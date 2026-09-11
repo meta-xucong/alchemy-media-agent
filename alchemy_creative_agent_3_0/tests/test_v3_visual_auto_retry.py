@@ -1,5 +1,6 @@
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
     EcommerceRemoteBrainTestProvider,
@@ -74,15 +75,16 @@ def test_unbound_general_mock_retry_is_withheld_without_a_local_prompt_patch(tmp
     service = _service(tmp_path)
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "force_visual_retry_issue_codes": ["visible_text_artifact"],
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            force_visual_retry_issue_codes=("visible_text_artifact",),
+            max_visual_retry_attempts=1,
+        ),
     )
 
     internal_result = _internal_generation_result(service, created.job_id)
@@ -126,15 +128,16 @@ def test_unbound_general_mock_retry_does_not_enter_a_second_generation_loop(tmp_
 
     monkeypatch.setattr(service.scenario_runtime, "generate_job", generate_with_empty_retry)
 
-    service.generate_job(
+    service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "force_visual_retry_issue_codes": ["visible_text_artifact"],
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            force_visual_retry_issue_codes=("visible_text_artifact",),
+            max_visual_retry_attempts=1,
+        ),
     )
 
     internal_result = _internal_generation_result(service, created.job_id)
@@ -155,15 +158,16 @@ def test_unbound_general_mock_retry_never_repeats_a_local_issue_patch_in_strict_
     service = _service(tmp_path)
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "strict",
-            "metadata": {
-                "force_visual_retry_issue_codes": ["collage_or_split_panel"],
-                "max_visual_retry_attempts": 2,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            force_visual_retry_issue_codes=("collage_or_split_panel",),
+            max_visual_retry_attempts=2,
+        ),
     )
 
     retry_summary = _internal_generation_result(service, created.job_id).metadata["visual_auto_retry"]
@@ -208,16 +212,17 @@ def test_visual_auto_retry_executes_for_product_label_issue_from_active_ledger(t
         }
     )
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "force_visual_retry_issue_codes": ["product_label_unreadable"],
-                "visual_retry_patch": {"product_reinforcement": ["FORGED REQUEST PATCH"]},
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            force_visual_retry_issue_codes=("product_label_unreadable",),
+            visual_retry_patch={"product_reinforcement": ["FORGED REQUEST PATCH"]},
+            max_visual_retry_attempts=1,
+        ),
     )
 
     retry_summary = _internal_generation_result(service, created.job_id).metadata["visual_auto_retry"]
@@ -247,15 +252,16 @@ def test_visual_auto_retry_skips_empty_patch_without_provider_loop(tmp_path) -> 
     service = _service(tmp_path)
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "force_visual_retry_issue_codes": ["visible_text_artifact"],
-                "force_empty_visual_retry_patch": True,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            force_visual_retry_issue_codes=("visible_text_artifact",),
+            force_empty_visual_retry_patch=True,
+        ),
     )
 
     internal_result = _internal_generation_result(service, created.job_id)
@@ -274,15 +280,16 @@ def test_visual_auto_retry_is_off_by_default_in_explore_mode(tmp_path) -> None:
     service = _service(tmp_path)
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "explore",
-            "metadata": {
-                "force_visual_retry_issue_codes": ["visible_text_artifact"],
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            force_visual_retry_issue_codes=("visible_text_artifact",),
+            max_visual_retry_attempts=1,
+        ),
     )
 
     retry_summary = generated.metadata["visual_auto_retry"]

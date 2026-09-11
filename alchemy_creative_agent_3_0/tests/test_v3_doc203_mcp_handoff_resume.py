@@ -26,6 +26,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import build_brain_s
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.contracts import (
     CreateCreativeJobRequest,
+    GenerateContinuation,
     ProductJobStatus,
     ProductJobStatusValue,
 )
@@ -75,6 +76,10 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from app.providers.base import ProviderRuntimeError
+
+
+def _continuation(job_id: str, **controls: object) -> GenerateContinuation:
+    return GenerateContinuation(job_id=job_id, **controls)
 
 
 def _doc203_body_frozen_contract_fields() -> dict[str, object]:
@@ -2612,14 +2617,13 @@ def test_doc228_service_review_only_resume_rechecks_generated_timeout_package_wi
 
     status = service.generate_asset_series(
         job_id,
-        {
-            "quality_mode": "strict",
-            "metadata": {
-                "_v3_resume_finalizing_review": True,
-                "disable_visual_auto_retry": True,
-                "max_visual_retry_attempts": 0,
-            },
-        },
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+            disable_visual_auto_retry=True,
+            max_visual_retry_attempts=0,
+        ),
     )
 
     updated = job_store.get(job_id)
@@ -2745,14 +2749,13 @@ def test_doc228_service_review_only_resume_rechecks_signal_provider_unavailable_
 
     status = service.generate_asset_series(
         job_id,
-        {
-            "quality_mode": "strict",
-            "metadata": {
-                "_v3_resume_finalizing_review": True,
-                "disable_visual_auto_retry": True,
-                "max_visual_retry_attempts": 0,
-            },
-        },
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+            disable_visual_auto_retry=True,
+            max_visual_retry_attempts=0,
+        ),
     )
 
     updated = job_store.get(job_id)
@@ -2892,10 +2895,11 @@ def test_doc228_exact_body_handoff_resume_reenters_runtime_despite_stale_failed_
 
     status = service.generate_asset_series(
         job_id,
-        {
-            "quality_mode": "strict",
-            "metadata": {"_v3_resume_interrupted_mcp_materialization": True},
-        },
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_interrupted_mcp_materialization=True,
+        ),
     )
 
     assert runtime.calls, "exact submitted Body MCP handoff resume must re-enter ScenarioRuntime"
@@ -3083,10 +3087,11 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
     assert service._is_submitted_body_mcp_resume(record)  # noqa: SLF001
     status = service.generate_asset_series(
         job_id,
-        {
-            "quality_mode": "strict",
-            "metadata": {"_v3_resume_finalizing_review": True},
-        },
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert runtime.calls == []
@@ -3535,7 +3540,11 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
 
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert status.status == ProductJobStatusValue.GENERATED
@@ -3556,7 +3565,11 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
     # review-only pass on a later exact resume.
     second_status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
     assert second_status.status == ProductJobStatusValue.GENERATED
     assert len(review_calls) == 1
@@ -3688,7 +3701,11 @@ def test_doc263_existing_generated_body_resume_missing_artifact_is_closed_withou
     monkeypatch.setattr(service, "_resume_finalizing_generation_review", fake_review)
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert status.status == ProductJobStatusValue.BLOCKED
@@ -3825,7 +3842,11 @@ def test_doc263_body_resume_reconciles_submitted_handoff_before_consumer(
 
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert runtime.calls == []
@@ -3909,7 +3930,11 @@ def test_doc263_generating_body_resume_identity_conflict_stays_fail_closed(
     )
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert runtime.calls == []
@@ -3955,7 +3980,11 @@ def test_doc263_ordinary_generating_job_does_not_use_submitted_body_bypass(tmp_p
     )
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert runtime.calls == []
@@ -4194,7 +4223,11 @@ def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_proj
     )
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert runtime.generate_job_calls == 0
@@ -4395,7 +4428,11 @@ def test_doc263_submitted_body_resume_contract_mismatch_fails_closed(
     )
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert status.status == ProductJobStatusValue.BLOCKED
@@ -4903,7 +4940,11 @@ def test_doc228_review_only_resume_syncs_durable_job_checkpoint_and_review_pendi
 
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     updated = job_store.get(job_id)
@@ -5026,7 +5067,11 @@ def test_doc228_review_only_resume_rejects_checkpoint_identity_mismatch(
 
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     updated = job_store.get(job_id)
@@ -6356,7 +6401,11 @@ def test_doc203_submitted_body_resume_without_durable_planning_does_not_remain_g
     )
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert status.status == ProductJobStatusValue.BLOCKED
@@ -6790,7 +6839,11 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
 
     status = service.generate_asset_series(
         job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=_continuation(
+            job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert router.requests, (

@@ -16,7 +16,7 @@ from alchemy_creative_agent_3_0.app.creative_core.doc281_output_plan_binding imp
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
-from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateJobRequest
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation, GenerateJobRequest
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.output_resolver import GeneratedOutputResolver
@@ -167,6 +167,34 @@ def _internal_generation_metadata(service: V3ProductApiService, job_id: str) -> 
     return record.generation_result.metadata
 
 
+def _generate_with_trusted_controls(
+    service: V3ProductApiService,
+    job_id: str,
+    request: dict | None = None,
+):
+    """Keep review/retry controls on the typed internal continuation seam."""
+
+    payload = dict(request or {})
+    metadata = dict(payload.get("metadata") or {})
+    continuation_fields = set(GenerateContinuation.model_fields)
+    continuation_values = {
+        key: metadata.pop(key)
+        for key in tuple(continuation_fields)
+        if key != "job_id" and key in metadata
+    }
+    continuation = (
+        GenerateContinuation(job_id=job_id, **continuation_values)
+        if continuation_values
+        else None
+    )
+    payload["metadata"] = metadata
+    return service.generate_job_with_continuation(
+        job_id,
+        payload,
+        continuation=continuation or GenerateContinuation(job_id=job_id),
+    )
+
+
 def _review_evidence_plan(metadata: dict) -> dict:
     package = metadata.get("post_generation_review_package")
     assert isinstance(package, dict)
@@ -201,7 +229,8 @@ def test_doc260_no_product_reference_still_enters_real_pixel_review_with_channel
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -232,7 +261,8 @@ def test_doc260_no_references_still_reviews_generic_pixels_and_marks_all_optiona
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -262,7 +292,8 @@ def test_doc260_default_no_reference_route_uses_available_vision_provider(
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -292,7 +323,8 @@ def test_doc260_public_review_projects_safe_no_reference_real_pixel_facts(
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -338,7 +370,8 @@ def test_doc260_public_review_projects_required_unavailable_without_source_ids(
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service, uploaded_asset_ids=[source_id])
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -431,7 +464,8 @@ def test_doc260_optional_missing_reference_does_not_trigger_retry_or_manual_hold
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -466,7 +500,8 @@ def test_doc260_verified_retryable_visual_defect_still_uses_existing_bounded_ret
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -1069,7 +1104,8 @@ def test_doc260_ready_output_plans_are_scoped_by_output_id(tmp_path) -> None:
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
-    generated = service.generate_job(
+    generated = _generate_with_trusted_controls(
+        service,
         created.job_id,
         {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0}},
     )
@@ -1102,7 +1138,8 @@ def test_doc260_review_recovers_persisted_auto_anchor_when_result_omits_private_
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {"quality_mode": "standard", "metadata": {"max_visual_retry_attempts": 0}},
     )
@@ -1175,7 +1212,8 @@ def test_doc260_review_recovers_server_request_anchor_when_continuation_result_i
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {"quality_mode": "standard", "metadata": {"max_visual_retry_attempts": 0}},
     )
@@ -1322,7 +1360,8 @@ def test_doc260_public_create_metadata_cannot_supply_trusted_plan(tmp_path) -> N
             },
         }
     )
-    generated = service.generate_job(
+    generated = _generate_with_trusted_controls(
+        service,
         created.job_id,
         {
             "quality_mode": "standard",
@@ -1442,7 +1481,8 @@ def test_doc260_ready_plan_receipt_closes_for_absent_non_dict_mismatch_and_mixed
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0}},
     )
@@ -1502,7 +1542,8 @@ def test_doc260_evidence_gate_without_provider_call_cannot_claim_real_pixel_revi
     )
     service.output_resolver = _StaticReadyResolver(resolution)
     created = _create_general_job(service, uploaded_asset_ids=[source_id])
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0}},
     )
@@ -1520,7 +1561,8 @@ def test_doc260_closed_ready_receipt_withholds_public_delivery_and_selection(tmp
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0}},
     )
@@ -1580,7 +1622,8 @@ def test_doc260_unknown_claimed_channel_invalidates_server_owned_product_channel
     )
     service.output_resolver = _StaticReadyResolver(resolution)
     created = _create_general_job(service, uploaded_asset_ids=[source_id])
-    service.generate_job(
+    _generate_with_trusted_controls(
+        service,
         created.job_id,
         {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0}},
     )

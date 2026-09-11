@@ -5,7 +5,17 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 from ..public_api_guardrails import reject_low_level_controls
 from ..scenario_packs import ScenarioSelection
@@ -144,6 +154,242 @@ class CreateCreativeJobRequest(ProductApiBase):
     @property
     def effective_brand_id(self) -> str | None:
         return self.brand_id or self.continue_style_from_brand_id
+
+
+_VISUAL_RETRY_PATCH_FIELDS = (
+    "prompt_additions",
+    "negative_additions",
+    "negative_prompt_additions",
+    "reference_requirements",
+    "identity_reinforcement",
+    "product_reinforcement",
+    "brand_asset_reinforcement",
+    "composition_repair",
+    "artifact_repair",
+    "object_removal_instruction",
+)
+
+
+class VisualRetryPatch(BaseModel):
+    """The narrow legacy-compatible retry material accepted by a continuation.
+
+    This is intentionally limited to the existing compatibility patch fields.
+    Provider routing, complete prompts, reasoning traces, and storage details
+    remain server-owned and cannot cross the continuation boundary here.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
+
+    prompt_additions: tuple[StrictStr, ...] = ()
+    negative_additions: tuple[StrictStr, ...] = ()
+    negative_prompt_additions: tuple[StrictStr, ...] = ()
+    reference_requirements: tuple[StrictStr, ...] = ()
+    identity_reinforcement: tuple[StrictStr, ...] = ()
+    product_reinforcement: tuple[StrictStr, ...] = ()
+    brand_asset_reinforcement: tuple[StrictStr, ...] = ()
+    composition_repair: tuple[StrictStr, ...] = ()
+    artifact_repair: tuple[StrictStr, ...] = ()
+    object_removal_instruction: tuple[StrictStr, ...] = ()
+
+    @field_validator(*_VISUAL_RETRY_PATCH_FIELDS, mode="before")
+    @classmethod
+    def normalize_legacy_patch_strings(cls, value: Any) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        values = (value,) if isinstance(value, str) else value
+        if not isinstance(values, (list, tuple)):
+            raise ValueError("visual retry patch fields must be strings or string sequences")
+        if any(not isinstance(item, str) for item in values):
+            raise ValueError("visual retry patch fields must contain only strings")
+        cleaned = tuple(item.strip() for item in values)
+        if any(not item for item in cleaned):
+            raise ValueError("visual retry patch fields must not contain empty strings")
+        return cleaned
+
+    def legacy_payload(self) -> dict[str, list[str]]:
+        """Return the established metadata shape consumed by legacy retry code."""
+
+        return {
+            field_name: list(values)
+            for field_name in _VISUAL_RETRY_PATCH_FIELDS
+            if (values := getattr(self, field_name))
+        }
+
+
+class GenerateContinuation(BaseModel):
+    """Typed, server-only controls for continuing an existing V3 Job.
+
+    This model is deliberately not accepted by the HTTP Generate contract.
+    Public Generate requests carry product-level options only; worker claims,
+    resume predicates, review switches, and retry controls enter through the
+    explicit internal continuation seam on ``V3ProductApiService``.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        validate_default=True,
+    )
+
+    job_id: StrictStr
+    background_worker_claim: StrictBool = False
+    background_generation_attempt_id: StrictStr | None = None
+    resume_interrupted_mcp_materialization: StrictBool = False
+    resume_finalizing_review: StrictBool = False
+    disable_visual_auto_retry: StrictBool | None = None
+    max_visual_retry_attempts: StrictInt | None = Field(default=None, ge=0, le=2)
+    enable_visual_auto_retry_in_explore: StrictBool | None = None
+    force_empty_visual_retry_patch: StrictBool | None = None
+
+    vision_inspection_mode: StrictStr | None = None
+    post_generation_inspection_mode: StrictStr | None = None
+    vision_inspection_timeout_seconds: StrictFloat | StrictInt | None = Field(
+        default=None,
+        ge=0.05,
+        le=300.0,
+    )
+    vision_inspection_max_attempts: StrictInt | None = Field(default=None, ge=1, le=5)
+    enable_real_vision_inspection: StrictBool | None = None
+    disable_real_vision_inspection: StrictBool | None = None
+    enable_local_aesthetic_heuristics: StrictBool | None = None
+    post_generation_fake_issue_codes: tuple[StrictStr, ...] | None = None
+    post_generation_fake_confidence: StrictFloat | StrictInt | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+    )
+
+    force_visual_retry_issue_codes: tuple[StrictStr, ...] | None = None
+    visual_retry_issue_codes: tuple[StrictStr, ...] | None = None
+    visual_auto_retry_issue_codes: tuple[StrictStr, ...] | None = None
+    force_anti_ai_face_issue_codes: tuple[StrictStr, ...] | None = None
+    anti_ai_face_issue_codes: tuple[StrictStr, ...] | None = None
+    force_beautiful_realism_issue_codes: tuple[StrictStr, ...] | None = None
+    beautiful_realism_issue_codes: tuple[StrictStr, ...] | None = None
+    facial_feature_issue_codes: tuple[StrictStr, ...] | None = None
+    identity_card_issue_codes: tuple[StrictStr, ...] | None = None
+    force_visual_retry_issue: StrictStr | None = None
+    visual_retry_issue_code: StrictStr | None = None
+    visual_retry_patch: VisualRetryPatch | None = None
+
+    @field_validator("job_id", "background_generation_attempt_id", mode="after")
+    @classmethod
+    def non_empty_identifiers(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("continuation identifiers must not be empty")
+        return cleaned
+
+    @field_validator(
+        "post_generation_fake_issue_codes",
+        "force_visual_retry_issue_codes",
+        "visual_retry_issue_codes",
+        "visual_auto_retry_issue_codes",
+        "force_anti_ai_face_issue_codes",
+        "anti_ai_face_issue_codes",
+        "force_beautiful_realism_issue_codes",
+        "beautiful_realism_issue_codes",
+        "facial_feature_issue_codes",
+        "identity_card_issue_codes",
+        mode="after",
+    )
+    @classmethod
+    def issue_codes_are_non_empty(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        cleaned = tuple(item.strip() for item in value)
+        if any(not item for item in cleaned):
+            raise ValueError("continuation issue codes must not be empty")
+        return cleaned
+
+    @field_validator(
+        "vision_inspection_mode",
+        "post_generation_inspection_mode",
+        "force_visual_retry_issue",
+        "visual_retry_issue_code",
+        mode="after",
+    )
+    @classmethod
+    def continuation_strings_are_non_empty(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("continuation string controls must not be empty")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_continuation(self) -> "GenerateContinuation":
+        if self.background_worker_claim and not self.background_generation_attempt_id:
+            raise ValueError("background_worker_claim requires background_generation_attempt_id")
+        if self.enable_real_vision_inspection and self.disable_real_vision_inspection:
+            raise ValueError("vision enable and disable controls are mutually exclusive")
+        return self
+
+    def runtime_metadata(self) -> dict[str, Any]:
+        """Return only the typed runtime controls for a trusted local copy."""
+
+        metadata: dict[str, Any] = {}
+        scalar_fields = (
+            "disable_visual_auto_retry",
+            "max_visual_retry_attempts",
+            "enable_visual_auto_retry_in_explore",
+            "force_empty_visual_retry_patch",
+            "vision_inspection_mode",
+            "post_generation_inspection_mode",
+            "vision_inspection_timeout_seconds",
+            "vision_inspection_max_attempts",
+            "enable_real_vision_inspection",
+            "disable_real_vision_inspection",
+            "enable_local_aesthetic_heuristics",
+            "post_generation_fake_confidence",
+            "force_visual_retry_issue",
+            "visual_retry_issue_code",
+        )
+        for field_name in scalar_fields:
+            value = getattr(self, field_name)
+            if value is not None:
+                metadata[field_name] = value
+        sequence_fields = (
+            "post_generation_fake_issue_codes",
+            "force_visual_retry_issue_codes",
+            "visual_retry_issue_codes",
+            "visual_auto_retry_issue_codes",
+            "force_anti_ai_face_issue_codes",
+            "anti_ai_face_issue_codes",
+            "force_beautiful_realism_issue_codes",
+            "beautiful_realism_issue_codes",
+            "facial_feature_issue_codes",
+            "identity_card_issue_codes",
+        )
+        for field_name in sequence_fields:
+            value = getattr(self, field_name)
+            if value is not None:
+                metadata[field_name] = list(value)
+        if self.visual_retry_patch is not None:
+            metadata["visual_retry_patch"] = self.visual_retry_patch.legacy_payload()
+        return metadata
+
+    def legacy_metadata(self) -> dict[str, Any]:
+        """Build the old metadata shape for test doubles without the seam.
+
+        Production V3 services use ``runtime_metadata`` through the typed
+        method.  This compatibility adapter is kept so historical host fakes
+        can continue to assert the old call shape while they are migrated.
+        """
+
+        metadata = self.runtime_metadata()
+        if self.background_worker_claim:
+            metadata["_v3_background_worker_claim"] = True
+        if self.background_generation_attempt_id:
+            metadata["_v3_background_generation_attempt_id"] = self.background_generation_attempt_id
+        if self.resume_interrupted_mcp_materialization:
+            metadata["_v3_resume_interrupted_mcp_materialization"] = True
+        if self.resume_finalizing_review:
+            metadata["_v3_resume_finalizing_review"] = True
+        return metadata
 
 
 class GenerateJobRequest(ProductApiBase):

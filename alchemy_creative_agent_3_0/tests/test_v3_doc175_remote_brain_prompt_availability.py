@@ -224,9 +224,9 @@ def _finalizer_request(*, stage: str = "provider_prompt_finalize") -> BrainRunRe
             "upstream_http_error",
             {"remote_http_status_code": 502},
         ),
-        (
-            BrainProviderUnavailable("D:/unsafe/provider_payload unavailable"),
-            "provider_error",
+            (
+                BrainProviderUnavailable("D:/unsafe/provider_payload unavailable"),
+                "provider_unavailable",
             {"state": "within_budget"},
         ),
         (
@@ -425,6 +425,17 @@ def test_doc175_transport_failure_projection_rejects_unsafe_stage() -> None:
     }
     assert _safe_remote_brain_transport_failure(valid)["stage"] == "plan"
     assert _safe_remote_brain_transport_failure({**valid, "stage": "https://unsafe.example/path"}) == {}
+    assert _safe_remote_brain_transport_failure({**valid, "request_acceptance": "unknown"}) == {}
+    assert _safe_remote_brain_transport_failure({**valid, "response_started": "true"}) == {}
+
+    from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+
+    assert V3ProductApiService._public_remote_brain_transport_failure(
+        {**valid, "request_acceptance": "unknown"}
+    ) == {}
+    assert V3ProductApiService._public_remote_brain_transport_failure(
+        {**valid, "response_started": "true"}
+    ) == {}
 
 
 def test_doc175_transport_attempt_projection_is_closed_and_preserves_dispatch_facts() -> None:
@@ -462,6 +473,7 @@ def test_doc175_semantic_transport_attempt_reaches_blocked_outcome_safely(
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "deepseek-test")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "520")
     monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "7")
 
@@ -672,11 +684,12 @@ def test_doc175_finalizer_generic_error_after_successful_plan_needs_stage_scoped
         "schema_version": "v3_remote_brain_finalizer_lifecycle_v1",
         "stage": "provider_prompt_finalize",
         "provider_available": True,
-        "remote_brain_request_started": True,
+        "remote_brain_request_started": False,
         "response_started": False,
         "status": "blocked",
         "failure_family": "remote_brain_signoff",
         "failure_code": "provider_error",
+        "remote_brain_request_acceptance": "unknown",
     }
     serialized = json.dumps(outcome, sort_keys=True)
     assert "D:/unsafe" not in serialized
@@ -724,7 +737,8 @@ def test_doc175_finalizer_preflight_availability_is_separate_from_planning_avail
         "status": "blocked",
         "failure_family": "remote_brain_signoff",
         "failure_code": "provider_unavailable",
-    }
+        "remote_brain_request_acceptance": "not_started",
+        }
 
 
 def test_doc175_finalizer_configuration_preflight_failures_carry_closed_lifecycle(
@@ -753,6 +767,7 @@ def test_doc175_finalizer_configuration_preflight_failures_carry_closed_lifecycl
         "status": "blocked",
         "failure_family": "remote_brain_signoff",
         "failure_code": "provider_unavailable",
+        "remote_brain_request_acceptance": "not_started",
     }
 
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")

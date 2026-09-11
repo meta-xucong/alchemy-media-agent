@@ -29,24 +29,44 @@ from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import 
     mark_formal_slot_receipt_reload_public_projection_verified,
     validate_formal_slot_receipt_for_activation,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.library import VisualAssetLibraryLifecycleService
 
 
-def _generic_shared_receipt(*, status: str = "pass", framing: bool = True) -> dict[str, object]:
+def _generic_shared_receipt(
+    *,
+    status: str = "pass",
+    framing: bool = True,
+    body_source_standard: bool = False,
+) -> dict[str, object]:
+    evidence_codes = [
+        "shared_visual_review_verified",
+        "shared_visual_review_status_pass",
+        "front_card_framing_parity_verified",
+        "front_card_framing_delta_receipt_verified",
+    ]
+    score_dimensions = ["generic_visual_quality", "identity_or_subject_consistency"]
+    if body_source_standard:
+        evidence_codes.append(BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE)
+        evidence_codes.extend(
+            BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES[dimension]
+            for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS
+        )
+        score_dimensions.extend(
+            [BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION, *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS]
+        )
     return {
         "owner": "v3_shared_visual_cluster",
         "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
         "status": status,
-        "evidence_codes": [
-            "shared_visual_review_verified",
-            "shared_visual_review_status_pass",
-            "front_card_framing_parity_verified",
-            "front_card_framing_delta_receipt_verified",
-        ]
-        if status == "pass"
-        else ["shared_visual_review_rejected"],
+        "evidence_codes": evidence_codes if status == "pass" else ["shared_visual_review_rejected"],
         "issue_codes": [] if status == "pass" else ["shared_visual_review_rejected"],
-        "score_dimensions": ["generic_visual_quality", "identity_or_subject_consistency"],
+        "score_dimensions": score_dimensions,
         "framing_delta_dimensions": ["front_card_framing_delta"] if framing else [],
     }
 
@@ -95,12 +115,23 @@ def _scores(index: int, *, body_eligible: bool = True) -> IdentityScoreSummary:
     )
 
 
-def _review(index: int, *, framing: bool = True, body_eligible: bool = True) -> AnchorReviewDecision:
+def _review(
+    index: int,
+    *,
+    framing: bool = True,
+    body_eligible: bool = True,
+    body_source_standard: bool = False,
+) -> AnchorReviewDecision:
     return AnchorReviewDecision(
         status="pass",
         identity_scores=_scores(index, body_eligible=body_eligible),
         issue_codes=[] if body_eligible else ["body_silhouette_profile_rejected"],
-        shared_review_receipts=[_generic_shared_receipt(framing=framing)],
+        shared_review_receipts=[
+            _generic_shared_receipt(
+                framing=framing,
+                body_source_standard=body_source_standard,
+            )
+        ],
     )
 
 
@@ -135,7 +166,7 @@ def _body_attempts(slot_key: str, *, framing: bool = True) -> list[object]:
                 source_class="brain_inferred",
             ),
             candidate=_body_candidate(slot_key, index),
-            review=_review(index, framing=framing),
+            review=_review(index, framing=framing, body_source_standard=True),
         )
         for index in (1, 2, 3)
     ]
@@ -159,7 +190,7 @@ class _BodyGenerator:
 
 class _BodyReviewer:
     def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
-        return _review(candidate.candidate_index)
+        return _review(candidate.candidate_index, body_source_standard=True)
 
 
 def _card_ready_for_body() -> CharacterCardState:

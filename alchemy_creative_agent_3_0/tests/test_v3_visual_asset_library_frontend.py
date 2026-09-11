@@ -16,7 +16,6 @@ APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
 STYLES_CSS = ROOT / "src_skeleton" / "app" / "static" / "styles.css"
 HANDLERS = ROOT / "alchemy_creative_agent_3_0" / "app" / "product_api" / "route_handlers.py"
-FRONTEND_VERSION = "20260810-v3-reference-authority"
 
 
 def _function(source: str, name: str, next_name: str) -> str:
@@ -131,8 +130,8 @@ def test_doc247_character_card_slot_status_labels_are_formal_proof_aware() -> No
     assert 'empty: "尚未建立"' in helper
     assert 'blocked: "需要重新处理"' in helper
     assert '}[status] || "等待处理";' in helper
-    assert f"app.js?v={FRONTEND_VERSION}" in index
-    assert f"styles.css?v={FRONTEND_VERSION}" in index
+    assert "/static/app.js?v=__STATIC_APP_VERSION__" in index
+    assert "/static/styles.css?v=__STATIC_STYLES_VERSION__" in index
 
 
 def test_doc247_character_card_ui_excludes_auxiliary_25_degree_face_references() -> None:
@@ -252,7 +251,7 @@ def test_doc177_professional_home_is_a_compact_hub_and_detail_work_is_on_demand(
     assert 'id="v3ManageVisualAssetsFromBindingBtn"' in index
     assert ".v3-visual-asset-hub-card" in css
     assert ".v3-visual-asset-library-dialog" in css
-    assert f"styles.css?v={FRONTEND_VERSION}" in index
+    assert "/static/styles.css?v=__STATIC_STYLES_VERSION__" in index
 
 
 def test_doc177_project_asset_card_preserves_explicit_binding_and_management_route() -> None:

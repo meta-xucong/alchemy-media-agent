@@ -4,6 +4,10 @@ from pathlib import Path
 
 from PIL import Image
 
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DOC = ROOT / "alchemy_creative_agent_3_0" / "docs" / "262_V3_ECOMMERCE_PRODUCT_REFERENCE_DEDUP_AND_CONTINUATION_CONTRACT.md"
@@ -89,7 +93,10 @@ def test_ecommerce_saved_product_reference_reuses_existing_content_digest(tmp_pa
     from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
     from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = V3ProductRouteHandlers(
+        service=ecommerce_test_service(),
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
     same_product = _png_base64((200, 190, 170))
     original_id = _ready_upload(handlers, tmp_path, filename="swimwear-original.png", content=same_product)
     duplicate_id = _ready_upload(handlers, tmp_path, filename="swimwear-duplicate.png", content=same_product)
@@ -123,7 +130,10 @@ def test_ecommerce_duplicate_reference_reuses_legacy_project_create_source(tmp_p
     from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
     from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = V3ProductRouteHandlers(
+        service=ecommerce_test_service(),
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
     same_product = _png_base64((170, 210, 190))
     original_id = _ready_upload(handlers, tmp_path, filename="original-create-source.png", content=same_product)
     duplicate_id = _ready_upload(handlers, tmp_path, filename="duplicate-later-source.png", content=same_product)
@@ -150,7 +160,10 @@ def test_ecommerce_job_product_truth_pool_dedupes_reuploaded_same_bytes(tmp_path
     from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
     from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = V3ProductRouteHandlers(
+        service=ecommerce_test_service(),
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
     same_product = _png_base64((120, 150, 210))
     original_id = _ready_upload(handlers, tmp_path, filename="product-view-a.png", content=same_product)
     duplicate_id = _ready_upload(handlers, tmp_path, filename="product-view-a-copy.png", content=same_product)
@@ -182,7 +195,10 @@ def test_ecommerce_legacy_duplicate_pool_repairs_to_four_originals_before_contin
     from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectReferenceAsset
     from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = V3ProductRouteHandlers(
+        service=ecommerce_test_service(),
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
     originals = [
         _ready_upload(
             handlers,

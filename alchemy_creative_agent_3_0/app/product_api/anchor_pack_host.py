@@ -9,6 +9,7 @@ second candidate/delivery lifecycle.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import math
 from pathlib import Path
 from statistics import median
@@ -81,7 +82,7 @@ from ..visual_assets.contracts import (
     PeopleAsset,
     RootSourceProvenance,
 )
-from .contracts import ProductJobStatusValue
+from .contracts import GenerateContinuation, ProductJobStatusValue
 from .service import V3ProductApiService
 
 _ANCHOR_REMOTE_FAILURE_CODES = {
@@ -206,6 +207,65 @@ class ProductApiAnchorPackPreparationHost:
         )
 
     production_shared_runtime = True
+
+    @staticmethod
+    def _accepts_continuation_keyword(method: Any) -> bool:
+        """Detect the explicit typed seam without invoking a provider."""
+
+        try:
+            parameters = inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            return False
+        return "continuation" in parameters
+
+    def _generate_job_with_continuation(
+        self,
+        job_id: str,
+        request: dict[str, Any],
+        continuation: GenerateContinuation,
+    ) -> Any:
+        """Use the typed Product API seam, with a test-double adapter only."""
+
+        typed_method = getattr(self.product_service, "generate_job_with_continuation", None)
+        if callable(typed_method):
+            return typed_method(job_id, request, continuation=continuation)
+        # Older host test doubles predate the typed seam.  Keep this fallback
+        # local to the adapter; the production V3 service always exposes the
+        # method above and therefore never receives untyped continuation data.
+        return self.product_service.generate_job(
+            job_id,
+            {
+                **request,
+                "metadata": continuation.legacy_metadata(),
+            },
+        )
+
+    def _generate_character_card_with_continuation(
+        self,
+        job_id: str,
+        request: dict[str, Any],
+        *,
+        body_refresh_analysis_context: Any,
+        continuation: GenerateContinuation,
+    ) -> Any:
+        method = getattr(self.product_service, "generate_professional_character_card_candidate")
+        if self._accepts_continuation_keyword(method):
+            return method(
+                job_id,
+                request,
+                body_refresh_analysis_context=body_refresh_analysis_context,
+                continuation=continuation,
+            )
+        # Compatibility path for pre-seam host fakes; see the equivalent
+        # Generate adapter above.
+        return method(
+            job_id,
+            {
+                **request,
+                "metadata": continuation.legacy_metadata(),
+            },
+            body_refresh_analysis_context=body_refresh_analysis_context,
+        )
 
     def set_body_refresh_candidate_checkpoint_callback(self, callback: Any | None) -> None:
         """Install the lifecycle-owned durable cursor callback."""
@@ -584,31 +644,21 @@ class ProductApiAnchorPackPreparationHost:
         # candidate one; the first candidate that actually executes the
         # shared visual retry consumes the budget for all later candidates.
         retry_available = stage_key not in self._stage_visual_retry_consumed
-        generation = self.product_service.generate_job(
+        continuation = GenerateContinuation(
+            job_id=status_job_id,
+            disable_visual_auto_retry=None if retry_available else True,
+            max_visual_retry_attempts=1 if retry_available else 0,
+            resume_finalizing_review=(
+                resume_record is not None and request.generation_channel == "mcp"
+            ),
+        )
+        generation = self._generate_job_with_continuation(
             status_job_id,
             {
                 "quality_mode": "strict",
-                "metadata": (
-                    {
-                        "max_visual_retry_attempts": 1,
-                        **(
-                            {"_v3_resume_finalizing_review": True}
-                            if resume_record is not None and request.generation_channel == "mcp"
-                            else {}
-                        ),
-                    }
-                    if retry_available
-                    else {
-                        "disable_visual_auto_retry": True,
-                        "max_visual_retry_attempts": 0,
-                        **(
-                            {"_v3_resume_finalizing_review": True}
-                            if resume_record is not None and request.generation_channel == "mcp"
-                            else {}
-                        ),
-                    }
-                ),
+                "metadata": {},
             },
+            continuation,
         )
         self._record_stage_visual_retry_usage(stage_key, status_job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
@@ -2133,31 +2183,29 @@ class ProductApiAnchorPackPreparationHost:
             if failure_code:
                 raise AnchorCandidateUnavailable(failure_code)
             raise AnchorCandidateUnavailable("character_card_candidate_planning_blocked")
-        generation_request = {
-            "quality_mode": "strict",
-            "metadata": {
-                "disable_visual_auto_retry": True,
-                "max_visual_retry_attempts": 0,
-                **(
-                    {"_v3_resume_interrupted_mcp_materialization": True}
-                    if resume_interrupted_mcp_materialization
-                    else {}
-                ),
-                **(
-                    {"_v3_resume_finalizing_review": True}
-                    if resume_record is not None and request.generation_channel == "mcp"
-                    else {}
-                ),
-            },
-        }
+        generation_request = {"quality_mode": "strict", "metadata": {}}
+        continuation = GenerateContinuation(
+            job_id=status_job_id,
+            disable_visual_auto_retry=True,
+            max_visual_retry_attempts=0,
+            resume_interrupted_mcp_materialization=resume_interrupted_mcp_materialization,
+            resume_finalizing_review=(
+                resume_record is not None and request.generation_channel == "mcp"
+            ),
+        )
         if request.body_refresh_analysis_context is not None:
-            generation = self.product_service.generate_professional_character_card_candidate(
+            generation = self._generate_character_card_with_continuation(
                 status_job_id,
                 generation_request,
                 body_refresh_analysis_context=request.body_refresh_analysis_context,
+                continuation=continuation,
             )
         else:
-            generation = self.product_service.generate_job(status_job_id, generation_request)
+            generation = self._generate_job_with_continuation(
+                status_job_id,
+                generation_request,
+                continuation,
+            )
         self._record_character_card_retry_usage(stage_key, status_job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
             if (

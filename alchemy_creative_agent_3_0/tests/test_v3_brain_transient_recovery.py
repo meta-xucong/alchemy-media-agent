@@ -255,19 +255,21 @@ def test_failed_serialization_recovery_preserves_bounded_attempt_receipt(monkeyp
 
     receipt = transport_failure_receipt(failure.value)
     assert receipt == {
-        "schema_version": "v3_brain_transport_attempt_v1",
-        "stage": "plan",
-        "attempts": 2,
-        "request_dispatched": True,
+            "schema_version": "v3_brain_transport_attempt_v1",
+            "stage": "plan",
+            "attempts": 2,
+            "request_acceptance": "dispatched",
+            "request_dispatched": True,
         "response_started": True,
         "first_content_observed": False,
         "complete_response_observed": False,
         "json_parse_started": False,
         "json_parse_completed": False,
-        "json_recovery": True,
-        "json_serialization_recovery_attempted": True,
-        "transient_recovery_attempted": False,
-    }
+            "json_recovery": True,
+            "json_serialization_recovery_attempted": True,
+            "transient_recovery_attempted": False,
+            "protocol_fallback_attempted": False,
+        }
 
     audit = V3LLMBrainAdapter(provider=provider).provider_failure_audit(failure.value, stage="plan")
     assert audit["remote_brain_request_started"] is True

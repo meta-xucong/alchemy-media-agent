@@ -93,6 +93,7 @@ def _face_anchor_finalizer_request() -> BrainRunRequest:
             "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
             "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
             "torso_scope": "visible_neck_collar_and_upper_shoulders",
+            "aspect_ratio_standard": "honor_frozen_rendering_size_as_reference_card_aspect_ratio",
             "source_viewpoint_inheritance": "identity_only_do_not_inherit_source_pose_angle",
             "front_pose_normalization": "standard_front_model_card_view",
             "face_axis_alignment": "camera_facing_front_model_card_view",

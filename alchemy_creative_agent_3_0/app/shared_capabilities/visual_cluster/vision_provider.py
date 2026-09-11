@@ -33,7 +33,6 @@ from ...visual_assets.body_silhouette_source_standard import (
     body_silhouette_fixed_full_body_framing_contract,
     validated_body_silhouette_source_standard_contract,
 )
-from ...visual_assets.character_card import BodySilhouetteBackdropPresentationContract
 
 
 _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
@@ -768,14 +767,18 @@ def _professional_serial_anchor_review_context(
     professional = review_contract.get("professional_identity_quality")
     strategy = str(metadata.get("professional_identity_reference_strategy") or "").strip()
     stage = str(metadata.get("professional_reference_stage") or "").strip()
+    # ``left_front_25`` and ``right_front_25`` are auxiliary bridge
+    # references, not Character Card winners.  Count only the formal Face
+    # Identity winner chain so this evidence remains consistent with the
+    # append-only card projection and with the bounded reference routing.
     previous_winner_count = {
         "standard_front": 0,
         "left_front_25": 1,
-        "three_quarter": 2,
-        "profile": 3,
-        "right_front_25": 4,
-        "reverse_three_quarter": 5,
-        "rear_head": 6,
+        "three_quarter": 1,
+        "profile": 2,
+        "right_front_25": 3,
+        "reverse_three_quarter": 3,
+        "rear_head": 4,
     }.get(stage)
     if (
         not isinstance(professional, dict)
@@ -1061,6 +1064,12 @@ def _professional_identity_quality_contract(
     raw_backdrop_contract = body_source_contract.get("backdrop_presentation_contract")
     if isinstance(raw_backdrop_contract, dict):
         try:
+            # Character Card imports the shared visual cluster for its own
+            # framing contracts.  Keep this optional validation import lazy so
+            # importing either side never observes a partially initialized
+            # Character Card module.
+            from ...visual_assets.character_card import BodySilhouetteBackdropPresentationContract
+
             backdrop_presentation_contract = (
                 BodySilhouetteBackdropPresentationContract.model_validate(raw_backdrop_contract).model_dump(
                     mode="json"

@@ -296,6 +296,13 @@ def _provider_materialization_for_refs(
                     {
                         "output_index": 1,
                         "review_status": "approved",
+                        "prompt_status": "complete",
+                        "semantic_coverage": "complete",
+                        "user_direction_integrity": {
+                            "contract_version": "v3_user_direction_integrity_v1",
+                            "status": "preserved",
+                            "owner": "remote_v3_llm_brain",
+                        },
                         "prompt": "Professional visible-body materializer regression.",
                     }
                 ]

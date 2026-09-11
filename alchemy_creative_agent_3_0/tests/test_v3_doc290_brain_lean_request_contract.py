@@ -75,7 +75,10 @@ GATE_A_BASELINE = {
     },
     "general_multi": {
         "plan": (21480, 14997, 40889, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
-        "provider_prompt_finalize": (5359, 65281, 88469, "a163fe363051cfec4a720a5fc91455f77b44966ea17860b6c193b2f7e710026f"),
+        # Doc299 closes the finalizer lifecycle/source-projection contract;
+        # keep the measured current schema hash instead of the retired
+        # pre-closure baseline.
+        "provider_prompt_finalize": (5359, 65281, 88469, "281b1f19db0d63a292c197ea1443ddb8e5ef7f4de5b03a9fa35c2d7e951a4b49"),
     },
     "professional_ecommerce": {
         "plan": (21480, 21210, 47495, "5c485b5493ae3538fe006292cf296adde4e1a3d464fd01d0964c7dab33badd5b"),
@@ -321,7 +324,7 @@ def test_doc290_normal_entry_dispatch_baseline(captured_entry):
         # Exact original-to-dispatch fidelity has a separate red regression.
         assert capture["user"]["user_input"] == state.requests[capture["attempt"] - 1].user_input
         assert capture["body"]["model"] == "deepseek-v4-pro"
-        assert capture["body"]["max_tokens"] == 12000
+        assert capture["body"]["max_tokens"] == 20000
         assert capture["body"]["stream"] is True
         assert capture["body"]["response_format"] == {"type": "json_object"}
     assert state.provider.timeout == 300
@@ -685,7 +688,7 @@ def _combined_recovery_script():
     ]
 
 
-@pytest.mark.parametrize("step, expected_calls", ((60.0, 8), (110.0, 5)))
+@pytest.mark.parametrize("step, expected_calls", ((60.0, 8), (110.0, 3)))
 def test_doc290_combined_recovery_uses_one_deadline(tmp_path, monkeypatch, offline_transport, step, expected_calls):
     state = offline_transport
     state.clock = SimpleNamespace(now=1000.0, step=step)
@@ -694,13 +697,24 @@ def test_doc290_combined_recovery_uses_one_deadline(tmp_path, monkeypatch, offli
     original = ' \r\nCreate one quiet landscape.\tCopy "A & B".\n  '
     state = _capture_entry(tmp_path, state, "general_single", original=original)
     assert len(state.captures) == expected_calls
-    assert [item["user"]["stage"] for item in state.captures] == ["plan"] * 4 + ["provider_prompt_finalize"] * (expected_calls - 4)
+    assert [item["user"]["stage"] for item in state.captures] == ["plan"] * min(4, expected_calls) + ["provider_prompt_finalize"] * max(0, expected_calls - 4)
     assert all(item is state.budgets[0] for item in state.budgets)
     assert all(item["budget"] is state.budgets[0] for item in state.captures)
     assert {item["deadline"] for item in state.captures} == {1520.0}
     remaining = [520.0 - step * index for index in range(expected_calls)]
     assert [item["remaining"] for item in state.captures] == remaining
-    assert [item["timeout"]["read"] for item in state.captures] == [min(300.0, value) for value in remaining]
+    # Doc299 reserves 220 seconds for the canonical finalizer and 30 seconds
+    # for streaming progress before a real-image plan may consume the shared
+    # 520-second logical deadline. Once the finalizer stage starts, it may use
+    # the remaining deadline directly. At the larger clock step the third
+    # malformed plan response exhausts the budget before another transport
+    # retry can be issued, so the run fails closed after three calls.
+    expected_read_timeouts = [
+        max(0.1, min(300.0, value - 220.0 - 30.0)) if index < min(4, expected_calls)
+        else min(300.0, value)
+        for index, value in enumerate(remaining)
+    ]
+    assert [item["timeout"]["read"] for item in state.captures] == expected_read_timeouts
     assert all(item["user"]["user_input"] == original for item in state.captures)
     assert all(item.user_input == original for item in state.requests)
     for start in (0, 2, 4, 6):
@@ -722,13 +736,21 @@ def test_doc290_combined_recovery_uses_one_deadline(tmp_path, monkeypatch, offli
         assert audit["llm_used"] is True and audit["fallback_used"] is False
     else:
         assert state.created["status"] == "blocked"
-        assert len(state.requests) == 3
+        # The third HTTP attempt is the bounded JSON recovery inside the
+        # second adapter run; no third semantic Brain request is entered once
+        # the shared budget is exhausted.
+        assert len(state.requests) == 2
         assert state.record.planning_result is None
         outcome = state.record.request.metadata["remote_creative_brain_outcome"]
         assert outcome["state"] == "blocked"
         assert len(state.failures) == 1
         assert isinstance(state.failures[0], brain_providers.BrainExecutionBudgetExceeded)
-        assert outcome["remote_brain_execution_budget"]["remaining_ms"] == 0
+        # The budget failure is raised before the impossible fourth HTTP
+        # attempt, so the receipt keeps the 190-second remainder rather than
+        # fabricating an exhausted deadline.
+        assert outcome["remote_brain_execution_budget"]["remaining_ms"] == int(
+            (520.0 - step * expected_calls) * 1000
+        )
     print("DOC290_RECOVERY " + _json({
         "http_attempts": len(state.captures), "provider_runs": len(state.requests),
         "stage": [item["user"]["stage"] for item in state.captures],

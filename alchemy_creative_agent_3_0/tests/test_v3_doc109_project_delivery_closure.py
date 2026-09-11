@@ -193,9 +193,13 @@ def test_doc109_selected_output_and_generated_reference_dedupe_by_content_identi
     )
 
     references = selected["context"]["selected_visual_references"]
-    source_ids = [item.get("source_integrity_id") for item in references if item.get("source_integrity_id")]
+    internal_project = handlers.project_service._require_project(project["project_id"])
+    assert internal_project.latest_context is not None
+    internal_references = internal_project.latest_context.selected_visual_references
+    source_ids = [item.get("source_integrity_id") for item in internal_references if item.get("source_integrity_id")]
     assert source_ids
     assert len(source_ids) == len(set(source_ids))
+    assert all("source_integrity_id" not in item for item in references)
     assert selected["metadata"]["continuation_available"] is not False
 
 

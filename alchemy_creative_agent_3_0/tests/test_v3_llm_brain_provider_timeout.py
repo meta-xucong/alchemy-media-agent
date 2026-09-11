@@ -54,11 +54,12 @@ def test_brain_provider_request_timeout_is_outer_hard_cap(monkeypatch) -> None:
     assert failure.value.safe_metadata() == {
         "schema_version": "v3_brain_transport_failure_v1",
         "stage": "provider_prompt_finalize",
-        "transport_error_class": "timeout",
-        "timeout_phase": "unknown_transport_timeout",
-        "timeout_seconds": 1.0,
-        "elapsed_ms": failure.value.elapsed_ms,
-        "response_started": False,
+            "transport_error_class": "timeout",
+            "timeout_phase": "unknown_transport_timeout",
+            "timeout_seconds": 1.0,
+            "elapsed_ms": failure.value.elapsed_ms,
+            "request_acceptance": "not_started",
+            "response_started": False,
         "first_content_observed": False,
         "complete_response_observed": False,
         "json_parse_started": False,
@@ -768,6 +769,33 @@ def test_openai_chat_stream_collector_returns_complete_json_and_marks_trace(monk
     assert trace["complete_response_observed"] is True
 
 
+def test_openai_chat_stream_collector_flushes_multiline_sse_event_at_blank_line(monkeypatch) -> None:
+    _install_fake_httpx(
+        monkeypatch,
+        [
+            "data: {\"choices\":[",
+            'data: {\"delta\":{\"content\":\"{\\\"ok\\\":true}\"}}]}',
+            "",
+            "data: [DONE]",
+            "",
+        ],
+    )
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    try:
+        text = _collect_openai_chat_completion_stream(
+            url="https://brain.example/v1/chat/completions",
+            api_key="redacted",
+            payload={"stream": True},
+            timeout_seconds=120,
+        )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(token)
+
+    assert json.loads(text) == {"ok": True}
+    assert trace["complete_response_observed"] is True
+
+
 def test_openai_chat_stream_collector_keeps_reasoning_out_of_final_json(monkeypatch) -> None:
     _install_fake_httpx(
         monkeypatch,
@@ -795,6 +823,30 @@ def test_openai_chat_stream_collector_keeps_reasoning_out_of_final_json(monkeypa
     assert trace["reasoning_content_observed"] is True
     assert trace["reasoning_chunk_count"] == 2
     assert trace["first_content_observed"] is True
+    assert trace["complete_response_observed"] is True
+
+
+def test_openai_chat_stream_collector_accepts_unprefixed_done_marker(monkeypatch) -> None:
+    _install_fake_httpx(
+        monkeypatch,
+        [
+            '{"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}',
+            "[DONE]",
+        ],
+    )
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    try:
+        text = _collect_openai_chat_completion_stream(
+            url="https://brain.example/v1/chat/completions",
+            api_key="redacted",
+            payload={"stream": True},
+            timeout_seconds=120,
+        )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(token)
+
+    assert json.loads(text) == {"ok": True}
     assert trace["complete_response_observed"] is True
 
 

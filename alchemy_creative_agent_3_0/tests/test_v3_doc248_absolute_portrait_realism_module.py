@@ -7,6 +7,7 @@ import ast
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image, ImageDraw
 from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.absolute_portrait_realism import (
@@ -581,7 +582,12 @@ def test_doc248_host_does_not_write_deprecated_absolute_realism_active_metadata(
     assert "professional_absolute_portrait_realism_provenance" not in captured[1]
 
 
-def test_doc248_face_host_projects_canonical_generic_shared_receipt_for_formal_core() -> None:
+def test_doc248_face_host_projects_canonical_generic_shared_receipt_for_formal_core(tmp_path) -> None:
+    front_path = tmp_path / "front_absolute.png"
+    image = Image.new("RGB", (100, 100), "white")
+    ImageDraw.Draw(image).rectangle((5, 10, 94, 95), fill=(32, 32, 32))
+    image.save(front_path)
+
     class _FakeOutputStore:
         def list_by_job(self, job_id: str):  # noqa: ANN001, ANN201
             assert job_id == "job_front_absolute"
@@ -614,7 +620,7 @@ def test_doc248_face_host_projects_canonical_generic_shared_receipt_for_formal_c
                             },
                         ],
                     },
-                    file_path="unused_front.png",
+                    file_path=str(front_path),
                 )
             ]
 

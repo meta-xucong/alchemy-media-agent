@@ -1241,6 +1241,22 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
     monkeypatch.setattr(service.output_store, "get_output", directed_get_output)
     monkeypatch.setattr(
         service.output_store,
+        "file_for_variant",
+        lambda output_id, _variant: (
+            (str(output.file_path),)
+            for outputs in outputs_by_job.values()
+            for output in outputs
+            if str(output.output_id) == str(output_id)
+        ).__next__()
+        if any(
+            str(output.output_id) == str(output_id)
+            for outputs in outputs_by_job.values()
+            for output in outputs
+        )
+        else None,
+    )
+    monkeypatch.setattr(
+        service.output_store,
         "list_by_job",
         lambda job_id: list(outputs_by_job.get(job_id, [])),
     )

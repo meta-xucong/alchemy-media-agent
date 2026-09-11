@@ -746,7 +746,7 @@ def test_doc252_composite_does_not_apply_to_auxiliary_25_degree() -> None:
     assert receipt.candidates[0].enhanced_proof is None
 
 
-def test_doc252_trusted_host_threads_micro_guidance_only_for_standard_front() -> None:
+def test_doc252_deprecated_host_projection_does_not_emit_micro_metadata() -> None:
     captured: list[dict[str, object]] = []
 
     class _FakeService:
@@ -788,11 +788,11 @@ def test_doc252_trusted_host_threads_micro_guidance_only_for_standard_front() ->
     with pytest.raises(AnchorCandidateUnavailable):
         host.generate(bridge_request)
 
-    assert captured[0]["professional_micro_real_human_fidelity_required"] is True
-    assert captured[0]["professional_micro_real_human_fidelity_provenance"] == "server_feature_flag_v1"
-    assert "professional_micro_real_human_fidelity_guidance" in captured[0]
-    assert "professional_micro_real_human_fidelity_required" not in captured[1]
-    assert "professional_micro_real_human_fidelity_guidance" not in captured[1]
+    # Doc257 made Doc252 historical/read-only. A legacy request may still
+    # carry the old typed flag, but the Host must not turn it into a new
+    # prompt/gate/retry metadata surface for either formal or auxiliary views.
+    assert len(captured) == 2
+    assert all(not str(key).startswith("professional_micro_") for item in captured for key in item)
 
 
 def test_doc252_base_anchor_pack_request_cannot_enable_micro_realism() -> None:
@@ -881,9 +881,7 @@ def test_doc252_host_never_projects_micro_metadata_for_anchor_pack_scope() -> No
     assert all(not str(key).startswith("professional_micro_") for key in captured[0])
 
 
-def test_doc252_host_consumes_existing_prompt_authority_instead_of_fabricating(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_doc252_host_does_not_fabricate_retired_micro_guidance() -> None:
     captured: list[dict[str, object]] = []
 
     class _FakeService:
@@ -895,20 +893,6 @@ def test_doc252_host_consumes_existing_prompt_authority_instead_of_fabricating(
 
         def get_job_record(self, job_id: str):  # noqa: ANN001, ANN201
             return SimpleNamespace(request=SimpleNamespace(metadata={}))
-
-    def _fake_anchor_metadata(*, view_role: str, capture_scope: str) -> dict[str, object]:
-        assert view_role == "standard_front"
-        assert capture_scope == "character_card_face_identity"
-        return {
-            "creative_direction_owner": "existing_test_brain_authority",
-            "professional_anchor_capture_scope": capture_scope,
-        }
-
-    monkeypatch.setattr(
-        ProfessionalModeRuntimeBridge,
-        "anchor_pack_preparation_metadata",
-        staticmethod(_fake_anchor_metadata),
-    )
 
     host = ProductApiAnchorPackPreparationHost(_FakeService())  # type: ignore[arg-type]
     request = AnchorGenerationRequest(
@@ -929,9 +913,8 @@ def test_doc252_host_consumes_existing_prompt_authority_instead_of_fabricating(
     with pytest.raises(AnchorCandidateUnavailable):
         host.generate(request)
 
-    guidance = captured[0]["professional_micro_real_human_fidelity_guidance"]
-    assert isinstance(guidance, dict)
-    assert guidance["prompt_authority"] == "existing_test_brain_authority"
+    assert captured
+    assert all(not str(key).startswith("professional_micro_") for key in captured[0])
 
 
 def test_doc252_visible_optional_micro_dimension_missing_is_not_synthesized_not_applicable() -> None:

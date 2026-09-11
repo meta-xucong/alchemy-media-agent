@@ -40,7 +40,10 @@ from ..generation_router.providers import (
 )
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
 from ..llm_brain.contracts import BRAIN_TRANSPORT_TIMEOUT_PHASES
-from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
+from ..llm_brain.finalizer_lifecycle import (
+    remote_brain_receipts_are_monotonic,
+    safe_remote_brain_finalizer_lifecycle,
+)
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
 from ..photography_profiles import (
     PhotographerProfileBinding,
@@ -132,6 +135,7 @@ from .contracts import (
     CreateBrandRequest,
     CreateCreativeJobRequest,
     EcommerceCapabilitySummary,
+    GenerateContinuation,
     GenerateJobRequest,
     GeneralCreativeCapabilitySummary,
     ImageOutputOptions,
@@ -198,6 +202,17 @@ _REMOTE_BRAIN_LIFECYCLE_ERROR_CLASSES = {
     "serialization_failure",
     "contract_validation",
     "unknown",
+}
+
+_REMOTE_BRAIN_AVAILABILITY_REASONS = {
+    "remote_disabled",
+    "brain_disabled",
+    "missing_credentials",
+    "invalid_configuration",
+    "capability_scope_inactive",
+    "availability_check_failed",
+    "provider_unavailable",
+    "configured",
 }
 
 _REMOTE_BRAIN_LIFECYCLE_STAGES = {
@@ -1270,6 +1285,47 @@ class V3ProductApiService:
         }
     )
 
+    # Generate may carry a small set of explicit review-runtime controls for
+    # compatibility and deterministic tests.  Arbitrary Generate metadata is
+    # never copied into the reviewer: server-owned evidence, prompt
+    # projections, and hidden control fields must remain Job-owned.
+    _POST_GENERATION_REVIEW_RUNTIME_OVERRIDES = frozenset(
+        {
+            "require_real_images",
+            "real_image_generation",
+            "vision_inspection_mode",
+            "post_generation_inspection_mode",
+            "vision_inspection_timeout_seconds",
+            "vision_inspection_max_attempts",
+            "enable_real_vision_inspection",
+            "disable_real_vision_inspection",
+            "enable_local_aesthetic_heuristics",
+            "post_generation_fake_issue_codes",
+            "post_generation_fake_confidence",
+        }
+    )
+
+    _GENERATE_RETRY_RUNTIME_CONTROLS = frozenset(
+        {
+            "disable_visual_auto_retry",
+            "max_visual_retry_attempts",
+            "enable_visual_auto_retry_in_explore",
+            "force_empty_visual_retry_patch",
+            "force_visual_retry_issue_codes",
+            "visual_retry_issue_codes",
+            "visual_auto_retry_issue_codes",
+            "force_anti_ai_face_issue_codes",
+            "anti_ai_face_issue_codes",
+            "force_beautiful_realism_issue_codes",
+            "beautiful_realism_issue_codes",
+            "facial_feature_issue_codes",
+            "identity_card_issue_codes",
+            "force_visual_retry_issue",
+            "visual_retry_issue_code",
+            "visual_retry_patch",
+        }
+    )
+
     def __init__(
         self,
         brand_profile_service: BrandProfileService | None = None,
@@ -2323,7 +2379,7 @@ class V3ProductApiService:
                 "three_quarter": 3,
                 "profile": 3,
                 "right_front_25": 3,
-                "reverse_three_quarter": 3,
+                "reverse_three_quarter": 4,
                 "rear_head": 4,
             }[view_role]
         evidence_ids = [str(item or "").strip() for item in (reference_evidence_ids or [])]
@@ -3395,6 +3451,7 @@ class V3ProductApiService:
         request: GenerateJobRequest | dict[str, Any] | None = None,
         *,
         _trusted_body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+        _trusted_generate_continuation: GenerateContinuation | None = None,
     ) -> ProductJobStatus:
         record = self.job_store.get(job_id)
         if record is None:
@@ -3405,14 +3462,31 @@ class V3ProductApiService:
         ):
             raise ValueError("body_refresh_analysis_context_untrusted")
         generate_request = self._coerce_generate_request(request or {})
+        self._assert_external_generate_metadata_clean(generate_request)
+        continuation = self._coerce_generate_continuation(_trusted_generate_continuation)
+        if continuation is not None and continuation.job_id != record.job_id:
+            raise ValueError("generate_continuation_job_mismatch")
+        worker_claim = continuation.background_worker_claim if continuation is not None else False
+        background_attempt_id = (
+            continuation.background_generation_attempt_id or "" if continuation is not None else ""
+        )
+        resume_interrupted_mcp_materialization = (
+            continuation.resume_interrupted_mcp_materialization if continuation is not None else False
+        )
+        resume_finalizing_review = continuation.resume_finalizing_review if continuation is not None else False
+        if continuation is not None:
+            trusted_runtime_metadata = continuation.runtime_metadata()
+            if trusted_runtime_metadata:
+                generate_request = generate_request.model_copy(
+                    update={
+                        "metadata": {
+                            **dict(generate_request.metadata or {}),
+                            **trusted_runtime_metadata,
+                        }
+                    }
+                )
         self._bind_generate_image_options(record, generate_request)
         self._assert_photographer_profile_binding_immutable(record, generate_request)
-        worker_claim = bool(generate_request.metadata.pop("_v3_background_worker_claim", False))
-        background_attempt_id = str(generate_request.metadata.pop("_v3_background_generation_attempt_id", "") or "")
-        resume_interrupted_mcp_materialization = bool(
-            generate_request.metadata.pop("_v3_resume_interrupted_mcp_materialization", False)
-        )
-        resume_finalizing_review = bool(generate_request.metadata.pop("_v3_resume_finalizing_review", False))
         if worker_claim and not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         if self._blocked_planning_reentry_requires_explicit_resume(
@@ -3510,9 +3584,15 @@ class V3ProductApiService:
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
+        try:
+            self._validate_current_job_capability_plan(record)
+        except ValueError:
+            record.status = ProductJobStatusValue.BLOCKED
+            record.warnings.append("The saved execution plan could not be reconciled with this job.")
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+            return self._status_from_record(record)
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
-        if generate_request.metadata:
-            record.request.metadata = {**dict(record.request.metadata), **dict(generate_request.metadata)}
         submitted_mcp_generation_result = None
         submitted_mcp_contract_invalid = False
         submitted_body_resume = self._is_submitted_body_mcp_resume(record)
@@ -3529,10 +3609,15 @@ class V3ProductApiService:
                 record.request.metadata = self._without_transient_generation_failure_metadata(record.request.metadata)
                 record.status = ProductJobStatusValue.GENERATING
                 record.lifecycle = self._build_lifecycle(record)
+                runtime_request = record.request
                 self.job_store.save(record)
                 generation_runtime_result = self.scenario_runtime.generate_job(
                     self._runtime_request_payload(
-                        record.request,
+                        runtime_request,
+                        # The current record is the trusted source for a
+                        # frozen plan. External Generate metadata has been
+                        # rejected above and cannot replace this authority.
+                        trusted_capability_plan_reuse=True,
                         body_refresh_analysis_context=_trusted_body_refresh_analysis_context,
                     ),
                     mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
@@ -3761,6 +3846,16 @@ class V3ProductApiService:
                 record.lifecycle = self._build_lifecycle(record)
                 self.job_store.save(record)
                 return self._status_from_record(record)
+        if not self._persist_output_store_job_closure(record, generation_result):
+            # Durable restart recovery is an auxiliary projection.  It must
+            # not turn an otherwise complete in-memory core result into a
+            # false generation failure; status-from-output-store remains
+            # conservative when this receipt is absent or invalid.
+            warning = (
+                "Generated output was not sealed for restart recovery; the current result remains available."
+            )
+            if warning not in record.warnings:
+                record.warnings.append(warning)
         record.status = ProductJobStatusValue.GENERATED
         record.balance_estimate = self._estimate_for_result(generation_result)
         record.lifecycle = self._build_lifecycle(record)
@@ -4780,6 +4875,7 @@ class V3ProductApiService:
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         record.generation_result = generation_result
+        self._persist_mode_execution_projection_to_output_store(generation_result)
         package = generation_result.metadata.get("post_generation_review_package")
         review_still_pending = (
             isinstance(package, dict)
@@ -4827,6 +4923,14 @@ class V3ProductApiService:
                 record.lifecycle = self._build_lifecycle(record)
                 self.job_store.save(record)
                 return self._status_from_record(record)
+        if not self._persist_output_store_job_closure(record, generation_result):
+            # Durable restart recovery is an auxiliary projection and cannot
+            # block the already-reviewed core result.
+            warning = (
+                "Generated output was not sealed for restart recovery; the current result remains available."
+            )
+            if warning not in record.warnings:
+                record.warnings.append(warning)
         record.status = ProductJobStatusValue.GENERATED
         record.balance_estimate = self._estimate_for_result(generation_result)
         record.lifecycle = self._build_lifecycle(record)
@@ -5529,12 +5633,30 @@ class V3ProductApiService:
     ) -> ProductJobStatus:
         return self.generate_asset_series(job_id, request)
 
+    def generate_job_with_continuation(
+        self,
+        job_id: str,
+        request: GenerateJobRequest | dict[str, Any] | None = None,
+        *,
+        continuation: GenerateContinuation,
+    ) -> ProductJobStatus:
+        """Run Generate with an explicit, job-bound internal continuation."""
+
+        if not isinstance(continuation, GenerateContinuation):
+            raise ValueError("generate_continuation_untrusted")
+        return self.generate_asset_series(
+            job_id,
+            request,
+            _trusted_generate_continuation=continuation,
+        )
+
     def generate_professional_character_card_candidate(
         self,
         job_id: str,
         request: GenerateJobRequest | dict[str, Any] | None = None,
         *,
         body_refresh_analysis_context: BodyRefreshAnalysisContext,
+        continuation: GenerateContinuation | None = None,
     ) -> ProductJobStatus:
         """Generate one Character Card candidate with an ephemeral frozen context.
 
@@ -5595,6 +5717,7 @@ class V3ProductApiService:
             job_id,
             request,
             _trusted_body_refresh_analysis_context=body_refresh_analysis_context,
+            _trusted_generate_continuation=continuation,
         )
 
     def _background_generation_attempt_is_current(self, record: ProductJobRecord, background_attempt_id: str) -> bool:
@@ -5678,20 +5801,16 @@ class V3ProductApiService:
         # created, while the later generate request normally contains only
         # per-attempt controls.  Choosing a strategy from the latter alone
         # silently downgraded an already-required real image job to the mock
-        # fixture.  Persisted job intent is therefore a hard baseline; a
-        # per-attempt request may require real generation too, but cannot
-        # relax a persisted real-provider requirement.
+        # fixture.  Persisted job intent is therefore the sole strategy
+        # authority; Generate cannot change the provider route for one attempt.
         frozen_metadata = dict(record.request.metadata)
-        attempt_metadata = dict(generate_request.metadata)
-        metadata = {**frozen_metadata, **attempt_metadata}
+        metadata = frozen_metadata
         channel = str(metadata.get("generation_channel") or "provider").strip().lower()
         if channel == "mcp":
             return ProviderStrategy.MCP_MATERIALIZATION
         require_real_images = bool(
             frozen_metadata.get("require_real_images")
             or frozen_metadata.get("real_image_generation")
-            or attempt_metadata.get("require_real_images")
-            or attempt_metadata.get("real_image_generation")
         )
         if not require_real_images:
             return ProviderStrategy.MOCK_GENERATION
@@ -6099,10 +6218,10 @@ class V3ProductApiService:
     ) -> PlanningResult:
         project_id = record.request.metadata.get("project_id")
         # Review evidence is server-owned and must never be accepted from public metadata.
-        public_metadata = {
-            **dict(record.request.metadata or {}),
-            **dict(generate_request.metadata or {}),
-        }
+        public_metadata = dict(record.request.metadata or {})
+        for key in self._POST_GENERATION_REVIEW_RUNTIME_OVERRIDES:
+            if key in (generate_request.metadata or {}):
+                public_metadata[key] = generate_request.metadata[key]
         for key in (
             "review_evidence_plan",
             "review_evidence_plan_digest",
@@ -6979,7 +7098,7 @@ class V3ProductApiService:
             record.request.metadata = retry_metadata
             try:
                 retry_runtime_result = self.scenario_runtime.generate_job(
-                    self._runtime_request_payload(record.request),
+                    self._runtime_request_payload(record.request, trusted_capability_plan_reuse=True),
                     mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
                     apply_memory_update=False,
                     provider_strategy=provider_strategy,
@@ -7227,7 +7346,7 @@ class V3ProductApiService:
         record.request.metadata = retry_metadata
         try:
             runtime_result = self.scenario_runtime.generate_job(
-                self._runtime_request_payload(record.request),
+                self._runtime_request_payload(record.request, trusted_capability_plan_reuse=True),
                 mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
                 apply_memory_update=False,
                 provider_strategy=provider_strategy,
@@ -8276,6 +8395,21 @@ class V3ProductApiService:
         return type(recipe_index) is int and recipe_index == output_index
 
     @staticmethod
+    def _is_opaque_provider_role_recipe(recipe: Any) -> bool:
+        """Keep a bound provider role while the ledger owns its semantics."""
+
+        if not isinstance(recipe, dict):
+            return False
+        role_key = str(recipe.get("role_key") or "").strip()
+        metadata = recipe.get("metadata")
+        if not role_key or not isinstance(metadata, dict):
+            return False
+        semantic_role_key = str(
+            metadata.get("semantic_role_key") or metadata.get("source_role_key") or ""
+        ).strip()
+        return bool(semantic_role_key and role_key != semantic_role_key)
+
+    @staticmethod
     def _output_index_for_packaged(
         asset_spec: Any,
         packaged: Any,
@@ -8297,13 +8431,303 @@ class V3ProductApiService:
             return priority
         return ordinal if type(ordinal) is int and ordinal >= 1 else None
 
+    def _persist_output_store_job_closure(
+        self,
+        record: ProductJobRecord,
+        result: PlanningResult | Any,
+    ) -> bool:
+        """Write one immutable restore receipt after review/delivery settles."""
+
+        saver = getattr(self.output_store, "save_job_closure", None)
+        if not callable(saver):
+            return False
+        package = dict(getattr(result, "metadata", {}).get("post_generation_review_package") or {})
+        if not package or str(package.get("review_evidence_receipt_status") or "").strip().lower() != "complete":
+            # A normal in-memory result may still be usable by its owning
+            # record, but an output-only restart must remain conservative until
+            # the shared review package is complete.
+            return True
+        final_delivery, eligible_output_ids, _eligible_asset_ids = self._public_final_delivery_projection(result)
+        output_ids = self._dedupe_strings(
+            self._reviewed_result_output_ids(result)
+            or self._visual_result_output_ids(result)
+        )
+        if not output_ids:
+            return False
+        output_records = {
+            str(item.output_id or "").strip(): item
+            for item in self.output_store.list_by_job(record.job_id)
+            if str(item.output_id or "").strip()
+        }
+        if set(output_ids) - set(output_records):
+            return False
+        envelope = self._capability_execution_envelope_from_result(result)
+        ledger = envelope.get("resolved_constraint_ledger") if isinstance(envelope, dict) else None
+        execution_fingerprint = str(envelope.get("execution_fingerprint") or "").strip()
+        envelope_id = str(envelope.get("envelope_id") or "").strip()
+        ledger_id = str(ledger.get("ledger_id") or "").strip() if isinstance(ledger, dict) else ""
+        if not execution_fingerprint or not envelope_id or not ledger_id:
+            return False
+        bindings: list[dict[str, Any]] = []
+        for output_id in output_ids:
+            output = output_records[output_id]
+            metadata = dict(output.metadata or {})
+            stored_envelope = metadata.get("capability_execution_envelope")
+            if not isinstance(stored_envelope, dict):
+                return False
+            stored_ledger = stored_envelope.get("resolved_constraint_ledger")
+            stored_projection = (
+                stored_ledger.get("provider_projection")
+                if isinstance(stored_ledger, dict)
+                else None
+            )
+            if (
+                str(stored_envelope.get("execution_fingerprint") or "").strip() != execution_fingerprint
+                or str(stored_envelope.get("envelope_id") or "").strip() != envelope_id
+                or not isinstance(stored_projection, dict)
+                or not isinstance(stored_projection.get("capability_projection"), dict)
+            ):
+                return False
+            content_sha256 = str(metadata.get("content_sha256") or "").strip().lower()
+            if len(content_sha256) != 64 or not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
+                return False
+            bindings.append(
+                {
+                    "output_id": output_id,
+                    "asset_id": str(output.asset_id or "").strip(),
+                    "candidate_id": str(output.candidate_id or "").strip(),
+                    "content_sha256": content_sha256,
+                }
+            )
+        closure = {
+            "schema_version": "v3_output_delivery_closure_v1",
+            "job_id": record.job_id,
+            "status": "complete",
+            "review_evidence_receipt_status": "complete",
+            "final_delivery_status": str(final_delivery.get("final_delivery_status") or "not_evaluated"),
+            "automatic_delivery_available": bool(final_delivery.get("automatic_delivery_available")),
+            "eligible_output_ids": sorted(str(item) for item in eligible_output_ids if str(item).strip()),
+            "execution_fingerprint": execution_fingerprint,
+            "envelope_id": envelope_id,
+            "ledger_id": ledger_id,
+            "outputs": bindings,
+        }
+        closure_valid, _closure_reason = self._valid_output_store_job_closure(
+            closure,
+            job_id=record.job_id,
+            records=list(output_records.values()),
+        )
+        if not closure_valid or not self._output_store_closure_files_match(closure, output_records):
+            return False
+        try:
+            saver(record.job_id, closure)
+        except (OSError, ValueError, TypeError):
+            return False
+        return True
+
+    @staticmethod
+    def _valid_output_store_job_closure(
+        closure: Any,
+        *,
+        job_id: str,
+        records: list[V3GeneratedOutputRecord],
+    ) -> tuple[bool, str]:
+        """Validate the job-level receipt without consulting mutable status."""
+
+        if not isinstance(closure, dict):
+            return False, "closure_missing"
+        if (
+            closure.get("schema_version") != "v3_output_delivery_closure_v1"
+            or closure.get("job_id") != job_id
+            or closure.get("status") != "complete"
+            or closure.get("review_evidence_receipt_status") != "complete"
+        ):
+            return False, "closure_invalid"
+        final_delivery_status = str(closure.get("final_delivery_status") or "").strip()
+        if final_delivery_status not in {
+            "ready",
+            "withheld_manual_confirmation",
+            "withheld_review_failure",
+            "not_evaluated",
+        }:
+            return False, "closure_delivery_invalid"
+        if closure.get("automatic_delivery_available") is not (final_delivery_status == "ready"):
+            return False, "closure_delivery_invalid"
+        execution_fingerprint = str(closure.get("execution_fingerprint") or "").strip()
+        envelope_id = str(closure.get("envelope_id") or "").strip()
+        ledger_id = str(closure.get("ledger_id") or "").strip()
+        outputs = closure.get("outputs")
+        declared = closure.get("eligible_output_ids")
+        if (
+            not execution_fingerprint
+            or not envelope_id
+            or not ledger_id
+            or not isinstance(outputs, list)
+            or not outputs
+            or not isinstance(declared, list)
+            or len({str(item).strip() for item in declared if str(item).strip()}) != len(declared)
+        ):
+            return False, "closure_binding_missing"
+        records_by_id = {
+            str(item.output_id or "").strip(): item
+            for item in records
+            if str(item.output_id or "").strip()
+        }
+        output_ids: set[str] = set()
+        for item in outputs:
+            if not isinstance(item, dict):
+                return False, "closure_output_invalid"
+            output_id = str(item.get("output_id") or "").strip()
+            if not output_id or output_id in output_ids or output_id not in records_by_id:
+                return False, "closure_output_mismatch"
+            output_ids.add(output_id)
+            output = records_by_id[output_id]
+            if (
+                str(item.get("job_id") or job_id).strip() != job_id
+                or str(item.get("asset_id") or "").strip() != str(output.asset_id or "").strip()
+                or str(item.get("candidate_id") or "").strip() != str(output.candidate_id or "").strip()
+                or str(item.get("content_sha256") or "").strip().lower()
+                != str(dict(output.metadata or {}).get("content_sha256") or "").strip().lower()
+            ):
+                return False, "closure_output_binding_invalid"
+            if not re.fullmatch(r"[0-9a-f]{64}", str(item.get("content_sha256") or "").strip().lower()):
+                return False, "closure_output_binding_invalid"
+            stored_envelope = dict(output.metadata or {}).get("capability_execution_envelope")
+            stored_ledger = stored_envelope.get("resolved_constraint_ledger") if isinstance(stored_envelope, dict) else None
+            stored_projection = stored_ledger.get("provider_projection") if isinstance(stored_ledger, dict) else None
+            if (
+                not isinstance(stored_envelope, dict)
+                or str(stored_envelope.get("execution_fingerprint") or "").strip() != execution_fingerprint
+                or str(stored_envelope.get("envelope_id") or "").strip() != envelope_id
+                or not isinstance(stored_ledger, dict)
+                or str(stored_ledger.get("ledger_id") or "").strip() != ledger_id
+                or not isinstance(stored_projection, dict)
+                or not isinstance(stored_projection.get("capability_projection"), dict)
+            ):
+                return False, "closure_mode_binding_invalid"
+        declared_ids = {str(item).strip() for item in declared if str(item).strip()}
+        if final_delivery_status == "ready" and declared_ids != output_ids:
+            return False, "closure_delivery_output_mismatch"
+        if final_delivery_status != "ready" and declared_ids:
+            return False, "closure_delivery_output_mismatch"
+        return True, "closed"
+
+    def _output_store_job_closure(self, job_id: str) -> dict[str, Any] | None:
+        """Read the immutable restore receipt at the output-store boundary."""
+
+        getter = getattr(self.output_store, "get_job_closure", None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter(job_id)
+        except (OSError, TypeError, ValueError):
+            return None
+        return dict(value) if isinstance(value, dict) else None
+
+    def _output_store_closure_files_match(
+        self,
+        closure: dict[str, Any],
+        records: dict[str, V3GeneratedOutputRecord] | list[V3GeneratedOutputRecord],
+    ) -> bool:
+        """Verify closure hashes against canonical bytes before publication."""
+
+        resolver = getattr(self.output_store, "file_for_variant", None)
+        if not callable(resolver):
+            return False
+        records_by_id = (
+            records
+            if isinstance(records, dict)
+            else {
+                str(item.output_id or "").strip(): item
+                for item in records
+                if str(item.output_id or "").strip()
+            }
+        )
+        for binding in closure.get("outputs", []) if isinstance(closure, dict) else []:
+            if not isinstance(binding, dict):
+                return False
+            output_id = str(binding.get("output_id") or "").strip()
+            expected = str(binding.get("content_sha256") or "").strip().lower()
+            record = records_by_id.get(output_id)
+            if record is None or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                return False
+            try:
+                resolved = resolver(output_id, "download")
+                path = Path(resolved[0]) if isinstance(resolved, tuple) and resolved else None
+                actual = hashlib.sha256(path.read_bytes()).hexdigest() if path is not None else ""
+            except (OSError, TypeError, ValueError, IndexError):
+                return False
+            if actual != expected:
+                return False
+            record_expected = str(dict(record.metadata or {}).get("content_sha256") or "").strip().lower()
+            if record_expected != actual:
+                return False
+        return True
+
+    @staticmethod
+    def _closed_output_store_records(
+        records: list[V3GeneratedOutputRecord],
+        closure: dict[str, Any] | None,
+    ) -> list[V3GeneratedOutputRecord]:
+        """Select only the immutable delivery set, folding superseded outputs."""
+
+        if not isinstance(closure, dict):
+            return []
+        output_ids = {
+            str(item.get("output_id") or "").strip()
+            for item in closure.get("outputs", [])
+            if isinstance(item, dict) and str(item.get("output_id") or "").strip()
+        }
+        if not output_ids:
+            return []
+        return [
+            record
+            for record in records
+            if str(record.output_id or "").strip() in output_ids
+        ]
+
+    def _aggregate_output_store_mode_projection(
+        self,
+        records: list[V3GeneratedOutputRecord],
+    ) -> tuple[dict[str, Any], str]:
+        """Aggregate authoritative mode facts across every restored output."""
+
+        projections = [
+            projection
+            for record in records
+            for projection in [self._mode_execution_status_projection(record, authoritative_only=True)]
+            if projection
+        ]
+        if not projections:
+            envelope_projection_present = False
+            for record in records:
+                metadata = record.metadata if isinstance(record.metadata, dict) else {}
+                envelope = metadata.get("capability_execution_envelope")
+                ledger = envelope.get("resolved_constraint_ledger") if isinstance(envelope, dict) else None
+                provider_projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
+                if isinstance(provider_projection, dict) and isinstance(
+                    provider_projection.get("capability_projection"),
+                    dict,
+                ):
+                    envelope_projection_present = True
+                    break
+            return {}, "projection_not_applicable" if envelope_projection_present else "projection_missing"
+        try:
+            fingerprints = {
+                json.dumps(item, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                for item in projections
+            }
+        except (TypeError, ValueError):
+            fingerprints = {repr(item) for item in projections}
+        if len(fingerprints) != 1:
+            return {}, "projection_conflict"
+        return dict(projections[0]), "projection_restored"
+
     def _persist_mode_execution_projection_to_output_store(self, result: PlanningResult | Any) -> None:
         """Bind the frozen mode projection to each durable generated output."""
 
         self._ensure_effective_mode_in_authoritative_projection(result)
         projection = self._authoritative_mode_execution_projection(result)
-        if not projection:
-            return
         updater = getattr(self.output_store, "update_metadata", None)
         if not callable(updater):
             return
@@ -8454,12 +8878,25 @@ class V3ProductApiService:
                 )
                 if not value:
                     continue
+            if not self._projection_value_is_non_empty(value):
+                continue
             current = projected.get(key)
             if self._projection_value_is_non_empty(current):
                 if current != value:
                     projection_conflicts.append(key)
+            if (
+                key == "mode_role_recipe"
+                and self._is_opaque_provider_role_recipe(current)
+                and self._mode_role_recipe_matches_output_index(current, bound_output_index)
+            ):
+                # The ledger remains authoritative for the semantic role, but
+                # a provider-specific, output-bound recipe is the executable
+                # adapter needed by downstream materialization.
                 continue
-            projected[key] = value
+            # The nested execution ledger is the server-owned authority.  A
+            # stale candidate projection may be retained for diagnostics, but
+            # it must not win the public candidate view over the frozen mode.
+            projected[key] = copy.deepcopy(value)
 
         mode_audit = self._mode_execution_audit_from_result(
             result,
@@ -8662,12 +9099,13 @@ class V3ProductApiService:
 
         receipt: Any = None
         hinted_receipt: dict[str, Any] | None = None
-        job_id = str(getattr(result.creative_job, "job_id", "") or "").strip()
-        result_metadata = dict(result.metadata or {})
+        job_id = str(getattr(getattr(result, "creative_job", None), "job_id", "") or "").strip()
+        result_metadata = dict(getattr(result, "metadata", None) or {})
+        asset_pack = getattr(result, "asset_pack", None)
         candidate_sources = (
             result_metadata,
-            dict(result.asset_pack.metadata or {}),
-            dict(result.asset_pack.manifest or {}),
+            dict(getattr(asset_pack, "metadata", None) or {}),
+            dict(getattr(asset_pack, "manifest", None) or {}),
         )
         for source in candidate_sources:
             value = source.get("doc73_auto_identity_anchor_receipt")
@@ -8688,7 +9126,7 @@ class V3ProductApiService:
         if receipt is None and hinted_receipt is not None:
             receipt = hinted_receipt
         if receipt is None:
-            for asset in result.asset_pack.assets:
+            for asset in getattr(asset_pack, "assets", []) or []:
                 asset_metadata = dict(asset.metadata or {})
                 candidate_metadata = asset_metadata.get("candidate_metadata")
                 if isinstance(candidate_metadata, dict):
@@ -11283,7 +11721,6 @@ class V3ProductApiService:
                 "background_generation_watchdog",
                 "effective_variation_mode",
                 "mode_execution_policy",
-                "role_specific_generation_plan",
                 "mode_quality_profile",
                 "variation_execution_contract",
                 "variation_execution_contract_binding",
@@ -11880,6 +12317,14 @@ class V3ProductApiService:
             "provider_response_summary",
             "runtime_transport",
             "final_provider_prompt",
+            "compiled_visual_direction",
+            "optimized_direction",
+            "provider_prompt",
+            "generation_prompt",
+            "visual_prompt",
+            "prompt_guidance",
+            "prompt_compilation",
+            "provider_notes",
             "provider_reference_assets",
             "professional_standard_front_framing_profile",
             "post_generation_review_package",
@@ -12079,6 +12524,13 @@ class V3ProductApiService:
             "review_certification",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        raw_remote_outcome = status_metadata.get("remote_creative_brain_outcome")
+        if isinstance(raw_remote_outcome, dict):
+            safe_remote_outcome = self._public_remote_brain_lifecycle_outcome(raw_remote_outcome)
+            if safe_remote_outcome:
+                status_metadata["remote_creative_brain_outcome"] = safe_remote_outcome
+            else:
+                status_metadata.pop("remote_creative_brain_outcome", None)
         general_activation = self._doc270_general_activation_public_state(record)
         if general_activation is not None:
             status_metadata["doc270_general_source_activation"] = general_activation
@@ -12378,8 +12830,26 @@ class V3ProductApiService:
         for key in ("llm_used", "fallback_used", "remote_provider_available"):
             if isinstance(outcome.get(key), bool):
                 projected[key] = outcome[key]
+        availability_reason = cls._closed_string(
+            outcome.get("remote_provider_availability_reason"),
+            allowed=_REMOTE_BRAIN_AVAILABILITY_REASONS,
+        )
+        if availability_reason:
+            projected["remote_provider_availability_reason"] = availability_reason
         if isinstance(outcome.get("remote_brain_request_started"), bool):
             projected["remote_brain_request_started"] = outcome["remote_brain_request_started"]
+        raw_request_acceptance = outcome.get("remote_brain_request_acceptance")
+        if raw_request_acceptance is not None and (
+            not isinstance(raw_request_acceptance, str)
+            or raw_request_acceptance not in {"not_started", "dispatched", "unknown"}
+        ):
+            return {}
+        request_acceptance = raw_request_acceptance
+        if request_acceptance and isinstance(outcome.get("remote_brain_request_started"), bool):
+            if outcome["remote_brain_request_started"] is not (request_acceptance == "dispatched"):
+                return {}
+        if request_acceptance:
+            projected["remote_brain_request_acceptance"] = request_acceptance
         status_code = outcome.get("remote_http_status_code")
         if (
             isinstance(status_code, int)
@@ -12397,7 +12867,31 @@ class V3ProductApiService:
             outcome.get("remote_brain_finalizer_lifecycle")
         )
         if finalizer_lifecycle:
+            lifecycle_started = finalizer_lifecycle["remote_brain_request_started"]
+            lifecycle_acceptance = finalizer_lifecycle["remote_brain_request_acceptance"]
+            top_level_started = outcome.get("remote_brain_request_started")
+            if isinstance(top_level_started, bool) and top_level_started is not lifecycle_started:
+                return {}
+            if request_acceptance and request_acceptance != lifecycle_acceptance:
+                return {}
+            # A valid nested lifecycle is authoritative evidence. Complete
+            # the public top-level projection when an older runtime omitted
+            # its duplicate fields, while rejecting contradictory duplicates.
+            projected.setdefault("remote_brain_request_started", lifecycle_started)
+            projected.setdefault("remote_brain_request_acceptance", lifecycle_acceptance)
             projected["remote_brain_finalizer_lifecycle"] = finalizer_lifecycle
+        if not remote_brain_receipts_are_monotonic(
+            request_started=(
+                outcome.get("remote_brain_request_started")
+                if isinstance(outcome.get("remote_brain_request_started"), bool)
+                else None
+            ),
+            request_acceptance=request_acceptance,
+            finalizer_lifecycle=finalizer_lifecycle or None,
+            transport_attempt=attempt_receipt or None,
+            transport_failure=transport or None,
+        ):
+            return {}
         return projected
 
     @classmethod
@@ -12425,11 +12919,57 @@ class V3ProductApiService:
         )
         if any(not isinstance(value.get(key), bool) for key in boolean_keys):
             return {}
+        request_acceptance = value.get("request_acceptance")
+        if request_acceptance is not None and (
+            not isinstance(request_acceptance, str)
+            or request_acceptance not in {
+                "not_started",
+                "dispatched",
+                "unknown",
+            }
+        ):
+            return {}
+        if request_acceptance is not None and value.get("request_dispatched") != (
+            request_acceptance == "dispatched"
+        ):
+            return {}
+        protocol_fallback_attempted = value.get("protocol_fallback_attempted", False)
+        if not isinstance(protocol_fallback_attempted, bool):
+            return {}
+        if value.get("json_parse_completed") and not value.get("json_parse_started"):
+            return {}
+        if (
+            value.get("first_content_observed")
+            or value.get("complete_response_observed")
+            or value.get("json_parse_started")
+            or value.get("json_parse_completed")
+        ) and not value.get("response_started"):
+            return {}
+        effective_acceptance = request_acceptance
+        if effective_acceptance is None and (
+            value.get("request_dispatched") or value.get("response_started")
+        ):
+            effective_acceptance = "dispatched"
+        if value.get("response_started") and effective_acceptance != "dispatched":
+            return {}
+        if value.get("first_content_observed") and effective_acceptance != "dispatched":
+            return {}
+        if attempts == 0 and (
+            effective_acceptance not in {None, "not_started"}
+            or any(value.get(key) for key in boolean_keys)
+        ):
+            return {}
         return {
             "schema_version": "v3_brain_transport_attempt_v1",
             "stage": stage,
             "attempts": attempts,
+            **(
+                {"request_acceptance": effective_acceptance}
+                if effective_acceptance is not None
+                else {}
+            ),
             **{key: value[key] for key in boolean_keys},
+            "protocol_fallback_attempted": protocol_fallback_attempted,
         }
 
     @classmethod
@@ -12469,6 +13009,28 @@ class V3ProductApiService:
         attempts = value.get("attempts")
         if not stage or not isinstance(attempts, int) or isinstance(attempts, bool) or attempts not in {1, 2}:
             return {}
+        boolean_keys = (
+            "json_serialization_recovery_attempted",
+            "json_serialization_recovery_succeeded",
+            "json_parse_started",
+            "json_parse_completed",
+        )
+        if any(key in value and not isinstance(value[key], bool) for key in boolean_keys):
+            return {}
+        json_recovery_attempted = bool(value.get("json_serialization_recovery_attempted"))
+        json_recovery_succeeded = bool(value.get("json_serialization_recovery_succeeded"))
+        json_parse_started = bool(value.get("json_parse_started"))
+        json_parse_completed = bool(value.get("json_parse_completed"))
+        if schema_version == "v3_brain_truncated_response_v1" and (
+            json_parse_started or json_parse_completed
+        ):
+            return {}
+        if json_recovery_succeeded:
+            return {}
+        if json_recovery_attempted and attempts != 2:
+            return {}
+        if json_parse_completed and not json_parse_started:
+            return {}
         return {
             "schema_version": schema_version,
             "stage": stage,
@@ -12476,39 +13038,48 @@ class V3ProductApiService:
             "error_family": error_family,
             "json_failure_kind": json_failure_kind,
             "attempts": attempts,
-            "json_serialization_recovery_attempted": bool(
-                value.get("json_serialization_recovery_attempted")
-            ),
-            "json_serialization_recovery_succeeded": bool(
-                value.get("json_serialization_recovery_succeeded")
-            ),
-            "json_parse_started": bool(value.get("json_parse_started")),
-            "json_parse_completed": bool(value.get("json_parse_completed")),
+            "json_serialization_recovery_attempted": json_recovery_attempted,
+            "json_serialization_recovery_succeeded": json_recovery_succeeded,
+            "json_parse_started": json_parse_started,
+            "json_parse_completed": json_parse_completed,
         }
 
     @classmethod
     def _public_remote_brain_transport_failure(cls, value: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
             return {}
+        if value.get("schema_version") != "v3_brain_transport_failure_v1":
+            return {}
+        stage = cls._closed_string(value.get("stage"), allowed=_REMOTE_BRAIN_LIFECYCLE_STAGES)
+        transport_error_class = value.get("transport_error_class")
+        timeout_phase = value.get("timeout_phase")
+        timeout_seconds = value.get("timeout_seconds")
+        elapsed_ms = value.get("elapsed_ms")
+        if not stage or transport_error_class != "timeout":
+            return {}
+        if timeout_phase not in _REMOTE_BRAIN_TIMEOUT_PHASES:
+            return {}
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or float(timeout_seconds) <= 0.0
+        ):
+            return {}
+        if (
+            not isinstance(elapsed_ms, int)
+            or isinstance(elapsed_ms, bool)
+            or elapsed_ms < 0
+        ):
+            return {}
         projected: dict[str, Any] = {
             "schema_version": "v3_brain_transport_failure_v1",
+            "stage": stage,
+            "transport_error_class": "timeout",
+            "timeout_phase": timeout_phase,
+            "timeout_seconds": round(float(timeout_seconds), 3),
+            "elapsed_ms": elapsed_ms,
         }
-        stage = cls._closed_string(value.get("stage"), allowed=_REMOTE_BRAIN_LIFECYCLE_STAGES)
-        if stage:
-            projected["stage"] = stage
-        transport_error_class = cls._closed_string(
-            value.get("transport_error_class"),
-            allowed=_REMOTE_BRAIN_TRANSPORT_ERROR_CLASSES,
-        )
-        if transport_error_class:
-            projected["transport_error_class"] = transport_error_class
-        timeout_phase = cls._closed_string(value.get("timeout_phase"), allowed=_REMOTE_BRAIN_TIMEOUT_PHASES)
-        if timeout_phase:
-            projected["timeout_phase"] = timeout_phase
-        for key in ("timeout_seconds", "elapsed_ms"):
-            number = cls._safe_public_number(value.get(key))
-            if number is not None:
-                projected[key] = number
         for key in (
             "response_started",
             "first_content_observed",
@@ -12516,9 +13087,30 @@ class V3ProductApiService:
             "json_parse_started",
             "json_parse_completed",
         ):
-            if isinstance(value.get(key), bool):
-                projected[key] = value[key]
-        return projected if len(projected) > 1 else {}
+            if key in value and not isinstance(value[key], bool):
+                return {}
+            projected[key] = bool(value.get(key))
+        response_started = projected["response_started"]
+        if projected["json_parse_completed"] and not projected["json_parse_started"]:
+            return {}
+        if (
+            projected["first_content_observed"]
+            or projected["complete_response_observed"]
+            or projected["json_parse_started"]
+            or projected["json_parse_completed"]
+        ) and not response_started:
+            return {}
+        request_acceptance = cls._closed_string(
+            value.get("request_acceptance"),
+            allowed={"not_started", "dispatched", "unknown"},
+        )
+        if value.get("request_acceptance") is not None and not request_acceptance:
+            return {}
+        if request_acceptance and response_started and request_acceptance != "dispatched":
+            return {}
+        if request_acceptance:
+            projected["request_acceptance"] = request_acceptance
+        return projected
 
     @classmethod
     def _public_remote_brain_execution_budget(cls, value: Any) -> dict[str, Any]:
@@ -13096,24 +13688,66 @@ class V3ProductApiService:
         items: list[V3JobHistoryItem] = []
         for job_id, records in by_job.items():
             sorted_records = sorted(records, key=lambda item: item.created_at or "", reverse=True)
-            latest = sorted_records[0]
+            closure = self._output_store_job_closure(job_id)
+            closure_valid, closure_reason = self._valid_output_store_job_closure(
+                closure,
+                job_id=job_id,
+                records=sorted_records,
+            )
+            if closure_valid and not self._output_store_closure_files_match(closure, sorted_records):
+                closure_valid = False
+                closure_reason = "closure_file_integrity_invalid"
+            restore_records = self._closed_output_store_records(
+                sorted_records,
+                closure if closure_valid else None,
+            )
+            if not restore_records:
+                restore_records = sorted_records
+            latest = restore_records[0]
+            final_delivery_status = (
+                str(closure.get("final_delivery_status") or "").strip()
+                if closure_valid and isinstance(closure, dict)
+                else ""
+            )
+            history_status = (
+                ProductJobStatusValue.GENERATED
+                if closure_valid and final_delivery_status == "ready"
+                else ProductJobStatusValue.BLOCKED
+            )
+            restore_projection, projection_reason = self._aggregate_output_store_mode_projection(
+                restore_records
+            )
             items.append(
                 V3JobHistoryItem(
                     job_id=job_id,
-                    status=ProductJobStatusValue.GENERATED,
+                    status=history_status,
                     scenario_id=None,
                     scenario_label="V3 Generated Output",
                     selected_preset_id=None,
                     user_input="Restored V3 generated image output",
-                    asset_count=len(sorted_records),
-                    candidate_count=len(sorted_records),
-                    selected_asset_count=len(sorted_records),
-                    created_at=sorted_records[-1].created_at,
+                    asset_count=len(restore_records),
+                    candidate_count=len(restore_records),
+                    selected_asset_count=len(restore_records) if history_status == ProductJobStatusValue.GENERATED else 0,
+                    created_at=restore_records[-1].created_at,
                     updated_at=latest.created_at,
                     route=get_navigation_entry()["route"],
                     metadata={
                         "source": "V3GeneratedOutputStore",
                         "restored_from_output_store": True,
+                        "output_store_restore_state": (
+                            "closed"
+                            if history_status == ProductJobStatusValue.GENERATED
+                            else "needs_recovery"
+                            if not closure_valid
+                            else "delivery_withheld"
+                        ),
+                        "output_store_restore_reason": (
+                            "closed"
+                            if closure_valid and history_status == ProductJobStatusValue.GENERATED
+                            else projection_reason
+                            if projection_reason != "projection_restored"
+                            else closure_reason
+                        ),
                         "first_output_id": latest.output_id,
                         "thumbnail_url": latest.thumbnail_url,
                         "preview_url": latest.preview_url,
@@ -13121,6 +13755,7 @@ class V3ProductApiService:
                         "v3_history_owned": True,
                         "imports_v1_v2_runtime": False,
                         "imports_lab_runtime": False,
+                        **restore_projection,
                     },
                 )
             )
@@ -13131,10 +13766,37 @@ class V3ProductApiService:
         if not records:
             return None
         records = sorted(records, key=lambda item: item.created_at or "")
-        restored_mode_projection = self._mode_execution_status_projection(records[0], authoritative_only=True)
+        closure = self._output_store_job_closure(job_id)
+        closure_valid, closure_reason = self._valid_output_store_job_closure(
+            closure,
+            job_id=job_id,
+            records=records,
+        )
+        if closure_valid and not self._output_store_closure_files_match(closure, records):
+            closure_valid = False
+            closure_reason = "closure_file_integrity_invalid"
+        restore_records = self._closed_output_store_records(
+            records,
+            closure if closure_valid else None,
+        )
+        if not restore_records:
+            restore_records = records
+        restored_mode_projection, projection_reason = self._aggregate_output_store_mode_projection(
+            restore_records
+        )
+        final_delivery_status = (
+            str(closure.get("final_delivery_status") or "").strip()
+            if closure_valid and isinstance(closure, dict)
+            else ""
+        )
+        restored_status = (
+            ProductJobStatusValue.GENERATED
+            if closure_valid and final_delivery_status == "ready"
+            else ProductJobStatusValue.BLOCKED
+        )
         asset_series: list[AssetSeriesItem] = []
         candidates: list[CandidateSummary] = []
-        for index, record in enumerate(records):
+        for index, record in enumerate(restore_records):
             candidate_metadata = self._public_metadata_projection(
                 self._candidate_metadata_from_output_record(record)
             )
@@ -13145,7 +13807,7 @@ class V3ProductApiService:
                     platform=Platform.ECOMMERCE_GENERIC,
                     aspect_ratio=self._aspect_ratio_from_output_record(record),
                     purpose="Restored V3 generated image output",
-                    status=ProductJobStatusValue.GENERATED.value,
+                    status=restored_status.value,
                     selected_candidate_id=record.candidate_id,
                     preview_uri=record.thumbnail_url or record.preview_url,
                     output_id=record.output_id,
@@ -13182,23 +13844,46 @@ class V3ProductApiService:
                 )
             )
         nav = get_navigation_entry()
+        if closure_valid and restored_status == ProductJobStatusValue.GENERATED:
+            restore_warning = (
+                "This V3 job record was restored from generated output files using a complete durable review/delivery closure."
+            )
+            restore_state = "closed"
+            restore_reason = "closed"
+        elif closure_valid:
+            restore_warning = (
+                "Generated output files were restored, but durable review/delivery withheld final delivery; recovery is required."
+            )
+            restore_state = "delivery_withheld"
+            restore_reason = final_delivery_status or closure_reason
+        else:
+            restore_warning = (
+                "Generated output files were found without a complete durable review/delivery closure; recovery is required."
+            )
+            restore_state = "needs_recovery"
+            restore_reason = closure_reason
+        if projection_reason != "projection_restored":
+            restore_warning += " Mode execution projection is incomplete or conflicting."
+            restore_reason = projection_reason
         return ProductJobStatus(
             job_id=job_id,
-            status=ProductJobStatusValue.GENERATED,
+            status=restored_status,
             api_namespace=API_NAMESPACE,
             ui_entry_route=nav["route"],
             asset_series=asset_series,
             candidates=candidates,
             routes=get_route_contracts(),
-            warnings=["This V3 job record was restored from generated output files because the in-memory job detail is unavailable."],
+            warnings=[restore_warning],
             metadata={
                 "source": "V3ProductApiService",
                 "rules_version": RULE_VERSION,
                 "v3_independent_product_api": True,
                 "restored_from_output_store": True,
-                "output_count": len(records),
+                "output_count": len(restore_records),
+                "output_store_restore_state": restore_state,
+                "output_store_restore_reason": restore_reason,
                 **restored_mode_projection,
-                **self._workflow_artifacts_from_output_records(records),
+                **self._workflow_artifacts_from_output_records(restore_records),
             },
         )
 
@@ -13231,44 +13916,43 @@ class V3ProductApiService:
         )
         if prompt is None and not final_prompt:
             return {}
+        # This method feeds the public ProductJobStatus.  The full prompt and
+        # compiled direction remain in the private job/output audit records;
+        # the browser receives only the already user-facing Brain summary.
+        public_summary = self._public_metadata_projection(
+            prompt_llm_summary
+            or (candidate_llm_brain.get("user_visible_summary") if isinstance(candidate_llm_brain, dict) else {})
+            or (result_llm_brain.get("user_visible_summary") if isinstance(result_llm_brain, dict) else {})
+        )
         return {
             "workflow_artifacts": {
                 "user_request": record.request.user_input,
-                "optimized_direction": prompt.visual_prompt if prompt else "",
-                "style_notes": list(prompt.style_notes) if prompt else [],
-                "layout_notes": list(prompt.layout_notes) if prompt else [],
-                "hard_constraints": list(prompt.hard_constraints) if prompt else [],
-                "negative_prompt": prompt.negative_prompt if prompt else "",
-                "final_provider_prompt": final_prompt,
-                "llm_brain": candidate_llm_brain or result_llm_brain,
-                "llm_brain_summary": prompt_llm_summary
-                or (candidate_llm_brain.get("user_visible_summary") if isinstance(candidate_llm_brain, dict) else {})
-                or (result_llm_brain.get("user_visible_summary") if isinstance(result_llm_brain, dict) else {}),
-                "prompt_available": prompt is not None,
-                "final_prompt_available": bool(final_prompt),
+                "llm_brain_summary": public_summary,
+                "prompt_available": False,
+                "final_prompt_available": False,
             }
         }
 
     def _workflow_artifacts_from_output_records(self, records: list[V3GeneratedOutputRecord]) -> dict[str, Any]:
         for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
             metadata = dict(record.metadata or {})
-            if metadata.get("compiled_visual_direction") or metadata.get("final_provider_prompt"):
+            if (
+                metadata.get("compiled_visual_direction")
+                or metadata.get("final_provider_prompt")
+                or isinstance(metadata.get("llm_brain_summary"), dict)
+            ):
                 llm_brain = metadata.get("llm_brain") if isinstance(metadata.get("llm_brain"), dict) else {}
+                public_summary = self._public_metadata_projection(
+                    metadata.get("llm_brain_summary")
+                    if isinstance(metadata.get("llm_brain_summary"), dict)
+                    else llm_brain.get("user_visible_summary", {})
+                )
                 return {
                     "workflow_artifacts": {
                         "user_request": "",
-                        "optimized_direction": str(metadata.get("compiled_visual_direction") or ""),
-                        "style_notes": list(metadata.get("style_notes") or []),
-                        "layout_notes": list(metadata.get("layout_notes") or []),
-                        "hard_constraints": [],
-                        "negative_prompt": ", ".join(metadata.get("negative_constraints") or []),
-                        "final_provider_prompt": str(metadata.get("final_provider_prompt") or ""),
-                        "llm_brain": llm_brain,
-                        "llm_brain_summary": metadata.get("llm_brain_summary")
-                        if isinstance(metadata.get("llm_brain_summary"), dict)
-                        else llm_brain.get("user_visible_summary", {}),
-                        "prompt_available": bool(metadata.get("compiled_visual_direction")),
-                        "final_prompt_available": bool(metadata.get("final_provider_prompt")),
+                        "llm_brain_summary": public_summary,
+                        "prompt_available": False,
+                        "final_prompt_available": False,
                         "restored_from_output_store": True,
                     }
                 }
@@ -14529,8 +15213,10 @@ class V3ProductApiService:
         self._prepare_ecommerce_creative_context(request)
         metadata = self._runtime_metadata_without_retired_ecommerce_execution(request)
         scenario_selection = self._runtime_scenario_selection_without_retired_ecommerce_execution(request)
-        has_frozen_plan = isinstance(metadata.get("capability_activation_plan"), dict)
-        trusted_reuse = has_frozen_plan if trusted_capability_plan_reuse is None else trusted_capability_plan_reuse
+        # A frozen plan in request metadata is evidence, not authority.  Only
+        # an explicit internal seam may opt into trusted reuse; ordinary
+        # callers must not gain execution authority by copying server fields.
+        trusted_reuse = bool(trusted_capability_plan_reuse)
         resolved_uploads = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
         product_truth_asset_ids = {
             str(item).strip()
@@ -14699,6 +15385,17 @@ class V3ProductApiService:
             "resolved_constraint_ledger",
             "resolved_constraint_ledger_id",
             "frozen_remote_creative_brain",
+            "remote_creative_brain_outcome",
+            "provider_failure_retry",
+            "provider_failure_retry_exhausted",
+            "generation_lifecycle_timeout",
+            "generation_lifecycle_failure",
+            "background_generation_watchdog",
+            "specialized_execution_summary",
+            "review_certification",
+            "mcp_materialization",
+            "capability_activation_error",
+            "capability_activation_error_code",
             "v3_job_instance_id",
             "professional_mode",
             "professional_mode_binding",
@@ -15544,6 +16241,79 @@ class V3ProductApiService:
             raise ValueError(
                 "runtime_metadata_server_owned: " + ", ".join(sorted(supplied))
             )
+
+    @classmethod
+    def _assert_external_generate_metadata_clean(cls, request: GenerateJobRequest) -> None:
+        """Reject untyped Generate controls before they can alter a Job.
+
+        Generate is a continuation of an existing Job, not a second create
+        request. Its execution/lifecycle facts must come from the server-owned
+        Job record. Review/retry/provider switches and private continuation
+        markers must use ``GenerateContinuation`` so the internal caller is
+        explicit, typed, and bound to the same Job.
+        """
+
+        supplied = {str(key) for key in dict(request.metadata or {})}
+        if not supplied:
+            return
+        server_owned = supplied.intersection(cls._SERVER_OWNED_RUNTIME_METADATA)
+        runtime_controls = supplied.intersection(
+            cls._POST_GENERATION_REVIEW_RUNTIME_OVERRIDES | cls._GENERATE_RETRY_RUNTIME_CONTROLS
+        )
+        private_continuation = {key for key in supplied if key.startswith("_v3_")}
+        blocked = server_owned | runtime_controls | private_continuation
+        if blocked:
+            raise ValueError(
+                "runtime_metadata_server_owned: " + ", ".join(sorted(blocked))
+            )
+
+    @staticmethod
+    def _coerce_generate_continuation(
+        continuation: GenerateContinuation | None,
+    ) -> GenerateContinuation | None:
+        if continuation is None:
+            return None
+        if not isinstance(continuation, GenerateContinuation):
+            raise ValueError("generate_continuation_untrusted")
+        return continuation
+
+    def _validate_current_job_capability_plan(self, record: ProductJobRecord) -> None:
+        """Reject a persisted plan/envelope that is not bound to this Job."""
+
+        metadata = dict(record.request.metadata or {})
+        plan = metadata.get("capability_activation_plan")
+        provenance = metadata.get("capability_plan_provenance")
+        if not isinstance(plan, dict) or not isinstance(provenance, dict):
+            return
+        issued_for_job_id = str(provenance.get("issued_for_job_id") or "").strip()
+        plan_id = str(plan.get("plan_id") or "").strip()
+        plan_fingerprint = str(plan.get("fingerprint") or "").strip()
+        if (
+            not issued_for_job_id
+            or issued_for_job_id != record.job_id
+            or str(provenance.get("plan_id") or "").strip() != plan_id
+            or str(provenance.get("plan_fingerprint") or "").strip() != plan_fingerprint
+        ):
+            raise ValueError("current_job_capability_plan_provenance_mismatch")
+        envelope = metadata.get("capability_execution_envelope")
+        if not isinstance(envelope, dict):
+            return
+        envelope_plan = envelope.get("activation_plan")
+        if isinstance(envelope_plan, dict) and (
+            str(envelope_plan.get("plan_id") or "").strip() != plan_id
+            or str(envelope_plan.get("fingerprint") or "").strip() != plan_fingerprint
+        ):
+            raise ValueError("current_job_capability_envelope_plan_mismatch")
+        envelope_job_id = str(envelope.get("job_id") or "").strip()
+        if envelope_job_id and envelope_job_id != record.job_id:
+            # A trusted continuation deliberately reuses the parent's frozen
+            # execution envelope while issuing a new Product Job record.  The
+            # child provenance must make that lineage explicit; an arbitrary
+            # cross-job envelope remains invalid.
+            reuse_kind = str(provenance.get("reuse_kind") or "").strip().lower()
+            source_job_id = str(provenance.get("source_job_id") or "").strip()
+            if reuse_kind not in {"continuation", "amendment"} or source_job_id != envelope_job_id:
+                raise ValueError("current_job_capability_envelope_job_mismatch")
 
     @staticmethod
     def _bind_typed_image_options(request: CreateCreativeJobRequest) -> None:

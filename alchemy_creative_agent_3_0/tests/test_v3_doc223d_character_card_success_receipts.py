@@ -410,7 +410,7 @@ def test_doc223d_public_projection_exposes_only_safe_success_receipt_summary(tmp
         assert forbidden not in text
 
 
-def test_doc223d_public_projection_sanitizes_auxiliary_mcp_history_ids() -> None:
+def test_doc223d_public_projection_keeps_safe_mcp_history_ids_outside_formal_card() -> None:
     candidate_failure = SimpleNamespace(
         stage="body_silhouette",
         view_role="body.front_full",
@@ -474,9 +474,12 @@ def test_doc223d_public_projection_sanitizes_auxiliary_mcp_history_ids() -> None
         "output_id": "output_body_candidate2",
         "preview_url": "/api/v3/creative-agent/outputs/output_body_candidate2/preview",
         "download_url": "/api/v3/creative-agent/outputs/output_body_candidate2/download",
+        "candidate_id": "candidate_internal_private",
+        "mcp_handoff_id": "mcp_handoff_private_candidate",
     }
     assert history["generation_channel"] == "mcp"
-    text = json.dumps(public, ensure_ascii=False).lower()
+    assert history["mcp_handoff_ids"] == ["mcp_handoff_private_version"]
+    text = json.dumps(public["character_card"], ensure_ascii=False).lower()
     for forbidden in (
         "mcp_handoff",
         "candidate_internal_private",

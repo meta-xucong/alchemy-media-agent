@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 
 
@@ -75,10 +75,11 @@ def test_existing_checkpointed_body_result_reenters_review_without_submitted_pro
 
     status = service.generate_asset_series(
         job_id,
-        {
-            "quality_mode": "strict",
-            "metadata": {"_v3_resume_finalizing_review": True},
-        },
+        {"quality_mode": "strict"},
+        _trusted_generate_continuation=GenerateContinuation(
+            job_id=job_id,
+            resume_finalizing_review=True,
+        ),
     )
 
     assert status.status == ProductJobStatusValue.GENERATED

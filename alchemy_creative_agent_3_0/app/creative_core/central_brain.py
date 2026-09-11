@@ -1095,6 +1095,41 @@ class CentralCreativeBrain:
 
     def _mode_role_recipe_for_asset(self, context: PipelineContext, asset, index: int) -> dict[str, Any]:
         metadata = dict(getattr(asset, "metadata", {}) or {})
+        if self._remote_brain_directed_specialized_execution(context):
+            # A frozen specialized deliverable plan owns its creative language.
+            # Do not carry a dormant General/Doc59 recipe from the base series
+            # into the per-output provider plan.  A role identity is different
+            # from role language, however: the shared executor and Product API
+            # still need the frozen role key to reconcile a generated output
+            # with its deliverable.  Keep only that typed identity here.  The
+            # Provider derives any remote-owned direction from the resolved
+            # ledger, so this projection cannot reintroduce local prompt text.
+            plan = self._role_specific_generation_plan_metadata(context)
+            recipes = plan.get("role_recipes")
+            plan_metadata = plan.get("metadata")
+            if (
+                self._requires_independent_role_terminal_states(context)
+                and isinstance(recipes, list)
+                and recipes
+                and not (
+                    isinstance(plan_metadata, dict)
+                    and bool(plan_metadata.get("terminal_evidence_only"))
+                )
+            ):
+                recipe = recipes[min(index, len(recipes) - 1)]
+                if isinstance(recipe, dict) and str(recipe.get("role_key") or "").strip():
+                    return {
+                        "role_id": recipe.get("role_id"),
+                        "index": recipe.get("index", index + 1),
+                        "role_key": str(recipe["role_key"]).strip(),
+                        "label": recipe.get("label"),
+                        "metadata": {
+                            "source": "specialized_role_execution_plan",
+                            "template_role_contract": True,
+                            "static_recipe_present": False,
+                        },
+                    }
+            return {}
         plan = self._role_specific_generation_plan_metadata(context)
         recipes = plan.get("role_recipes")
         if self._requires_independent_role_terminal_states(context) and isinstance(recipes, list) and recipes:
@@ -1111,6 +1146,20 @@ class CentralCreativeBrain:
     def _asset_with_mode_role(self, context: PipelineContext, asset, index: int):
         recipe = self._mode_role_recipe_for_asset(context, asset, index)
         if not recipe:
+            if self._remote_brain_directed_specialized_execution(context):
+                metadata = dict(getattr(asset, "metadata", {}) or {})
+                for key in (
+                    "mode_role_recipe",
+                    "mode_role_key",
+                    "mode_role_label",
+                    "mode_role_purpose",
+                    "role_specific_prompt_pressure",
+                    "role_specific_generation_plan",
+                    "mode_execution_policy",
+                    "variation_mode",
+                ):
+                    metadata.pop(key, None)
+                return asset.model_copy(update={"metadata": metadata})
             return asset
         role_plan = self._role_specific_generation_plan_metadata(context)
         policy = self._mode_execution_policy_metadata(context)
@@ -1182,6 +1231,45 @@ class CentralCreativeBrain:
             return False
         metadata = plan.get("metadata")
         return isinstance(metadata, dict) and bool(metadata.get("require_independent_role_terminal_states"))
+
+    def _remote_brain_directed_specialized_execution(self, context: PipelineContext) -> bool:
+        """Detect a frozen remote-owned specialized deliverable contract.
+
+        This is an execution-shape predicate, not a vertical-template branch.
+        It lets the shared Brain preserve General's role recipes while keeping
+        a specialized template's remote deliverable direction from being
+        relabeled as a dormant generic suite recipe.
+        """
+
+        envelope = context.metadata.get("capability_execution_envelope")
+        if not isinstance(envelope, dict):
+            return False
+        activation_plan = envelope.get("activation_plan")
+        if not isinstance(activation_plan, dict) or str(
+            activation_plan.get("activation_mode") or envelope.get("activation_mode") or ""
+        ).strip().lower() != "enforced":
+            return False
+        ledger = envelope.get("resolved_constraint_ledger")
+        projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
+        if not isinstance(projection, dict):
+            return False
+        template_plan = context.metadata.get("template_deliverable_plan")
+        if not isinstance(template_plan, dict):
+            template_plan = {}
+        template_id = str(projection.get("template_id") or template_plan.get("template_id") or "").strip()
+        deliverables = projection.get("deliverables")
+        if not isinstance(deliverables, list):
+            deliverables = template_plan.get("deliverables")
+        creative_direction_owner = str(
+            projection.get("creative_direction_owner") or template_plan.get("creative_direction_owner") or ""
+        ).strip().lower()
+        return bool(
+            template_id
+            and template_id != "general_template"
+            and creative_direction_owner == "remote_v3_llm_brain"
+            and isinstance(deliverables, list)
+            and deliverables
+        )
 
     def _generated_output_reference_chain_allowed(self, context: PipelineContext) -> bool:
         """Respect a frozen template policy before deriving image-edit inputs.

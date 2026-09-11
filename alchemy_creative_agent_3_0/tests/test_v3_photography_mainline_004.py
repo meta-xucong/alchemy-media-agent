@@ -19,6 +19,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 )
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
 from alchemy_creative_agent_3_0.app.project_mode.service import PhotographyRoleContinuationError
@@ -137,6 +138,7 @@ def _project_and_root(
     *,
     profile: dict | None = None,
     mode_id: str = "professional_set",
+    require_real_images: bool = False,
 ) -> tuple[dict, dict]:
     project = handlers.post_projects(
         {
@@ -144,6 +146,9 @@ def _project_and_root(
             "user_goal": "Create a professional portrait session of a ceramic artist in her studio.",
         }
     )["project"]
+    root_metadata = {"selected_mode_id": mode_id, "scene_domain": "portrait"}
+    if require_real_images:
+        root_metadata["require_real_images"] = True
     root = handlers.post_project_job(
         project["project_id"],
         {
@@ -151,11 +156,28 @@ def _project_and_root(
             "user_input": "Create a professional portrait session of a ceramic artist in her studio.",
             "photographer_profile_id": profile.get("profile_id") if profile else None,
             "photographer_profile_selection_source": profile.get("selection_source") if profile else None,
-            "metadata": {"selected_mode_id": mode_id, "scene_domain": "portrait"},
+            "metadata": root_metadata,
         },
     )
     assert root["status"] == "planned"
     return project, root
+
+
+def _generate_project_job(
+    handlers: V3ProductRouteHandlers,
+    project: dict,
+    root: dict,
+    *,
+    continuation: GenerateContinuation | None = None,
+) -> dict:
+    """Use the Project Mode internal continuation seam for trusted controls."""
+
+    return handlers.project_service.generate_project_job(
+        project["project_id"],
+        root["job_id"],
+        {"quality_mode": "standard"},
+        _trusted_generate_continuation=continuation,
+    ).model_dump(mode="json")
 
 
 def _ready_nonhuman_identity_upload(handlers: V3ProductRouteHandlers, *, filename: str) -> str:
@@ -215,12 +237,16 @@ def test_professional_set_t2i_executes_three_frozen_roles_without_generated_imag
 
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     handlers, provider = _handlers_with_recording_production_provider(tmp_path)
-    project, root = _project_and_root(handlers)
+    project, root = _project_and_root(handlers, require_real_images=True)
 
-    generated = handlers.post_project_job_generate(
-        project["project_id"],
-        root["job_id"],
-        {"quality_mode": "standard", "metadata": {"require_real_images": True, "disable_visual_auto_retry": True}},
+    generated = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            disable_visual_auto_retry=True,
+        ),
     )
 
     assert generated["status"] == "generated"
@@ -260,19 +286,17 @@ def test_single_hero_retry_rebinds_the_frozen_role_to_the_certified_retry_winner
 
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     handlers, provider = _handlers_with_recording_production_provider(tmp_path)
-    project, root = _project_and_root(handlers, mode_id="single_hero")
+    project, root = _project_and_root(handlers, mode_id="single_hero", require_real_images=True)
 
-    generated = handlers.post_project_job_generate(
-        project["project_id"],
-        root["job_id"],
-        {
-            "quality_mode": "standard",
-            "metadata": {
-                "require_real_images": True,
-                "force_visual_retry_issue_codes": ["visible_text_artifact"],
-                "max_visual_retry_attempts": 1,
-            },
-        },
+    generated = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            force_visual_retry_issue_codes=("visible_text_artifact",),
+            max_visual_retry_attempts=1,
+        ),
     )
 
     assert generated["status"] == "generated"
@@ -301,12 +325,16 @@ def test_single_hero_retry_rebinds_the_frozen_role_to_the_certified_retry_winner
 def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_single_delivery(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     handlers, provider = _handlers_with_recording_production_provider(tmp_path, fail_role="environmental_context")
-    project, root = _project_and_root(handlers)
+    project, root = _project_and_root(handlers, require_real_images=True)
 
-    blocked = handlers.post_project_job_generate(
-        project["project_id"],
-        root["job_id"],
-        {"quality_mode": "standard", "metadata": {"require_real_images": True, "disable_visual_auto_retry": True}},
+    blocked = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            disable_visual_auto_retry=True,
+        ),
     )
 
     assert blocked["status"] == "blocked"
@@ -356,12 +384,16 @@ def test_single_hero_provider_failure_without_pixels_skips_metadata_only_review(
 
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     handlers, provider = _handlers_with_recording_production_provider(tmp_path, fail_role="hero_photograph")
-    project, root = _project_and_root(handlers, mode_id="single_hero")
+    project, root = _project_and_root(handlers, mode_id="single_hero", require_real_images=True)
 
-    blocked = handlers.post_project_job_generate(
-        project["project_id"],
-        root["job_id"],
-        {"quality_mode": "standard", "metadata": {"require_real_images": True, "disable_visual_auto_retry": True}},
+    blocked = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            disable_visual_auto_retry=True,
+        ),
     )
 
     assert blocked["status"] == "blocked"
@@ -418,10 +450,14 @@ def test_metadata_only_photography_project_withholds_pixels_and_records_safe_rev
     handlers = V3ProductRouteHandlers(service=photography_test_service())
     project, root = _project_and_root(handlers, mode_id="single_hero")
 
-    blocked = handlers.post_project_job_generate(
-        project["project_id"],
-        root["job_id"],
-        {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "metadata_only"}},
+    blocked = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            vision_inspection_mode="metadata_only",
+        ),
     )
 
     assert blocked["status"] == "blocked"
@@ -468,10 +504,14 @@ def test_manual_vision_confirmation_is_visible_but_never_counts_as_photography_d
     handlers = V3ProductRouteHandlers(service=service)
     project, root = _project_and_root(handlers, mode_id="single_hero")
 
-    blocked = handlers.post_project_job_generate(
-        project["project_id"],
-        root["job_id"],
-        {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model"}},
+    blocked = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            vision_inspection_mode="vision_model",
+        ),
     )
 
     certification = blocked["metadata"]["review_certification"]

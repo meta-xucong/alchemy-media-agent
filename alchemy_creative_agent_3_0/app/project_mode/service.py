@@ -21,6 +21,7 @@ from ..creative_core.doc281_output_plan_binding import (
 from ..creative_core.rules import stable_id
 from ..product_api import V3ProductApiService
 from ..product_api.contracts import (
+    GenerateContinuation,
     ProductJobStatus,
     ProductJobStatusValue,
     SelectionResponse,
@@ -3028,8 +3029,8 @@ class V3ProjectModeService:
         self._ensure_project_product_reference_integrity(project)
         context = self._refresh_project_context(project)
         if owner_user_id is None:
-            return context
-        return self._build_context(project, owner_user_id=owner_user_id)
+            return self._public_project_context(context)
+        return self._public_project_context(self._build_context(project, owner_user_id=owner_user_id))
 
     def archive_project(self, project_id: str) -> ProjectResponse:
         project = self._require_project(project_id)
@@ -3180,9 +3181,9 @@ class V3ProjectModeService:
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}/references",
             project_id=project.project_id,
-            reference=reference,
-            project=project,
-            context=context,
+            reference=self._public_reference_asset(reference),
+            project=self._public_project_for_nested_response(project),
+            context=self._public_project_context(context),
             metadata=self._metadata(),
         )
 
@@ -3217,9 +3218,9 @@ class V3ProjectModeService:
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}/references/{reference.reference_id}",
             project_id=project.project_id,
-            reference=reference,
-            project=project,
-            context=context,
+            reference=self._public_reference_asset(reference),
+            project=self._public_project_for_nested_response(project),
+            context=self._public_project_context(context),
             metadata=self._metadata(),
         )
 
@@ -3276,9 +3277,9 @@ class V3ProjectModeService:
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}/references/{reference.reference_id}/remove",
             project_id=project.project_id,
-            reference=reference,
-            project=project,
-            context=context,
+            reference=self._public_reference_asset(reference),
+            project=self._public_project_for_nested_response(project),
+            context=self._public_project_context(context),
             metadata=self._metadata(),
         )
 
@@ -3313,9 +3314,9 @@ class V3ProjectModeService:
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}/feedback",
             project_id=project.project_id,
-            feedback=feedback,
-            project=project,
-            context=context,
+            feedback=self._public_feedback_record(feedback),
+            project=self._public_project_for_nested_response(project),
+            context=self._public_project_context(context),
             metadata=self._metadata(),
         )
 
@@ -3350,9 +3351,9 @@ class V3ProjectModeService:
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}/brand-memory/proposal",
             project_id=project.project_id,
-            proposal=proposal,
-            project=project,
-            context=context,
+            proposal=self._public_brand_memory_proposal(proposal),
+            project=self._public_project_for_nested_response(project),
+            context=self._public_project_context(context),
             metadata={**self._metadata(), "brand_memory_written": False},
         )
 
@@ -3404,8 +3405,8 @@ class V3ProjectModeService:
             memory_update_applied=True,
             updated_at=now,
             plain_summary=plain_summary,
-            proposal=proposal,
-            project=project,
+            proposal=self._public_brand_memory_proposal(proposal),
+            project=self._public_project_for_nested_response(project),
             metadata={**self._metadata(), "brand_memory_written": True},
         )
 
@@ -4774,7 +4775,23 @@ class V3ProjectModeService:
             },
         )
 
-    def generate_project_job(self, project_id: str, job_id: str, request: dict[str, Any] | None = None) -> ProductJobStatus:
+    def generate_project_job(
+        self,
+        project_id: str,
+        job_id: str,
+        request: dict[str, Any] | None = None,
+        *,
+        _trusted_generate_continuation: GenerateContinuation | None = None,
+    ) -> ProductJobStatus:
+        """Materialize one project Job through the public or trusted seam.
+
+        HTTP callers use the ordinary product-level request and cannot author
+        review/retry/provider state in ``metadata``.  Project workers and
+        deterministic recovery tests may carry those controls only through a
+        typed, job-bound ``GenerateContinuation``.  The project envelope is
+        still applied here so the Product API remains the single execution
+        authority.
+        """
         project = self._require_project(project_id)
         self._ensure_project_job(project, job_id)
         template_id = self._template_id_for_project_job(project, job_id)
@@ -4782,9 +4799,18 @@ class V3ProjectModeService:
         metadata = dict(payload.get("metadata") or {})
         metadata.update({"project_id": project.project_id, "template_id": template_id, "project_mode": True})
         payload["metadata"] = metadata
-        status = self.product_service.generate_job(job_id, payload)
+        if _trusted_generate_continuation is None:
+            status = self.product_service.generate_job(job_id, payload)
+        else:
+            status = self.product_service.generate_job_with_continuation(
+                job_id,
+                payload,
+                continuation=_trusted_generate_continuation,
+            )
         status.metadata.update({"project_id": project.project_id, "template_id": template_id, "project_mode": True})
-        if status.status == ProductJobStatusValue.GENERATED:
+        if self._output_store_recovery_required(status):
+            self._append_output_store_recovery_notice(project, status)
+        elif status.status == ProductJobStatusValue.GENERATED:
             final_delivery = status.metadata.get("final_delivery") if isinstance(status.metadata, dict) else None
             final_delivery_withheld = (
                 isinstance(final_delivery, dict)
@@ -5061,6 +5087,17 @@ class V3ProjectModeService:
         metadata.update({"project_id": project.project_id, "template_id": template_id, "project_mode": True})
         payload["metadata"] = metadata
         current_status = self.product_service.get_job(job_id)
+        has_explicit_selector = bool(
+            self._selection_id_set(payload.get("selected_candidate_ids"))
+            or self._selection_id_set(payload.get("selected_asset_ids"))
+            or self._selection_id_set(payload.get("selected_output_ids"))
+            or str(
+                payload.get("selected_candidate_id")
+                or payload.get("selected_asset_id")
+                or payload.get("selected_output_id")
+                or ""
+            ).strip()
+        )
         if str(metadata.get("identity_anchor_action") or "").strip() == "bind":
             selected_output_id = str(
                 payload.get("selected_output_id")
@@ -5105,12 +5142,12 @@ class V3ProjectModeService:
             return {
                 "job_id": job_id,
                 "status": current_status.status.value,
-                "job_status": current_status.model_dump(mode="json"),
+                "job_status": self._public_job_status(current_status).model_dump(mode="json"),
                 "project": self._public_project_record(
                     project,
                     visible_output_items=visible_output_items,
                 ).model_dump(mode="json"),
-                "context": context.model_dump(mode="json") if context else None,
+                "context": self._public_project_context(context).model_dump(mode="json") if context else None,
                 "metadata": {
                     **self._metadata(),
                     "project_outputs": visible_output_items,
@@ -5132,8 +5169,10 @@ class V3ProjectModeService:
             selected_asset_id=str(payload.get("selected_asset_id") or "").strip() or None,
             selected_candidate_ids=self._selection_id_set(payload.get("selected_candidate_ids")),
             selected_asset_ids=self._selection_id_set(payload.get("selected_asset_ids")),
+            selected_output_id=str(payload.get("selected_output_id") or "").strip() or None,
+            selected_output_ids=self._selection_id_set(payload.get("selected_output_ids")),
         )
-        if not preflight_refs:
+        if unresolved_refs or not preflight_refs:
             return self._selection_hold_response(
                 project,
                 template_id=template_id,
@@ -5142,7 +5181,21 @@ class V3ProjectModeService:
                 message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
                 unresolved_refs=unresolved_refs,
             )
-        if current_status.status == ProductJobStatusValue.GENERATED and (
+        has_explicit_output_selector = bool(
+            self._selection_id_set(payload.get("selected_output_ids"))
+            or str(payload.get("selected_output_id") or "").strip()
+        )
+        if has_explicit_output_selector:
+            # Product API selection has no output-id contract and would either
+            # reject the payload or broaden an output selector to every asset
+            # in the job. Project Mode already resolved the exact, renderable
+            # output binding above, so keep that receipt authoritative.
+            selected = self._selection_from_persisted_output_refs(
+                current_status,
+                preflight_refs,
+            )
+            refs = list(preflight_refs)
+        elif current_status.status == ProductJobStatusValue.GENERATED and (
             current_status.metadata.get("restored_from_output_store")
             or current_status.metadata.get("partial_generation_recovery")
         ):
@@ -5157,7 +5210,29 @@ class V3ProjectModeService:
                 restored_status = self.product_service.get_job(job_id)
                 if restored_status.status == ProductJobStatusValue.GENERATED:
                     selected = self._selection_from_restored_status(restored_status, payload)
-        refs, unresolved_refs = self._output_refs_from_selection(project, selected)
+        # The Product API can have a planning record without candidate metadata
+        # when the durable output was written just before a worker/process
+        # restart.  The exact preflight binding above is still authoritative;
+        # preserve it rather than allowing an empty Product selection to erase
+        # a real persisted output from the project context.
+        if has_explicit_output_selector:
+            # Keep the exact preflight refs; resolving the virtual selection
+            # back through candidate/asset ids could broaden a persisted
+            # output-only selection when the planning projection is stale.
+            pass
+        elif (
+            has_explicit_selector
+            and preflight_refs
+            and not selected.selected_result.selected_candidate_ids
+            and not selected.selected_result.selected_asset_ids
+        ):
+            selected = self._selection_from_persisted_output_refs(
+                current_status,
+                preflight_refs,
+            )
+            refs = list(preflight_refs)
+        else:
+            refs, unresolved_refs = self._output_refs_from_selection(project, selected)
         if not refs:
             return self._selection_hold_response(
                 project,
@@ -5186,13 +5261,15 @@ class V3ProjectModeService:
             metadata={"brand_memory_auto_applied": False},
         )
         visible_output_items = self._project_output_items(project, limit=60)
+        selected_payload = selected.model_dump(mode="json")
+        selected_payload["job_status"] = self._public_job_status(selected.job_status).model_dump(mode="json")
         return {
-            **selected.model_dump(mode="json"),
+            **selected_payload,
             "project": self._public_project_record(
                 project,
                 visible_output_items=visible_output_items,
             ).model_dump(mode="json"),
-            "context": project.latest_context.model_dump(mode="json") if project.latest_context else None,
+            "context": self._public_project_context(project.latest_context).model_dump(mode="json") if project.latest_context else None,
             "metadata": {
                 **selected.metadata,
                 "project_id": project.project_id,
@@ -5201,6 +5278,11 @@ class V3ProjectModeService:
                 "brand_memory_auto_applied": False,
                 "continuation_available": True,
                 "project_outputs": visible_output_items,
+                **(
+                    {"unresolved_output_refs": unresolved_refs}
+                    if unresolved_refs
+                    else {}
+                ),
             },
         }
 
@@ -5211,15 +5293,19 @@ class V3ProjectModeService:
     ) -> SelectionResponse:
         selected_candidate_ids = self._selection_id_set(request_payload.get("selected_candidate_ids"))
         selected_asset_ids = self._selection_id_set(request_payload.get("selected_asset_ids"))
+        selected_output_ids = self._selection_id_set(request_payload.get("selected_output_ids"))
         selected_candidate_id = str(request_payload.get("selected_candidate_id") or "").strip()
         selected_asset_id = str(request_payload.get("selected_asset_id") or "").strip()
+        selected_output_id = str(request_payload.get("selected_output_id") or "").strip()
         if selected_candidate_id:
             selected_candidate_ids.add(selected_candidate_id)
         if selected_asset_id:
             selected_asset_ids.add(selected_asset_id)
+        if selected_output_id:
+            selected_output_ids.add(selected_output_id)
         candidates = list(status.candidates)
         assets = list(status.asset_series)
-        if selected_candidate_ids or selected_asset_ids:
+        if selected_candidate_ids or selected_asset_ids or selected_output_ids:
             # Candidate and asset ids are two identifiers for the same
             # selection surface. A mixed request is a union, so restoring one
             # identifier kind must never discard valid members of the other.
@@ -5228,6 +5314,7 @@ class V3ProjectModeService:
                 for candidate in candidates
                 if candidate.candidate_id in selected_candidate_ids
                 or candidate.asset_id in selected_asset_ids
+                or candidate.output_id in selected_output_ids
             ]
             candidate_ids = {candidate.candidate_id for candidate in candidates if candidate.candidate_id}
             candidate_asset_ids = {candidate.asset_id for candidate in candidates if candidate.asset_id}
@@ -5235,6 +5322,7 @@ class V3ProjectModeService:
                 asset
                 for asset in assets
                 if asset.asset_id in selected_asset_ids
+                or asset.output_id in selected_output_ids
                 or asset.asset_id in candidate_asset_ids
                 or asset.selected_candidate_id in selected_candidate_ids
                 or asset.selected_candidate_id in candidate_ids
@@ -5736,6 +5824,7 @@ class V3ProjectModeService:
         """Return an explicit hold rather than silently substituting a reference."""
 
         context = self._refresh_project_context(project)
+        visible_output_items = self._project_output_items(project, limit=60)
         return {
             "job_id": status.job_id,
             "status": status.status.value if hasattr(status.status, "value") else str(status.status),
@@ -5744,10 +5833,10 @@ class V3ProjectModeService:
                 "selected_asset_ids": [],
                 "metadata": {"selection_status": "selection_held", "hold_reason": reason},
             },
-            "job_status": status.model_dump(mode="json"),
+            "job_status": self._public_job_status(status).model_dump(mode="json"),
             "warnings": [message],
-            "project": project.model_dump(mode="json"),
-            "context": context.model_dump(mode="json"),
+            "project": self._public_project_record(project, visible_output_items=visible_output_items).model_dump(mode="json"),
+            "context": self._public_project_context(context).model_dump(mode="json"),
             "metadata": {
                 "source": PROJECT_API_SOURCE,
                 "project_id": project.project_id,
@@ -5757,7 +5846,7 @@ class V3ProjectModeService:
                 "continuation_available": False,
                 "hold_reason": reason,
                 "unresolved_selected_outputs": list(unresolved_refs or []),
-                "project_outputs": self._project_output_items(project, limit=60),
+                "project_outputs": visible_output_items,
             },
         }
     def _ecommerce_slot_anchors(self, project: ProjectRecord) -> dict[str, dict[str, Any]]:
@@ -8436,6 +8525,19 @@ class V3ProjectModeService:
             if not records:
                 continue
             records = sorted(records, key=lambda item: item.created_at or "")
+            if self._output_store_recovery_required(job_status):
+                output_ids = [
+                    str(getattr(record, "output_id", "") or "").strip()
+                    for record in records
+                    if str(getattr(record, "output_id", "") or "").strip()
+                ]
+                if self._append_output_store_recovery_notice(
+                    project,
+                    job_status,
+                    output_ids=output_ids,
+                ):
+                    changed = True
+                continue
             incomplete_execution = self._incomplete_specialized_set_execution(job_status, records)
             if incomplete_execution is not None:
                 review_certification = incomplete_execution.get("review_certification")
@@ -8518,6 +8620,61 @@ class V3ProjectModeService:
             project.memory_summary = self._memory_summary(project)
             self.project_store.save_project(project)
         return changed
+
+    def _append_output_store_recovery_notice(
+        self,
+        project: ProjectRecord,
+        status: ProductJobStatus,
+        *,
+        output_ids: list[str] | None = None,
+    ) -> bool:
+        restore_state = self._output_store_restore_state(status)
+        if restore_state not in {"needs_recovery", "delivery_withheld"}:
+            return False
+        if any(
+            item.item_type == TimelineItemType.NOTE_ADDED
+            and (item.job_id == status.job_id or item.related_job_id == status.job_id)
+            and isinstance(item.metadata, dict)
+            and item.metadata.get("output_store_restore_state") == restore_state
+            for item in self.project_store.list_timeline(project.project_id)
+        ):
+            return False
+        resolved_output_ids = list(
+            dict.fromkeys(
+                str(output_id).strip()
+                for output_id in (output_ids or [getattr(item, "output_id", "") for item in status.candidates])
+                if str(output_id).strip()
+            )
+        )
+        self._append_timeline(
+            project.project_id,
+            TimelineItemType.NOTE_ADDED,
+            "持久化输出需要恢复" if restore_state == "needs_recovery" else "持久化输出仅供复核",
+            (
+                "已保留持久化像素，但交付闭环尚未确认；当前仅提供复核和恢复入口，不作为正式交付。"
+                if restore_state == "needs_recovery"
+                else "已保留持久化像素，但最终交付被保留；当前仅提供复核入口，不作为正式交付。"
+            ),
+            job_id=status.job_id,
+            asset_ids=[
+                str(getattr(asset, "asset_id", "") or "").strip()
+                for asset in status.asset_series
+                if str(getattr(asset, "asset_id", "") or "").strip()
+            ],
+            candidate_ids=[
+                str(getattr(candidate, "candidate_id", "") or "").strip()
+                for candidate in status.candidates
+                if str(getattr(candidate, "candidate_id", "") or "").strip()
+            ],
+            metadata={
+                "restored_from_output_store": True,
+                "output_store_restore_state": restore_state,
+                "output_ids": resolved_output_ids,
+                "review_only": True,
+                "recovery_required": True,
+            },
+        )
+        return True
 
     @staticmethod
     def _incomplete_specialized_set_execution(job_status: ProductJobStatus, records: list[Any]) -> dict[str, Any] | None:
@@ -9180,14 +9337,14 @@ class V3ProjectModeService:
                 project,
                 visible_output_items=visible_output_items,
             ).model_dump(mode="json"),
-            "context": context.model_dump(mode="json"),
+            "context": self._public_project_context(context).model_dump(mode="json"),
             "metadata": {
                 **self._metadata(),
                 "project_outputs": visible_output_items,
             },
         }
         if feedback is not None:
-            payload["feedback"] = feedback.model_dump(mode="json")
+            payload["feedback"] = self._public_feedback_record(feedback).model_dump(mode="json")
         return payload
 
     def _build_context(
@@ -10923,6 +11080,15 @@ class V3ProjectModeService:
     @staticmethod
     def _public_project_review_reason(item: dict[str, Any]) -> str:
         metadata = dict(item.get("metadata") or {})
+        restore_state = str(
+            item.get("output_store_restore_state")
+            or metadata.get("output_store_restore_state")
+            or ""
+        ).strip().lower()
+        if restore_state == "needs_recovery":
+            return "持久化输出尚未完成交付闭环，仅提供复核和恢复入口。"
+        if restore_state == "delivery_withheld":
+            return "持久化输出的最终交付已保留，仅提供复核入口。"
         codes = [
             str(code).strip().lower()
             for code in metadata.get("retry_reason_codes", [])
@@ -11129,7 +11295,7 @@ class V3ProjectModeService:
         references are only projections and cannot nominate another output.
         """
 
-        output_store = getattr(self.product_service, "output_store", None)
+        output_store = getattr(getattr(self, "product_service", None), "output_store", None)
         list_by_job = getattr(output_store, "list_by_job", None)
         receipt_reader = getattr(output_store, "get_doc73_auto_identity_anchor_receipt", None)
         if output_store is None or not callable(list_by_job) or not callable(receipt_reader):
@@ -11444,9 +11610,22 @@ class V3ProjectModeService:
         return self._job_delivery_is_settled(job_status)
 
     @staticmethod
+    def _output_store_restore_state(job_status: ProductJobStatus) -> str:
+        return str(dict(job_status.metadata or {}).get("output_store_restore_state") or "").strip().lower()
+
+    @staticmethod
+    def _output_store_recovery_required(job_status: ProductJobStatus) -> bool:
+        return V3ProjectModeService._output_store_restore_state(job_status) in {
+            "needs_recovery",
+            "delivery_withheld",
+        }
+
+    @staticmethod
     def _job_delivery_is_settled(job_status: ProductJobStatus) -> bool:
         """Keep one terminal-state rule for normal and recovered Project outputs."""
 
+        if V3ProjectModeService._output_store_recovery_required(job_status):
+            return False
         if job_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
             return False
         execution = dict(job_status.metadata or {}).get("specialized_execution_summary")
@@ -11591,7 +11770,7 @@ class V3ProjectModeService:
             certification_state = "blocked"
         else:
             certification_state = "not_evaluated"
-        return {
+        projection = {
             "review_mode": review_mode,
             "review_status": review_status,
             "verification_state": verification_state,
@@ -11607,6 +11786,16 @@ class V3ProjectModeService:
                 or output_id in canonical_final_output_ids
             ),
         }
+        restore_state = V3ProjectModeService._output_store_restore_state(job_status)
+        if restore_state in {"needs_recovery", "delivery_withheld"}:
+            projection.update(
+                {
+                    "output_store_restore_state": restore_state,
+                    "review_only": True,
+                    "recovery_required": True,
+                }
+            )
+        return projection
 
     @staticmethod
     def _review_projection_allows_project_delivery(review_projection: dict[str, Any]) -> bool:
@@ -11626,6 +11815,7 @@ class V3ProjectModeService:
         )
 
     def _output_ref_from_record(self, project: ProjectRecord, record: Any) -> OutputRef:
+        preview_url, thumbnail_url, download_url = self._canonical_output_urls(record)
         return OutputRef(
             output_ref_id=stable_id("output_ref", project.project_id, record.job_id, record.output_id),
             source_type="generated_output",
@@ -11634,9 +11824,9 @@ class V3ProjectModeService:
             asset_id=record.asset_id,
             candidate_id=record.candidate_id,
             output_id=record.output_id,
-            preview_url=record.preview_url,
-            thumbnail_url=record.thumbnail_url,
-            download_url=record.download_url,
+            preview_url=preview_url,
+            thumbnail_url=thumbnail_url,
+            download_url=download_url,
             selection_reason="project generated image",
             selected_at=record.created_at,
             metadata={
@@ -11667,6 +11857,15 @@ class V3ProjectModeService:
             for key, value in dict(review_projection or {}).items()
             if not str(key).startswith("_")
         }
+        restore_state = str(public_review.get("output_store_restore_state") or "").strip().lower()
+        if restore_state in {"needs_recovery", "delivery_withheld"}:
+            delivery_metadata = {
+                **delivery_metadata,
+                "delivery_state": "review_only",
+                "output_store_restore_state": restore_state,
+                "review_only": True,
+                "recovery_required": True,
+            }
         delivery_state = str(delivery_metadata.get("delivery_state") or "final_delivery")
         item = {
             "output_ref_id": stable_id("project_output", project.project_id, record.job_id, record.output_id),
@@ -11695,8 +11894,6 @@ class V3ProjectModeService:
                 "model": record.model,
                 "requested_image_count": record_metadata.get("requested_image_count"),
                 "requested_image_size": record_metadata.get("requested_image_size"),
-                "final_provider_prompt": record_metadata.get("final_provider_prompt"),
-                "compiled_visual_direction": record_metadata.get("compiled_visual_direction"),
                 "style_notes": record_metadata.get("style_notes") or [],
                 "layout_notes": record_metadata.get("layout_notes") or [],
                 **delivery_metadata,
@@ -11927,6 +12124,58 @@ class V3ProjectModeService:
             selected_asset_ids=set(selected.selected_result.selected_asset_ids),
         )
 
+    def _selection_from_persisted_output_refs(
+        self,
+        status: ProductJobStatus,
+        refs: list[OutputRef],
+    ) -> SelectionResponse:
+        """Build a selection receipt from exact output-store bindings.
+
+        A restarted worker may have persisted pixels while the append-only Job
+        record still has no planning candidate/asset projection. Project Mode
+        may select those pixels only after its job-scoped output resolver has
+        proved the binding; it must never invent a candidate or choose a
+        sibling output.
+        """
+
+        candidate_ids = list(dict.fromkeys(ref.candidate_id for ref in refs if ref.candidate_id))
+        asset_ids = list(dict.fromkeys(ref.asset_id for ref in refs if ref.asset_id))
+        selected_result = SelectedResult(
+            selected_candidate_ids=candidate_ids,
+            selected_asset_ids=asset_ids,
+            asset_pack_id=status.asset_pack_id,
+            memory_update_applied=False,
+            metadata={
+                "selection_status": "selected_from_restored_outputs",
+                "source": PROJECT_API_SOURCE,
+                "restored_from_output_store": True,
+                "apply_memory_update_requested": False,
+            },
+        )
+        restored_status = status.model_copy(
+            update={
+                "status": ProductJobStatusValue.SELECTED,
+                "selected_result": selected_result,
+                "metadata": {
+                    **dict(status.metadata or {}),
+                    "selected_from_restored_outputs": True,
+                },
+            },
+            deep=True,
+        )
+        return SelectionResponse(
+            job_id=status.job_id,
+            status=ProductJobStatusValue.SELECTED,
+            selected_result=selected_result,
+            job_status=restored_status,
+            warnings=list(status.warnings),
+            metadata={
+                "source": PROJECT_API_SOURCE,
+                "project_mode": True,
+                "restored_from_output_store": True,
+            },
+        )
+
     def _resolved_output_refs_for_status(
         self,
         project: ProjectRecord,
@@ -11936,6 +12185,8 @@ class V3ProjectModeService:
         selected_asset_id: str | None = None,
         selected_candidate_ids: set[str] | None = None,
         selected_asset_ids: set[str] | None = None,
+        selected_output_id: str | None = None,
+        selected_output_ids: set[str] | None = None,
     ) -> tuple[list[OutputRef], list[dict[str, Any]]]:
         """Resolve a selection to exact V3 output records before it is persisted.
 
@@ -11947,18 +12198,22 @@ class V3ProjectModeService:
 
         selected_candidate_ids = set(selected_candidate_ids or [])
         selected_asset_ids = set(selected_asset_ids or [])
+        selected_output_ids = set(selected_output_ids or [])
         if selected_candidate_id:
             selected_candidate_ids.add(selected_candidate_id)
         if selected_asset_id:
             selected_asset_ids.add(selected_asset_id)
+        if selected_output_id:
+            selected_output_ids.add(selected_output_id)
         refs: list[OutputRef] = []
         now = _utc_now_iso()
-        has_selection_filter = bool(selected_candidate_ids or selected_asset_ids)
+        has_selection_filter = bool(selected_candidate_ids or selected_asset_ids or selected_output_ids)
         selected_candidates: list[Any] = []
         for candidate in status.candidates:
             if has_selection_filter and not (
                 candidate.candidate_id in selected_candidate_ids
                 or candidate.asset_id in selected_asset_ids
+                or candidate.output_id in selected_output_ids
             ):
                 continue
             selected_candidates.append(candidate)
@@ -11985,6 +12240,7 @@ class V3ProjectModeService:
         for asset in status.asset_series:
             if has_selection_filter and not (
                 asset.asset_id in selected_asset_ids
+                or asset.output_id in selected_output_ids
                 or asset.asset_id in selected_candidate_asset_ids
                 or asset.selected_candidate_id in selected_candidate_ids
             ):
@@ -12009,8 +12265,18 @@ class V3ProjectModeService:
                     selected_at=now,
                 )
             )
+        persisted_refs, persisted_unresolved = self._persisted_output_refs_for_selection(
+            project,
+            status,
+            selected_candidate_ids=selected_candidate_ids,
+            selected_asset_ids=selected_asset_ids,
+            selected_output_ids=selected_output_ids,
+            existing_refs=refs,
+            selected_at=now,
+        )
+        refs.extend(persisted_refs)
         resolved: list[OutputRef] = []
-        unresolved: list[dict[str, Any]] = []
+        unresolved: list[dict[str, Any]] = list(persisted_unresolved)
         for ref in refs:
             canonical = self._canonical_selected_output_ref(project, ref)
             if canonical is None:
@@ -12026,6 +12292,138 @@ class V3ProjectModeService:
                 continue
             resolved.append(canonical)
         return resolved, unresolved
+
+    def _persisted_output_refs_for_selection(
+        self,
+        project: ProjectRecord,
+        status: ProductJobStatus,
+        *,
+        selected_candidate_ids: set[str],
+        selected_asset_ids: set[str],
+        selected_output_ids: set[str],
+        existing_refs: list[OutputRef],
+        selected_at: str,
+    ) -> tuple[list[OutputRef], list[dict[str, Any]]]:
+        """Resolve explicit selectors against the job-scoped output store.
+
+        This is intentionally a recovery adapter, not a replacement for the
+        Product Job candidate projection. It is used only for explicit
+        selection IDs and accepts a record only when exactly one renderable
+        output matches that ID inside the current project-owned job.
+        """
+
+        selectors = {
+            *(('candidate', selector) for selector in selected_candidate_ids),
+            *(('asset', selector) for selector in selected_asset_ids),
+            *(('output', selector) for selector in selected_output_ids),
+        }
+        if not selectors:
+            return [], []
+        existing_selector_bindings = {
+            (selector_type, str(value or "").strip())
+            for ref in existing_refs
+            for selector_type, value in (
+                ("output", ref.output_id),
+                ("candidate", ref.candidate_id),
+                ("asset", ref.asset_id),
+            )
+            if str(value or "").strip()
+        }
+        # The status projection is already authoritative for selectors it
+        # contains.  The output-store adapter is only needed for an explicit
+        # selector that is absent from that projection (for example a durable
+        # output written just before a worker restart).  Do not manufacture a
+        # store-unavailable diagnostic when every selector will still pass
+        # through the canonical materialization gate below.
+        selectors_to_resolve = selectors - existing_selector_bindings
+        if not selectors_to_resolve:
+            return [], []
+        output_store = getattr(getattr(self, "product_service", None), "output_store", None)
+        list_by_job = getattr(output_store, "list_by_job", None)
+        if not callable(list_by_job):
+            return [], [
+                {
+                    "job_id": status.job_id,
+                    "reason": "materialized_output_store_unavailable",
+                }
+            ]
+        try:
+            records = list(list_by_job(status.job_id))
+        except Exception:
+            return [], [
+                {
+                    "job_id": status.job_id,
+                    "reason": "materialized_output_store_unavailable",
+                }
+            ]
+        matches_by_selector: dict[tuple[str, str], list[Any]] = {
+            selector: [] for selector in selectors_to_resolve
+        }
+        for record in records:
+            if str(getattr(record, "job_id", "") or "").strip() != status.job_id:
+                continue
+            record_ids = {
+                "candidate": str(getattr(record, "candidate_id", "") or "").strip(),
+                "asset": str(getattr(record, "asset_id", "") or "").strip(),
+                "output": str(getattr(record, "output_id", "") or "").strip(),
+            }
+            for selector in selectors_to_resolve:
+                if record_ids.get(selector[0]) == selector[1]:
+                    matches_by_selector[selector].append(record)
+        selected_records: dict[str, Any] = {}
+        unresolved: list[dict[str, Any]] = []
+        for selector_type, selector in sorted(selectors_to_resolve):
+            selector_key = (selector_type, selector)
+            matches = matches_by_selector.get(selector_key, [])
+            if len(matches) != 1:
+                unresolved.append(
+                    {
+                        "job_id": status.job_id,
+                        "selector": selector,
+                        "selector_type": selector_type,
+                        "reason": (
+                            "materialized_output_selector_not_found"
+                            if not matches
+                            else "materialized_output_selector_ambiguous"
+                        ),
+                    }
+                )
+                continue
+            record = matches[0]
+            output_id = str(getattr(record, "output_id", "") or "").strip()
+            if not output_id or not self._output_record_is_renderable(record):
+                unresolved.append(
+                    {
+                        "job_id": status.job_id,
+                        "selector": selector,
+                        "reason": "materialized_output_unavailable",
+                    }
+                )
+                continue
+            record_bindings = {
+                (field, str(getattr(record, f"{field}_id", "") or "").strip())
+                for field in ("output", "candidate", "asset")
+                if str(getattr(record, f"{field}_id", "") or "").strip()
+            }
+            if record_bindings.intersection(existing_selector_bindings):
+                continue
+            selected_records[output_id] = record
+        refs: list[OutputRef] = []
+        for output_id, record in selected_records.items():
+            base = self._output_ref_from_record(project, record)
+            refs.append(
+                base.model_copy(
+                    update={
+                        "selection_reason": "user selected persisted project output",
+                        "selected_at": selected_at,
+                        "metadata": {
+                            **dict(base.metadata or {}),
+                            "restored_from_output_store": True,
+                        },
+                    }
+                )
+            )
+        return refs, unresolved
 
     def _canonical_selected_output_ref(self, project: ProjectRecord, ref: OutputRef) -> OutputRef | None:
         """Hydrate one selected output from its immutable local output record."""
@@ -12061,6 +12459,7 @@ class V3ProjectModeService:
         record = records[0]
         if not self._output_record_is_renderable(record):
             return None
+        preview_url, thumbnail_url, download_url = self._canonical_output_urls(record)
         source_integrity_id = self._output_source_integrity_id(record)
         return OutputRef(
             output_ref_id=stable_id("output_ref", project.project_id, record.job_id, record.output_id),
@@ -12070,9 +12469,9 @@ class V3ProjectModeService:
             asset_id=record.asset_id,
             candidate_id=record.candidate_id,
             output_id=record.output_id,
-            preview_url=record.preview_url,
-            thumbnail_url=record.thumbnail_url,
-            download_url=record.download_url,
+            preview_url=preview_url,
+            thumbnail_url=thumbnail_url,
+            download_url=download_url,
             selection_reason=ref.selection_reason,
             selected_at=ref.selected_at,
             metadata={
@@ -12089,13 +12488,52 @@ class V3ProjectModeService:
 
     def _output_record_is_renderable(self, record: Any) -> bool:
         file_path = str(getattr(record, "file_path", "") or "").strip()
-        return bool(
+        renderable = bool(
             file_path
             and Path(file_path).is_file()
             and str(getattr(record, "preview_url", "") or "").strip()
             and str(getattr(record, "thumbnail_url", "") or "").strip()
             and str(getattr(record, "download_url", "") or "").strip()
         )
+
+        if not renderable:
+            return False
+        # The output store owns canonical paths and immutable content
+        # integrity. A persisted record's historical file_path/URLs are not
+        # sufficient evidence for Project Mode recovery; when the store
+        # exposes its resolver, require all three serving variants to pass it;
+        # a store without the resolver is rejected below.
+        output_store = getattr(getattr(self, "product_service", None), "output_store", None)
+        file_for_variant = getattr(output_store, "file_for_variant", None)
+        if not callable(file_for_variant):
+            # A path and three URLs are only legacy metadata. Without the
+            # output-store resolver there is no proof that the served variants
+            # are canonical, current, and integrity-checked; recovery must
+            # fail closed instead of trusting an adapter-shaped record.
+            return False
+        for variant in ("download", "preview", "thumbnail"):
+            try:
+                binding = file_for_variant(record.output_id, variant)
+            except Exception:
+                return False
+            if (
+                not isinstance(binding, tuple)
+                or not binding
+                or not Path(str(binding[0] or "")).is_file()
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _canonical_output_urls(record: Any) -> tuple[str, str, str]:
+        """Derive serving routes from the immutable output id, never metadata URLs."""
+
+        output_id = str(getattr(record, "output_id", "") or "").strip()
+        if not output_id:
+            return "", "", ""
+        from ..product_api.outputs import download_route, preview_route, thumbnail_route
+
+        return preview_route(output_id), thumbnail_route(output_id), download_route(output_id)
 
     def _output_source_integrity_id(self, record: Any) -> str:
         strict_integrity_id = self._doc265_output_source_integrity_id(record)
@@ -12527,7 +12965,7 @@ class V3ProjectModeService:
             route=f"{API_NAMESPACE}/projects/{project.project_id}",
             project=public_project,
             templates=self.template_cards(),
-            context=context_override if context_override is not None else project.latest_context,
+            context=self._public_project_context(context_override if context_override is not None else project.latest_context),
             metadata=metadata,
         )
 
@@ -12716,30 +13154,72 @@ class V3ProjectModeService:
             "advanced_reference_controls",
             "doc281_used_source_disclosures",
         }
-        public_metadata = {
-            key: value
-            for key, value in dict(project.metadata or {}).items()
-            if key in public_metadata_keys
-        }
+        public_metadata = self._public_metadata_projection(project.metadata, public_metadata_keys)
         auto_anchor = self._doc73_auto_identity_anchor_public_projection(
             project,
             owner_user_id=owner_user_id,
         )
         if auto_anchor is not None:
             public_metadata["doc73_auto_identity_anchor"] = auto_anchor
-        public_project = project.model_copy(update={"metadata": public_metadata}, deep=True)
-        if owner_user_id is None:
-            return public_project
-
         visible_aliases = self._visible_output_aliases(visible_output_items or [])
         public_selected_refs = [
             self._public_output_ref(ref)
             for ref in project.selected_output_refs
-            if self._output_ref_aliases(ref).intersection(visible_aliases)
+            if owner_user_id is None or self._output_ref_aliases(ref).intersection(visible_aliases)
         ]
-        return public_project.model_copy(
-            update={"selected_output_refs": public_selected_refs},
-            deep=True,
+        public_payload = project.model_dump(mode="json")
+        public_payload.update(
+            {
+                "metadata": public_metadata,
+                "selected_output_refs": [ref.model_dump(mode="json") for ref in public_selected_refs],
+                "latest_context": self._public_project_context(project.latest_context).model_dump(mode="json") if project.latest_context else None,
+            }
+        )
+        return ProjectRecord.model_validate(self._public_safe_projection(public_payload))
+
+    @classmethod
+    def _public_job_status(cls, status: ProductJobStatus) -> ProductJobStatus:
+        """Project a Product status before embedding it in Project responses."""
+
+        payload = cls._public_safe_projection(status.model_dump(mode="json"))
+        return ProductJobStatus.model_validate(payload)
+
+    @classmethod
+    def public_job_status(cls, status: ProductJobStatus) -> ProductJobStatus:
+        """Expose the safe Job projection to the HTTP route adapter."""
+
+        return cls._public_job_status(status)
+
+    @classmethod
+    def _public_reference_asset(cls, reference: ProjectReferenceAsset) -> ProjectReferenceAsset:
+        """Project a reference response without execution-only metadata."""
+
+        payload = cls._public_safe_projection(reference.model_dump(mode="json"))
+        return ProjectReferenceAsset.model_validate(payload)
+
+    @classmethod
+    def _public_feedback_record(cls, feedback: ProjectFeedbackRecord) -> ProjectFeedbackRecord:
+        """Project a feedback response without execution-only metadata."""
+
+        payload = cls._public_safe_projection(feedback.model_dump(mode="json"))
+        return ProjectFeedbackRecord.model_validate(payload)
+
+    @classmethod
+    def _public_brand_memory_proposal(
+        cls,
+        proposal: ProjectBrandMemoryProposal,
+    ) -> ProjectBrandMemoryProposal:
+        """Project a Brand Memory response without execution-only metadata."""
+
+        payload = cls._public_safe_projection(proposal.model_dump(mode="json"))
+        return ProjectBrandMemoryProposal.model_validate(payload)
+
+    def _public_project_for_nested_response(self, project: ProjectRecord) -> ProjectRecord:
+        """Use the same safe project projection for every mutation response."""
+
+        return self._public_project_record(
+            project,
+            visible_output_items=self._project_output_items(project, limit=60),
         )
 
     @staticmethod
@@ -12761,22 +13241,72 @@ class V3ProjectModeService:
         return aliases
 
     @staticmethod
-    def _public_output_ref(ref: OutputRef) -> OutputRef:
-        private_metadata_keys = {
-            "file_path",
-            "mime_type",
-            "provider",
-            "model",
-            "source_integrity_id",
-            "canonical_output_binding",
-            "v3_owned_output",
+    def _public_safe_projection(value: Any) -> Any:
+        """Remove execution-only data from nested public dictionaries."""
+        private_keys = {
+            "final_provider_prompt", "compiled_visual_direction", "optimized_direction",
+            "provider_prompt", "provider_negative_prompt", "provider_prompt_rules",
+            "provider_negative_rules", "llm_brain", "file_path", "source_integrity_id",
+            "canonical_output_binding", "v3_owned_output", "retry_patch", "retry_patches",
+            "prompt_additions", "negative_additions", "reasoning", "provider_payload", "provider_request",
         }
-        metadata = {
-            key: value
-            for key, value in dict(ref.metadata or {}).items()
-            if key not in private_metadata_keys
+        if isinstance(value, dict):
+            return {
+                key: V3ProjectModeService._public_safe_projection(item)
+                for key, item in value.items()
+                if str(key).strip().lower() not in private_keys
+            }
+        if isinstance(value, (list, tuple)):
+            return [V3ProjectModeService._public_safe_projection(item) for item in value]
+        return value
+
+    @classmethod
+    def _public_metadata_projection(
+        cls, metadata: dict[str, Any] | None, allowed_keys: set[str]
+    ) -> dict[str, Any]:
+        return cls._public_safe_projection(
+            {key: value for key, value in dict(metadata or {}).items() if key in allowed_keys}
+        )
+
+    @classmethod
+    def _public_project_context(cls, context: ProjectContextPackage | None) -> ProjectContextPackage | None:
+        if context is None:
+            return None
+        public_metadata_keys = {
+            "source", "positive_context_from_selected_outputs_only", "unselected_candidates_excluded",
+            "active_reference_count", "active_uploaded_reference_count", "active_generated_reference_count",
+            "suppressed_generated_reference_count", "active_negative_feedback_count", "template_id",
+            "reference_resolution_audit", "general_forced_reference_count", "variation_mode",
+            "effective_variation_mode", "inferred_variation_mode", "variation_mode_source",
+            "requested_image_count", "requested_image_size", "visual_continuity_strength",
+            "visual_snapshot_id", "strong_reference_binding_count", "identity_lock_count",
+            "project_identity_anchor_count", "strong_reference_continuation_plan_id",
+            "reference_policy_package_id", "doc93_reference_channel_policy", "general_suite_role_plan_id",
+            "batch_identity_diversity_review_id", "template_consistency_policy",
+            "doc73_auto_identity_anchor_state", "commerce_profile", "product_reference_required",
         }
-        return ref.model_copy(update={"metadata": metadata}, deep=True)
+        payload = context.model_dump(mode="json")
+        payload["metadata"] = cls._public_metadata_projection(context.metadata, public_metadata_keys)
+        payload["selected_output_assets"] = [
+            cls._public_output_ref(ref).model_dump(mode="json")
+            for ref in context.selected_output_assets
+        ]
+        return ProjectContextPackage.model_validate(cls._public_safe_projection(payload))
+
+    @classmethod
+    def _public_output_ref(cls, ref: OutputRef) -> OutputRef:
+        return ref.model_copy(
+            update={
+                "metadata": cls._public_metadata_projection(
+                    ref.metadata,
+                    {
+                        "recommendation", "restored_from_reference_id", "restored_from_output_store",
+                        "delivery_state", "output_store_restore_state", "review_only", "recovery_required",
+                    },
+                )
+            },
+            deep=True,
+        )
 
     def _metadata(self) -> dict[str, Any]:
         ecommerce_manifest = self.template_registry.get_manifest(ECOMMERCE_TEMPLATE_ID)

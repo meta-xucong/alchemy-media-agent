@@ -141,6 +141,19 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _deepseek_base_url_from_env() -> str | None:
+    """Resolve only the DeepSeek Brain route, never another provider's route."""
+
+    return (os.getenv("DEEPSEEK_LLM_BASE_URL") or "https://aiself.vip").rstrip() or None
+
+
+def _deepseek_api_key_from_env() -> str | None:
+    """Read only the credential explicitly assigned to the DeepSeek Brain."""
+
+    value = os.getenv("DEEPSEEK_LLM_API_KEY")
+    return value.strip() if value and value.strip() else None
+
+
 class Settings(BaseModel):
     media_agent_mode: str = os.getenv("MEDIA_AGENT_MODE", "live")
     v3_capability_activation_mode: str = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "shadow").strip().lower()
@@ -180,20 +193,8 @@ class Settings(BaseModel):
         "DEEPSEEK_LLM_MODEL",
         os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro"),
     )
-    deepseek_llm_base_url: str | None = (
-        os.getenv("DEEPSEEK_LLM_BASE_URL")
-        or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL")
-        or os.getenv("ANTHROPIC_BASE_URL")
-        or os.getenv("LAB_DOUBAO_VISION_BASE_URL")
-        or "https://aiself.vip"
-    ).rstrip() or None
-    deepseek_llm_api_key: str | None = (
-        os.getenv("DEEPSEEK_LLM_API_KEY")
-        or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN")
-        or os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("LAB_DOUBAO_VISION_API_KEY")
-    )
+    deepseek_llm_base_url: str | None = _deepseek_base_url_from_env()
+    deepseek_llm_api_key: str | None = _deepseek_api_key_from_env()
     llm_prompt_planning_enabled: bool = os.getenv("LLM_PROMPT_PLANNING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     lab_llm_enabled: bool = os.getenv("LAB_LLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "deepseek"))

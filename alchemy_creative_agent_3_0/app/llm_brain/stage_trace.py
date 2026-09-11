@@ -57,6 +57,8 @@ _SAFE_EXTRA_KEYS = {
     "remote_brain_call_count",
     "remote_http_status_code",
     "remote_provider_transport_kind",
+    "request_acceptance",
+    "protocol_fallback_attempted",
     "exitcode",
 }
 _SAFE_REJECTED_SECTION_VALUES = {
@@ -77,6 +79,7 @@ _SAFE_REASON_VALUES = {
     "local_mcp_planning_timeout",
     "timeout",
     "unavailable",
+    "provider_unavailable",
     "provider_error",
     "validation_error",
     "execution_budget_exhausted",
@@ -116,6 +119,29 @@ _SAFE_TRANSPORT_KIND_VALUES = {
     "timeout",
     "transport_error",
     "write_error",
+}
+_SAFE_REQUEST_ACCEPTANCE_VALUES = {"not_started", "dispatched", "unknown"}
+_SAFE_BOOLEAN_EXTRA_KEYS = {
+    "response_started",
+    "first_content_observed",
+    "reasoning_content_observed",
+    "complete_response_observed",
+    "json_parse_started",
+    "json_parse_completed",
+    "json_serialization_recovery_attempted",
+    "json_serialization_recovery_succeeded",
+    "cardinality_valid",
+    "semantic_recovery_attempted",
+    "protocol_fallback_attempted",
+}
+_RESPONSE_PROGRESS_KEYS = {
+    "first_content_observed",
+    "reasoning_content_observed",
+    "complete_response_observed",
+    "json_parse_started",
+    "json_parse_completed",
+    "json_serialization_recovery_attempted",
+    "json_serialization_recovery_succeeded",
 }
 
 
@@ -180,6 +206,14 @@ def _safe_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
             token = _safe_token(value)
             if token in _SAFE_TRANSPORT_KIND_VALUES:
                 cleaned[safe_key] = token
+        elif safe_key == "request_acceptance":
+            if isinstance(value, str):
+                token = _safe_token(value)
+                if token in _SAFE_REQUEST_ACCEPTANCE_VALUES:
+                    cleaned[safe_key] = token
+        elif safe_key in _SAFE_BOOLEAN_EXTRA_KEYS:
+            if isinstance(value, bool):
+                cleaned[safe_key] = value
         elif safe_key == "logical_budget_seconds":
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 cleaned[safe_key] = round(float(value), 3)
@@ -205,7 +239,32 @@ def _safe_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
             cleaned[safe_key] = None
         else:
             cleaned[safe_key] = _safe_token(value)
+    _drop_impossible_progression(cleaned)
     return cleaned
+
+
+def _drop_impossible_progression(cleaned: dict[str, Any]) -> None:
+    """Remove lifecycle facts that contradict their observed predecessors."""
+
+    if cleaned.get("response_started") is not True:
+        for key in _RESPONSE_PROGRESS_KEYS:
+            if cleaned.get(key) is True:
+                cleaned.pop(key, None)
+
+    if cleaned.get("json_parse_completed") is True and cleaned.get("json_parse_started") is not True:
+        cleaned.pop("json_parse_completed", None)
+
+    if (
+        cleaned.get("json_serialization_recovery_succeeded") is True
+        and cleaned.get("json_serialization_recovery_attempted") is not True
+    ):
+        cleaned.pop("json_serialization_recovery_succeeded", None)
+
+    if (
+        cleaned.get("response_started") is True
+        and cleaned.get("request_acceptance") in {"not_started", "unknown"}
+    ):
+        cleaned.pop("request_acceptance", None)
 
 
 def _safe_token(value: Any) -> str:

@@ -50,12 +50,19 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     AnchorCandidateFailureReceipt,
+    FACE_AUXILIARY_BRIDGE_ROLES,
     AnchorView,
     FaceIdentityModule,
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
     PeopleAsset,
     RootSourceProvenance,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotCandidateSummary,
+    FormalSlotReceipt,
+    FormalSlotRequirementSummary,
+    FormalSlotSharedReviewSummary,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryVisualAssetCreateRequest,
@@ -99,11 +106,16 @@ def _face_card() -> CharacterCardState:
 
 
 def _face_anchor_view(role: str, output_id: str) -> AnchorView:
+    formal_receipt = None
+    source_candidate_ids = [f"candidate_{output_id}"]
+    if role not in FACE_AUXILIARY_BRIDGE_ROLES:
+        formal_receipt = _face_formal_receipt(role, output_id)
+        source_candidate_ids = [candidate.candidate_id for candidate in formal_receipt.candidates]
     return AnchorView(
         view_id=f"view_{output_id}",
         view_role=role,  # type: ignore[arg-type]
         output_id=output_id,
-        source_candidate_ids=[f"candidate_{output_id}"],
+        source_candidate_ids=source_candidate_ids,
         identity_scores=IdentityScoreSummary(
             same_face_score=0.91,
             distinctive_feature_score=0.9,
@@ -111,6 +123,50 @@ def _face_anchor_view(role: str, output_id: str) -> AnchorView:
             visual_quality_score=0.93,
             pose_compliance_score=0.92,
         ),
+        formal_slot_receipt=formal_receipt,
+    )
+
+
+def _face_formal_receipt(role: str, output_id: str) -> FormalSlotReceipt:
+    shared_review = FormalSlotSharedReviewSummary(
+        status="pass",
+        evidence_codes=["shared_visual_review_verified"],
+        score_dimensions=["identity_or_subject_consistency", "generic_visual_quality"],
+        framing_delta_dimensions=["face_identity_view_framing_delta"],
+    )
+    candidates = [
+        FormalSlotCandidateSummary(
+            candidate_index=index,
+            candidate_id=(
+                f"candidate_{output_id}"
+                if index == 3
+                else f"candidate_{output_id}_{index}"
+            ),
+            output_id=(output_id if index == 3 else f"{output_id}_{index}"),
+            reviewed=True,
+            selected_as_winner=index == 3,
+            shared_review=shared_review,
+        )
+        for index in (1, 2, 3)
+    ]
+    requirement = lambda code: FormalSlotRequirementSummary(  # noqa: E731
+        status="pass",
+        evidence_codes=[code],
+        dimensions={"summary_score": 0.93},
+    )
+    return FormalSlotReceipt(
+        module="face_identity",
+        slot_key=f"face_identity.{role}",
+        acceptance_mode="standard_three_candidate",
+        reviewed_candidate_count=3,
+        candidates=candidates,
+        winner_candidate_id="candidate_" + output_id,
+        winner_output_id=output_id,
+        winner_shared_review=shared_review,
+        framing_summary=requirement("face_identity_view_profile_reviewed"),
+        parity_summary=requirement("face_identity_reference_parity_verified"),
+        identity_summary=requirement("face_identity_shared_identity_review_verified"),
+        reload_public_projection_verified=True,
     )
 
 
@@ -159,6 +215,17 @@ class _PassReviewer:
                 if getattr(candidate, "slot_key", "") == "expression.laugh"
                 else [],
             ),
+            shared_review_receipts=[
+                {
+                    "owner": "v3_shared_visual_cluster",
+                    "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
+                    "status": "pass",
+                    "evidence_codes": ["shared_visual_review_verified"],
+                    "issue_codes": [],
+                    "score_dimensions": ["identity"],
+                    "framing_delta_dimensions": ["frame_delta"],
+                }
+            ],
         )
 
 
@@ -984,7 +1051,12 @@ def test_doc203_character_card_mcp_resume_passes_pending_handoff_only_to_matchin
     )
 
     laugh_requests = [request for request in generator.requests if request.slot_key == "expression.laugh"]
-    assert result.status == "review"
+    # The public card checkpoint carries only the cursor and opaque handoff;
+    # it does not carry the already-reviewed candidate records required by the
+    # current formal three-candidate receipt.  Resume therefore consumes the
+    # matching handoff, records candidate 3, and fails closed at receipt
+    # construction instead of claiming a winner from two candidates.
+    assert result.status == "blocked"
     assert [
         (request.candidate_index, request.mcp_handoff_id)
         for request in laugh_requests
@@ -1106,14 +1178,20 @@ def test_doc192_character_card_reverse_45_uses_profile_before_right25_bridge() -
         view.view_role: view.output_id
         for view in result.pack.anchor_views
     }
+    selected_auxiliary_by_role = {
+        reference.reference_role: reference.output_id
+        for reference in result.pack.auxiliary_references
+    }
     assert [view.view_role for view in result.pack.anchor_views] == [
         "standard_front",
-        "left_front_25",
         "three_quarter",
         "profile",
-        "right_front_25",
         "reverse_three_quarter",
         "rear_head",
+    ]
+    assert [reference.reference_role for reference in result.pack.auxiliary_references] == [
+        "left_front_25",
+        "right_front_25",
     ]
     reverse_requests = [
         request
@@ -1127,7 +1205,7 @@ def test_doc192_character_card_reverse_45_uses_profile_before_right25_bridge() -
             "root_doc182",
             selected_by_role["standard_front"],
             selected_by_role["profile"],
-            selected_by_role["right_front_25"],
+            selected_auxiliary_by_role["right_front_25"],
         ]
         for request in reverse_requests
     )
@@ -1137,8 +1215,10 @@ def test_doc190_character_card_persists_each_face_slot_winner_as_resume_checkpoi
     class _Catalog:
         def __init__(self) -> None:
             self.records = []
+            self.packs = {}
 
         def save_pack(self, pack, *, project_id=None, event_type="review"):  # noqa: ANN001, ANN202
+            self.packs[(project_id, pack.people_asset_id, pack.pack_version_id)] = pack
             self.records.append(
                 (
                     event_type,
@@ -1147,6 +1227,9 @@ def test_doc190_character_card_persists_each_face_slot_winner_as_resume_checkpoi
                 )
             )
             return pack
+
+        def get_pack(self, project_id, people_asset_id, pack_version_id):  # noqa: ANN001, ANN202
+            return self.packs.get((project_id, people_asset_id, pack_version_id))
 
     catalog = _Catalog()
     result = AnchorPackPreparationService(
@@ -1157,16 +1240,13 @@ def test_doc190_character_card_persists_each_face_slot_winner_as_resume_checkpoi
 
     assert result.status == "review"
     assert ("fail", "failed", ["standard_front"]) in catalog.records
-    assert ("fail", "failed", ["standard_front", "left_front_25"]) in catalog.records
     assert (
         "fail",
         "failed",
         [
             "standard_front",
-            "left_front_25",
             "three_quarter",
             "profile",
-            "right_front_25",
             "reverse_three_quarter",
         ],
     ) in catalog.records
@@ -1175,10 +1255,8 @@ def test_doc190_character_card_persists_each_face_slot_winner_as_resume_checkpoi
         "review",
         [
             "standard_front",
-            "left_front_25",
             "three_quarter",
             "profile",
-            "right_front_25",
             "reverse_three_quarter",
             "rear_head",
         ],
@@ -1228,8 +1306,10 @@ def test_doc182_face_resume_skips_completed_views_and_creates_new_pack() -> None
     assert first.status == "blocked"
     assert [view.view_role for view in first.pack.anchor_views] == [
         "standard_front",
-        "left_front_25",
         "three_quarter",
+    ]
+    assert [reference.reference_role for reference in first.pack.auxiliary_references] == [
+        "left_front_25",
     ]
     assert len(first.generation_failures) == 3
 
@@ -1327,14 +1407,13 @@ def test_doc190_mcp_resume_consumes_legacy_review_failure_when_handoff_id_exists
 
     assert [
         (request.view_role, request.candidate_index, request.mcp_handoff_id)
-        for request in generator.requests[:3]
+        for request in generator.requests
     ] == [
         ("standard_front", 1, "mcp_handoff_standard_front_1"),
-        ("left_front_25", 1, None),
+        ("standard_front", 2, None),
     ]
-    assert [view.view_role for view in resumed.pack.anchor_views] == ["standard_front"]
-    assert resumed.pack.anchor_views[0].output_id == "output_standard_front_1"
-    assert resumed.mcp_handoff_ids == ["mcp_handoff_left_front_25_1"]
+    assert [view.view_role for view in resumed.pack.anchor_views] == []
+    assert resumed.mcp_handoff_ids == ["mcp_handoff_standard_front_2"]
 
 
 def test_doc193_mcp_resume_skips_non_resumable_failure_before_pending_handoff() -> None:
@@ -1376,18 +1455,17 @@ def test_doc193_mcp_resume_skips_non_resumable_failure_before_pending_handoff() 
         for item in resumed.pack.candidate_failures
     ] == [
         ("standard_front", 1, "provider_timeout", None),
-        ("left_front_25", 1, "mcp_materialization_pending", "mcp_handoff_left_front_25_1"),
+        ("standard_front", 3, "mcp_materialization_pending", "mcp_handoff_standard_front_3"),
     ]
     assert [
         (item.view_role, item.candidate_index, item.mcp_handoff_id)
         for item in generator.requests
     ] == [
         ("standard_front", 2, "mcp_handoff_standard_front_2"),
-        ("left_front_25", 1, None),
+        ("standard_front", 3, None),
     ]
-    assert [view.view_role for view in resumed.pack.anchor_views] == ["standard_front"]
-    assert resumed.pack.anchor_views[0].output_id == "output_standard_front_2"
-    assert resumed.mcp_handoff_ids == ["mcp_handoff_left_front_25_1"]
+    assert [view.view_role for view in resumed.pack.anchor_views] == []
+    assert resumed.mcp_handoff_ids == ["mcp_handoff_standard_front_3"]
 
 
 def test_doc187_mcp_face_resume_does_not_create_new_handoffs_after_three_review_failures() -> None:
@@ -1446,17 +1524,17 @@ def test_doc189_mcp_resume_does_not_reuse_front_handoffs_for_next_face_view() ->
     ).prepare(_mcp_anchor_request(), resume_from_pack=first.pack)
 
     assert resumed.status == "blocked"
-    assert [view.view_role for view in resumed.pack.anchor_views] == ["standard_front"]
+    assert [view.view_role for view in resumed.pack.anchor_views] == []
     assert [
         (request.view_role, request.candidate_index, request.mcp_handoff_id)
         for request in generator.requests
     ] == [
         ("standard_front", 1, "mcp_handoff_standard_front_1"),
-        ("left_front_25", 1, None),
+        ("standard_front", 2, None),
     ]
-    assert resumed.mcp_handoff_ids == ["mcp_handoff_left_front_25_1"]
+    assert resumed.mcp_handoff_ids == ["mcp_handoff_standard_front_2"]
     assert all(
-        item.view_role == "left_front_25"
+        item.view_role == "standard_front"
         for item in resumed.generation_failures
         if item.mcp_handoff_id in resumed.mcp_handoff_ids
     )
@@ -1467,33 +1545,64 @@ def test_doc192_mcp_character_card_pauses_after_each_supplementary_slot_checkpoi
         generator=_McpHandoffGenerator(),
         reviewer=_PassReviewer(),
     ).prepare(_mcp_anchor_request())
+    assert first.mcp_handoff_ids == ["mcp_handoff_standard_front_1"]
+
     second = AnchorPackPreparationService(
         generator=_McpHandoffGenerator(submitted={"mcp_handoff_standard_front_1"}),
         reviewer=_PassReviewer(),
     ).prepare(_mcp_anchor_request(), resume_from_pack=first.pack)
-    assert second.mcp_handoff_ids == ["mcp_handoff_left_front_25_1"]
+    assert second.mcp_handoff_ids == ["mcp_handoff_standard_front_2"]
 
-    generator = _McpHandoffGenerator(
+    third = AnchorPackPreparationService(
+        generator=_McpHandoffGenerator(
+            submitted={
+                "mcp_handoff_standard_front_1",
+                "mcp_handoff_standard_front_2",
+            }
+        ),
+        reviewer=_PassReviewer(),
+    ).prepare(_mcp_anchor_request(), resume_from_pack=second.pack)
+    assert third.mcp_handoff_ids == ["mcp_handoff_standard_front_3"]
+
+    fourth_generator = _McpHandoffGenerator(
         submitted={
             "mcp_handoff_standard_front_1",
+            "mcp_handoff_standard_front_2",
+            "mcp_handoff_standard_front_3",
+        }
+    )
+    fourth = AnchorPackPreparationService(
+        generator=fourth_generator,
+        reviewer=_PassReviewer(),
+    ).prepare(_mcp_anchor_request(), resume_from_pack=third.pack)
+    assert fourth.mcp_handoff_ids == ["mcp_handoff_left_front_25_1"]
+    assert [view.view_role for view in fourth.pack.anchor_views] == ["standard_front"]
+
+    fifth_generator = _McpHandoffGenerator(
+        submitted={
+            "mcp_handoff_standard_front_1",
+            "mcp_handoff_standard_front_2",
+            "mcp_handoff_standard_front_3",
             "mcp_handoff_left_front_25_1",
         }
     )
-    third = AnchorPackPreparationService(
-        generator=generator,
+    fifth = AnchorPackPreparationService(
+        generator=fifth_generator,
         reviewer=_PassReviewer(),
-    ).prepare(_mcp_anchor_request(), resume_from_pack=second.pack)
+    ).prepare(_mcp_anchor_request(), resume_from_pack=fourth.pack)
 
-    assert third.status == "blocked"
-    assert third.failure_codes == ["mcp_character_card_slot_checkpoint_ready"]
-    assert third.mcp_handoff_ids == []
-    assert [view.view_role for view in third.pack.anchor_views] == [
+    assert fifth.status == "blocked"
+    assert fifth.failure_codes == ["mcp_character_card_slot_checkpoint_ready"]
+    assert fifth.mcp_handoff_ids == []
+    assert [view.view_role for view in fifth.pack.anchor_views] == [
         "standard_front",
+    ]
+    assert [reference.reference_role for reference in fifth.pack.auxiliary_references] == [
         "left_front_25",
     ]
     assert [
         (request.view_role, request.candidate_index, request.mcp_handoff_id)
-        for request in generator.requests
+        for request in fifth_generator.requests
     ] == [
         ("left_front_25", 1, "mcp_handoff_left_front_25_1"),
     ]
@@ -2588,7 +2697,10 @@ def test_doc190_face_pack_projection_clears_stale_downstream_slots() -> None:
     projected = apply_face_identity_pack_to_card(card, pack)
 
     assert projected.face_slots["face.front"].output_id == "new_front"
-    assert projected.face_slots["face.left_front_25"].output_id == "new_left25"
+    # 25° bridges remain reviewable auxiliary references; they are not
+    # projected into the formal Character Card slot grid.
+    assert projected.face_slots["face.left_front_25"].state == "empty"
+    assert projected.face_slots["face.left_front_25"].output_id is None
     assert projected.face_slots["face.front_three_quarter"].output_id == "new_left45"
     assert projected.face_slots["face.profile"].state == "empty"
     assert projected.face_slots["face.profile"].output_id is None

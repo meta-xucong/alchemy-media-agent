@@ -118,6 +118,9 @@ def test_project_output_reference_resolution_keeps_mixed_selection_union() -> No
         selected_asset_ids={"asset-b"},
     )
 
+    # Both selectors are already represented by the status projection.  The
+    # recovery adapter must not require an unrelated output store in this
+    # branch; canonical materialization remains the next gate in production.
     assert unresolved == []
     assert [ref.output_id for ref in refs] == ["output-a", "output-b"]
 

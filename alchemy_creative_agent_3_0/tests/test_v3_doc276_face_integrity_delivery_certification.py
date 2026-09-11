@@ -17,6 +17,7 @@ from PIL import Image
 from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
@@ -377,19 +378,21 @@ def test_doc276_browser_metadata_cannot_enable_the_server_rollout_gate(tmp_path:
     )
     created = _create_general_job(service)
 
-    service.generate_job(
-        created.job_id,
-        {
-            "quality_mode": "standard",
-            "metadata": {
-                "vision_inspection_mode": "vision_model",
-                "doc276_face_integrity_review_required": True,
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.generate_job(
+            created.job_id,
+            {
+                "quality_mode": "standard",
+                "metadata": {
+                    "vision_inspection_mode": "vision_model",
+                    "doc276_face_integrity_review_required": True,
+                },
             },
-        },
-    )
+        )
 
-    package = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
-    assert package.get("doc276_face_integrity_review_required") is not True
+    record = service.get_job_record(created.job_id)
+    assert record is not None
+    assert record.generation_result is None
 
 
 @pytest.mark.parametrize(
@@ -575,12 +578,13 @@ def test_doc276_non_enforced_human_generation_persists_the_required_face_gate(
     created = _create_general_job(service)
     _install_server_owned_human_review_contract(service, created.job_id)
 
-    service.generate_job(
+    service.generate_job_with_continuation(
         created.job_id,
-        {
-            "quality_mode": "explore",
-            "metadata": {"vision_inspection_mode": "vision_model"},
-        },
+        {"quality_mode": "explore"},
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+        ),
     )
 
     package = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
@@ -900,12 +904,14 @@ def test_doc276_face_retry_uses_existing_bounded_append_only_authority_without_h
     )
     created = _create_general_job(service)
     _install_server_owned_human_review_contract(service, created.job_id)
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
-        {
-            "quality_mode": "standard",
-            "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 1},
-        },
+        {"quality_mode": "standard"},
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=1,
+        ),
     )
 
     internal_review = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]

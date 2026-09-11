@@ -7,6 +7,7 @@ import json
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import photography_capability_policy
 from alchemy_creative_agent_3_0.tests.photography_test_support import (
@@ -193,7 +194,13 @@ def test_metadata_only_photography_review_withholds_terminal_delivery(monkeypatc
     created = service.create_job(create_request)
     assert created.status.value == "planned"
 
-    generated = service.generate_job(created.job_id, {"metadata": {"vision_inspection_mode": "metadata_only"}})
+    generated = service.generate_job_with_continuation(
+        created.job_id,
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="metadata_only",
+        ),
+    )
 
     assert generated.status.value == "blocked"
     summary = generated.metadata["specialized_execution_summary"]
@@ -231,7 +238,13 @@ def test_legacy_photography_summary_can_only_be_projected_to_withhold_not_recert
     create_request = _request(mode_id="single_hero")
     create_request["metadata"] = {"template_id": "photographer_template"}
     created = service.create_job(create_request)
-    service.generate_job(created.job_id, {"metadata": {"vision_inspection_mode": "metadata_only"}})
+    service.generate_job_with_continuation(
+        created.job_id,
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="metadata_only",
+        ),
+    )
 
     record = service.get_job_record(created.job_id)
     assert record is not None

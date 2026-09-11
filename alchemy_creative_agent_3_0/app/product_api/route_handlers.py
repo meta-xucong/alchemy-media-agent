@@ -564,6 +564,18 @@ class V3ProductRouteHandlers:
                         "download_url": f"/api/v3/creative-agent/outputs/{encoded}/download",
                     }
                 )
+            candidate_id = str(getattr(candidate, "candidate_id", "") or "").strip()
+            if candidate_id:
+                # Candidate identity is useful only for the append-only
+                # failure-history feed; the official slot grid remains
+                # winner-only and opaque to workflow handles.
+                public["candidate_id"] = candidate_id
+            mcp_handoff_id = str(getattr(candidate, "mcp_handoff_id", "") or "").strip()
+            if mcp_handoff_id:
+                # Doc192 permits the opaque current-candidate handle in the
+                # append-only history feed. It is deliberately not projected
+                # onto the official Character Card slot grid (Doc203).
+                public["mcp_handoff_id"] = mcp_handoff_id
             return public
 
         def _preparation_public(version: Any, *, include_resume: bool = False) -> dict[str, Any]:
@@ -589,6 +601,15 @@ class V3ProductRouteHandlers:
             generation_channel = str(getattr(version, "generation_channel", "") or "")
             if generation_channel == "mcp":
                 public["generation_channel"] = generation_channel
+            mcp_handoff_ids = [
+                str(item or "").strip()
+                for item in (getattr(version, "mcp_handoff_ids", None) or [])
+                if str(item or "").strip()
+            ]
+            if mcp_handoff_ids:
+                # This belongs to the historical preparation/resume feed, not
+                # the formal Character Card state projection.
+                public["mcp_handoff_ids"] = list(dict.fromkeys(mcp_handoff_ids))[:8]
             failure_attempt_count = int(getattr(version, "failure_attempt_count", 0) or 0)
             if failure_attempt_count:
                 public["failure_attempt_count"] = failure_attempt_count
@@ -780,7 +801,9 @@ class V3ProductRouteHandlers:
         return self.project_service.reject_project_output(project_id, output_id, payload)
 
     def post_project_job(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.project_service.create_project_job(project_id, payload).model_dump(mode="json")
+        return self.project_service.public_job_status(
+            self.project_service.create_project_job(project_id, payload)
+        ).model_dump(mode="json")
 
     def post_project_ecommerce_slot_continuation(
         self,
@@ -835,7 +858,9 @@ class V3ProductRouteHandlers:
         ).model_dump(mode="json")
 
     def post_project_job_generate(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self.project_service.generate_project_job(project_id, job_id, payload or {}).model_dump(mode="json")
+        return self.project_service.public_job_status(
+            self.project_service.generate_project_job(project_id, job_id, payload or {})
+        ).model_dump(mode="json")
 
     def mark_project_job_generating(
         self,
@@ -847,13 +872,15 @@ class V3ProductRouteHandlers:
         background_timeout_owner: str | None = None,
         background_runtime_id: str | None = None,
     ) -> dict[str, Any]:
-        return self.project_service.mark_project_job_generating(
-            project_id,
-            job_id,
-            background_attempt_id=background_attempt_id,
-            background_timeout_seconds=background_timeout_seconds,
-            background_timeout_owner=background_timeout_owner,
-            background_runtime_id=background_runtime_id,
+        return self.project_service.public_job_status(
+            self.project_service.mark_project_job_generating(
+                project_id,
+                job_id,
+                background_attempt_id=background_attempt_id,
+                background_timeout_seconds=background_timeout_seconds,
+                background_timeout_owner=background_timeout_owner,
+                background_runtime_id=background_runtime_id,
+            )
         ).model_dump(mode="json")
 
     def mark_project_job_generation_timed_out(
@@ -864,11 +891,13 @@ class V3ProductRouteHandlers:
         background_attempt_id: str,
         timeout_seconds: float,
     ) -> dict[str, Any]:
-        return self.project_service.mark_project_job_generation_timed_out(
-            project_id,
-            job_id,
-            background_attempt_id=background_attempt_id,
-            timeout_seconds=timeout_seconds,
+        return self.project_service.public_job_status(
+            self.project_service.mark_project_job_generation_timed_out(
+                project_id,
+                job_id,
+                background_attempt_id=background_attempt_id,
+                timeout_seconds=timeout_seconds,
+            )
         ).model_dump(mode="json")
 
     def mark_project_job_generation_worker_failed(
@@ -879,11 +908,13 @@ class V3ProductRouteHandlers:
         background_attempt_id: str,
         failure_code: str,
     ) -> dict[str, Any]:
-        return self.project_service.mark_project_job_generation_worker_failed(
-            project_id,
-            job_id,
-            background_attempt_id=background_attempt_id,
-            failure_code=failure_code,
+        return self.project_service.public_job_status(
+            self.project_service.mark_project_job_generation_worker_failed(
+                project_id,
+                job_id,
+                background_attempt_id=background_attempt_id,
+                failure_code=failure_code,
+            )
         ).model_dump(mode="json")
 
     def post_project_job_select(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:

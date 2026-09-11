@@ -25,6 +25,8 @@ from ..creative_core.doc281_output_plan_binding import (
 _OUTPUT_ID_PATTERN = re.compile(r"^v3_output_[a-f0-9]{20}$")
 _FORMAT_SUFFIXES = {"png": ".png", "jpeg": ".jpg", "jpg": ".jpg", "webp": ".webp"}
 _MIME_FORMATS = {"image/png": "png", "image/jpeg": "jpeg", "image/jpg": "jpeg", "image/webp": "webp"}
+_IMMUTABLE_OUTPUT_METADATA_KEYS = frozenset({"content_sha256", "source_integrity_id"})
+_CLOSURE_BOUND_OUTPUT_METADATA_KEYS = frozenset({"capability_execution_envelope", "output_index"})
 
 
 @dataclass(frozen=True)
@@ -268,32 +270,34 @@ class V3GeneratedOutputStore:
         record = self.get_output(output_id)
         if record is None:
             return None
-        output_dir = self.storage_root / output_id
+        output_dir = (self.storage_root / output_id).resolve(strict=False)
+        if not _path_is_within(self.storage_root, output_dir) or output_dir.name != record.output_id:
+            return None
         if variant == "download":
-            path = Path(record.file_path)
             media_type = record.mime_type
             filename = f"{output_id}.{_extension(record.output_format)}"
             fallback_path = output_dir / f"original{_FORMAT_SUFFIXES.get(record.output_format, '.png')}"
         elif variant == "preview":
-            path = Path(record.preview_path)
             media_type = "image/png"
             filename = f"{output_id}_preview.png"
             fallback_path = output_dir / "preview.png"
         elif variant == "thumbnail":
-            path = Path(record.thumbnail_path)
             media_type = "image/png"
             filename = f"{output_id}_thumbnail.png"
             fallback_path = output_dir / "thumbnail.png"
         else:
             return None
-        if (
-            (not path.exists() or not path.is_file())
-            and fallback_path.exists()
-            and fallback_path.is_file()
-            and _canonical_output_files_match_record(record, output_dir)
-        ):
-            path = fallback_path
-        if not path.exists() or not path.is_file():
+        # Record paths are historical metadata and may be stale or hostile.
+        # Serve only the canonical output directory after validating the
+        # original content binding; never follow an arbitrary persisted path.
+        if not _canonical_output_files_match_record(record, output_dir):
+            return None
+        path = fallback_path
+        if not _path_is_within(output_dir, path) or not path.exists() or not path.is_file():
+            return None
+        try:
+            _validate_image(path.read_bytes())
+        except (OSError, ValueError):
             return None
         return path, media_type, filename
 
@@ -313,10 +317,80 @@ class V3GeneratedOutputStore:
         record = self.get_output(output_id)
         if record is None:
             return None
-        updated = replace(record, metadata={**dict(record.metadata or {}), **dict(updates or {})})
+        existing_metadata = dict(record.metadata or {})
+        incoming = dict(updates or {})
+        for key in _IMMUTABLE_OUTPUT_METADATA_KEYS:
+            if key in incoming and key in existing_metadata and incoming[key] != existing_metadata[key]:
+                raise ValueError(f"output_metadata_immutable:{key}")
+        closure = self.get_job_closure(record.job_id)
+        if closure is not None:
+            for key in _CLOSURE_BOUND_OUTPUT_METADATA_KEYS:
+                if key in incoming and incoming[key] != existing_metadata.get(key):
+                    raise ValueError(f"closed_output_metadata_immutable:{key}")
+        updated = replace(record, metadata={**existing_metadata, **incoming})
         self._write_record(updated)
         self._invalidate_cache()
         return updated
+
+    def save_job_closure(self, job_id: str, closure: dict[str, Any]) -> dict[str, Any]:
+        """Persist one immutable, job-level output/review closure receipt.
+
+        Output pixels and their per-output records are append-only.  The
+        closure is written only after review and delivery projection finish,
+        so restore can distinguish a complete job from a process crash between
+        pixel persistence and lifecycle projection.
+        """
+
+        target_job_id = str(job_id or "").strip()
+        if not target_job_id or not isinstance(closure, dict):
+            raise ValueError("invalid_v3_output_job_closure")
+        payload = dict(closure)
+        if str(payload.get("job_id") or target_job_id).strip() != target_job_id:
+            raise ValueError("v3_output_job_closure_job_mismatch")
+        payload["job_id"] = target_job_id
+        path = self._job_closure_path(target_job_id)
+        existing = self.get_job_closure(target_job_id)
+        if existing is not None:
+            if existing != payload:
+                raise ValueError("v3_output_job_closure_immutable")
+            return existing
+        path.parent.mkdir(parents=True, exist_ok=True)
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            existing = self.get_job_closure(target_job_id)
+            if existing == payload:
+                return existing
+            raise ValueError("v3_output_job_closure_immutable") from None
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            try:
+                if path.exists() and self.get_job_closure(target_job_id) is None:
+                    path.unlink()
+            except OSError:
+                pass
+        self._mark_storage_mutation()
+        return dict(payload)
+
+    def get_job_closure(self, job_id: str) -> dict[str, Any] | None:
+        """Read the immutable job-level closure receipt, if one exists."""
+
+        target_job_id = str(job_id or "").strip()
+        if not target_job_id:
+            return None
+        path = self._job_closure_path(target_job_id)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(data, dict) or str(data.get("job_id") or "").strip() != target_job_id:
+            return None
+        return dict(data)
 
     def _write_record(self, record: V3GeneratedOutputRecord) -> None:
         path = self._record_path(record.output_id)
@@ -338,6 +412,10 @@ class V3GeneratedOutputStore:
 
     def _record_path(self, output_id: str) -> Path:
         return self.storage_root / output_id / "output.json"
+
+    def _job_closure_path(self, job_id: str) -> Path:
+        job_digest = hashlib.sha256(str(job_id or "").strip().encode("utf-8")).hexdigest()
+        return self.storage_root / "_job_closures" / f"{job_digest}.json"
 
     def _doc73_anchor_receipt_path(self, job_id: str) -> Path:
         job_digest = hashlib.sha256(str(job_id or "").strip().encode("utf-8")).hexdigest()
@@ -466,12 +544,23 @@ def _doc281_bind_output_record_metadata(metadata: dict, *, output_id: str) -> di
 
 
 def _canonical_output_files_match_record(record: V3GeneratedOutputRecord, output_dir: Path) -> bool:
-    if output_dir.name != record.output_id:
+    if output_dir.name != record.output_id or not _path_is_within(output_dir.parent, output_dir):
         return False
     original_path = output_dir / f"original{_FORMAT_SUFFIXES.get(record.output_format, '.png')}"
+    if not _path_is_within(output_dir, original_path):
+        return False
     if not original_path.exists() or not original_path.is_file():
         return False
+    metadata = record.metadata or {}
+    canonical_hash_present = any(key in metadata for key in _IMMUTABLE_OUTPUT_METADATA_KEYS)
     expected_sha = _expected_output_content_sha256(record)
+    if canonical_hash_present:
+        if not expected_sha:
+            return False
+        try:
+            return hashlib.sha256(original_path.read_bytes()).hexdigest() == expected_sha
+        except OSError:
+            return False
     if expected_sha:
         try:
             return hashlib.sha256(original_path.read_bytes()).hexdigest() == expected_sha
@@ -490,19 +579,39 @@ def _canonical_output_files_match_record(record: V3GeneratedOutputRecord, output
 
 def _expected_output_content_sha256(record: V3GeneratedOutputRecord) -> str:
     metadata = record.metadata or {}
-    for key in (
-        "artifact_sha256",
-        "content_sha256",
-        "output_sha256",
-        "original_sha256",
-        "source_integrity_id",
-    ):
+    # New records have two names for one canonical content hash.  If either
+    # name is present, both must be valid and agree; otherwise a malformed
+    # canonical value must never fall through to a weaker legacy alias.
+    canonical_values: list[str] = []
+    for key in ("content_sha256", "source_integrity_id"):
+        if key not in metadata:
+            continue
+        value = str(metadata.get(key) or "").strip().lower()
+        if value.startswith("sha256:"):
+            value = value.split(":", 1)[1].strip()
+        if not re.fullmatch(r"[a-f0-9]{64}", value):
+            return ""
+        canonical_values.append(value)
+    if canonical_values:
+        return canonical_values[0] if len(set(canonical_values)) == 1 else ""
+    for key in ("artifact_sha256", "output_sha256", "original_sha256"):
         value = str(metadata.get(key) or "").strip().lower()
         if value.startswith("sha256:"):
             value = value.split(":", 1)[1].strip()
         if re.fullmatch(r"[a-f0-9]{64}", value):
             return value
     return ""
+
+
+def _path_is_within(root: Path, candidate: Path) -> bool:
+    """Return true only when a resolved candidate stays under its root."""
+
+    try:
+        root_resolved = root.resolve(strict=False)
+        candidate.resolve(strict=False).relative_to(root_resolved)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _safe_remove_tree(root: Path, target: Path) -> None:

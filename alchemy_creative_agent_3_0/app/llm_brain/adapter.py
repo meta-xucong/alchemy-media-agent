@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 import os
 import re
 import time
@@ -41,6 +42,7 @@ from .prompt_policy import (
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .finalizer_lifecycle import (
     REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
+    REMOTE_BRAIN_FINALIZER_STAGE,
     build_remote_brain_finalizer_lifecycle,
     safe_remote_brain_finalizer_lifecycle,
 )
@@ -52,6 +54,7 @@ from .providers import (
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
     BrainPromptContractInvalid,
+    BrainPromptRequestContractInvalid,
     BrainProfessionalAnchorViewDecisionMissing,
     BrainProviderAdmissionDecisionMissing,
     BrainProviderError,
@@ -96,6 +99,17 @@ _INVALID_PROFESSIONAL_ECOMMERCE_POSE_CONTRACT = {
 GENERAL_TEMPLATE_ID = "general_template"
 
 
+_FINALIZER_TRANSPORT_RECEIPT_ATTR = "_v3_finalizer_transport_receipt"
+_ACTIVE_FINALIZER_TRANSPORT_RECEIPT: ContextVar[dict[str, Any] | None] = ContextVar(
+    "v3_active_finalizer_transport_receipt",
+    default=None,
+)
+_ACTIVE_FINALIZER_CALL_STATE: ContextVar[str] = ContextVar(
+    "v3_active_finalizer_call_state",
+    default="not_started",
+)
+
+
 class V3LLMBrainAdapter:
     """Runs a remote brain when configured and deterministic V3 fallback otherwise."""
 
@@ -125,6 +139,10 @@ class V3LLMBrainAdapter:
         http_status_code = _remote_provider_http_status_code(exc)
         transport_kind = _remote_provider_transport_kind(exc)
         attempt_receipt = transport_failure_receipt(exc)
+        if not attempt_receipt:
+            finalizer_receipt = getattr(exc, _FINALIZER_TRANSPORT_RECEIPT_ATTR, None)
+            if isinstance(finalizer_receipt, dict):
+                attempt_receipt = dict(finalizer_receipt)
         finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
             getattr(exc, "_remote_brain_finalizer_lifecycle", None)
         )
@@ -172,22 +190,59 @@ class V3LLMBrainAdapter:
                 else {}
             ),
         }
+        availability = _safe_provider_availability(
+            getattr(exc, "_remote_brain_provider_availability", None)
+        )
+        if availability:
+            audit["remote_provider_availability"] = availability
+            audit["remote_provider_availability_reason"] = availability.get("reason_code")
+        elif isinstance(exc, BrainProviderUnavailable):
+            audit["remote_provider_availability_reason"] = str(
+                getattr(exc, "reason_code", "provider_unavailable")
+            )[:80]
         if attempt_receipt:
-            audit["remote_brain_request_started"] = bool(attempt_receipt.get("request_dispatched"))
+            acceptance = _request_acceptance_from_receipt(attempt_receipt)
+            audit["remote_brain_request_acceptance"] = acceptance
+            audit["remote_brain_request_started"] = acceptance == "dispatched"
         elif finalizer_lifecycle:
             audit["remote_brain_request_started"] = bool(
                 finalizer_lifecycle.get("remote_brain_request_started")
             )
+            acceptance = finalizer_lifecycle.get("remote_brain_request_acceptance")
+            if acceptance in {"not_started", "dispatched", "unknown"}:
+                audit["remote_brain_request_acceptance"] = acceptance
         return audit
 
     def run(self, request: BrainRunRequest) -> BrainRunResult:
         if not _enabled():
-            return build_skipped_result(request, "V3 LLM Brain is disabled by configuration.")
+            result = build_skipped_result(request, "V3 LLM Brain is disabled by configuration.")
+            result.audit = {
+                **result.audit,
+                "remote_provider_available": False,
+                "remote_provider_availability": {
+                    "available": False,
+                    "reason_code": "brain_disabled",
+                    "health_checked": False,
+                },
+                "remote_provider_availability_reason": "brain_disabled",
+            }
+            return result
         if not self._activation_scope_enabled(request):
-            return build_skipped_result(
+            result = build_skipped_result(
                 request,
                 "No trusted capability policy is active; the compatibility scope remains the general template.",
             )
+            result.audit = {
+                **result.audit,
+                "remote_provider_available": False,
+                "remote_provider_availability": {
+                    "available": False,
+                    "reason_code": "capability_scope_inactive",
+                    "health_checked": False,
+                },
+                "remote_provider_availability_reason": "capability_scope_inactive",
+            }
+            return result
 
         strict_remote_contract = _requires_complete_remote_image_set(request)
         if request.reasoning_depth == "off":
@@ -203,15 +258,22 @@ class V3LLMBrainAdapter:
             else build_fallback_result(request)
         )
         remote_for_request = _remote_allowed_for_request(request)
-        if not self.provider.available(force=remote_for_request):
+        availability = _safe_provider_availability(self.provider, force=remote_for_request)
+        if not availability.get("available"):
             fallback.warnings.append(
                 "远程 Brain 暂不可用；真实图片任务已阻断，不使用本地创意 fallback。"
                 if strict_remote_contract
                 else "远程创意脑暂不可用，已自动使用本地 V3 规划继续。"
             )
-            fallback.audit = {**fallback.audit, "remote_provider_available": False}
+            fallback.audit = {
+                **fallback.audit,
+                "remote_provider_available": False,
+                "remote_provider_availability": availability,
+                "remote_provider_availability_reason": availability.get("reason_code"),
+            }
             return fallback
         started = time.perf_counter()
+        remote_brain_call_count = 0
         semantic_recovery_attempted = False
         initial_rejected_sections: list[str] = []
         initial_contract_validation_audit: dict[str, Any] = {}
@@ -224,6 +286,7 @@ class V3LLMBrainAdapter:
                 extra={"requested_image_count": request.requested_image_count},
             )
             data = self.provider.run(request)
+            remote_brain_call_count += 1
             record_stage_event("brain_adapter", "semantic_plan_provider_returned", stage=request.stage)
             transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
             transport_receipt = _with_elapsed_transport_receipt(
@@ -279,6 +342,7 @@ class V3LLMBrainAdapter:
                 )
                 recovery_started = time.perf_counter()
                 recovery_data = self.provider.run(recovery_request)
+                remote_brain_call_count += 1
                 record_stage_event("brain_adapter", "semantic_recovery_provider_returned", stage=request.stage)
                 recovery_transport_receipt = (
                     pop_transport_receipt(recovery_data) if isinstance(recovery_data, dict) else {}
@@ -305,6 +369,7 @@ class V3LLMBrainAdapter:
                 "source": "v3_remote_brain",
                 "remote_reasoning_visible": False,
                 "remote_provider_available": True,
+                "remote_brain_call_count": remote_brain_call_count,
                 **({"remote_brain_transport": transport_receipt} if transport_receipt else {}),
                 "remote_semantic_contract_recovery_attempted": semantic_recovery_attempted,
                 "remote_semantic_contract_recovery_succeeded": bool(
@@ -361,6 +426,7 @@ class V3LLMBrainAdapter:
             fallback.audit = {
                 **fallback.audit,
                 "remote_provider_failure_recorded": True,
+                "remote_brain_call_count": remote_brain_call_count,
                 "remote_provider_error_class": safe_error_class,
                 **(
                     {"remote_provider_http_status_code": remote_http_status_code}
@@ -372,6 +438,15 @@ class V3LLMBrainAdapter:
                 **(
                     {"remote_brain_request_started": failure_audit["remote_brain_request_started"]}
                     if isinstance(failure_audit.get("remote_brain_request_started"), bool)
+                    else {}
+                ),
+                **(
+                    {"remote_brain_request_acceptance": failure_audit["remote_brain_request_acceptance"]}
+                    if failure_audit.get("remote_brain_request_acceptance") in {
+                        "not_started",
+                        "dispatched",
+                        "unknown",
+                    }
                     else {}
                 ),
                 **(
@@ -417,6 +492,152 @@ class V3LLMBrainAdapter:
         self,
         request: BrainRunRequest,
     ) -> tuple[list[BrainCanonicalProviderPrompt], dict[str, Any]]:
+        """Run the finalizer and attach lifecycle evidence to every failure.
+
+        Provider transport failures already carry their own receipt. The
+        outer boundary also covers the response-validation phase: a reachable
+        Brain that returns malformed or incomplete canonical prompts must be
+        distinguishable from a request that never reached the upstream.
+        """
+
+        receipt_token = _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.set(None)
+        state_token = _ACTIVE_FINALIZER_CALL_STATE.set("not_started")
+        try:
+            return self._finalize_canonical_provider_prompts_impl(request)
+        except (BrainProviderError, BrainProviderUnavailable) as exc:
+            call_state = _ACTIVE_FINALIZER_CALL_STATE.get()
+            response_received = call_state in {"response_received", "response_validation"}
+            if _is_finalizer_response_contract_failure(exc) and response_received:
+                _attach_finalizer_transport_receipt(
+                    exc,
+                    _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get(),
+                )
+                record_stage_event(
+                    "brain_adapter",
+                    "canonical_finalizer_schema_validation_failed",
+                    stage=request.stage,
+                    terminal_reason=_remote_brain_finalizer_failure_code(exc),
+                    extra=_finalizer_transport_trace_fields(
+                        _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get()
+                    ),
+                )
+            elif isinstance(exc, BrainPromptRequestContractInvalid):
+                record_stage_event(
+                    "brain_adapter",
+                    "canonical_finalizer_request_contract_failed",
+                    stage=request.stage,
+                    terminal_reason="request_contract_invalid",
+                )
+            elif _is_finalizer_response_contract_failure(exc):
+                record_stage_event(
+                    "brain_adapter",
+                    "canonical_finalizer_request_contract_failed",
+                    stage=request.stage,
+                    terminal_reason=_remote_brain_finalizer_failure_code(exc),
+                )
+            if not safe_remote_brain_finalizer_lifecycle(
+                getattr(exc, "_remote_brain_finalizer_lifecycle", None)
+            ):
+                receipt = _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get() or {}
+                acceptance = _finalizer_acceptance_from_receipt(
+                    receipt,
+                    default="dispatched" if response_received else "not_started",
+                )
+                _attach_remote_brain_finalizer_lifecycle(
+                    exc,
+                    stage=request.stage,
+                    provider_available=response_received,
+                    remote_brain_request_started=acceptance == "dispatched",
+                    response_started=response_received,
+                    failure_code=_remote_brain_finalizer_failure_code(exc),
+                    remote_brain_request_acceptance=acceptance,
+                )
+            raise
+        except ValidationError as exc:
+            call_state = _ACTIVE_FINALIZER_CALL_STATE.get()
+            response_received = call_state in {"response_received", "response_validation"}
+            _attach_finalizer_transport_receipt(
+                exc,
+                _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get(),
+            )
+            record_stage_event(
+                "brain_adapter",
+                "canonical_finalizer_schema_validation_failed",
+                stage=request.stage,
+                terminal_reason="invalid_response",
+                extra=_finalizer_transport_trace_fields(
+                    _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get()
+                ),
+            )
+            wrapped = BrainPromptContractInvalid(
+                "Remote Brain returned an invalid canonical provider-prompt contract."
+            )
+            _attach_finalizer_transport_receipt(
+                wrapped,
+                _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get(),
+            )
+            _attach_remote_brain_finalizer_lifecycle(
+                wrapped,
+                stage=request.stage,
+                provider_available=response_received,
+                remote_brain_request_started=response_received,
+                response_started=response_received,
+                failure_code="invalid_response",
+                remote_brain_request_acceptance=(
+                    _finalizer_acceptance_from_receipt(
+                        _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get() or {},
+                        default="dispatched" if response_received else "not_started",
+                    )
+                ),
+            )
+            raise wrapped from exc
+        except Exception as exc:  # pragma: no cover - defensive response boundary
+            call_state = _ACTIVE_FINALIZER_CALL_STATE.get()
+            response_received = call_state in {"response_received", "response_validation"}
+            _attach_finalizer_transport_receipt(
+                exc,
+                _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get(),
+            )
+            record_stage_event(
+                "brain_adapter",
+                (
+                    "canonical_finalizer_response_validation_error"
+                    if response_received
+                    else "canonical_finalizer_request_contract_error"
+                ),
+                stage=request.stage,
+                terminal_reason=exc.__class__.__name__,
+            )
+            wrapped = BrainProviderError(
+                "Remote Brain failed while validating the canonical provider prompt."
+            )
+            _attach_finalizer_transport_receipt(
+                wrapped,
+                _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get(),
+            )
+            _attach_remote_brain_finalizer_lifecycle(
+                wrapped,
+                stage=request.stage,
+                provider_available=response_received,
+                remote_brain_request_started=response_received,
+                response_started=response_received,
+                failure_code="provider_error",
+                remote_brain_request_acceptance=(
+                    _finalizer_acceptance_from_receipt(
+                        _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.get() or {},
+                        default="dispatched" if response_received else "not_started",
+                    )
+                ),
+            )
+            raise wrapped from exc
+        finally:
+            _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.reset(receipt_token)
+            _ACTIVE_FINALIZER_CALL_STATE.reset(state_token)
+
+    def _finalize_canonical_provider_prompts_impl(
+        self,
+        request: BrainRunRequest,
+    ) -> tuple[list[BrainCanonicalProviderPrompt], dict[str, Any]]:
         """Ask the remote Brain to sign final renderer text after validation.
 
         This intentionally bypasses the ordinary fallback-result merger.  A
@@ -426,7 +647,10 @@ class V3LLMBrainAdapter:
         """
 
         if not _enabled():
-            exc = BrainProviderUnavailable("V3 LLM Brain is disabled by configuration.")
+            exc = BrainProviderUnavailable(
+                "V3 LLM Brain is disabled by configuration.",
+                reason_code="brain_disabled",
+            )
             _attach_remote_brain_finalizer_lifecycle(
                 exc,
                 stage=request.stage,
@@ -434,10 +658,14 @@ class V3LLMBrainAdapter:
                 remote_brain_request_started=False,
                 response_started=False,
                 failure_code="provider_unavailable",
+                remote_brain_request_acceptance="not_started",
             )
             raise exc
         if not self._activation_scope_enabled(request):
-            exc = BrainProviderUnavailable("No trusted capability policy is active for canonical prompt signing.")
+            exc = BrainProviderUnavailable(
+                "No trusted capability policy is active for canonical prompt signing.",
+                reason_code="capability_scope_inactive",
+            )
             _attach_remote_brain_finalizer_lifecycle(
                 exc,
                 stage=request.stage,
@@ -445,20 +673,66 @@ class V3LLMBrainAdapter:
                 remote_brain_request_started=False,
                 response_started=False,
                 failure_code="provider_unavailable",
+                remote_brain_request_acceptance="not_started",
             )
             raise exc
-        if not self.provider.available(force=True):
-            exc = BrainProviderUnavailable("Remote Brain is unavailable for canonical prompt signing.")
+        _ACTIVE_FINALIZER_CALL_STATE.set("preflight")
+        try:
+            _validate_finalizer_request_contract(request)
+        except (BrainProviderError, BrainProviderUnavailable) as exc:
             _attach_remote_brain_finalizer_lifecycle(
                 exc,
                 stage=request.stage,
                 provider_available=False,
                 remote_brain_request_started=False,
                 response_started=False,
-                failure_code="provider_unavailable",
+                failure_code=_remote_brain_finalizer_failure_code(exc),
+                remote_brain_request_acceptance="not_started",
+            )
+            raise
+        provider_availability = _safe_provider_availability(self.provider, force=True)
+        provider_available = bool(provider_availability.get("available"))
+        if not provider_available:
+            reason_code = str(
+                provider_availability.get("reason_code") or "provider_unavailable"
+            )
+            if reason_code == "availability_check_failed":
+                wrapped = BrainProviderError(
+                    "Remote Brain provider preflight failed before the request was sent."
+                )
+                setattr(wrapped, "_remote_brain_provider_availability", provider_availability)
+                _attach_remote_brain_finalizer_lifecycle(
+                    wrapped,
+                    stage=request.stage,
+                    provider_available=False,
+                    remote_brain_request_started=False,
+                    response_started=False,
+                    failure_code="provider_error",
+                    remote_brain_request_acceptance="not_started",
+                )
+                raise wrapped
+            exc = BrainProviderUnavailable(
+                "Remote Brain is unavailable for canonical prompt signing.",
+                reason_code=reason_code,
+            )
+            setattr(exc, "_remote_brain_provider_availability", provider_availability)
+            _attach_remote_brain_finalizer_lifecycle(
+                exc,
+                stage=request.stage,
+                provider_available=False,
+                remote_brain_request_started=False,
+                response_started=False,
+                failure_code=(
+                    "provider_error"
+                    if reason_code == "availability_check_failed"
+                    else "provider_unavailable"
+                ),
+                remote_brain_request_acceptance="not_started",
             )
             raise exc
         started = time.perf_counter()
+        remote_brain_call_count = 0
+        _ACTIVE_FINALIZER_CALL_STATE.set("request_started")
         try:
             record_stage_event(
                 "brain_adapter",
@@ -467,14 +741,13 @@ class V3LLMBrainAdapter:
                 extra={"requested_image_count": request.requested_image_count},
             )
             data = self.provider.run(request)
+            remote_brain_call_count += 1
+            _ACTIVE_FINALIZER_CALL_STATE.set("response_received")
             record_stage_event("brain_adapter", "canonical_finalizer_provider_returned", stage=request.stage)
         except (BrainProviderError, BrainProviderUnavailable) as exc:
             attempt_receipt = transport_failure_receipt(exc)
-            request_started = (
-                bool(attempt_receipt.get("request_dispatched"))
-                if attempt_receipt
-                else True
-            )
+            request_acceptance = _finalizer_request_acceptance(exc, attempt_receipt)
+            request_started = request_acceptance == "dispatched"
             _attach_remote_brain_finalizer_lifecycle(
                 exc,
                 stage=request.stage,
@@ -482,6 +755,7 @@ class V3LLMBrainAdapter:
                 remote_brain_request_started=request_started,
                 response_started=_remote_brain_finalizer_response_started(exc),
                 failure_code=_remote_brain_finalizer_failure_code(exc),
+                remote_brain_request_acceptance=request_acceptance,
             )
             failure_audit = self.provider_failure_audit(exc, stage=request.stage)
             execution_budget = failure_audit.get("remote_brain_execution_budget")
@@ -521,13 +795,25 @@ class V3LLMBrainAdapter:
                 stage=request.stage,
                 terminal_reason=exc.__class__.__name__,
             )
-            raise BrainProviderError("Remote Brain failed while signing the canonical provider prompt.") from exc
+            wrapped = BrainProviderError("Remote Brain failed while signing the canonical provider prompt.")
+            _attach_remote_brain_finalizer_lifecycle(
+                wrapped,
+                stage=request.stage,
+                provider_available=True,
+                remote_brain_request_started=False,
+                response_started=False,
+                failure_code="provider_error",
+                remote_brain_request_acceptance="unknown",
+            )
+            raise wrapped from exc
         transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
         transport_receipt = _with_elapsed_transport_receipt(
             transport_receipt,
             stage=request.stage,
             elapsed_ms=_elapsed_ms(started),
         )
+        _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.set(transport_receipt or None)
+        _ACTIVE_FINALIZER_CALL_STATE.set("response_validation")
         prompts_raw = data.get("canonical_provider_prompts") if isinstance(data, dict) else None
         expected_count = request.requested_image_count
         record_stage_event(
@@ -819,6 +1105,7 @@ class V3LLMBrainAdapter:
                     else None
                 ),
                 "variation_execution_receipts_signed": variation_execution_contract is not None,
+                "remote_brain_call_count": remote_brain_call_count,
                 **({"remote_brain_transport": transport_receipt} if transport_receipt else {}),
                 "human_realism_semantic_preflight_required": semantic_preflight_required,
                 "human_realism_semantic_preflight_signed": semantic_preflight_required,
@@ -1699,6 +1986,64 @@ def _enabled() -> bool:
     return os.getenv("V3_LLM_BRAIN_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _safe_provider_availability(provider_or_value: Any, *, force: bool = False) -> dict[str, Any]:
+    """Project a provider configuration diagnosis without secrets or URLs."""
+
+    if isinstance(provider_or_value, Mapping):
+        raw = provider_or_value
+    else:
+        checker = getattr(provider_or_value, "availability", None)
+        if callable(checker):
+            try:
+                raw = checker(force=force)
+            except Exception:
+                raw = None
+        else:
+            try:
+                available = bool(provider_or_value.available(force=force))
+            except BrainProviderUnavailable as exc:
+                return {
+                    "available": False,
+                    "reason_code": str(getattr(exc, "reason_code", "provider_unavailable"))[:80],
+                    "health_checked": False,
+                }
+            except Exception:
+                return {
+                    "available": False,
+                    "reason_code": "availability_check_failed",
+                    "health_checked": False,
+                }
+            return {
+                "available": available,
+                "reason_code": "configured" if available else "provider_unavailable",
+                "health_checked": False,
+            }
+    if not isinstance(raw, Mapping):
+        return {
+            "available": False,
+            "reason_code": "availability_check_failed",
+            "health_checked": False,
+        }
+    available = raw.get("available")
+    reason_code = str(raw.get("reason_code") or ("configured" if available is True else "provider_unavailable"))
+    if not isinstance(available, bool):
+        return {
+            "available": False,
+            "reason_code": "availability_check_failed",
+            "health_checked": False,
+        }
+    result: dict[str, Any] = {
+        "available": available,
+        "reason_code": reason_code[:80],
+        "health_checked": bool(raw.get("health_checked")) if isinstance(raw.get("health_checked"), bool) else False,
+    }
+    for key in ("provider", "model"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            result[key] = value.strip()[:120]
+    return result
+
+
 def _remote_allowed_for_request(request: BrainRunRequest) -> bool:
     raw = os.getenv("V3_LLM_BRAIN_REMOTE_ENABLED")
     if raw is not None:
@@ -1756,27 +2101,290 @@ def _attach_remote_brain_finalizer_lifecycle(
     remote_brain_request_started: bool,
     response_started: bool,
     failure_code: str,
+    remote_brain_request_acceptance: str,
 ) -> None:
     lifecycle = build_remote_brain_finalizer_lifecycle(
-        stage=stage,
+        # ``BrainRunRequest.stage`` identifies the creative stage that asked
+        # for signing (for example ``generate``). The lifecycle contract's
+        # stage is the fixed finalizer boundary, otherwise ordinary requests
+        # silently lose their failure receipt during public sanitization.
+        stage=REMOTE_BRAIN_FINALIZER_STAGE,
         provider_available=provider_available,
         remote_brain_request_started=remote_brain_request_started,
         response_started=response_started,
         failure_code=failure_code,
+        remote_brain_request_acceptance=remote_brain_request_acceptance,
     )
     if lifecycle:
         setattr(exc, "_remote_brain_finalizer_lifecycle", lifecycle)
 
 
 def _remote_brain_finalizer_failure_code(exc: Exception) -> str:
+    if isinstance(exc, BrainPromptRequestContractInvalid):
+        return "request_contract_invalid"
     if isinstance(exc, BrainProviderUnavailable):
         return "provider_unavailable"
+    if isinstance(
+        exc,
+        (
+            BrainPromptContractInvalid,
+            BrainSemanticPreflightMissing,
+            BrainHumanNaturalnessDecisionMissing,
+            BrainReferenceChannelOwnershipDecisionMissing,
+            BrainDevelopmentalAgeDecisionMissing,
+            BrainDevelopmentalPresenceDecisionMissing,
+            BrainProfessionalAnchorViewDecisionMissing,
+            BrainProviderAdmissionDecisionMissing,
+        ),
+    ):
+        # The upstream call completed, but its response did not satisfy the
+        # frozen V3 signing contract. This is a response-contract failure, not
+        # a transport outage.
+        return "invalid_response"
     error_class = _remote_provider_error_class(exc)
     return (
         error_class
         if error_class in REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES
         else "provider_error"
     )
+
+
+def _request_acceptance_from_receipt(receipt: dict[str, Any]) -> str:
+    """Read the explicit acceptance state, with a legacy boolean fallback."""
+
+    value = str(receipt.get("request_acceptance") or "").strip().lower()
+    if value in {"not_started", "dispatched", "unknown"}:
+        return value
+    return "dispatched" if receipt.get("request_dispatched") is True else "not_started"
+
+
+def _finalizer_request_acceptance(
+    exc: Exception,
+    attempt_receipt: dict[str, Any],
+) -> str:
+    """Derive finalizer acceptance from typed evidence without guessing.
+
+    A typed invalid/truncated JSON error proves that a response was received,
+    even when no transport trace was attached by a provider double.  A plain
+    provider error proves neither dispatch nor response acceptance, so it
+    remains unknown to the caller and is not promoted to ``started``.
+    """
+
+    if attempt_receipt:
+        return _request_acceptance_from_receipt(attempt_receipt)
+    if isinstance(exc, BrainTransportTimeoutError):
+        value = getattr(exc, "request_acceptance", None)
+        if value in {"not_started", "dispatched", "unknown"}:
+            return value
+        if bool(getattr(exc, "response_started", False)):
+            return "dispatched"
+        if bool(getattr(exc, "request_call_entered", False)):
+            return "unknown"
+        return "not_started"
+    if isinstance(exc, BrainInvalidJsonResponse):
+        # Invalid/truncated JSON is only raised after the remote response has
+        # produced a body or output-limit signal.
+        return "dispatched"
+    if isinstance(exc, BrainProviderUnavailable):
+        return "not_started"
+    return "unknown"
+
+
+def _finalizer_acceptance_from_receipt(
+    receipt: dict[str, Any],
+    *,
+    default: str,
+) -> str:
+    """Read a validated finalizer receipt without promoting call entry to dispatch."""
+
+    value = str(receipt.get("request_acceptance") or "").strip().lower()
+    if value in {"not_started", "dispatched", "unknown"}:
+        return value
+    attempt = receipt.get("transport_attempt")
+    if isinstance(attempt, dict):
+        value = str(attempt.get("request_acceptance") or "").strip().lower()
+        if value in {"not_started", "dispatched", "unknown"}:
+            return value
+    return default if default in {"not_started", "dispatched", "unknown"} else "unknown"
+
+
+def _finalizer_transport_trace_fields(receipt: dict[str, Any] | None) -> dict[str, Any]:
+    """Project bounded attempt facts for the opt-in stage trace."""
+
+    if not isinstance(receipt, dict):
+        return {}
+    attempt = receipt.get("transport_attempt")
+    attempt = attempt if isinstance(attempt, dict) else receipt
+    fields: dict[str, Any] = {}
+    for key in (
+        "attempts",
+        "response_started",
+        "first_content_observed",
+        "complete_response_observed",
+        "json_parse_started",
+        "json_parse_completed",
+        "json_serialization_recovery_attempted",
+        "json_serialization_recovery_succeeded",
+        "request_acceptance",
+        "protocol_fallback_attempted",
+    ):
+        if key in receipt:
+            fields[key] = receipt[key]
+        elif key in attempt:
+            fields[key] = attempt[key]
+    return fields
+
+
+def _attach_finalizer_transport_receipt(
+    exc: BaseException,
+    receipt: dict[str, Any] | None,
+) -> None:
+    """Keep a validated successful-attempt receipt on response-contract errors."""
+
+    if not isinstance(receipt, dict):
+        return
+    safe = dict(receipt)
+    attempt = safe.get("transport_attempt")
+    if isinstance(attempt, dict):
+        acceptance = _finalizer_acceptance_from_receipt(receipt, default="unknown")
+        safe = {
+            "schema_version": "v3_brain_transport_attempt_v1",
+            "stage": str(attempt.get("stage") or "unknown"),
+            "attempts": receipt.get("attempts") if receipt.get("attempts") in {1, 2} else 1,
+            "request_acceptance": acceptance,
+            "request_dispatched": acceptance == "dispatched",
+            "response_started": bool(attempt.get("response_started")),
+            "first_content_observed": bool(attempt.get("first_content_observed")),
+            "complete_response_observed": bool(attempt.get("complete_response_observed")),
+            "json_parse_started": bool(attempt.get("json_parse_started")),
+            "json_parse_completed": bool(attempt.get("json_parse_completed")),
+            "json_recovery": bool(attempt.get("json_recovery")),
+            "protocol_fallback_attempted": bool(attempt.get("protocol_fallback_attempted")),
+            "json_serialization_recovery_attempted": bool(
+                receipt.get("json_serialization_recovery_attempted")
+            ),
+            "transient_recovery_attempted": bool(receipt.get("transient_recovery_attempted")),
+        }
+    else:
+        # An aggregate receipt without the provider-owned nested attempt is
+        # timing/recovery evidence only.  It cannot prove that this finalizer
+        # call was accepted by the upstream, so do not expose it as an attempt
+        # and accidentally downgrade a lifecycle that already observed a
+        # response.
+        return
+    setattr(exc, _FINALIZER_TRANSPORT_RECEIPT_ATTR, safe)
+
+
+def _is_finalizer_response_contract_failure(exc: Exception) -> bool:
+    """Identify failures raised while checking a returned canonical response."""
+
+    return isinstance(
+        exc,
+        (
+            BrainPromptContractInvalid,
+            BrainSemanticPreflightMissing,
+            BrainHumanNaturalnessDecisionMissing,
+            BrainReferenceChannelOwnershipDecisionMissing,
+            BrainDevelopmentalAgeDecisionMissing,
+            BrainDevelopmentalPresenceDecisionMissing,
+            BrainProfessionalAnchorViewDecisionMissing,
+            BrainProviderAdmissionDecisionMissing,
+        ),
+    )
+
+
+def _validate_finalizer_request_contract(request: BrainRunRequest) -> None:
+    """Validate frozen request-side receipts before any finalizer network call."""
+
+    # These helpers only read and validate request-owned contracts. They must
+    # run before ``provider.available``/``provider.run`` so malformed local
+    # state cannot be reported as an upstream response failure or trigger a
+    # remote retry.
+    try:
+        _validate_brain_source_projection_request(request)
+        _general_variation_execution_contract_for_request(request)
+        _required_human_developmental_age_requirement(request)
+        _required_human_developmental_presence_requirement(request)
+        _required_professional_anchor_view_requirement(request)
+        _required_provider_admission_requirement(request)
+        _required_reference_led_slot_delta_requirement(request)
+        _requires_human_semantic_preflight(request)
+        _requires_human_naturalness_decision(request)
+        _requires_reference_channel_ownership_decision(request)
+    except (
+        BrainPromptContractInvalid,
+        BrainSemanticPreflightMissing,
+        BrainHumanNaturalnessDecisionMissing,
+        BrainReferenceChannelOwnershipDecisionMissing,
+        BrainDevelopmentalAgeDecisionMissing,
+        BrainDevelopmentalPresenceDecisionMissing,
+        BrainProfessionalAnchorViewDecisionMissing,
+        BrainProviderAdmissionDecisionMissing,
+    ) as exc:
+        # Preserve the typed cause for local logs/debugging, but expose one
+        # unambiguous public class: this request never reached the upstream.
+        # The runtime must not classify it as a remote response failure or
+        # spend a second remote sign-off attempt on the same malformed state.
+        raise BrainPromptRequestContractInvalid(
+            "The frozen canonical-prompt request contract is invalid before the Brain call."
+        ) from exc
+
+
+def _validate_brain_source_projection_request(request: BrainRunRequest) -> None:
+    """Validate request-owned Brain source projection before network I/O."""
+
+    metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+    if metadata.get("brain_source_projection_required") is not True:
+        return
+    expected_source_digest = str(metadata.get("brain_source_projection_digest") or "").lower()
+    expected_contract_version = str(metadata.get("brain_source_projection_contract_version") or "")
+    expected_binding_digest = str(metadata.get("brain_source_projection_binding_digest") or "").lower()
+    if (
+        expected_contract_version != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
+        or len(expected_source_digest) != 64
+        or len(expected_binding_digest) != 64
+    ):
+        raise BrainPromptContractInvalid("Brain source projection binding is not frozen.")
+    canonical_context = metadata.get("canonical_prompt_context")
+    source_projection = (
+        canonical_context.get("brain_source_projection")
+        if isinstance(canonical_context, Mapping)
+        else None
+    )
+    source_binding = (
+        source_projection.get("source_binding")
+        if isinstance(source_projection, Mapping)
+        else None
+    )
+    expected_source_binding_keys = {
+        "contract_version",
+        "user_intent_digest",
+        "planning_result_digest",
+        "prompt_guidance_image_set_digest",
+        "active_capability_contract_digest",
+        "reference_channel_ownership_digest",
+        "frozen_runtime_binding_digest",
+        "policy_revision",
+        "finalizer_stage",
+        "binding_digest",
+    }
+    if isinstance(source_projection, Mapping) and "capability_guidance" in source_projection:
+        expected_source_binding_keys.add("capability_guidance_digest")
+    if isinstance(source_projection, Mapping) and "protected_constraint_projection" in source_projection:
+        expected_source_binding_keys.add("protected_constraint_projection_digest")
+    if (
+        not isinstance(source_projection, Mapping)
+        or source_projection.get("contract_version") != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
+        or str(source_projection.get("source_digest") or "").lower() != expected_source_digest
+        or brain_source_projection_sha256(source_projection) != expected_source_digest
+        or source_projection.get("requested_image_count") != request.requested_image_count
+        or not isinstance(source_binding, Mapping)
+        or set(source_binding) != expected_source_binding_keys
+        or source_binding.get("contract_version") != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
+        or source_binding.get("binding_digest") != expected_binding_digest
+        or brain_source_projection_binding_sha256(source_binding) != expected_binding_digest
+    ):
+        raise BrainPromptContractInvalid("Brain source projection context binding is invalid.")
 
 
 def _remote_brain_finalizer_response_started(exc: Exception) -> bool:
@@ -1797,8 +2405,15 @@ def _with_elapsed_transport_receipt(
 ) -> dict[str, Any]:
     """Add safe phase timing without exposing request bodies or provider data."""
 
+    # Timing is not a transport attempt. A provider double or a legacy
+    # adapter may return a valid response without the optional phase-level
+    # receipt. Preserve the already validated aggregate receipt and attach
+    # stage timing; this keeps useful attempt/recovery facts without
+    # manufacturing a response-observed lifecycle from timing alone.
+    if not isinstance(receipt, dict) or not receipt:
+        return {}
     return {
-        **dict(receipt or {}),
+        **dict(receipt),
         "stage": str(stage),
         "elapsed_ms": max(0, int(elapsed_ms)),
     }
@@ -1807,36 +2422,115 @@ def _with_elapsed_transport_receipt(
 def _remote_provider_error_class(exc: Exception) -> str:
     """Normalize a remote Brain failure for public-safe job provenance."""
 
-    chain = _exception_chain(exc)
-    if any(isinstance(item, BrainTransportTimeoutError) for item in chain):
-        return "timeout"
-    if any(isinstance(item, BrainExecutionBudgetExceeded) for item in chain):
+    # Walk the exception chain from the outermost (terminal) error inward.
+    # The old implementation searched for any timeout first, so a first
+    # retry timeout could overwrite a second, terminal 401/contract failure.
+    # Causes remain evidence, but the first classifiable terminal layer owns
+    # the public outcome.
+    for item in _exception_chain(exc):
+        classification = _remote_provider_error_class_for_item(item)
+        if classification:
+            return classification
+    return "provider_error"
+
+
+def _remote_provider_error_class_for_item(item: BaseException) -> str:
+    """Classify one exception layer without consulting its causes."""
+
+    if isinstance(item, BrainProviderUnavailable):
+        return "provider_unavailable"
+    if isinstance(item, BrainExecutionBudgetExceeded):
         return "execution_budget_exhausted"
-    if any(isinstance(item, BrainOutputTruncated) for item in chain):
-        return "truncated_response"
-    if any(isinstance(item, BrainInvalidJsonResponse) for item in chain):
-        return "invalid_response"
-    if any(isinstance(item, JSONDecodeError) for item in chain):
-        return "invalid_response"
-    transport_kind = _remote_provider_transport_kind(exc)
-    if transport_kind == "timeout":
+    if isinstance(item, BrainTransportTimeoutError):
         return "timeout"
-    text = " ".join(str(item or "") for item in chain).lower()
+    if isinstance(item, BrainOutputTruncated):
+        return "truncated_response"
+    if isinstance(item, BrainPromptRequestContractInvalid):
+        return "request_contract_invalid"
+    if isinstance(
+        item,
+        (
+            BrainInvalidJsonResponse,
+            BrainPromptContractInvalid,
+            BrainSemanticPreflightMissing,
+            BrainHumanNaturalnessDecisionMissing,
+            BrainReferenceChannelOwnershipDecisionMissing,
+            BrainDevelopmentalAgeDecisionMissing,
+            BrainDevelopmentalPresenceDecisionMissing,
+            BrainProfessionalAnchorViewDecisionMissing,
+            BrainProviderAdmissionDecisionMissing,
+            JSONDecodeError,
+        ),
+    ):
+        return "invalid_response"
+
+    text = str(item or "").lower()
     if "content_policy" in text or "content policy" in text:
         return "content_policy"
-    if any(token in text for token in ("timed out", "timeout", "readtimeout", "connecttimeout")):
-        return "timeout"
     if any(token in text for token in ("context canceled", "cancelled", "canceled")):
         return "canceled"
+    if any(token in text for token in ("timed out", "timeout", "readtimeout", "connecttimeout")):
+        return "timeout"
     if any(token in text for token in ("non-json", "empty output", "json")):
         return "invalid_response"
-    if _remote_provider_http_status_code(exc) is not None or any(
+    if _direct_http_status_code(item) is not None or any(
         token in text for token in ("status code", "error code", "http")
     ):
         return "upstream_http_error"
+    transport_kind = _direct_provider_transport_kind(item)
+    if transport_kind == "timeout":
+        return "timeout"
     if transport_kind:
         return "upstream_transport_error"
-    return "provider_error"
+    return ""
+
+
+def _direct_http_status_code(exc: BaseException) -> int | None:
+    """Read a status from one exception layer only."""
+
+    for candidate in (
+        getattr(exc, "status_code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and 100 <= candidate <= 599:
+            return candidate
+    match = re.search(r"(?:status|error)\s+code\s*[:=]?\s*(\d{3})", str(exc or ""), flags=re.IGNORECASE)
+    if match:
+        code = int(match.group(1))
+        if 100 <= code <= 599:
+            return code
+    return None
+
+
+def _direct_provider_transport_kind(exc: BaseException) -> str:
+    """Classify one known transport exception layer only."""
+
+    module = str(exc.__class__.__module__ or "").lower()
+    name = str(exc.__class__.__name__ or "").lower()
+    qualified = f"{module}.{name}"
+    if not (
+        module.startswith("httpx")
+        or module.startswith("httpcore")
+        or module.startswith("openai")
+        or "transport" in qualified
+        or "protocol" in qualified
+    ):
+        return ""
+    if "timeout" in name:
+        return "timeout"
+    if "protocol" in name:
+        return "protocol_error"
+    if "connect" in name or "connection" in name:
+        return "connection_error"
+    if "read" in name:
+        return "read_error"
+    if "write" in name:
+        return "write_error"
+    if "network" in name:
+        return "network_error"
+    if "apierror" in name or name == "api_error":
+        return "provider_api_error"
+    return "transport_error"
 
 
 def _remote_brain_transport_failure(exc: Exception) -> dict[str, Any]:
@@ -2073,6 +2767,13 @@ def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_c
     return indexes == list(range(1, expected_count + 1))
 
 
+def _receipt_output_index_matches(item: dict[str, Any], expected_index: int) -> bool:
+    """Match receipt indexes without coercing attacker-controlled values."""
+
+    value = item.get("output_index")
+    return type(value) is int and value == expected_index
+
+
 def _general_variation_execution_contract_for_request(
     request: BrainRunRequest,
 ) -> VariationExecutionContract | None:
@@ -2179,13 +2880,26 @@ def _requires_human_semantic_preflight(request: BrainRunRequest) -> bool:
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     requirement = context.get("final_prompt_semantic_preflight")
-    return (
-        isinstance(requirement, dict)
-        and bool(requirement.get("required"))
+    if requirement is None:
+        return False
+    if not isinstance(requirement, dict):
+        raise BrainSemanticPreflightMissing(
+            "The frozen Human Realism semantic-preflight requirement is malformed."
+        )
+    if requirement.get("required") is False:
+        return False
+    if not (
+        requirement.get("required") is True
         and str(requirement.get("owner") or "") == "remote_v3_llm_brain"
-        and str(requirement.get("scope") or "") == "whole_image_human_photographic_plausibility"
-        and str(requirement.get("revision_mode") or "") == "rewrite_complete_canonical_prompt"
-    )
+        and str(requirement.get("scope") or "")
+        == "whole_image_human_photographic_plausibility"
+        and str(requirement.get("revision_mode") or "")
+        == "rewrite_complete_canonical_prompt"
+    ):
+        raise BrainSemanticPreflightMissing(
+            "The frozen Human Realism semantic-preflight requirement is malformed."
+        )
+    return True
 
 
 def _matches_human_semantic_preflight_receipts(candidate: Any, *, expected_count: int) -> bool:
@@ -2195,7 +2909,7 @@ def _matches_human_semantic_preflight_receipts(candidate: Any, *, expected_count
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and item.get("semantic_preflight_status") == "approved"
         for index, item in enumerate(candidate, start=1)
     )
@@ -2216,23 +2930,33 @@ def _requires_human_naturalness_decision(request: BrainRunRequest) -> bool:
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     decision = context.get("human_naturalness_decision")
-    return bool(
-        _requires_human_semantic_preflight(request)
-        and (
-            request.stage in {
-                "provider_prompt_human_naturalness_resign",
-                "provider_prompt_developmental_presence_verify",
-                "provider_prompt_professional_capture_resign",
-            }
-            or (
-                isinstance(decision, dict)
-                and decision.get("required") is True
-                and decision.get("contract_version") == "v3_human_naturalness_decision_v1"
-                and decision.get("owner") == "remote_v3_llm_brain"
-                and isinstance(decision.get("frozen_binding"), dict)
+    if decision is not None:
+        if not isinstance(decision, dict):
+            raise BrainHumanNaturalnessDecisionMissing(
+                "The frozen Human Realism naturalness requirement is malformed."
             )
-        )
-    )
+        if decision.get("required") is False:
+            return False
+        if not (
+            decision.get("required") is True
+            and decision.get("contract_version") == "v3_human_naturalness_decision_v1"
+            and decision.get("owner") == "remote_v3_llm_brain"
+            and isinstance(decision.get("frozen_binding"), dict)
+        ):
+            raise BrainHumanNaturalnessDecisionMissing(
+                "The frozen Human Realism naturalness requirement is malformed."
+            )
+    if not _requires_human_semantic_preflight(request):
+        return False
+    if request.stage in {
+        "provider_prompt_human_naturalness_resign",
+        "provider_prompt_developmental_presence_verify",
+        "provider_prompt_professional_capture_resign",
+    }:
+        return True
+    if decision is None:
+        return False
+    return True
 
 
 def _matches_human_naturalness_decision_receipts(candidate: Any, *, expected_count: int) -> bool:
@@ -2243,7 +2967,7 @@ def _matches_human_naturalness_decision_receipts(candidate: Any, *, expected_cou
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and isinstance(item.get("human_naturalness_decision"), dict)
         and set(item["human_naturalness_decision"]) == expected_keys
         and item["human_naturalness_decision"].get("contract_version") == "v3_human_naturalness_decision_v1"
@@ -2260,15 +2984,26 @@ def _requires_reference_channel_ownership_decision(request: BrainRunRequest) -> 
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     decision = context.get("reference_channel_ownership_decision")
-    return bool(
-        isinstance(decision, dict)
-        and decision.get("required") is True
+    if decision is None:
+        return False
+    if not isinstance(decision, dict):
+        raise BrainReferenceChannelOwnershipDecisionMissing(
+            "The frozen reference-channel ownership requirement is malformed."
+        )
+    if decision.get("required") is False:
+        return False
+    if not (
+        decision.get("required") is True
         and decision.get("contract_version") == "v3_reference_channel_ownership_decision_v1"
         and decision.get("owner") == "remote_v3_llm_brain"
         and isinstance(decision.get("frozen_binding"), dict)
         and isinstance(decision.get("reference_owned_channels"), list)
         and isinstance(decision.get("current_request_owned_channels"), list)
-    )
+    ):
+        raise BrainReferenceChannelOwnershipDecisionMissing(
+            "The frozen reference-channel ownership requirement is malformed."
+        )
+    return True
 
 
 def _matches_reference_channel_ownership_receipts(candidate: Any, *, expected_count: int) -> bool:
@@ -2279,7 +3014,7 @@ def _matches_reference_channel_ownership_receipts(candidate: Any, *, expected_co
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and isinstance(item.get("reference_channel_ownership_decision"), dict)
         and set(item["reference_channel_ownership_decision"]) == expected_keys
         and item["reference_channel_ownership_decision"].get("contract_version")
@@ -2297,8 +3032,12 @@ def _required_human_developmental_age_requirement(request: BrainRunRequest) -> d
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     decision = context.get("human_developmental_age_decision")
-    if not isinstance(decision, dict):
+    if decision is None:
         return {}
+    if not isinstance(decision, dict):
+        raise BrainDevelopmentalAgeDecisionMissing(
+            "The frozen developmental-age ownership requirement is malformed."
+        )
     expected = {
         "contract_version": "v3_human_developmental_age_decision_v2",
         "age_fidelity": "follow_explicit_prompt",
@@ -2331,7 +3070,7 @@ def _matches_human_developmental_age_receipts(
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and isinstance(item.get("human_developmental_age_decision"), dict)
         and set(item["human_developmental_age_decision"]) == expected_keys
         and all(
@@ -2352,8 +3091,12 @@ def _required_human_developmental_presence_requirement(
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     decision = context.get("human_developmental_presence_decision")
-    if not isinstance(decision, dict):
+    if decision is None:
         return {}
+    if not isinstance(decision, dict):
+        raise BrainDevelopmentalPresenceDecisionMissing(
+            "The frozen developmental-presence requirement is malformed."
+        )
     expected = {
         "contract_version": "v3_human_developmental_presence_decision_v2",
         "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
@@ -2386,7 +3129,7 @@ def _matches_human_developmental_presence_receipts(
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and isinstance(item.get("human_developmental_presence_decision"), dict)
         and set(item["human_developmental_presence_decision"]) == expected_keys
         and all(
@@ -2410,8 +3153,12 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     decision = context.get("professional_anchor_view_decision")
-    if not isinstance(decision, dict):
+    if decision is None:
         return {}
+    if not isinstance(decision, dict):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The frozen Professional anchor-view requirement is malformed."
+        )
     target = str(decision.get("target_view_role") or "").strip()
     version = str(decision.get("contract_version") or "").strip()
     capture = str(decision.get("capture_presentation") or "").strip()
@@ -2583,7 +3330,7 @@ def _matches_professional_anchor_view_receipts(
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and isinstance(item.get("professional_anchor_view_decision"), dict)
         and set(item["professional_anchor_view_decision"]) == expected_keys
         and item["professional_anchor_view_decision"].get("contract_version")
@@ -3066,8 +3813,12 @@ def _required_provider_admission_requirement(request: BrainRunRequest) -> dict[s
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     decision = context.get("provider_admission_decision")
-    if not isinstance(decision, dict):
+    if decision is None:
         return {}
+    if not isinstance(decision, dict):
+        raise BrainProviderAdmissionDecisionMissing(
+            "The frozen provider-admission requirement is malformed."
+        )
     expected = {
         "contract_version": "v3_provider_admission_decision_v1",
         "provider_admission_status": "admitted",
@@ -3099,7 +3850,7 @@ def _matches_provider_admission_receipts(
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and isinstance(item.get("provider_admission_decision"), dict)
         and set(item["provider_admission_decision"]) == expected_keys
         and all(
@@ -3118,8 +3869,12 @@ def _required_reference_led_slot_delta_requirement(request: BrainRunRequest) -> 
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
     decision = context.get("reference_led_slot_delta_decision")
-    if not isinstance(decision, dict):
+    if decision is None:
         return {}
+    if not isinstance(decision, dict):
+        raise BrainProviderAdmissionDecisionMissing(
+            "The frozen reference-led slot-delta requirement is malformed."
+        )
     expected = {
         "contract_version": "v3_reference_led_slot_delta_decision_v1",
         "materialization_mode": "reference_led_slot_delta",
@@ -3154,7 +3909,7 @@ def _matches_reference_led_slot_delta_receipts(
         return False
     return all(
         isinstance(item, dict)
-        and int(item.get("output_index") or 0) == index
+        and _receipt_output_index_matches(item, index)
         and isinstance(item.get("reference_led_slot_delta_decision"), dict)
         and set(item["reference_led_slot_delta_decision"]) == expected_keys
         and all(

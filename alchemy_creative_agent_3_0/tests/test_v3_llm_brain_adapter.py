@@ -1440,7 +1440,7 @@ def test_remote_brain_default_output_budget_allows_complete_reasoning_contract(m
 
     provider = V3LLMBrainProvider()
 
-    assert provider.max_tokens == 12000
+    assert provider.max_tokens == 20000
 
 
 def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monkeypatch) -> None:
@@ -1452,6 +1452,7 @@ def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monk
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "default_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
@@ -1578,11 +1579,12 @@ def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
     monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 
-    result = V3LLMBrainProvider()._run_openai_compatible(  # noqa: SLF001 - transport contract
+    result = V3LLMBrainProvider().run(
         BrainRunRequest(user_input="Create one remote photography direction.")
     )
 
-    assert result == {"remote": True}
+    assert result["remote"] is True
+    assert result["_alchemy_brain_transport"]["transport_attempt"]["protocol_fallback_attempted"] is True
     assert calls == {"responses": 1, "chat": 1}
 
 
@@ -1685,7 +1687,15 @@ def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monk
     result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
 
     assert result["remote"] is True
-    assert result["_alchemy_brain_transport"] == {
+    transport = result["_alchemy_brain_transport"]
+    assert {
+        key: transport[key]
+        for key in (
+            "attempts",
+            "json_serialization_recovery_attempted",
+            "json_serialization_recovery_succeeded",
+        )
+    } == {
         "attempts": 2,
         "json_serialization_recovery_attempted": True,
         "json_serialization_recovery_succeeded": True,
@@ -1774,7 +1784,7 @@ def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(
     assert result["_alchemy_brain_transport"]["attempts"] == 2
     assert len(calls) == 2
     assert calls[0]["payload"]["messages"][1] == calls[1]["payload"]["messages"][1]
-    assert all(call["payload"]["max_tokens"] == 12000 for call in calls)
+    assert all(call["payload"]["max_tokens"] == 20000 for call in calls)
 
 
 def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> None:
@@ -1971,7 +1981,7 @@ def test_provider_reads_project_reference_assets_for_continuation(tmp_path, monk
     assert response.candidates[0].metadata["reference_asset_ids"] == ["v3_output_selected"]
 
 
-def test_selected_generated_output_context_contains_reusable_file_path(tmp_path) -> None:
+def test_selected_generated_output_context_keeps_public_identity_without_file_path(tmp_path) -> None:
     project_store = PersistentProjectStore(tmp_path / "v3_projects")
     output_store = V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs")
     service = V3ProductApiService(output_store=output_store)
@@ -2005,8 +2015,11 @@ def test_selected_generated_output_context_contains_reusable_file_path(tmp_path)
     assert record.output_id in selected["context"]["visual_grammar_snapshot"]["positive_anchor_output_ids"]
     assert selected["context"]["selected_visual_references"]
     assert context_ref["source_type"] == "generated_selected"
-    assert context_ref["file_path"] == record.file_path
+    assert "file_path" not in context_ref
     assert context_ref["output_id"] == record.output_id
+    internal_project = restarted.project_service._require_project(project["project_id"])
+    assert internal_project.latest_context is not None
+    assert internal_project.latest_context.selected_reference_assets[0]["file_path"] == record.file_path
 
 
 def test_project_can_select_a_persisted_partial_output_while_the_job_record_remains_blocked(tmp_path) -> None:

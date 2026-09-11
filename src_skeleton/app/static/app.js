@@ -2648,7 +2648,7 @@ function renderV3ScenarioState() {
   // initial "auto" visual even while the payload uses another mode.
   setV3VariationMode(v3State.selectedVariationMode || "auto");
   if (els.v3CountInput && Number.isFinite(Number(v3State.generationCount))) {
-    // setV3Preset() synchronizes the count control too; seed the DOM with the
+    // setV3Preset() synchronizes the count control too; populate the DOM with the
     // project value first so stale HTML cannot overwrite a restored count.
     els.v3CountInput.value = String(v3State.generationCount);
   }

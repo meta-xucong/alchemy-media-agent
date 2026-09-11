@@ -1,6 +1,6 @@
 # V3 剩余边界缺陷与 Brain 不可用诊断修复规范
 
-状态：开发中（2026-09-11）  
+状态：本地实现、确定性验收与独立审计完成，部署后 VPS 验收待执行（2026-09-12）
 范围：V3 Product API、LLM Brain transport/adapter、V3 generated-output restore  
 上游参考：Doc290、Doc293、Doc294、Doc296、Doc297，以及仓库 `AGENTS.md` 的 theory-first、code-first audit 和 Core/Enhanced/Auxiliary 分层规则。
 
@@ -28,7 +28,7 @@
 - 更接近上游网关/其下游 DeepSeek 生成链路对高复杂度、长上下文、结构化 JSON 请求的长尾响应或截断问题；
 - 本地仍存在状态归因和边界信任缺陷，会把“调用已进入但是否被上游接受未知”错误说成 dispatched，或在没有证据时说成 Brain 已开始请求。这些本地缺陷必须修复，否则无法可靠区分上游问题。
 
-### 2.2 已确认的五类本地边界缺陷
+### 2.2 已确认的六类本地边界缺陷
 
 1. 外部 Create 元数据可注入伪造的 Brain lifecycle receipt，并被公共 status 投影。
 2. 外部 Generate 元数据可替换服务端执行 envelope；当前默认逻辑还可能把有冻结计划的请求自动当成 trusted reuse。
@@ -36,7 +36,9 @@
 4. transport timeout/connection error 仅因进入 SDK 调用就被提升为 `request_dispatched=True`，混淆“未启动”和“接受状态未知”。
 5. image 文件先落盘、模式 envelope/审查/交付闭环后落盘。进程在中间退出时，restore 仅凭像素记录就返回 GENERATED，并且只信任第一条 output record。
 
-归属：1、2、5 是 Product API/persistence Core 边界；3、4 是 Brain transport/adapter 的 Auxiliary 诊断边界，但会污染 Core 的失败归因和用户可见状态。
+6. Project Mode 的部分 mutation/worker HTTP 响应曾把原始 `ProjectRecord`、`ProjectContextPackage`、`feedback` 或 `ProductJobStatus` 直接序列化，绕过统一公共投影，存在执行元数据泄露和跨出口语义漂移。
+
+归属：1、2、5 是 Product API/persistence Core 边界；3、4 是 Brain transport/adapter 的 Auxiliary 诊断边界，但会污染 Core 的失败归因和用户可见状态；6 是 Project public projection 的 Auxiliary 边界，但会污染公共安全契约。
 
 ## 3. 权威模型
 
@@ -84,17 +86,33 @@ finalizer 遇到没有 typed receipt 的 `BrainProviderUnavailable` 时，`remot
 2. Brain provider/adapter：引入显式 request acceptance 状态，修复 timeout/exception 归因，保留安全 attempt receipt；finalizer 无 receipt 默认未开始。
 3. Output store/Product API：定义安全的 durable closure marker；在 restore 时严格验证模式 envelope、closure 状态和跨输出一致性；对 crash-window 输出保守阻断。
 4. Regression tests：增加 hostile Create/Generate、call-entered-before-send、no-receipt finalizer、partial output restore、multi-output mixed projection 测试。
-5. 真实验收：修复和独立审计通过后才重跑原始提示词；一次完整请求失败时用 receipt 区分本地 preflight、上游 acceptance unknown 和上游完整响应失败，不再反复生成作为 exploratory debugger。
+5. Project public response：统一 `ProjectRecord`、`ProjectContextPackage`、`ProjectReferenceAsset`、`ProjectFeedbackRecord`、`ProjectBrandMemoryProposal` 和 `ProductJobStatus` 的公共投影；HTTP route adapter 不得直接序列化未经投影的 Job status。
+6. 真实验收：修复和独立审计通过后才重跑原始提示词；一次完整请求失败时用 receipt 区分本地 preflight、上游 acceptance unknown 和上游完整响应失败，不再反复生成作为 exploratory debugger。
 
 ## 5. 验收证据
 
 本规范完成的必要证据：
 
-- 相关回归测试全绿，且覆盖上述五类缺陷；
+- 相关回归测试全绿，且覆盖上述六类缺陷；
 - `compileall`、`git diff --check` 通过；
 - 独立只读审计确认没有新的 server-owned ingress、public projection 或 restore 绕过；
+- 当前本地证据：Project/Brain 焦点回归 `167 passed`，全量 V3 + 根目录回归 `3673 passed, 4 warnings`；`compileall`、`git diff --check`、release staging hygiene `2 tests OK`；最终独立审计 PASS。上述均为部署前证据，不代表 VPS 已验收；
 - VPS 部署前后服务健康检查通过；
 - 原始提示词 SHA-256 仍为 `f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`；
 - 真实 Brain 失败时能明确给出 `request_acceptance`、timeout phase、response/JSON 进度，而不泄露 prompt/body/provider 原文。
 
 阶段通过不等于总目标完成；只有本地回归、独立审计、部署后探针和受控真实验收全部完成，才可报告最终可用。
+
+## Addendum — Doc299 实施收口优先级（2026-09-11）
+
+后续代码审计确认，原文“本阶段不放宽重试/超时阈值”的表述不能覆盖一个独立的
+Brain response-capacity 缺陷：同一冻结请求在 VPS 上使用 12000 output tokens
+时可达到 `finish_reason=length`，使用 20000 时可正常 `stop`。因此，Brain
+输出预算、finalizer lifecycle 固定 stage、响应合同失败归因和 job-scoped
+持久化输出选择恢复，统一由
+`299_V3_BRAIN_CAPACITY_DIAGNOSTICS_AND_OUTPUT_RECOVERY_CLOSURE_SPEC.md`
+收口；Doc299 仅 supersede 本文对应的容量/归因段落，其余 server-owned
+metadata、closure、mode projection 和 Core/Enhanced/Auxiliary 规则仍以本文为准。
+
+Doc299 的部署后真实 VPS 验收尚未完成前，本规范与 Doc299 都不得被解读为
+“Brain 生产可用”或“总目标已完成”。

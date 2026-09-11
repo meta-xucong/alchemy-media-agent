@@ -14,7 +14,10 @@ from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
 from ..llm_brain.contracts import BRAIN_TRANSPORT_TIMEOUT_PHASES
 from ..llm_brain.fallback import build_remote_required_result
-from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
+from ..llm_brain.finalizer_lifecycle import (
+    remote_brain_receipts_are_monotonic,
+    safe_remote_brain_finalizer_lifecycle,
+)
 from ..llm_brain.stage_trace import record_stage_event
 from ..llm_brain.prompt_policy import (
     V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
@@ -28,6 +31,7 @@ from ..llm_brain.providers import (
     BrainExecutionBudgetExceeded,
     BrainHumanNaturalnessDecisionMissing,
     BrainPromptContractInvalid,
+    BrainPromptRequestContractInvalid,
     BrainProfessionalAnchorViewDecisionMissing,
     BrainReferenceChannelOwnershipDecisionMissing,
     BrainSemanticPreflightMissing,
@@ -209,6 +213,41 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
         return {}
     if not isinstance(elapsed_ms, int) or elapsed_ms < 0:
         return {}
+    boolean_keys = (
+        "response_started",
+        "first_content_observed",
+        "complete_response_observed",
+        "json_parse_started",
+        "json_parse_completed",
+    )
+    if any(key in value and not isinstance(value[key], bool) for key in boolean_keys):
+        return {}
+    response_started = bool(value.get("response_started"))
+    first_content_observed = bool(value.get("first_content_observed"))
+    complete_response_observed = bool(value.get("complete_response_observed"))
+    json_parse_started = bool(value.get("json_parse_started"))
+    json_parse_completed = bool(value.get("json_parse_completed"))
+    if json_parse_completed and not json_parse_started:
+        return {}
+    if (
+        first_content_observed
+        or complete_response_observed
+        or json_parse_started
+        or json_parse_completed
+    ) and not response_started:
+        return {}
+    request_acceptance = value.get("request_acceptance")
+    if request_acceptance is not None and (
+        not isinstance(request_acceptance, str)
+        or request_acceptance not in {
+            "not_started",
+            "dispatched",
+            "unknown",
+        }
+    ):
+        return {}
+    if request_acceptance is not None and response_started and request_acceptance != "dispatched":
+        return {}
     return {
         "schema_version": "v3_brain_transport_failure_v1",
         "stage": stage,
@@ -216,11 +255,16 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
         "timeout_phase": timeout_phase,
         "timeout_seconds": round(float(timeout_seconds), 3),
         "elapsed_ms": elapsed_ms,
-        "response_started": bool(value.get("response_started")),
-        "first_content_observed": bool(value.get("first_content_observed")),
-        "complete_response_observed": bool(value.get("complete_response_observed")),
-        "json_parse_started": bool(value.get("json_parse_started")),
-        "json_parse_completed": bool(value.get("json_parse_completed")),
+        **(
+            {"request_acceptance": request_acceptance}
+            if request_acceptance is not None
+            else {}
+        ),
+        "response_started": response_started,
+        "first_content_observed": first_content_observed,
+        "complete_response_observed": complete_response_observed,
+        "json_parse_started": json_parse_started,
+        "json_parse_completed": json_parse_completed,
     }
 
 
@@ -250,11 +294,61 @@ def _safe_remote_brain_transport_attempt(value: Any) -> dict[str, Any]:
     )
     if any(not isinstance(value.get(key), bool) for key in boolean_keys):
         return {}
+    # ``protocol_fallback_attempted`` was added after the original public
+    # receipt contract. Treat it as an additive compatibility field so older
+    # persisted receipts remain readable without weakening the required
+    # transport facts above.
+    protocol_fallback_attempted = value.get("protocol_fallback_attempted", False)
+    if not isinstance(protocol_fallback_attempted, bool):
+        return {}
+    request_acceptance = value.get("request_acceptance")
+    if request_acceptance is not None and (
+            not isinstance(request_acceptance, str)
+            or request_acceptance not in {
+                "not_started",
+                "dispatched",
+                "unknown",
+            }
+    ):
+        return {}
+    if request_acceptance is not None and value.get("request_dispatched") != (
+        request_acceptance == "dispatched"
+    ):
+        return {}
+    if attempts == 0 and (
+        request_acceptance not in {None, "not_started"}
+        or any(value.get(key) for key in boolean_keys)
+    ):
+        return {}
+    if value.get("json_parse_completed") and not value.get("json_parse_started"):
+        return {}
+    if (
+        value.get("first_content_observed")
+        or value.get("complete_response_observed")
+        or value.get("json_parse_started")
+        or value.get("json_parse_completed")
+    ) and not value.get("response_started"):
+        return {}
+    effective_acceptance = request_acceptance
+    if effective_acceptance is None and (
+        value.get("request_dispatched") or value.get("response_started")
+    ):
+        effective_acceptance = "dispatched"
+    if value.get("response_started") and effective_acceptance != "dispatched":
+        return {}
+    if value.get("first_content_observed") and effective_acceptance != "dispatched":
+        return {}
     return {
         "schema_version": "v3_brain_transport_attempt_v1",
         "stage": stage,
         "attempts": attempts,
+        **(
+            {"request_acceptance": effective_acceptance}
+            if effective_acceptance is not None
+            else {}
+        ),
         **{key: value[key] for key in boolean_keys},
+        "protocol_fallback_attempted": protocol_fallback_attempted,
     }
 
 
@@ -291,6 +385,28 @@ def _safe_remote_brain_serialization_failure(value: Any) -> dict[str, Any]:
         return {}
     if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts not in {1, 2}:
         return {}
+    boolean_keys = (
+        "json_serialization_recovery_attempted",
+        "json_serialization_recovery_succeeded",
+        "json_parse_started",
+        "json_parse_completed",
+    )
+    if any(key in value and not isinstance(value[key], bool) for key in boolean_keys):
+        return {}
+    json_recovery_attempted = bool(value.get("json_serialization_recovery_attempted"))
+    json_recovery_succeeded = bool(value.get("json_serialization_recovery_succeeded"))
+    json_parse_started = bool(value.get("json_parse_started"))
+    json_parse_completed = bool(value.get("json_parse_completed"))
+    if schema_version == "v3_brain_truncated_response_v1" and (
+        json_parse_started or json_parse_completed
+    ):
+        return {}
+    if json_recovery_succeeded:
+        return {}
+    if json_recovery_attempted and attempts != 2:
+        return {}
+    if json_parse_completed and not json_parse_started:
+        return {}
     return {
         "schema_version": schema_version,
         "stage": stage,
@@ -298,14 +414,10 @@ def _safe_remote_brain_serialization_failure(value: Any) -> dict[str, Any]:
         "error_family": error_family,
         "json_failure_kind": json_failure_kind,
         "attempts": attempts,
-        "json_serialization_recovery_attempted": bool(
-            value.get("json_serialization_recovery_attempted")
-        ),
-        "json_serialization_recovery_succeeded": bool(
-            value.get("json_serialization_recovery_succeeded")
-        ),
-        "json_parse_started": bool(value.get("json_parse_started")),
-        "json_parse_completed": bool(value.get("json_parse_completed")),
+        "json_serialization_recovery_attempted": json_recovery_attempted,
+        "json_serialization_recovery_succeeded": json_recovery_succeeded,
+        "json_parse_started": json_parse_started,
+        "json_parse_completed": json_parse_completed,
     }
 
 
@@ -351,12 +463,24 @@ _SAFE_REMOTE_BRAIN_ERROR_CLASSES = {
     "upstream_transport_error",
     "upstream_http_error",
     "invalid_response",
+    "request_contract_invalid",
     "truncated_response",
     "content_policy",
     "canceled",
     "serialization_failure",
     "contract_validation",
     "unknown",
+}
+
+_SAFE_REMOTE_BRAIN_AVAILABILITY_REASONS = {
+    "remote_disabled",
+    "brain_disabled",
+    "missing_credentials",
+    "invalid_configuration",
+    "capability_scope_inactive",
+    "availability_check_failed",
+    "provider_unavailable",
+    "configured",
 }
 
 
@@ -2774,7 +2898,10 @@ class ScenarioRuntime:
                         "professional_anchor_view_contract_recovery_attempted": True,
                         "professional_anchor_view_contract_recovery_succeeded": True,
                     }
-            elif isinstance(first_exc, BrainPromptContractInvalid):
+            elif isinstance(first_exc, BrainPromptContractInvalid) and not isinstance(
+                first_exc,
+                BrainPromptRequestContractInvalid,
+            ):
                 recovery_request = signing_request.model_copy(
                     update={
                         "metadata": {
@@ -2802,11 +2929,15 @@ class ScenarioRuntime:
                         "canonical_prompt_signoff_recovery_succeeded": True,
                     }
             if failure is not None:
-                recovered_brain_result = self._recover_character_card_slot_delta_brain_result(
-                    request,
-                    brain_result,
-                    force_after_finalizer_failure=True,
-                    recovery_reason="remote_final_prompt_anchor_view_contract_invalid",
+                recovered_brain_result = (
+                    brain_result
+                    if isinstance(failure, BrainPromptRequestContractInvalid)
+                    else self._recover_character_card_slot_delta_brain_result(
+                        request,
+                        brain_result,
+                        force_after_finalizer_failure=True,
+                        recovery_reason="remote_final_prompt_anchor_view_contract_invalid",
+                    )
                 )
                 if self._uses_character_card_slot_delta_recovery(recovered_brain_result):
                     return recovered_brain_result
@@ -2866,6 +2997,8 @@ class ScenarioRuntime:
                         if isinstance(failure, BrainDevelopmentalPresenceDecisionMissing)
                         else "professional_anchor_view_decision_missing"
                         if isinstance(failure, BrainProfessionalAnchorViewDecisionMissing)
+                        else "remote_creative_brain_request_contract_invalid"
+                        if isinstance(failure, BrainPromptRequestContractInvalid)
                         else "remote_creative_brain_prompt_signoff_invalid"
                         if isinstance(failure, BrainPromptContractInvalid)
                         else "remote_creative_brain_prompt_signoff_unavailable"
@@ -3005,7 +3138,19 @@ class ScenarioRuntime:
             transport_history.append(dict(brain_result.audit["remote_brain_transport"]))
         transport_history.extend(finalizer_transport_history)
         audit["remote_brain_transports"] = transport_history
-        audit["remote_brain_call_count"] = len(transport_history)
+        plan_call_count = brain_result.audit.get("remote_brain_call_count")
+        finalizer_call_count = audit.get("remote_brain_call_count")
+        if (
+            isinstance(plan_call_count, int)
+            and not isinstance(plan_call_count, bool)
+            and plan_call_count >= 0
+            and isinstance(finalizer_call_count, int)
+            and not isinstance(finalizer_call_count, bool)
+            and finalizer_call_count >= 0
+        ):
+            audit["remote_brain_call_count"] = plan_call_count + finalizer_call_count
+        else:
+            audit["remote_brain_call_count"] = len(transport_history)
         execution_budget = self.llm_brain_adapter.execution_budget_receipt()
         if execution_budget is not None:
             audit["remote_brain_execution_budget"] = execution_budget
@@ -4004,6 +4149,7 @@ class ScenarioRuntime:
         elif reason_code in {
             "remote_creative_brain_image_set_plan_invalid",
             "remote_creative_brain_prompt_signoff_invalid",
+            "remote_creative_brain_request_contract_invalid",
         }:
             outcome_class = "remote_contract_invalid"
         elif reason_code == "remote_creative_brain_output_count_mismatch":
@@ -4035,6 +4181,44 @@ class ScenarioRuntime:
             or []
         )
 
+        safe_finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
+            audit.get("remote_brain_finalizer_lifecycle")
+        )
+        safe_transport_failure = _safe_remote_brain_transport_failure(
+            audit.get("remote_brain_transport_failure")
+        )
+        safe_transport_attempt = _safe_remote_brain_transport_attempt(
+            audit.get("remote_brain_transport_attempt")
+        )
+        safe_serialization_failure = _safe_remote_brain_serialization_failure(
+            audit.get("remote_brain_serialization_failure")
+        )
+        safe_request_started = (
+            audit.get("remote_brain_request_started")
+            if isinstance(audit.get("remote_brain_request_started"), bool)
+            else None
+        )
+        raw_request_acceptance = audit.get("remote_brain_request_acceptance")
+        safe_request_acceptance = (
+            raw_request_acceptance
+            if isinstance(raw_request_acceptance, str)
+            and raw_request_acceptance in {"not_started", "dispatched", "unknown"}
+            else None
+        )
+        if not remote_brain_receipts_are_monotonic(
+            request_started=safe_request_started,
+            request_acceptance=raw_request_acceptance,
+            finalizer_lifecycle=safe_finalizer_lifecycle or None,
+            transport_attempt=safe_transport_attempt or None,
+            transport_failure=safe_transport_failure or None,
+        ):
+            safe_finalizer_lifecycle = {}
+            safe_transport_failure = {}
+            safe_transport_attempt = {}
+            safe_serialization_failure = {}
+            safe_request_started = None
+            safe_request_acceptance = None
+
         safe_outcome = {
             "schema_version": "v3_remote_creative_brain_outcome_v1",
             "state": "blocked",
@@ -4042,22 +4226,36 @@ class ScenarioRuntime:
             "outcome_class": outcome_class,
             "llm_used": bool(brain_result.llm_used),
             "fallback_used": bool(brain_result.fallback_used),
-            "remote_provider_available": audit.get("remote_provider_available"),
-            "remote_contract_rejected_sections": rejected_sections,
+        **(
+            {"remote_provider_available": audit.get("remote_provider_available")}
+            if isinstance(audit.get("remote_provider_available"), bool)
+            or audit.get("remote_provider_available") is None
+            else {}
+        ),
+        "remote_contract_rejected_sections": rejected_sections,
+        **(
+            {
+                "remote_provider_availability_reason": str(
+                    audit["remote_provider_availability_reason"]
+                ).strip()
+            }
+            if str(audit.get("remote_provider_availability_reason") or "").strip()
+            in (_SAFE_REMOTE_BRAIN_AVAILABILITY_REASONS - {"provider_unavailable", "configured"})
+            else {}
+        ),
             **(
-                {"remote_brain_request_started": audit["remote_brain_request_started"]}
-                if isinstance(audit.get("remote_brain_request_started"), bool)
+                {"remote_brain_request_started": safe_request_started}
+                if isinstance(safe_request_started, bool)
                 else {}
             ),
             **(
-                {
-                    "remote_brain_finalizer_lifecycle": safe_remote_brain_finalizer_lifecycle(
-                        audit["remote_brain_finalizer_lifecycle"]
-                    )
-                }
-                if safe_remote_brain_finalizer_lifecycle(
-                    audit.get("remote_brain_finalizer_lifecycle")
-                )
+                {"remote_brain_request_acceptance": safe_request_acceptance}
+                if safe_request_acceptance is not None
+                else {}
+            ),
+            **(
+                {"remote_brain_finalizer_lifecycle": safe_finalizer_lifecycle}
+                if safe_finalizer_lifecycle
                 else {}
             ),
             **(
@@ -4072,33 +4270,18 @@ class ScenarioRuntime:
                 else {}
             ),
             **(
-                {
-                    "remote_brain_transport_failure": _safe_remote_brain_transport_failure(
-                        audit["remote_brain_transport_failure"]
-                    )
-                }
-                if isinstance(audit.get("remote_brain_transport_failure"), dict)
-                and _safe_remote_brain_transport_failure(audit["remote_brain_transport_failure"])
+                {"remote_brain_transport_failure": safe_transport_failure}
+                if safe_transport_failure
                 else {}
             ),
             **(
-                {
-                    "remote_brain_transport_attempt": _safe_remote_brain_transport_attempt(
-                        audit["remote_brain_transport_attempt"]
-                    )
-                }
-                if _safe_remote_brain_transport_attempt(audit.get("remote_brain_transport_attempt"))
+                {"remote_brain_transport_attempt": safe_transport_attempt}
+                if safe_transport_attempt
                 else {}
             ),
             **(
-                {
-                    "remote_brain_serialization_failure": _safe_remote_brain_serialization_failure(
-                        audit["remote_brain_serialization_failure"]
-                    )
-                }
-                if _safe_remote_brain_serialization_failure(
-                    audit.get("remote_brain_serialization_failure")
-                )
+                {"remote_brain_serialization_failure": safe_serialization_failure}
+                if safe_serialization_failure
                 else {}
             ),
             **(

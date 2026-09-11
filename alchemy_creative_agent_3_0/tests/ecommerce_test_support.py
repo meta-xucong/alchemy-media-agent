@@ -626,6 +626,12 @@ class EcommerceRemoteBrainTestProvider:
             request.metadata.get("brain_source_projection_required") is True
             and isinstance(source_projection, dict)
         )
+        canonical_prompt_finalizer_stage = request.stage in {
+            "provider_prompt_developmental_presence_verify",
+            "provider_prompt_finalize",
+            "provider_prompt_human_naturalness_resign",
+            "provider_prompt_professional_capture_resign",
+        }
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -678,7 +684,12 @@ class EcommerceRemoteBrainTestProvider:
                             "owner": "remote_v3_llm_brain",
                         }
                     }
-                    if request.metadata.get("require_lossless_user_direction") is True
+                    if (
+                        request.metadata.get("require_lossless_user_direction") is True
+                        or request.metadata.get("require_real_images") is True
+                        or request.metadata.get("real_image_generation") is True
+                        or canonical_prompt_finalizer_stage
+                    )
                     else {}
                 ),
                 **({"semantic_preflight_status": "approved"} if requires_human_preflight else {}),
@@ -815,6 +826,28 @@ class EcommerceRemoteBrainTestProvider:
             }
             for index in range(1, count + 1)
         ]
+        # Keep the contract fixture honest about successful remote calls. The
+        # production adapter uses this private receipt to distinguish a call
+        # that was accepted by the transport from a local preflight failure;
+        # omitting it makes the test double look like an uninstrumented
+        # provider and hides the stage-level audit assertion.
+        payload["_alchemy_brain_transport"] = {
+            "attempts": 1,
+            "json_serialization_recovery_attempted": False,
+            "json_serialization_recovery_succeeded": False,
+            "transport_attempt": {
+                "schema_version": "v3_brain_transport_attempt_v1",
+                "stage": request.stage,
+                "request_acceptance": "dispatched",
+                "request_dispatched": True,
+                "response_started": True,
+                "first_content_observed": True,
+                "complete_response_observed": True,
+                "json_parse_started": True,
+                "json_parse_completed": True,
+                "json_recovery": False,
+            },
+        }
         return payload
 
 

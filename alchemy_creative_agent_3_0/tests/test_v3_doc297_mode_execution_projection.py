@@ -632,7 +632,7 @@ def test_doc297_records_mode_projection_conflict_without_hiding_provider_fact():
         result.asset_pack.assets[0].metadata["candidate_metadata"],
     )
 
-    assert projected["mode_execution_policy"] == {"mode": "selection_candidates"}
+    assert projected["mode_execution_policy"] == {"mode": "creative_exploration"}
     assert projected["mode_execution_audit"]["projection_conflicts"] == ["mode_execution_policy"]
 
 
@@ -961,6 +961,8 @@ def test_doc297_output_store_restore_preserves_nested_mode_projection(tmp_path, 
     )._status_from_output_store(result.asset_pack.job_id)  # noqa: SLF001
 
     assert restored is not None
+    assert restored.status == ProductJobStatusValue.BLOCKED
+    assert restored.metadata["output_store_restore_state"] == "needs_recovery"
     assert restored.metadata["effective_variation_mode"] == mode
     assert restored.metadata["mode_execution_audit"]["mode"] == mode
     assert restored.metadata["mode_execution_audit"]["requested_image_count"] == image_count

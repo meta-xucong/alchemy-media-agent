@@ -13,6 +13,7 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.tests.photography_test_support import photography_test_service
 
 
@@ -175,11 +176,15 @@ def test_doc132_metadata_only_professional_set_is_held_not_a_delivery(monkeypatc
     handlers = V3ProductRouteHandlers(service=photography_test_service())
     project, root = _create_photography_root(handlers, mode_id="professional_set")
 
-    blocked = handlers.post_project_job_generate(
+    blocked = handlers.project_service.generate_project_job(
         project["project_id"],
         root["job_id"],
-        {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "metadata_only"}},
-    )
+        {"quality_mode": "standard"},
+        _trusted_generate_continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            vision_inspection_mode="metadata_only",
+        ),
+    ).model_dump(mode="json")
 
     assert blocked["status"] == "blocked"
     summary = blocked["metadata"]["specialized_execution_summary"]

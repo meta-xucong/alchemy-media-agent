@@ -17,10 +17,6 @@ from uuid import uuid4
 from pydantic import ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
-from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_receipt_allows_slot
-from ..shared_capabilities.visual_cluster.review_repair import (
-    shared_review_repair_context_from_decision,
-)
 from .formal_slot_acceptance import (
     FormalSlotAcceptanceCore,
     FormalSlotCandidateEnhancedProofSummary,
@@ -173,6 +169,26 @@ EXPRESSION_LABELS = {
     "expression.sad": "悲伤",
     "expression.smile": "微笑（旧版）",
 }
+
+
+def _laugh_expression_receipt_allows_slot(*args: Any, **kwargs: Any) -> bool:
+    """Load the shared reviewer lazily to keep the capability package acyclic."""
+
+    from ..shared_capabilities.visual_cluster.expression_review import (
+        laugh_expression_receipt_allows_slot,
+    )
+
+    return laugh_expression_receipt_allows_slot(*args, **kwargs)
+
+
+def _shared_review_repair_context_from_decision(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Load shared retry evidence lazily to keep the capability package acyclic."""
+
+    from ..shared_capabilities.visual_cluster.review_repair import (
+        shared_review_repair_context_from_decision,
+    )
+
+    return shared_review_repair_context_from_decision(*args, **kwargs)
 
 
 def _is_expression_delivery_slot(slot_key: str) -> bool:
@@ -1822,7 +1838,7 @@ def project_character_card_slot_success_receipt(
         if not laugh_receipts:
             raise ValueError("Character Card laugh slot requires shared affective expression receipt")
         if not any(
-            laugh_expression_receipt_allows_slot(
+            _laugh_expression_receipt_allows_slot(
                 evidence_codes=item.get("evidence_codes", []),
                 issue_codes=item.get("issue_codes", []),
             )
@@ -1940,7 +1956,7 @@ def validate_character_card_slot_success_receipt(
             item.get("expression") == "laugh"
             and item.get("contract_version") == "v3_affective_expression_review_receipt_v1"
             and bool(item.get("framing_delta_dimensions"))
-            and laugh_expression_receipt_allows_slot(
+            and _laugh_expression_receipt_allows_slot(
                 evidence_codes=item.get("evidence_codes", []),
                 issue_codes=item.get("issue_codes", []),
             )
@@ -3517,7 +3533,7 @@ class CharacterCardPreparationService:
             if review_passed:
                 passing.append((candidate, review))
             else:
-                repair_context = shared_review_repair_context_from_decision(
+                repair_context = _shared_review_repair_context_from_decision(
                     candidate_id=candidate.candidate_id,
                     output_id=candidate.output_id,
                     issue_codes=getattr(review, "issue_codes", []) or [],
@@ -3813,7 +3829,7 @@ class CharacterCardPreparationService:
         if slot_key != POSITIVE_EXPRESSION_SLOT_KEY:
             return True
         scores = getattr(review, "identity_scores", None)
-        return laugh_expression_receipt_allows_slot(
+        return _laugh_expression_receipt_allows_slot(
             evidence_codes=getattr(scores, "evidence_codes", []) or [],
             issue_codes=getattr(review, "issue_codes", []) or [],
         )

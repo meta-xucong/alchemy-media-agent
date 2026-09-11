@@ -98,6 +98,11 @@ def _canonical_runtime_result(*, count: int = 1, uploaded_assets: list[Any] | No
                     "quiet balanced composition."
                 ),
                 "review_status": "approved",
+                "user_direction_integrity": {
+                    "contract_version": "v3_user_direction_integrity_v1",
+                    "status": "preserved",
+                    "owner": "remote_v3_llm_brain",
+                },
             }
             for index in range(1, count + 1)
         ],

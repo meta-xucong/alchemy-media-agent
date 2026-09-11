@@ -276,7 +276,7 @@ class AnchorGenerationRequest(V3BaseModel):
                 "three_quarter": 3,
                 "profile": 3,
                 "right_front_25": 3,
-                "reverse_three_quarter": 3,
+                "reverse_three_quarter": 4,
                 "rear_head": 4,
             }[self.view_role]
         if len(references) != expected_reference_count:
@@ -494,6 +494,7 @@ class AnchorPackPreparationService:
         front_attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
         prior_views = self._resume_views(request, resume_from_pack)
         prior_auxiliary_references = self._resume_auxiliary_references(request, resume_from_pack)
+        legacy_bridge_views = self._resume_legacy_bridge_views(request, resume_from_pack)
         prior_failures_by_key = {
             (item.view_role, item.candidate_index): item
             for item in self._resume_failures(request, resume_from_pack)
@@ -504,6 +505,7 @@ class AnchorPackPreparationService:
             request.root_source_provenance.source_asset_id,
             *[view.output_id for view in prior_views],
             *[reference.output_id for reference in prior_auxiliary_references],
+            *[view.output_id for view in legacy_bridge_views],
         ]
         front_view = next((view for view in prior_views if view.view_role == "standard_front"), None)
         winner_candidate_id = front_view.source_candidate_ids[0] if front_view is not None else None
@@ -704,8 +706,10 @@ class AnchorPackPreparationService:
             else self.SUPPLEMENTARY_ROLES
         )
         for role in supplementary_roles:
-            if any(view.view_role == role for view in views) or any(
-                reference.reference_role == role for reference in auxiliary_references
+            if (
+                any(view.view_role == role for view in views)
+                or any(reference.reference_role == role for reference in auxiliary_references)
+                or any(view.view_role == role for view in legacy_bridge_views)
             ):
                 continue
             supplementary_attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
@@ -740,6 +744,7 @@ class AnchorPackPreparationService:
                         views,
                         auxiliary_references,
                         role,
+                        legacy_bridge_views=legacy_bridge_views,
                     ),
                     mcp_handoff_id=resumable_handoff_id,
                 )
@@ -978,10 +983,23 @@ class AnchorPackPreparationService:
         views: list[AnchorView],
         auxiliary_references: list[AnchorAuxiliaryReference],
         view_role: FaceViewRole,
+        *,
+        legacy_bridge_views: list[AnchorView] | None = None,
     ) -> list[str]:
         root = request.root_source_provenance.source_asset_id
         by_role = {view.view_role: view.output_id for view in views if view.active}
         by_role.update({reference.reference_role: reference.output_id for reference in auxiliary_references if reference.active})
+        # Older failed packs stored a reviewed 25-degree bridge in
+        # ``anchor_views`` before the auxiliary-reference split.  Reuse its
+        # pixels as an internal continuation input, but never carry that
+        # legacy bridge back into the new formal pack representation.
+        by_role.update(
+            {
+                view.view_role: view.output_id
+                for view in (legacy_bridge_views or [])
+                if view.active and view.view_role not in by_role
+            }
+        )
 
         if request.face_view_scope != "character_card":
             return [root, *[view.output_id for view in views if view.active]]
@@ -994,11 +1012,15 @@ class AnchorPackPreparationService:
         if view_role == "right_front_25":
             return [root, by_role["standard_front"], by_role["profile"]]
         if view_role == "reverse_three_quarter":
-            # Right/front 45° mirrors the left/front 45° contract: root pose,
-            # approved front identity/framing, and the same-side 25° bridge.
-            # The profile slot remains its own formal view and later rear
-            # continuity authority; it is not an input to 45° generation.
-            return [root, by_role["standard_front"], by_role["right_front_25"]]
+            # The approved profile is the pose-depth authority.  The
+            # right-front 25° bridge is admitted only as same-side
+            # identity/continuity evidence, never as the target yaw.
+            return [
+                root,
+                by_role["standard_front"],
+                by_role["profile"],
+                by_role["right_front_25"],
+            ]
         if view_role == "rear_head":
             return [root, by_role["standard_front"], by_role["profile"], by_role["reverse_three_quarter"]]
         return [root, *[view.output_id for view in views if view.active]]
@@ -1107,6 +1129,25 @@ class AnchorPackPreparationService:
         if any(role not in FACE_AUXILIARY_BRIDGE_ROLES for role in roles):
             raise ValueError("character_card_resume_auxiliary_checkpoint_invalid")
         return references
+
+    @staticmethod
+    def _resume_legacy_bridge_views(
+        request: AnchorPackPreparationRequest,
+        resume_from_pack: IdentityAnchorPackVersion | None,
+    ) -> list[AnchorView]:
+        """Read pre-split bridge views as evidence without formalizing them."""
+
+        if resume_from_pack is None or request.face_view_scope != "character_card":
+            return []
+        if resume_from_pack.status != "failed":
+            return []
+        return [
+            view
+            for view in resume_from_pack.anchor_views
+            if view.active
+            and view.view_role in FACE_AUXILIARY_BRIDGE_ROLES
+            and view.formal_slot_receipt is None
+        ]
 
     @staticmethod
     def _resume_failures(

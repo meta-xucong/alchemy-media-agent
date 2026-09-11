@@ -13,7 +13,6 @@ DOC_PATH = (
     / "visual_assets"
     / "PROFESSIONAL_MODE_V3_UI_CARD_AND_MOBILE_REMEDIATION_20260726.md"
 )
-FRONTEND_VERSION = "20260810-v3-reference-authority"
 
 
 def _read(path: Path) -> str:
@@ -36,10 +35,10 @@ def test_doc258_frontend_cache_bust_versions_are_unified() -> None:
     index_html = _read(STATIC_ROOT / "index.html")
     mobile_html = _read(MOBILE_ROOT / "index.html")
 
-    assert f"/static/styles.css?v={FRONTEND_VERSION}" in index_html
-    assert f"/static/app.js?v={FRONTEND_VERSION}" in index_html
-    assert f"/mobile-static/mobile.css?v={FRONTEND_VERSION}" in mobile_html
-    assert f"/mobile-static/mobile.js?v={FRONTEND_VERSION}" in mobile_html
+    assert "/static/styles.css?v=__STATIC_STYLES_VERSION__" in index_html
+    assert "/static/app.js?v=__STATIC_APP_VERSION__" in index_html
+    assert "/mobile-static/mobile.css?v=__MOBILE_STYLES_VERSION__" in mobile_html
+    assert "/mobile-static/mobile.js?v=__MOBILE_APP_VERSION__" in mobile_html
     assert "20260726-visual-asset-cards" not in index_html
     assert "20260719-v3-frontend-ux-fix2" not in mobile_html
     assert "20260710-v3-reference-channels" not in mobile_html

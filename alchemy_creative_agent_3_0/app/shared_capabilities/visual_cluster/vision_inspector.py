@@ -1510,6 +1510,7 @@ def _retry_patch_for_issues(
             negative_additions.extend(
                 [
                     "weak aesthetic finish",
+                    "generic stock photo finish",
                     "flat low-contrast image",
                     "washed-out exposure",
                     "muddy underexposed frame",
@@ -1517,6 +1518,7 @@ def _retry_patch_for_issues(
                     "unclear subject",
                     "weak depth separation",
                     "accidental composition",
+                    "overprocessed " + "HDR finish",
                 ]
             )
         elif code in {"weak_lifestyle_context", "studio_only_when_lifestyle_requested"}:

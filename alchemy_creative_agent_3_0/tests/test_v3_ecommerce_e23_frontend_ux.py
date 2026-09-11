@@ -57,8 +57,14 @@ def test_e23_ecommerce_count_control_projects_the_exact_shared_contract() -> Non
 
     assert '<select id="v3CountInput"' in count_control
     assert 'type="range"' not in count_control
-    assert [f'<option value="{count}"' in count_control for count in (1, 2, 4, 7)] == [True, True, True, True]
+    # The initial shell is General-neutral.  E-Commerce's exact [1, 2, 4, 7]
+    # contract is projected only after its template is selected by the shared
+    # runtime control.
+    assert [f'<option value="{count}"' in count_control for count in (1, 2, 3, 4)] == [True, True, True, True]
+    assert '<option value="7"' not in count_control
     assert "const v3EcommerceExactCountContract = Object.freeze([1, 2, 4, 7]);" in script
+    assert 'templateId === "ecommerce_template" ? [...v3EcommerceExactCountContract] : [1, 2, 3, 4]' in script
+    assert 'input.innerHTML = supported' in script
     assert "不支持时会明确提示，不会少生成" in script
     assert "return Math.max(1, Math.min(4, number));" not in script
 
@@ -82,11 +88,13 @@ def test_e23_mobile_ecommerce_count_control_preserves_exact_n_without_general_cl
 
     assert '<select id="mobileV3CountInput"' in count_control
     assert 'type="range"' not in count_control
-    assert [f'<option value="{count}"' in count_control for count in (1, 2, 4, 7)] == [True, True, True, True]
+    # Mobile follows the same shell/runtime split as desktop.
+    assert [f'<option value="{count}"' in count_control for count in (1, 2, 3, 4)] == [True, True, True, True]
+    assert '<option value="7"' not in count_control
     assert "const mobileV3EcommerceExactCountContract = Object.freeze([1, 2, 4, 7]);" in script
     assert 'templateId === "ecommerce_template"' in supported
     assert 'templateId === "photographer_template"' in supported
-    assert 'mobileV3State.selectedPreset === "professional_set" ? [3] : [1]' in supported
+    assert 'mobileV3State.selectedPhotographyMode === "professional_set" ? [3] : [1]' in supported
     assert "Math.max(1, Math.min(4" not in bounded
     assert 'throw new Error(`当前模板支持 ${supported.join("、")} 张，请重新选择。`);' in bounded
     assert "请确认数量后再提交。" in script

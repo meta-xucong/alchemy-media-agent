@@ -85,13 +85,17 @@ def test_production_service_fails_closed_when_remote_brain_is_not_available(
         "fail_closed": True,
         "failure_reason_codes": ["remote_creative_brain_required_for_template"],
     }
-    assert status.metadata["remote_creative_brain_outcome"] == {
-        "schema_version": "v3_remote_creative_brain_outcome_v1",
-        "state": "blocked",
-        "reason_code": "remote_creative_brain_required_for_template",
-        "llm_used": False,
-        "fallback_used": True,
-    }
+    outcome = status.metadata["remote_creative_brain_outcome"]
+    assert outcome["schema_version"] == "v3_remote_creative_brain_outcome_v1"
+    assert outcome["state"] == "blocked"
+    assert outcome["reason_code"] == "remote_creative_brain_required_for_template"
+    assert outcome["llm_used"] is False
+    assert outcome["fallback_used"] is True
+    # The public diagnostic distinguishes a disabled local Brain route from a
+    # transport/provider failure; newer safe fields are intentionally additive.
+    assert outcome["outcome_class"] == "remote_provider_unavailable"
+    assert outcome["remote_provider_availability_reason"] == "brain_disabled"
+    assert outcome["remote_provider_available"] is False
 
 
 class _TimeoutRemoteBrain:

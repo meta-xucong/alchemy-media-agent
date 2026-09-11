@@ -18,7 +18,7 @@ from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, Bra
 from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
-from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter, MockGenerationProvider, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.creative_core.doc281_output_plan_binding import (
     DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
@@ -430,17 +430,16 @@ def test_project_generation_with_unverified_metadata_review_stays_manual_without
         {"user_input": "先做一张干净明亮的社媒封面", "template_id": "general_template"},
     )
 
-    generated = handlers.post_project_job_generate(
+    generated = handlers.project_service.generate_project_job(
         project["project_id"],
         job["job_id"],
-        {
-            "quality_mode": "standard",
-            "metadata": {
-                "post_generation_fake_issue_codes": ["visible_text_artifact"],
-                "max_visual_retry_attempts": 1,
-            },
-        },
-    )
+        {"quality_mode": "standard"},
+        _trusted_generate_continuation=GenerateContinuation(
+            job_id=job["job_id"],
+            post_generation_fake_issue_codes=("visible_text_artifact",),
+            max_visual_retry_attempts=1,
+        ),
+    ).model_dump(mode="json")
     timeline = handlers.get_project_timeline(project["project_id"])
     item_types = [item["item_type"] for item in timeline["items"]]
 
@@ -1043,11 +1042,17 @@ def test_project_summary_restores_generated_output_thumbnail_after_restart(tmp_p
     projects = second.get_projects(limit=5)
     restored_job = second.get_job(job["job_id"])
 
-    assert loaded["project"]["memory_summary"]["latest_thumbnail_urls"] == [record.thumbnail_url]
-    assert projects["projects"][0]["latest_thumbnail_urls"] == [record.thumbnail_url]
-    assert projects["projects"][0]["visible_output_count"] == 1
-    assert restored_job["status"] == "generated"
+    assert loaded["project"]["memory_summary"]["latest_thumbnail_urls"] == []
+    assert projects["projects"][0]["latest_thumbnail_urls"] == []
+    assert projects["projects"][0]["visible_output_count"] == 0
+    assert restored_job["status"] == "blocked"
+    assert restored_job["metadata"]["output_store_restore_state"] == "needs_recovery"
     assert restored_job["candidates"][0]["output_id"] == record.output_id
+
+    review_outputs = second.get_project_outputs(project_id=project["project_id"])
+    assert review_outputs["items"] == []
+    assert [item["output_id"] for item in review_outputs["review_items"]] == [record.output_id]
+    assert review_outputs["review_items"][0]["review_only"] is True
 
     selected = second.post_project_job_select(
         project["project_id"],
@@ -1388,12 +1393,12 @@ def test_portrait_selection_becomes_strong_identity_reference(tmp_path) -> None:
     context = selected["context"]
 
     assert context["selected_visual_references"][0]["use_policy"] == "identity"
-    assert context["selected_visual_references"][0]["file_path"]
+    assert "file_path" not in context["selected_visual_references"][0]
     assert context["selected_visual_references"][0]["output_id"] == record.output_id
     assert context["metadata"]["source"] == "V3ProjectModeService"
     assert context["selected_output_assets"][0]["job_id"] == record.job_id
     assert context["selected_reference_assets"][0]["created_from_job_id"] == record.job_id
-    assert context["selected_output_assets"][0]["metadata"]["file_path"] == record.file_path
+    assert "file_path" not in context["selected_output_assets"][0]["metadata"]
     assert context["strong_reference_bindings"][0]["use_policy"] == "identity"
     assert context["strong_reference_bindings"][0]["provider_input_required"] is True
     assert context["identity_lock_profiles"][0]["subject_type"] == "character"
@@ -1411,7 +1416,8 @@ def test_portrait_selection_becomes_strong_identity_reference(tmp_path) -> None:
     )
     continuation_context = handlers.get_project_context(project["project_id"])
     reference_assets = continuation_context["strong_reference_bindings"]
-    assert any(item.get("use_policy") == "identity" and item.get("file_path") for item in reference_assets)
+    assert any(item.get("use_policy") == "identity" for item in reference_assets)
+    assert all("file_path" not in item for item in reference_assets)
     assert continuation_context["project_identity_anchors"][0]["subject_type"] == "character"
     assert continuation_context["strong_reference_continuation_plan"]["reference_mode"] == "provider_image_reference"
     continuation_record = handlers.service.get_job_record(continuation["job_id"])
@@ -1510,7 +1516,10 @@ def test_identity_only_portrait_does_not_misapply_structured_appearance_lock(tmp
     keep_rules = " ".join(context["identity_lock_profiles"][0]["keep_rules"]).lower()
     assert "pattern family" not in keep_rules
     assert "accessory placement" not in keep_rules
-    plan_additions = " ".join(context["strong_reference_continuation_plan"]["prompt_additions"]).lower()
+    assert "prompt_additions" not in context["strong_reference_continuation_plan"]
+    internal_context = handlers.project_service._require_project(project["project_id"]).latest_context
+    assert internal_context is not None
+    plan_additions = " ".join(internal_context.strong_reference_continuation_plan["prompt_additions"]).lower()
     assert "appearance asset structure" not in plan_additions
     policy = context["resolved_reference_policy_package"]["policies"][0]
     assert policy["identity_geometry"] == "hard"
@@ -2351,12 +2360,22 @@ def test_project_timeline_reconciles_outputs_written_after_background_disconnect
     ]
     outputs = timeline["metadata"]["project_outputs"]
 
-    assert len(generated_items) == 1
-    assert generated_items[0]["metadata"]["restored_from_output_store"] is True
-    assert generated_items[0]["metadata"]["output_ids"] == [record.output_id]
-    assert len(review_items) == 1
-    assert review_items[0]["metadata"]["restored_from_output_store"] is True
-    assert [item["job_id"] for item in outputs] == [job["job_id"]]
+    assert generated_items == []
+    assert review_items == []
+    assert outputs == []
+    recovery_outputs = handlers.get_project_outputs(project_id=project["project_id"])
+    assert recovery_outputs["items"] == []
+    assert [item["output_id"] for item in recovery_outputs["review_items"]] == [record.output_id]
+    assert recovery_outputs["review_items"][0]["review_only"] is True
+    recovery_notes = [
+        item
+        for item in timeline["items"]
+        if item["item_type"] == "note_added"
+        and item["job_id"] == job["job_id"]
+        and item["metadata"].get("output_store_restore_state") == "needs_recovery"
+    ]
+    assert len(recovery_notes) == 1
+    assert recovery_notes[0]["metadata"]["review_only"] is True
 
     timeline_again = handlers.get_project_timeline(project["project_id"])
     generated_again = [
@@ -2366,11 +2385,19 @@ def test_project_timeline_reconciles_outputs_written_after_background_disconnect
         item for item in timeline_again["items"] if item["item_type"] == "visual_review" and item["job_id"] == job["job_id"]
     ]
 
-    assert len(generated_again) == 1
-    assert len(review_again) == 1
+    assert generated_again == []
+    assert review_again == []
+    recovery_notes_again = [
+        item
+        for item in timeline_again["items"]
+        if item["item_type"] == "note_added"
+        and item["job_id"] == job["job_id"]
+        and item["metadata"].get("output_store_restore_state") == "needs_recovery"
+    ]
+    assert len(recovery_notes_again) == 1
 
 
-def test_project_outputs_compact_mode_omits_heavy_prompt_metadata(tmp_path) -> None:
+def test_project_outputs_omit_private_prompt_metadata_in_all_modes(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects(
         {
@@ -2392,7 +2419,8 @@ def test_project_outputs_compact_mode_omits_heavy_prompt_metadata(tmp_path) -> N
     compact_item = compact["items"][0]
 
     assert full["output_id"] == record.output_id
-    assert full["metadata"]["final_provider_prompt"]
+    assert "final_provider_prompt" not in full["metadata"]
+    assert "compiled_visual_direction" not in full["metadata"]
     assert compact["metadata"]["compact"] is True
     assert compact_item["output_id"] == record.output_id
     assert compact_item["thumbnail_url"]

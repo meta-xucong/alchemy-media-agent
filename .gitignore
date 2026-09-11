@@ -7,6 +7,16 @@
 .codex-local-env-path
 .codex-local-professional-catalog-path
 
+# Root-only release/staging scratch; keep nested .codex skill/source trees visible.
+/.codex-*
+/.controlled-validation/
+/.pytest-main-*/
+/codex-vps-current-project-audit.ps1
+/src_skeleton/uv.lock
+
+# Historical validation handoff retained locally, not a publishable document.
+/alchemy_creative_agent_3_0/docs/293_V3_UNIFIED_PROMPT_COMPRESSION_AND_BRAIN_FINALIZATION_SPEC.main-untracked-before-integration.md
+
 # Runtime-generated media, history, and logs
 .media_storage/
 .codex-longrun/

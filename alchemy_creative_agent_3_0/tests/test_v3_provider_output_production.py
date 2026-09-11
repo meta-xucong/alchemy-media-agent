@@ -2080,14 +2080,18 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
             {
                 "user_input": "Create a clean summer portrait social cover",
                 "scenario_selection": {"scenario_id": "general_creative", "preset_id": "social_cover"},
-                "metadata": {"requested_image_count": 1, "requested_image_size": "1024x1024"},
+                "metadata": {
+                    "requested_image_count": 1,
+                    "requested_image_size": "1024x1024",
+                    "require_real_images": True,
+                },
             }
         )
         generated = service.generate_job(
             created.job_id,
             {
                 "quality_mode": "standard",
-                "metadata": {"require_real_images": True, "requested_image_count": 1},
+                "metadata": {"requested_image_count": 1},
             },
         )
     finally:
@@ -2302,9 +2306,10 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
             created.job_id,
             {
                 "quality_mode": "standard",
-                # This mirrors Project Mode's normal later generate request:
-                # it cannot relax the frozen real-provider intent.
-                "metadata": {"requested_image_count": 1, "require_real_images": False},
+                # This mirrors Project Mode's normal later Generate request:
+                # it carries product options only and cannot relax the
+                # frozen real-provider intent persisted at create time.
+                "metadata": {"requested_image_count": 1},
             },
         )
     finally:
@@ -2318,7 +2323,7 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
     assert records[0].metadata.get("mock_contract_fixture") is not True
 
 
-def test_product_api_restores_generated_history_from_output_store(tmp_path) -> None:
+def test_product_api_withholds_legacy_output_store_restore_without_closure(tmp_path) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     record = store.save_base64_output(
         job_id="job_restored_from_outputs",
@@ -2335,10 +2340,12 @@ def test_product_api_restores_generated_history_from_output_store(tmp_path) -> N
     status = service.get_job("job_restored_from_outputs")
     history = service.list_history(limit=5)
 
-    assert status.status == "generated"
+    assert status.status == "blocked"
     assert status.asset_series[0].output_id == record.output_id
     assert status.asset_series[0].thumbnail_url.endswith("/thumbnail")
     assert status.candidates[0].metadata["output_id"] == record.output_id
     assert status.metadata["restored_from_output_store"] is True
+    assert status.metadata["output_store_restore_state"] == "needs_recovery"
     assert history.items[0].job_id == "job_restored_from_outputs"
+    assert history.items[0].status == "blocked"
     assert history.items[0].metadata["restored_from_output_store"] is True

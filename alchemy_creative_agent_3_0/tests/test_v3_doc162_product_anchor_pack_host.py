@@ -295,6 +295,7 @@ def _reverse_45_generation_request() -> AnchorGenerationRequest:
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
+            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1326,15 +1327,15 @@ def test_doc178_extension_views_keep_lineage_but_bound_provider_evidence_to_five
 
     assert V3ProductApiService._professional_anchor_provider_evidence_ids(
         view_role="reverse_three_quarter",
-        evidence_ids=[root, front, right25],
-    ) == [root, front, right25]
+        evidence_ids=[root, front, profile, right25],
+    ) == [root, front, profile, right25]
     assert V3ProductApiService._professional_anchor_provider_evidence_ids(
         view_role="rear_head",
         evidence_ids=[root, front, profile, reverse],
     ) == [root, profile, reverse]
 
 
-def test_doc257_reverse45_product_api_accepts_exact_three_evidence_ids(tmp_path) -> None:
+def test_doc257_reverse45_product_api_accepts_exact_four_evidence_ids(tmp_path) -> None:
     upload_store = V3UploadedAssetStore(tmp_path / "uploads")
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")
     service = V3ProductApiService(asset_store=upload_store, output_store=output_store)
@@ -1391,16 +1392,16 @@ def test_doc257_reverse45_product_api_accepts_exact_three_evidence_ids(tmp_path)
         request,
         view_role="reverse_three_quarter",
         capture_scope="character_card_face_identity",
-        reference_evidence_ids=[upload.asset_id, front.output_id, right25.output_id],
+        reference_evidence_ids=[upload.asset_id, front.output_id, profile.output_id, right25.output_id],
     )
 
-    assert [item["output_id"] for item in references] == [front.output_id, right25.output_id]
+    assert [item["output_id"] for item in references] == [front.output_id, profile.output_id, right25.output_id]
     with pytest.raises(ValueError, match="professional_anchor_reference_chain_invalid"):
         service._professional_anchor_reference_assets(  # noqa: SLF001
             request,
             view_role="reverse_three_quarter",
             capture_scope="character_card_face_identity",
-            reference_evidence_ids=[upload.asset_id, front.output_id, right25.output_id, profile.output_id],
+            reference_evidence_ids=[upload.asset_id, front.output_id, right25.output_id],
         )
 
 
@@ -1431,7 +1432,11 @@ def test_doc165_provider_failure_without_pixels_does_not_consume_stage_repair() 
         root_source_provenance=_root(),
     )
 
-    assert result.status == "review"
+    # The no-pixel attempt does not consume the stage repair budget, but it
+    # also cannot be counted as one of the three reviewed candidates required
+    # by the current formal receipt contract.
+    assert result.status == "blocked"
+    assert result.failure_codes == ["formal_face_view_requires_three_reviewed_candidates"]
     assert service.requests[0]["generation_request"]["metadata"] == {
         "max_visual_retry_attempts": 1
     }
@@ -1614,6 +1619,7 @@ def test_doc193_character_card_face_gate_ignores_pose_geometry_localization_scop
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
+            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1638,6 +1644,7 @@ def test_doc257_reverse_three_quarter_provider_reference_count_is_exact_five(
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
+            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1656,6 +1663,7 @@ def test_doc257_reverse_three_quarter_provider_reference_count_is_exact_five(
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
+            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1682,6 +1690,7 @@ def test_doc193_character_card_face_gate_still_requires_feature_detail_localizat
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
+            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1733,6 +1742,7 @@ def test_doc193_character_card_face_gate_still_requires_feature_detail_localizat
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
+            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1765,7 +1775,7 @@ def test_doc164_product_host_records_reference_parity_failure_without_crashing()
     )
 
     assert result.status == "blocked"
-    assert result.failure_codes == ["no_passing_front_candidate"]
+    assert result.failure_codes == ["formal_face_view_requires_three_reviewed_candidates"]
     assert len(result.generation_failures) == 3
     assert {
         item.failure_code for item in result.generation_failures

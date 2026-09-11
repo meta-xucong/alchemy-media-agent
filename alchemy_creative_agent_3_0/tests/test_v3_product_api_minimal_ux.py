@@ -32,6 +32,7 @@ from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import (
     ScenarioRuntimeResult,
     ScenarioRuntimeStatus,
 )
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, Platform
 
@@ -135,6 +136,7 @@ def _remote_finalizer_request_started_outcome() -> dict[str, object]:
             "stage": "provider_prompt_finalize",
             "provider_available": True,
             "remote_brain_request_started": True,
+            "remote_brain_request_acceptance": "dispatched",
             "response_started": False,
             "status": "blocked",
             "failure_family": "remote_brain_signoff",
@@ -170,6 +172,7 @@ def _remote_finalizer_preflight_unavailable_outcome() -> dict[str, object]:
             "stage": "provider_prompt_finalize",
             "provider_available": False,
             "remote_brain_request_started": False,
+            "remote_brain_request_acceptance": "not_started",
             "response_started": False,
             "status": "blocked",
             "failure_family": "remote_brain_signoff",
@@ -553,9 +556,13 @@ def test_interrupted_body_resume_runtime_failure_clears_stale_remote_readback() 
     service.job_store.save(record)
     service.scenario_runtime = _ProductApiRuntimeError(service.scenario_runtime)
 
-    resumed = service.generate_job(
+    resumed = service.generate_job_with_continuation(
         created.job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_interrupted_mcp_materialization": True}},
+        {"quality_mode": "strict"},
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            resume_interrupted_mcp_materialization=True,
+        ),
     )
     durable = service.job_store.get(created.job_id)
     assert durable is not None
@@ -591,9 +598,13 @@ def test_interrupted_body_resume_runtime_failure_does_not_change_acceptance_sema
     service.job_store.save(record)
     service.scenario_runtime = _ProductApiRuntimeError(service.scenario_runtime)
 
-    resumed = service.generate_job(
+    resumed = service.generate_job_with_continuation(
         created.job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_interrupted_mcp_materialization": True}},
+        {"quality_mode": "strict"},
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            resume_interrupted_mcp_materialization=True,
+        ),
     )
 
     assert resumed.status == ProductJobStatusValue.BLOCKED
@@ -640,9 +651,13 @@ def test_blocked_body_new_attempt_clears_stale_failure_before_generating_persist
 
     service.scenario_runtime = _ProductApiRuntimeError(service.scenario_runtime, observe_inflight_record)
 
-    resumed = service.generate_job(
+    resumed = service.generate_job_with_continuation(
         created.job_id,
-        {"quality_mode": "strict", "metadata": {"_v3_resume_interrupted_mcp_materialization": True}},
+        {"quality_mode": "strict"},
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            resume_interrupted_mcp_materialization=True,
+        ),
     )
 
     assert resumed.status == ProductJobStatusValue.BLOCKED
@@ -806,15 +821,16 @@ def test_public_job_status_redacts_nested_retry_execution_data_but_keeps_durable
     service, _, _ = _service("public_retry_redaction")
     created = service.create_job({"user_input": "Create one clean still-life image."})
 
-    public_status = service.generate_job(
+    public_status = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "force_visual_retry_issue_codes": ["visible_text_artifact"],
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            force_visual_retry_issue_codes=("visible_text_artifact",),
+            max_visual_retry_attempts=1,
+        ),
     )
     public_payload = public_status.model_dump_json()
     record = service.job_store.get(created.job_id)
@@ -846,14 +862,13 @@ def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_
         background_attempt_id="attempt_one",
         timeout_seconds=675,
     )
-    late_worker = service.generate_job(
+    late_worker = service.generate_job_with_continuation(
         created.job_id,
-        {
-            "metadata": {
-                "_v3_background_worker_claim": True,
-                "_v3_background_generation_attempt_id": "attempt_one",
-            }
-        },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            background_worker_claim=True,
+            background_generation_attempt_id="attempt_one",
+        ),
     )
 
     assert pending.status == ProductJobStatusValue.GENERATING
@@ -881,14 +896,13 @@ def test_direct_provider_background_timeout_is_terminal_and_stale_worker_cannot_
         background_attempt_id="direct_attempt_one",
         timeout_seconds=255,
     )
-    late_worker = service.generate_job(
+    late_worker = service.generate_job_with_continuation(
         created.job_id,
-        {
-            "metadata": {
-                "_v3_background_worker_claim": True,
-                "_v3_background_generation_attempt_id": "direct_attempt_one",
-            }
-        },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            background_worker_claim=True,
+            background_generation_attempt_id="direct_attempt_one",
+        ),
     )
 
     assert pending.status == ProductJobStatusValue.GENERATING
@@ -914,14 +928,13 @@ def test_background_worker_failure_is_terminal_without_claiming_a_provider_timeo
         background_attempt_id="invalid_request_attempt",
         failure_code="background_generation_request_invalid",
     )
-    late_worker = service.generate_job(
+    late_worker = service.generate_job_with_continuation(
         created.job_id,
-        {
-            "metadata": {
-                "_v3_background_worker_claim": True,
-                "_v3_background_generation_attempt_id": "invalid_request_attempt",
-            }
-        },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            background_worker_claim=True,
+            background_generation_attempt_id="invalid_request_attempt",
+        ),
     )
 
     assert failed.status == ProductJobStatusValue.BLOCKED
@@ -1257,6 +1270,7 @@ def test_remote_finalizer_lifecycle_distinguishes_brain_request_from_image_provi
         "stage": "provider_prompt_finalize",
         "provider_available": True,
         "remote_brain_request_started": True,
+        "remote_brain_request_acceptance": "dispatched",
         "response_started": False,
         "status": "blocked",
         "failure_family": "remote_brain_signoff",
@@ -1376,7 +1390,7 @@ def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_j
     recovered = service.get_job(created.job_id)
     history = service.list_history()
 
-    assert recovered.status == ProductJobStatusValue.GENERATED
+    assert recovered.status == ProductJobStatusValue.BLOCKED
     assert [candidate.output_id for candidate in recovered.candidates] == [persisted.output_id]
     assert recovered.metadata["partial_generation_recovery"] == {
         "status": "partial_output_preserved",
@@ -1394,7 +1408,7 @@ def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_j
     assert "OpenAI image reference generation failed" not in recovered_payload
     assert "internal-binding-must-not-leak" not in recovered_payload
     assert "provider_payload" not in recovered_payload
-    assert history.items[0].status == ProductJobStatusValue.GENERATED
+    assert history.items[0].status == ProductJobStatusValue.BLOCKED
     assert history.items[0].candidate_count == 1
 
 

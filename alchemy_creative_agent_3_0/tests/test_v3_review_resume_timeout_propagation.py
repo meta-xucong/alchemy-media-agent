@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import (
     GeneratedOutputResolution,
@@ -55,11 +55,12 @@ def test_review_only_resume_projects_explicit_vision_timeout_before_existing_res
         job_id,
         {
             "quality_mode": "strict",
-            "metadata": {
-                "_v3_resume_finalizing_review": True,
-                "vision_inspection_timeout_seconds": 180,
-            },
         },
+        _trusted_generate_continuation=GenerateContinuation(
+            job_id=job_id,
+            resume_finalizing_review=True,
+            vision_inspection_timeout_seconds=180,
+        ),
     )
 
     assert status.status == ProductJobStatusValue.BLOCKED

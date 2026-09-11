@@ -10,6 +10,7 @@ from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, Bra
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.output_resolver import GeneratedOutputResolver
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
@@ -926,15 +927,16 @@ def test_product_api_noncertified_doc55_signal_requires_manual_review_without_re
     service = _service(tmp_path)
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "post_generation_fake_issue_codes": ["visible_text_artifact"],
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            post_generation_fake_issue_codes=("visible_text_artifact",),
+            max_visual_retry_attempts=1,
+        ),
     )
 
     retry_summary = generated.metadata["visual_auto_retry"]
@@ -987,16 +989,17 @@ def test_product_api_low_confidence_doc55_signal_does_not_retry(tmp_path) -> Non
     service = _service(tmp_path)
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "post_generation_fake_issue_codes": ["visible_text_artifact"],
-                "post_generation_fake_confidence": 0.4,
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            post_generation_fake_issue_codes=("visible_text_artifact",),
+            post_generation_fake_confidence=0.4,
+            max_visual_retry_attempts=1,
+        ),
     )
 
     retry_summary = generated.metadata["visual_auto_retry"]
@@ -1023,15 +1026,16 @@ def test_doc118_verified_manual_review_withholds_final_delivery_and_replaces_pla
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "vision_inspection_mode": "hybrid",
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="hybrid",
+            max_visual_retry_attempts=1,
+        ),
     )
 
     review = generated.metadata["post_generation_review"]
@@ -1082,12 +1086,16 @@ def test_doc118_verified_warning_remains_eligible_for_final_delivery(tmp_path) -
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0},
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=0,
+        ),
     )
 
     assert generated.metadata["post_generation_review"]["inspections"][0]["status"] == "warning"
@@ -1114,15 +1122,16 @@ def test_product_api_real_vision_signal_triggers_retry_and_inspects_retry_output
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "vision_inspection_mode": "vision_model",
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=1,
+        ),
     )
 
     retry_summary = generated.metadata["visual_auto_retry"]
@@ -1155,15 +1164,16 @@ def test_product_api_hides_planning_only_review_warning_after_live_pixel_review(
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "vision_inspection_mode": "vision_model",
-                "max_visual_retry_attempts": 0,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=0,
+        ),
     )
 
     assert generated.status == ProductJobStatusValue.GENERATED
@@ -1207,12 +1217,16 @@ def test_product_api_review_context_preserves_exact_user_direction(tmp_path) -> 
         }
     )
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0},
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=0,
+        ),
     )
 
     assert generated.metadata["post_generation_review"]["inspections"][0]["status"] == "pass"
@@ -1248,15 +1262,16 @@ def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_fa
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "vision_inspection_mode": "vision_model",
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=1,
+        ),
     )
 
     review = generated.metadata["post_generation_review"]
@@ -1314,12 +1329,16 @@ def test_doc95_worse_retry_does_not_replace_stronger_initial_attempt(tmp_path) -
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 1},
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=1,
+        ),
     )
 
     record = service.job_store.get(created.job_id)
@@ -1459,15 +1478,16 @@ def test_product_api_provider_unavailable_does_not_retry(tmp_path) -> None:
     )
     created = _create_general_job(service)
 
-    generated = service.generate_job(
+    generated = service.generate_job_with_continuation(
         created.job_id,
         {
             "quality_mode": "standard",
-            "metadata": {
-                "vision_inspection_mode": "vision_model",
-                "max_visual_retry_attempts": 1,
-            },
         },
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="vision_model",
+            max_visual_retry_attempts=1,
+        ),
     )
 
     retry_summary = generated.metadata["visual_auto_retry"]

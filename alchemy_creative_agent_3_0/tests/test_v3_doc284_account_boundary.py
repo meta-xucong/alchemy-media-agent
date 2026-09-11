@@ -11,7 +11,12 @@ from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatu
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputRecord
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.schemas.models import CommercialAssetPack, PackagedAsset, PlanningResult
-from alchemy_creative_agent_3_0.app.project_mode.contracts import OutputRef, ProjectRecord, ProjectTimelineItem
+from alchemy_creative_agent_3_0.app.project_mode.contracts import (
+    OutputRef,
+    ProjectContextPackage,
+    ProjectRecord,
+    ProjectTimelineItem,
+)
 from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
 
 
@@ -519,11 +524,19 @@ def test_authenticated_context_rebuild_is_owner_scoped_without_replacing_private
 
     def fake_build(value, **kwargs):
         captured.update(kwargs)
-        return public_context
+        return ProjectContextPackage(
+            project_id=value.project_id,
+            context_version="context_owned_public",
+            goal_summary=value.short_summary,
+            created_at="2026-08-30T00:00:00+00:00",
+        )
 
     service._build_context = fake_build
 
-    assert service.get_project_context(project.project_id, owner_user_id=101) is public_context
+    result = service.get_project_context(project.project_id, owner_user_id=101)
+    assert result is not public_context
+    assert result.project_id == project.project_id
+    assert result.context_version == "context_owned_public"
     assert captured == {"owner_user_id": 101}
 
 
@@ -584,7 +597,7 @@ def test_project_output_projection_requires_both_job_and_output_owner():
     service._job_delivery_is_settled = lambda value: True
     service._public_output_review_projection = lambda *args: {}
     service._review_projection_allows_project_delivery = lambda value: True
-    service._delivery_annotations_for_records = lambda records: {
+    service._delivery_annotations_for_records = lambda records, **_kwargs: {
         record.output_id: {"delivery_state": "final_delivery"}
         for record in records
     }
