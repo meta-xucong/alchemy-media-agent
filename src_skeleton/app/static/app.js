@@ -3027,7 +3027,11 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
     renderV3History();
     return;
   }
-  if (requestingMore && (!v3State.projectsHasMore || !v3State.projectsNextCursor)) return;
+  if (requestingMore && (!v3State.projectsHasMore || !v3State.projectsNextCursor)) {
+    if (expandV3ProjectRenderWindow()) return;
+    if (!silent) showGlobalToast("没有更多项目可以加载了。", "warning");
+    return;
+  }
   if (!requestingMore && v3State.projectsLoaded && !force) {
     renderV3HomeTemplateChooser();
     renderV3Projects();
@@ -3036,6 +3040,8 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
   }
   if (requestingMore) {
     v3State.projectsLoadingMore = true;
+    renderV3Projects();
+    renderV3History();
   } else {
     v3State.projectsLoading = true;
     v3State.templateCatalogStatus = "loading";
@@ -3102,6 +3108,9 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
     v3State.projectsLoading = false;
     v3State.projectsLoadingMore = false;
     if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.disabled = false;
+    renderV3Projects();
+    renderV3History();
+    renderV3HeroHistory();
   }
 }
 
@@ -3323,6 +3332,19 @@ function appendV3ProjectItems(existingItems, incomingItems) {
       result.push(item);
     });
   return result;
+}
+
+function expandV3ProjectRenderWindow() {
+  const currentLimit = Math.max(1, Number(v3State.projectRenderLimit) || v3ProjectHomePageSize);
+  const loadedProjectCount = Array.isArray(v3State.projects) ? v3State.projects.length : 0;
+  const loadedHistoryCount = v3ProjectImageGroups().length;
+  const availableCount = Math.max(loadedProjectCount, loadedHistoryCount);
+  if (availableCount <= currentLimit) return false;
+  v3State.projectRenderLimit = Math.min(availableCount, currentLimit + v3ProjectHomePageSize);
+  renderV3Projects();
+  renderV3History();
+  renderV3HeroHistory();
+  return true;
 }
 
 function v3ProjectTime(item) {

@@ -84,6 +84,26 @@ def test_workspace_filtered_lists_keep_pagination_when_a_page_has_no_visible_ite
     assert "mobileV3State.projectsHasMore || groups.length > visibleGroups.length" in mobile_projects
 
 
+def test_load_more_expands_cached_items_and_resets_loading_button_state() -> None:
+    desktop = DESKTOP.read_text(encoding="utf-8")
+    mobile = MOBILE.read_text(encoding="utf-8")
+    desktop_loader = _function(desktop, "loadV3Projects", "loadV3History")
+    desktop_window = _function(desktop, "expandV3ProjectRenderWindow", "v3ProjectTime")
+    mobile_loader = _function(mobile, "loadMobileV3Projects", "setMobileV3LoadingLayer")
+    mobile_window = _function(mobile, "expandMobileV3ProjectRenderWindow", "mobileV3ProjectWithResponseMetadata")
+
+    assert "expandV3ProjectRenderWindow()" in desktop_loader
+    assert "v3State.projectsLoadingMore = false;" in desktop
+    assert "renderV3History();" in desktop_loader
+    assert "renderV3HeroHistory();" in desktop
+    assert "loadedHistoryCount = v3ProjectImageGroups().length" in desktop_window
+
+    assert "expandMobileV3ProjectRenderWindow()" in mobile_loader
+    assert "mobileV3State.projectsLoadingMore = false;" in mobile
+    assert "renderMobileV3ProjectCards();" in mobile_loader
+    assert "loadedHistoryCount = mobileV3ProjectGroupsFromProjects().length" in mobile_window
+
+
 def test_desktop_does_not_load_project_asset_bindings_for_standard_projects() -> None:
     source = DESKTOP.read_text(encoding="utf-8")
     background = _function(source, "syncV3ProjectDetailInBackground", "renderV3ProjectOpeningState")

@@ -3482,6 +3482,17 @@ function appendMobileV3ProjectItems(existingItems, incomingItems) {
   return result;
 }
 
+function expandMobileV3ProjectRenderWindow() {
+  const currentLimit = Math.max(1, Number(mobileV3State.projectRenderLimit) || mobileV3ProjectPageSize);
+  const loadedProjectCount = Array.isArray(mobileV3State.projects) ? mobileV3State.projects.length : 0;
+  const loadedHistoryCount = mobileV3ProjectGroupsFromProjects().length;
+  const availableCount = Math.max(loadedProjectCount, loadedHistoryCount);
+  if (availableCount <= currentLimit) return false;
+  mobileV3State.projectRenderLimit = Math.min(availableCount, currentLimit + mobileV3ProjectPageSize);
+  renderMobileV3ProjectCards();
+  return true;
+}
+
 function mobileV3ProjectWithResponseMetadata(project, payload) {
   if (!project) return project;
   const metadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
@@ -3612,13 +3623,18 @@ function applyMobileV3GenerationPreferences(project = mobileV3State.currentProje
 async function loadMobileV3Projects({ silent = true, force = false, loadMore = false } = {}) {
   const requestingMore = Boolean(loadMore && !force);
   if (mobileV3State.loading || mobileV3State.projectsLoadingMore) return;
-  if (requestingMore && (!mobileV3State.projectsHasMore || !mobileV3State.projectsNextCursor)) return;
+  if (requestingMore && (!mobileV3State.projectsHasMore || !mobileV3State.projectsNextCursor)) {
+    if (expandMobileV3ProjectRenderWindow()) return;
+    if (!silent) updateMobileV3Status("没有更多项目可以加载了。");
+    return;
+  }
   if (!requestingMore && mobileV3State.loaded && !force) {
     renderMobileV3ProjectCards();
     return;
   }
   if (requestingMore) {
     mobileV3State.projectsLoadingMore = true;
+    renderMobileV3ProjectCards();
   } else {
     mobileV3State.loading = true;
     mobileV3State.projectsLoadError = "";
@@ -3726,6 +3742,7 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
     mobileV3State.loading = false;
     mobileV3State.projectsLoadingMore = false;
     setMobileV3LoadingLayer(false);
+    renderMobileV3ProjectCards();
     if (mobileV3State.projects.length && !mobileV3State.projectsLoadError && !mobileV3State.outputError) {
       updateMobileV3Status(mobileV3ProjectCountLabel(mobileV3VisibleProjects().length));
     }
