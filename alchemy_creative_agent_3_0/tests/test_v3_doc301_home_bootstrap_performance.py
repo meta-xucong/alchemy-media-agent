@@ -211,6 +211,18 @@ def test_home_output_loader_allows_small_preview_limit_without_global_minimum() 
     assert "surfaceQuery" in loader
 
 
+def test_desktop_output_request_dedupe_is_scoped_to_semantic_request_key() -> None:
+    source = DESKTOP.read_text(encoding="utf-8")
+    loader = source.split("async function loadV3ProjectOutputs", 1)[1].split(
+        "function clearV3PendingUploads", 1
+    )[0]
+
+    assert "projectOutputsRequestKey" in loader
+    assert 'normalizedSurface || "full"' in loader
+    assert "String(boundedLimit)" in loader
+    assert "v3State.projectOutputsRequestKey === requestKey" in loader
+
+
 def test_output_store_reuses_warm_record_index_and_rechecks_changed_media(tmp_path: Path) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     record = store.save_base64_output(

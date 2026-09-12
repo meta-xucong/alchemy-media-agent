@@ -105,6 +105,11 @@ Direct V3 route restoration must not create a second catalog request while
 the shell bootstrap is active. The auth/session cookie must be established
 before a direct V3 bootstrap can issue the protected catalog request.
 
+Output-request deduplication is semantic: the active request key includes the
+project scope, surface, and bounded limit. A global home preview must never
+coalesce a project-scoped full-history request, even when both requests share
+the same session owner.
+
 ### 4.4 Read-cache contract
 
 The output store may reuse a fully parsed record index when the storage root
@@ -162,6 +167,7 @@ review, owner, or retry predicates and it is never persisted as Job state.
 | R9 | Final fixed version is independently audited before GitHub/VPS delivery | separate read-only audit receipt |
 | R10 | A partial home cover cannot masquerade as complete history; opening history loads the full project surface | desktop/mobile contract test and scoped-history regression |
 | R11 | Global delivery and review reads share one request-scoped Job/output snapshot | instrumented snapshot regression |
+| R12 | A home preview cannot swallow a concurrently opened project full-history request | request-key contract and browser regression |
 
 ## 7. Delivery gates
 

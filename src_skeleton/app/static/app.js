@@ -392,6 +392,7 @@ const v3State = {
   imageHistoryError: "",
   projectOutputsRequest: null,
   projectOutputsRequestOwner: null,
+  projectOutputsRequestKey: "",
   activeHistoryProjectId: "",
   uploadFingerprints: {},
   progressStartedAt: null,
@@ -3134,11 +3135,23 @@ async function loadV3ProjectOutputs({
 } = {}) {
   const scopedProjectId = projectId || v3State.currentProject?.project_id || "";
   const requestOwner = sessionReceipt || null;
+  const normalizedSurface = String(surface || "").trim().toLowerCase();
+  const minimumLimit = normalizedSurface === "home_preview" ? 1 : 12;
+  const boundedLimit = Math.max(minimumLimit, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
+  // A global home preview and a project-scoped full history may overlap. Only
+  // coalesce requests with the same semantic scope/surface/limit; otherwise a
+  // home preview can swallow the full history request opened by the user.
+  const requestKey = [
+    String(scopedProjectId || ""),
+    normalizedSurface || "full",
+    String(boundedLimit),
+  ].join("\u0001");
   if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
   if (
     v3State.imageHistoryLoading
     && v3State.projectOutputsRequest
     && v3State.projectOutputsRequestOwner === requestOwner
+    && v3State.projectOutputsRequestKey === requestKey
   ) {
     if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;
     return [];
@@ -3164,14 +3177,12 @@ async function loadV3ProjectOutputs({
   let requestPromise = null;
   try {
     const cacheBust = force ? `&t=${Date.now()}` : "";
-    const normalizedSurface = String(surface || "").trim().toLowerCase();
-    const minimumLimit = normalizedSurface === "home_preview" ? 1 : 12;
-    const boundedLimit = Math.max(minimumLimit, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
     const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
     const surfaceQuery = normalizedSurface ? `&surface=${encodeURIComponent(normalizedSurface)}` : "";
     requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${cacheBust}`);
     v3State.projectOutputsRequest = requestPromise;
     v3State.projectOutputsRequestOwner = requestOwner;
+    v3State.projectOutputsRequestKey = requestKey;
     const payload = await requestPromise;
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     const items = Array.isArray(payload.items) ? payload.items : [];
@@ -3221,10 +3232,12 @@ async function loadV3ProjectOutputs({
     if (
       v3State.projectOutputsRequest === requestPromise
       && v3State.projectOutputsRequestOwner === requestOwner
+      && v3State.projectOutputsRequestKey === requestKey
     ) {
       v3State.imageHistoryLoading = false;
       v3State.projectOutputsRequest = null;
       v3State.projectOutputsRequestOwner = null;
+      v3State.projectOutputsRequestKey = "";
       if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
     }
   }
@@ -7012,6 +7025,7 @@ function v3DetachProjectOutputRequestOwner() {
   v3State.imageHistoryLoading = false;
   v3State.projectOutputsRequest = null;
   v3State.projectOutputsRequestOwner = null;
+  v3State.projectOutputsRequestKey = "";
   if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
 }
 

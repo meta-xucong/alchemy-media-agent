@@ -282,6 +282,50 @@ def test_desktop_releases_project_mask_after_first_preview_while_history_is_slow
             browser.close()
 
 
+def test_desktop_home_preview_does_not_swallow_scoped_history_request() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            requests = page.evaluate(
+                """
+                async () => {
+                  const requests = [];
+                  const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+                  window.fetch = async (input) => {
+                    const url = String(input);
+                    requests.push(url);
+                    await delay(url.includes("surface=home_preview") ? 160 : 20);
+                    return new Response(JSON.stringify({ items: [], review_items: [] }), { status: 200 });
+                  };
+                  v3State.currentProject = null;
+                  v3State.imageHistoryLoading = false;
+                  v3State.projectOutputsRequest = null;
+                  v3State.projectOutputsRequestOwner = null;
+                  v3State.projectOutputsRequestKey = "";
+                  const homePreview = loadV3ProjectOutputs({
+                    force: true,
+                    limit: 1,
+                    surface: "home_preview",
+                  });
+                  await delay(10);
+                  const scopedHistory = loadV3ProjectOutputs({
+                    force: true,
+                    limit: 120,
+                    projectId: "race-project",
+                  });
+                  await Promise.all([homePreview, scopedHistory]);
+                  return requests;
+                }
+                """,
+            )
+            assert len(requests) == 2
+            assert any("surface=home_preview" in url and "project_id=" not in url for url in requests)
+            assert any("project_id=race-project" in url and "surface=home_preview" not in url for url in requests)
+        finally:
+            browser.close()
+
+
 def test_mobile_releases_project_mask_after_first_preview_while_history_is_slow() -> None:
     project = {
         "project_id": "mobile-progressive-project",
