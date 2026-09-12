@@ -25,6 +25,7 @@ from starlette.concurrency import run_in_threadpool
 from alchemy_creative_agent_3_0.app.app_shell.routes import API_NAMESPACE
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
 from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import (
     V3ProductRouteHandlers,
@@ -120,6 +121,24 @@ _v3_background_generation_jobs: dict[str, str] = {}
 _v3_background_generation_watchdogs: dict[str, threading.Timer] = {}
 _v3_background_generation_jobs_lock = threading.Lock()
 _v3_background_generation_runtime_id = uuid4().hex
+_V3_BACKGROUND_CONTINUATION_METADATA_FIELDS = frozenset(
+    {
+        # This is the only browser-facing auto-generation switch that is
+        # allowed to cross the worker seam.  It only lowers the bounded visual
+        # retry budget; all other retry/review controls remain server-owned.
+        "disable_visual_auto_retry",
+    }
+)
+_V3_BACKGROUND_SERVER_MARKERS = frozenset(
+    {
+        "require_real_images",
+        "real_image_generation",
+        "_v3_background_worker_claim",
+        "_v3_background_generation_attempt_id",
+        "_v3_resume_interrupted_mcp_materialization",
+        "_v3_resume_finalizing_review",
+    }
+)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
@@ -764,10 +783,102 @@ def _recover_v3_interrupted_project_planning_operations() -> int:
         return 0
 
 
-def _run_v3_project_generation_background(project_id: str, job_id: str, payload: dict, background_attempt_id: str):
+def _v3_background_generation_payload_and_continuation(
+    payload: dict | None,
+    *,
+    job_id: str,
+    background_attempt_id: str,
+) -> tuple[dict, GenerateContinuation]:
+    """Split a browser-shaped auto request from its trusted worker claim.
+
+    The create/project flow persists real-render intent on the Job.  The
+    follow-up Generate call therefore carries only product options; lifecycle
+    claims and review/retry runtime controls enter through the explicit typed
+    continuation seam.  Keeping this split here makes the in-process worker
+    safe without weakening the public Generate boundary.
+    """
+
+    raw_payload = dict(payload or {})
+    raw_metadata = raw_payload.get("metadata")
+    if raw_metadata is None:
+        metadata: dict = {}
+    elif isinstance(raw_metadata, dict):
+        metadata = dict(raw_metadata)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_v3_request",
+                "message": "Background generation metadata must be an object.",
+            },
+        )
+
+    continuation_values: dict = {
+        "job_id": str(job_id),
+        "background_worker_claim": True,
+        "background_generation_attempt_id": str(background_attempt_id),
+    }
+    for key in _V3_BACKGROUND_CONTINUATION_METADATA_FIELDS:
+        if key in metadata:
+            continuation_values[key] = metadata.pop(key)
+    for key in _V3_BACKGROUND_SERVER_MARKERS:
+        metadata.pop(key, None)
+
+    product_payload = dict(raw_payload)
+    if metadata:
+        product_payload["metadata"] = metadata
+    else:
+        product_payload.pop("metadata", None)
+
+    try:
+        generate_request = GenerateJobRequest.model_validate(product_payload)
+        V3ProductApiService._assert_external_generate_metadata_clean(generate_request)
+        continuation = GenerateContinuation.model_validate(continuation_values)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_v3_request",
+                "message": "Background generation continuation is invalid.",
+            },
+        ) from exc
+    return (
+        generate_request.model_dump(mode="json", exclude_unset=True),
+        continuation,
+    )
+
+
+def _run_v3_project_generation_background(
+    project_id: str,
+    job_id: str,
+    payload: dict,
+    background_attempt_id: str,
+    continuation: GenerateContinuation | None = None,
+):
     key = f"{project_id}:{job_id}"
     try:
-        _run_v3_handler(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
+        if continuation is None:
+            generation_payload, continuation = _v3_background_generation_payload_and_continuation(
+                payload,
+                job_id=job_id,
+                background_attempt_id=background_attempt_id,
+            )
+        elif not (
+            isinstance(continuation, GenerateContinuation)
+            and continuation.job_id == str(job_id)
+            and continuation.background_worker_claim is True
+            and continuation.background_generation_attempt_id == str(background_attempt_id)
+        ):
+            raise ValueError("background_generation_continuation_binding_invalid")
+        else:
+            generation_payload = dict(payload or {})
+        _run_v3_handler(
+            v3_route_handlers.post_project_job_generate,
+            project_id,
+            job_id,
+            generation_payload,
+            trusted_continuation=continuation,
+        )
     except Exception as exc:
         detail = getattr(exc, "detail", None)
         detail_code = str(detail.get("code") or "") if isinstance(detail, dict) else ""
@@ -978,6 +1089,11 @@ def _timeout_v3_project_generation_background(
 def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
     key = f"{project_id}:{job_id}"
     background_attempt_id = uuid4().hex
+    worker_payload, continuation = _v3_background_generation_payload_and_continuation(
+        payload,
+        job_id=job_id,
+        background_attempt_id=background_attempt_id,
+    )
     timeout_seconds, timeout_owner = _v3_background_generation_timeout_plan(job_id, payload)
     with _v3_background_generation_jobs_lock:
         if key in _v3_background_generation_jobs:
@@ -998,14 +1114,6 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             if _v3_background_generation_jobs.get(key) == background_attempt_id:
                 _v3_background_generation_jobs.pop(key, None)
         raise
-    worker_payload = {
-        **dict(payload or {}),
-        "metadata": {
-            **dict((payload or {}).get("metadata") or {}),
-            "_v3_background_worker_claim": True,
-            "_v3_background_generation_attempt_id": background_attempt_id,
-        },
-    }
     watchdog = None
     if timeout_seconds is not None:
         watchdog = threading.Timer(
@@ -1025,6 +1133,7 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             job_id,
             worker_payload,
             background_attempt_id,
+            continuation,
         )
     except Exception:
         with _v3_background_generation_jobs_lock:
@@ -1150,8 +1259,10 @@ def _v3_generation_payload_without_transport_controls(payload: dict) -> dict:
         # Preserve the public request's sparse shape: the service supplies
         # defaults, while the background worker should not receive a synthetic
         # empty metadata object merely because the route validated it.
-        return GenerateJobRequest.model_validate(product_payload).model_dump(mode="json", exclude_unset=True)
-    except ValidationError as exc:
+        generate_request = GenerateJobRequest.model_validate(product_payload)
+        V3ProductApiService._assert_external_generate_metadata_clean(generate_request)
+        return generate_request.model_dump(mode="json", exclude_unset=True)
+    except (ValidationError, ValueError) as exc:
         raise HTTPException(
             status_code=400,
             detail={"code": "invalid_v3_request", "message": str(exc)},

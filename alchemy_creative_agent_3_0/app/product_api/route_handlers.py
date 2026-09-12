@@ -23,6 +23,7 @@ from ..visual_assets.character_card import BodySilhouettePublicRequest
 from ..visual_assets.character_card import CharacterCardStageHost
 from ..visual_assets.character_card import character_card_formal_slot_receipt_public_summary
 from ..visual_assets.character_card import character_card_slot_success_receipt_public_summary
+from .contracts import GenerateContinuation
 from .service import V3ProductApiService
 
 
@@ -859,9 +860,21 @@ class V3ProductRouteHandlers:
             role_id,
         ).model_dump(mode="json")
 
-    def post_project_job_generate(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def post_project_job_generate(
+        self,
+        project_id: str,
+        job_id: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        trusted_continuation: GenerateContinuation | None = None,
+    ) -> dict[str, Any]:
         return self.project_service.public_job_status(
-            self.project_service.generate_project_job(project_id, job_id, payload or {})
+            self.project_service.generate_project_job(
+                project_id,
+                job_id,
+                payload or {},
+                _trusted_generate_continuation=trusted_continuation,
+            )
         ).model_dump(mode="json")
 
     def mark_project_job_generating(

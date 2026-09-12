@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from alchemy_creative_agent_3_0.app.project_mode.store import InMemoryProjectStore, PersistentProjectStore
 from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V3UploadedAssetStore
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import InMemoryProductJobStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
@@ -1062,6 +1063,81 @@ def test_v3_project_generate_rejects_invalid_payload_before_background_claim(tmp
     current = client.get(f"/api/v3/creative-agent/jobs/{job['job_id']}").json()
     assert current["status"] == "planned"
     assert "generation_lifecycle_failure" not in current["metadata"]
+
+
+def test_v3_project_generate_rejects_server_owned_metadata_before_background_claim(tmp_path, monkeypatch) -> None:
+    _install_isolated_v3_handlers(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    project = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one neutral test image"},
+    ).json()["project"]
+    job = client.post(
+        f"/api/v3/creative-agent/projects/{project['project_id']}/jobs",
+        json={"template_id": "general_template", "user_input": "Create one neutral test image"},
+    ).json()
+
+    def unexpected_background_start(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("server-owned metadata must not claim a background worker")
+
+    monkeypatch.setattr(app_main, "_start_v3_project_generation_background", unexpected_background_start)
+    rejected = client.post(
+        f"/api/v3/creative-agent/projects/{project['project_id']}/jobs/{job['job_id']}/generate",
+        json={"metadata": {"require_real_images": True}},
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"]["code"] == "invalid_v3_request"
+    current = client.get(f"/api/v3/creative-agent/jobs/{job['job_id']}").json()
+    assert current["status"] == "planned"
+    assert "generation_lifecycle_failure" not in current["metadata"]
+
+
+def test_v3_background_worker_uses_clean_payload_and_bound_typed_continuation(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict, GenerateContinuation | None]] = []
+
+    class CaptureHandler:
+        def post_project_job_generate(
+            self,
+            project_id: str,
+            job_id: str,
+            payload: dict,
+            *,
+            trusted_continuation: GenerateContinuation | None = None,
+        ) -> dict:
+            calls.append((project_id, job_id, payload, trusted_continuation))
+            return {}
+
+    monkeypatch.setattr(app_main, "v3_route_handlers", CaptureHandler())
+    app_main._run_v3_project_generation_background(
+        "project_worker_boundary",
+        "job_worker_boundary",
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "require_real_images": True,
+                "requested_image_count": 1,
+                "disable_visual_auto_retry": True,
+                "_v3_background_worker_claim": "forged",
+                "_v3_background_generation_attempt_id": "forged",
+            },
+        },
+        "attempt_worker_boundary",
+    )
+
+    assert len(calls) == 1
+    project_id, job_id, payload, continuation = calls[0]
+    assert (project_id, job_id) == ("project_worker_boundary", "job_worker_boundary")
+    assert payload == {
+        "quality_mode": "standard",
+        "metadata": {"requested_image_count": 1},
+    }
+    assert isinstance(continuation, GenerateContinuation)
+    assert continuation.job_id == "job_worker_boundary"
+    assert continuation.background_worker_claim is True
+    assert continuation.background_generation_attempt_id == "attempt_worker_boundary"
+    assert continuation.disable_visual_auto_retry is True
 
 
 def test_v3_auto_generate_real_render_intent_reaches_project_planning(tmp_path, monkeypatch) -> None:
