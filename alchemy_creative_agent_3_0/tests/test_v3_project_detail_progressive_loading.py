@@ -254,6 +254,10 @@ def test_desktop_releases_project_mask_after_first_preview_while_history_is_slow
                       url.includes("/timeline") || url.includes("surface=delivery_preview") || url.includes("/visual-asset-bindings") ||
                       (url.includes("/projects/progressive-project") && !url.includes("view=summary"))
                     ).length,
+                    backgroundTimelineRequests: requests.filter(({ url }) => url.includes("/timeline")).length,
+                    backgroundFullOutputRequests: requests.filter(({ url }) =>
+                      url.includes("/project-outputs") && !url.includes("surface=delivery_preview")
+                    ).length,
                   };
                   const legacyStarted = performance.now();
                   await Promise.all([
@@ -270,7 +274,9 @@ def test_desktop_releases_project_mask_after_first_preview_while_history_is_slow
             assert result["maskHidden"] is True
             assert result["firstPreviewCount"] == 1
             assert result["opening"] is False
-            assert result["backgroundRequests"] >= 3
+            assert result["backgroundRequests"] >= 2
+            assert result["backgroundTimelineRequests"] >= 1
+            assert result["backgroundFullOutputRequests"] >= 1
             assert result["releasedMs"] < result["legacyMs"] * 0.5
         finally:
             browser.close()
