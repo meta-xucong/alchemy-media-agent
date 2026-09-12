@@ -9860,7 +9860,8 @@ async function createV3Job() {
         return;
       }
     }
-    updateV3Notice(v3IsTerminalJob(created) ? "本次未获得可交付图片。项目和原始参考已保留，请确认需求后再次尝试。" : "已理解需求，可以继续生成图片。", v3IsTerminalJob(created) ? "warning" : "success");
+    const terminalFailure = v3ProviderFailureUserMessage(created);
+    updateV3Notice(v3IsTerminalJob(created) ? (terminalFailure || "本次未获得可交付图片。项目和原始参考已保留，请确认需求后再次尝试。") : "已理解需求，可以继续生成图片。", v3IsTerminalJob(created) ? "warning" : "success");
   } catch (error) {
     if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     if (v3State.selectedScenario === "ecommerce") {

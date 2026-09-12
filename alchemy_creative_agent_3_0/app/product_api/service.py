@@ -11716,6 +11716,7 @@ class V3ProductApiService:
             for key in (
                 "provider_failure_retry",
                 "provider_failure_retry_exhausted",
+                "provider_execution",
                 "generation_lifecycle_timeout",
                 "generation_lifecycle_failure",
                 "background_generation_watchdog",

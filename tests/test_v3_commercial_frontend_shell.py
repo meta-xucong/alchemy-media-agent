@@ -270,6 +270,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "v3JobHasTerminalOutcome" in script.text
     assert "v3ReviewOnlyJobImageItems" in script.text
     assert "高级查看：质量复检" in script.text
+    assert "const terminalFailure = v3ProviderFailureUserMessage(created);" in script.text
+    assert "上游在返回图片前阻断了本次请求" in script.text
     assert ".v3-field-title-row" in styles.text
     assert ".v3-generation-settings" in styles.text
     assert ".v3-aspect-segments" in styles.text

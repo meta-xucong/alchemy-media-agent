@@ -63,3 +63,64 @@ def test_general_safe_status_keeps_allowlisted_review_projection_only(monkeypatc
     assert "retry_patch" not in public_text
     assert "private provider detail" not in public_text
     assert "private repair prompt" not in public_text
+
+
+def test_general_phase3_safe_status_exposes_policy_block_operation_projection(monkeypatch) -> None:
+    service = ecommerce_test_service()
+    monkeypatch.setattr(
+        service,
+        "_doc270_general_activation_public_state",
+        lambda _record: {"state": "activated_resolved"},
+    )
+    created = service.create_job({"user_input": "Create one editorial cover."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.status = ProductJobStatusValue.BLOCKED
+    record.request.metadata["provider_failure_retry"] = {
+        "executed_count": 0,
+        "max_attempts": 2,
+        "fresh_upstream_requests": 1,
+        "final_status": "failed",
+        "final_classification": "non_retryable_provider_failure",
+        "final_failure_code": "provider_policy_blocked",
+        "attempts": [
+            {
+                "attempt": 1,
+                "status": "failed",
+                "classification": "non_retryable_provider_failure",
+                "failure_code": "provider_policy_blocked",
+                "retryable": False,
+            }
+        ],
+        "reference_input_execution": {
+            "schema_version": "v3_reference_input_execution_v1",
+            "delivery_binding_id": "private-binding",
+            "operation": "image_generate",
+            "reference_count": 0,
+            "operation_outcome": "failed",
+            "failure_code": "provider_policy_blocked",
+            "safe_message": "The provider blocked this request before pixels.",
+        },
+    }
+
+    public = service._doc270_general_phase3_safe_status(record)  # noqa: SLF001
+
+    assert public is not None
+    assert public.metadata["provider_execution"] == {
+        "operation_count": 1,
+        "automatic_delivery_available": False,
+        "manual_confirmation_required": False,
+        "operations": [
+            {
+                "operation": "image_generate",
+                "reference_execution_state": "blocked",
+                "reference_count": 0,
+                "automatic_delivery_available": False,
+                "manual_confirmation_required": False,
+                "safe_reason_code": "provider_policy_blocked",
+            }
+        ],
+    }
+    public_text = public.model_dump_json()
+    assert "private-binding" not in public_text
+    assert "safe_message" not in public_text
