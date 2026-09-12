@@ -4085,6 +4085,11 @@ button.v2-live-preview:focus-visible {
   gap: 16px;
 }
 
+.v3-library-panel[hidden],
+.v3-project-visual-asset-panel[hidden] {
+  display: none !important;
+}
+
 .v3-visual-asset-hub-card {
   align-content: start;
 }

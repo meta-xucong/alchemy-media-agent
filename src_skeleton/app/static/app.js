@@ -317,6 +317,7 @@ const v3State = {
   projectsLoadingMore: false,
   projectsNextCursor: null,
   projectsHasMore: false,
+  projectsTotal: null,
   projectsLoadError: "",
   projectRenderLimit: v3ProjectHomePageSize,
   currentProject: null,
@@ -1772,7 +1773,16 @@ function setV3WorkspaceMenuOpen(open) {
 }
 
 function v3ProjectUsesProfessionalWorkspace(project) {
-  return String(project?.metadata?.v3_workspace || "").trim() === "professional";
+  return v3ProjectWorkspace(project) === "professional";
+}
+
+function v3ProjectWorkspace(project) {
+  const projectMetadata = project?.metadata && typeof project.metadata === "object" ? project.metadata : {};
+  const summaryMetadata = project?.memory_summary?.metadata && typeof project.memory_summary.metadata === "object"
+    ? project.memory_summary.metadata
+    : {};
+  const workspace = String(projectMetadata.v3_workspace ?? summaryMetadata.v3_workspace ?? "").trim().toLowerCase();
+  return workspace === "professional" ? "professional" : "standard";
 }
 
 function syncV3WorkspaceRoute() {
@@ -1897,6 +1907,10 @@ async function initV3Shell({ force = false } = {}) {
     );
     v3State.projectsNextCursor = payload.next_cursor || null;
     v3State.projectsHasMore = Boolean(payload.has_more && v3State.projectsNextCursor);
+    const serverTotal = Number(payload.total);
+    v3State.projectsTotal = Number.isFinite(serverTotal) && serverTotal >= 0
+      ? Math.floor(serverTotal)
+      : v3State.projects.length;
     v3State.projectsLoadError = "";
     v3State.projectRenderLimit = v3ProjectHomePageSize;
     v3State.projectsLoaded = true;
@@ -1935,6 +1949,7 @@ async function initV3Shell({ force = false } = {}) {
     v3State.projects = [];
     v3State.projectsNextCursor = null;
     v3State.projectsHasMore = false;
+    v3State.projectsTotal = null;
     v3State.projectsLoadError = friendlyError(error);
     clearV3LocalCaches();
     v3State.templates = [];
@@ -2057,6 +2072,10 @@ function renderV3ViewState() {
   if (els.v3HomeView) els.v3HomeView.hidden = isWorkspace;
   if (els.v3WorkspaceView) els.v3WorkspaceView.hidden = !isWorkspace;
   renderV3WorkspaceMode();
+  // A project switch clears currentProject before the network response. Keep
+  // the asset panel fail-closed during that transition so a previous
+  // Professional project cannot bleed into a Standard project entry.
+  renderV3ProjectVisualAssetPanel();
 }
 
 function v3ScenarioCanCreate(scenarioId) {
@@ -3025,6 +3044,7 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
     if (force) {
       v3State.projectsNextCursor = null;
       v3State.projectsHasMore = false;
+      v3State.projectsTotal = null;
       v3State.projectRenderLimit = v3ProjectHomePageSize;
     }
   }
@@ -3048,6 +3068,10 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
     }
     v3State.projectsNextCursor = payload.next_cursor || null;
     v3State.projectsHasMore = Boolean(payload.has_more && v3State.projectsNextCursor);
+    const serverTotal = Number(payload.total);
+    v3State.projectsTotal = Number.isFinite(serverTotal) && serverTotal >= 0
+      ? Math.floor(serverTotal)
+      : v3State.projects.length;
     v3State.projectsLoadError = "";
     v3State.projectsLoaded = true;
     writeV3LocalProjects(v3State.projects);
@@ -3063,6 +3087,7 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
       v3State.projects = [];
       v3State.projectsNextCursor = null;
       v3State.projectsHasMore = false;
+      v3State.projectsTotal = null;
       v3State.projectsLoadError = friendlyError(error);
       v3State.projectsLoaded = true;
       clearV3LocalCaches();
@@ -3315,7 +3340,14 @@ function saveV3ProjectSnapshot(project) {
 
 function v3ProjectSummaryFromProject(project) {
   if (!project?.project_id) return null;
-  if (project.memory_summary?.project_id) return project.memory_summary;
+  if (project.memory_summary?.project_id) {
+    return {
+      ...project.memory_summary,
+      // Keep the list projection limited to the one safe routing fact.  Old
+      // cached summaries may not have it, so normalize them fail-closed here.
+      metadata: { v3_workspace: v3ProjectWorkspace(project) },
+    };
+  }
   const templateId = v3ProjectTemplateId(project);
   const referenceGroups = v3ProjectReferenceGroups(project);
   const selectedRefs = v3SelectedOutputRefs(project);
@@ -3343,6 +3375,7 @@ function v3ProjectSummaryFromProject(project) {
     last_action_label: "项目已创建",
     updated_at: project.updated_at || new Date().toISOString(),
     next_suggested_actions: ["继续同风格生成", "上传新参考图继续", "挑选满意结果"],
+    metadata: { v3_workspace: v3ProjectWorkspace(project) },
   };
 }
 
@@ -3425,7 +3458,9 @@ async function createV3Project() {
       }
     }
     await loadV3ProjectTimeline(v3State.currentProject?.project_id, { silent: true });
-    await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
+    if (v3State.workspaceMode === "professional") {
+      await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
+    }
     if (createBindingApplied) {
       await refreshV3CurrentProject({ silent: true });
     }
@@ -3470,12 +3505,24 @@ function renderV3Projects() {
   const items = [...v3State.projects]
     .filter((item) => item?.status !== "archived")
     .filter((item) => v3ProjectUsesProfessionalWorkspace(item) === professional);
-  if (els.v3ProjectCount) els.v3ProjectCount.textContent = String(items.length);
+  if (els.v3ProjectCount) {
+    const loadedCount = Array.isArray(v3State.projects) ? v3State.projects.length : 0;
+    const serverTotal = Number(v3State.projectsTotal);
+    const paginationHint = v3State.projectsHasMore
+      ? (Number.isFinite(serverTotal) && serverTotal > loadedCount
+        ? ` · 已载入 ${loadedCount}/${Math.floor(serverTotal)}`
+        : " · 还有更多")
+      : "";
+    els.v3ProjectCount.textContent = `${items.length} 个项目${paginationHint}`;
+  }
   els.v3ProjectList.innerHTML = "";
-  els.v3ProjectList.classList.toggle("empty-v3-list", items.length === 0);
-  if (!items.length) {
+  els.v3ProjectList.classList.toggle("empty-v3-list", items.length === 0 && !v3State.projectsHasMore);
+  if (!items.length && !v3State.projectsHasMore) {
     els.v3ProjectList.textContent = professional ? "还没有专业项目。先建立视觉资产，或选择模板创建第一个专业项目。" : "还没有 V3 项目";
     return;
+  }
+  if (!items.length) {
+    els.v3ProjectList.textContent = "当前页暂时没有这个工作区的项目，继续加载查看更多。";
   }
   items.slice(0, v3State.projectRenderLimit).forEach((item) => {
     const card = document.createElement("article");
@@ -3529,14 +3576,15 @@ function renderV3History() {
   const visibleGroups = groups.slice(0, v3State.projectRenderLimit);
   if (els.v3HistoryCount) els.v3HistoryCount.textContent = `${groups.length} 个项目`;
   els.v3HistoryList.innerHTML = "";
-  els.v3HistoryList.classList.toggle("empty-v3-list", groups.length === 0);
+  els.v3HistoryList.classList.toggle("empty-v3-list", groups.length === 0 && !v3State.projectsHasMore);
   if (!groups.length) {
     els.v3HistoryList.textContent = v3State.projectsLoading
       ? "正在读取最近项目..."
       : v3State.imageHistoryError
         ? "项目图片暂时无法读取，请重试。"
-        : "还没有项目";
-    return;
+        : v3State.projectsHasMore
+          ? "当前页暂时没有这个工作区的项目，继续加载查看更多。"
+          : "还没有项目";
   }
   visibleGroups.forEach((group) => {
     const previewUrl = v3OutputStrictThumbImageUrl(group.latestItem || v3ProjectThumbnailItem(group.project));
@@ -3568,7 +3616,7 @@ function renderV3History() {
     `;
     els.v3HistoryList.appendChild(card);
   });
-  if (groups.length > visibleGroups.length) {
+  if (v3State.projectsHasMore || groups.length > visibleGroups.length) {
     const loadMore = document.createElement("article");
     loadMore.className = "v3-history-card v3-history-project-card v3-history-load-more-card";
     loadMore.innerHTML = `
@@ -3677,12 +3725,15 @@ function v3ProjectGroupFromProject(project, outputGroup = null) {
 
 function v3ProjectImageGroups(items = v3State.imageHistory) {
   const outputGroups = v3OutputProjectGroupMap(items);
+  const professional = v3State.workspaceMode === "professional";
   const projects = (Array.isArray(v3State.projects) ? v3State.projects : [])
     .filter((project) => project?.project_id && project.status !== "archived" && !v3ExpiredFailureOnlyProject(project))
+    .filter((project) => v3ProjectUsesProfessionalWorkspace(project) === professional)
     .sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
   if (!projects.length) {
     return Array.from(outputGroups.values())
       .filter((group) => group.project?.status !== "archived" && !v3ExpiredFailureOnlyProject(group.project))
+      .filter((group) => v3ProjectUsesProfessionalWorkspace(group.project) === professional)
       .sort((a, b) => v3OutputItemTime(b.latestItem) - v3OutputItemTime(a.latestItem));
   }
   return projects.map((project) => v3ProjectGroupFromProject(project, outputGroups.get(String(project.project_id))))
@@ -7831,6 +7882,7 @@ function resetV3VisualAssetWorkflowForNewDraft() {
 }
 
 function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
+  if (v3State.workspaceMode !== "professional") return;
   const dialog = els.v3VisualAssetLibraryDialog;
   if (!dialog) return;
   if (focusBuilder) {
@@ -8377,6 +8429,16 @@ async function loadV3ProjectVisualAssetBindings({
   const detailIsCurrent = () => v3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch);
   if (!detailIsCurrent()) return [];
   projectId = requestedProjectId;
+  if (
+    !v3ProjectUsesProfessionalWorkspace(v3State.currentProject)
+    || v3State.workspaceMode !== "professional"
+  ) {
+    v3State.projectVisualAssetBindings = [];
+    v3State.projectVisualAssetBindingState = "empty";
+    v3State.projectVisualAssetBindingsLoading = false;
+    renderV3ProjectVisualAssetPanel();
+    return [];
+  }
   if (!projectId) {
     v3State.projectVisualAssetBindings = [];
     v3State.projectVisualAssetBindingState = "empty";
@@ -8413,9 +8475,11 @@ function renderV3ProjectVisualAssetPanel() {
   if (!panel) return;
   const project = v3State.currentProject;
   const professionalProject = v3ProjectUsesProfessionalWorkspace(project);
+  const professionalSurface = v3State.workspaceMode === "professional";
+  const shouldShow = Boolean(project?.project_id && professionalProject && professionalSurface);
   panel.dataset.v3ProjectId = v3VisualAssetPanelProjectId(panel) || project?.project_id || "";
-  panel.hidden = !project?.project_id || !professionalProject;
-  if (!project?.project_id || !professionalProject) {
+  panel.hidden = !shouldShow;
+  if (!shouldShow) {
     delete panel.dataset.v3ProjectId;
     return;
   }
@@ -8461,6 +8525,7 @@ function v3VisualAssetPanelProjectId(panel = els.v3ProjectVisualAssetPanel) {
 }
 
 async function handleV3ProjectVisualAssetPanelClick(event) {
+  if (v3State.workspaceMode !== "professional") return;
   const pathButton = typeof event.composedPath === "function"
     ? event.composedPath().find((node) => node instanceof Element && node.id === "v3ContinueProfessionalProjectBtn")
     : null;
@@ -8489,7 +8554,11 @@ async function handleV3ProjectVisualAssetPanelClick(event) {
 }
 
 async function openV3VisualAssetBindingDialog() {
-  if (!v3State.currentProject?.project_id || !v3ProjectUsesProfessionalWorkspace(v3State.currentProject)) return;
+  if (
+    !v3State.currentProject?.project_id
+    || !v3ProjectUsesProfessionalWorkspace(v3State.currentProject)
+    || v3State.workspaceMode !== "professional"
+  ) return;
   await Promise.all([
     loadV3VisualAssets({ silent: true, force: true }),
     loadV3ProjectVisualAssetBindings({ silent: true, force: true }),
@@ -8727,6 +8796,10 @@ async function openV3Project(projectId) {
       v3ProjectUsesProfessionalWorkspace(v3State.currentProject) ? "professional" : "standard",
       { updateRoute: true },
     );
+    if (!v3ProjectUsesProfessionalWorkspace(v3State.currentProject)) {
+      closeV3VisualAssetBindingDialog();
+      closeV3VisualAssetLibraryDialog();
+    }
     syncV3ProjectOutputsFromPayload(payload);
     if (previewResult.status === "fulfilled") {
       const previewPayload = previewResult.value;
@@ -8781,6 +8854,9 @@ async function syncV3ProjectDetailInBackground(projectId, detailEpoch) {
   const shouldContinue = () => v3ProjectDetailRequestIsCurrent(projectId, detailEpoch);
   let recoveryJob = null;
   try {
+    const visualAssetTask = v3ProjectUsesProfessionalWorkspace(v3State.currentProject)
+      ? loadV3ProjectVisualAssetBindings({ silent: true, force: true, projectId, detailEpoch })
+      : Promise.resolve([]);
     await Promise.allSettled([
       loadV3ProjectTimeline(projectId, { silent: true, detailEpoch }),
       loadV3ProjectOutputs({
@@ -8791,7 +8867,7 @@ async function syncV3ProjectDetailInBackground(projectId, detailEpoch) {
         detailEpoch,
         sessionReceipt: { kind: "project_detail", projectId, detailEpoch },
       }),
-      loadV3ProjectVisualAssetBindings({ silent: true, force: true, projectId, detailEpoch }),
+      visualAssetTask,
     ]);
     if (!shouldContinue()) return;
     recoveryJob = await restoreV3LatestProjectJob(v3State.currentProject, {

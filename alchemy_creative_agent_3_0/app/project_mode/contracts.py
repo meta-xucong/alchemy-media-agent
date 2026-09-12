@@ -379,6 +379,9 @@ class ProjectMemorySummary(V3BaseModel):
     last_action_label: str = "项目已创建"
     updated_at: str
     next_suggested_actions: list[str] = Field(default_factory=list)
+    # Only safe workspace routing metadata is exposed on list summaries.  The
+    # full project record remains the authority for all other project facts.
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectRecord(V3BaseModel):

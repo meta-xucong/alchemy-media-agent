@@ -2730,6 +2730,7 @@ class V3ProjectModeService:
             last_action_label="项目已创建",
             updated_at=project.updated_at,
             next_suggested_actions=next_actions,
+            metadata={"v3_workspace": self._project_workspace(project)},
         )
 
     def begin_project_planning_operation(
@@ -10398,6 +10399,7 @@ class V3ProjectModeService:
             last_action_label=last_action,
             updated_at=project.updated_at,
             next_suggested_actions=self._next_actions(project),
+            metadata={"v3_workspace": self._project_workspace(project)},
         )
 
     def _latest_project_job_status(
@@ -11933,6 +11935,12 @@ class V3ProjectModeService:
             return True
         project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
         return project_owner_id == owner_user_id
+
+    def _project_workspace(self, project: ProjectRecord) -> str:
+        """Return the persisted V3 workspace without inferring from a template."""
+
+        workspace = str((project.metadata or {}).get("v3_workspace") or "").strip().lower()
+        return "professional" if workspace == "professional" else "standard"
 
     def _output_record_visible_to_owner(self, record: Any, owner_user_id: int | None) -> bool:
         if owner_user_id is None:
