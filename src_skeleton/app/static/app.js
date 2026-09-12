@@ -3021,14 +3021,15 @@ function v3GenerationPreferencesPayload(scenarioId, count, { hasReference = fals
 
 async function loadV3Projects({ silent = false, force = false, loadMore = false } = {}) {
   const requestingMore = Boolean(loadMore && !force);
+  if (requestingMore && !v3State.projectsLoadingMore && expandV3ProjectRenderWindow()) return;
   if (v3State.projectsLoading || v3State.projectsLoadingMore) {
     renderV3HomeTemplateChooser();
     renderV3Projects();
     renderV3History();
+    if (requestingMore && !silent) showGlobalToast("项目仍在同步，请稍后再加载更多。", "warning");
     return;
   }
   if (requestingMore && (!v3State.projectsHasMore || !v3State.projectsNextCursor)) {
-    if (expandV3ProjectRenderWindow()) return;
     if (!silent) showGlobalToast("没有更多项目可以加载了。", "warning");
     return;
   }

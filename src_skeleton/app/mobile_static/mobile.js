@@ -3622,9 +3622,12 @@ function applyMobileV3GenerationPreferences(project = mobileV3State.currentProje
 
 async function loadMobileV3Projects({ silent = true, force = false, loadMore = false } = {}) {
   const requestingMore = Boolean(loadMore && !force);
-  if (mobileV3State.loading || mobileV3State.projectsLoadingMore) return;
+  if (requestingMore && !mobileV3State.projectsLoadingMore && expandMobileV3ProjectRenderWindow()) return;
+  if (mobileV3State.loading || mobileV3State.projectsLoadingMore) {
+    if (requestingMore && !silent) updateMobileV3Status("项目仍在同步，请稍后再加载更多。");
+    return;
+  }
   if (requestingMore && (!mobileV3State.projectsHasMore || !mobileV3State.projectsNextCursor)) {
-    if (expandMobileV3ProjectRenderWindow()) return;
     if (!silent) updateMobileV3Status("没有更多项目可以加载了。");
     return;
   }

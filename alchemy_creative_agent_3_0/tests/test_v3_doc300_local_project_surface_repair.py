@@ -104,6 +104,22 @@ def test_load_more_expands_cached_items_and_resets_loading_button_state() -> Non
     assert "loadedHistoryCount = mobileV3ProjectGroupsFromProjects().length" in mobile_window
 
 
+def test_load_more_can_expand_cached_items_before_initial_request_guard() -> None:
+    desktop = DESKTOP.read_text(encoding="utf-8")
+    mobile = MOBILE.read_text(encoding="utf-8")
+    desktop_loader_start = desktop.index("async function loadV3Projects")
+    desktop_guard = desktop.index("if (v3State.projectsLoading || v3State.projectsLoadingMore)", desktop_loader_start)
+    desktop_expand = desktop.index("expandV3ProjectRenderWindow()", desktop_loader_start)
+    mobile_loader_start = mobile.index("async function loadMobileV3Projects")
+    mobile_guard = mobile.index("if (mobileV3State.loading || mobileV3State.projectsLoadingMore)", mobile_loader_start)
+    mobile_expand = mobile.index("expandMobileV3ProjectRenderWindow()", mobile_loader_start)
+
+    assert desktop_expand < desktop_guard
+    assert mobile_expand < mobile_guard
+    assert "项目仍在同步，请稍后再加载更多。" in desktop
+    assert "项目仍在同步，请稍后再加载更多。" in mobile
+
+
 def test_desktop_does_not_load_project_asset_bindings_for_standard_projects() -> None:
     source = DESKTOP.read_text(encoding="utf-8")
     background = _function(source, "syncV3ProjectDetailInBackground", "renderV3ProjectOpeningState")
