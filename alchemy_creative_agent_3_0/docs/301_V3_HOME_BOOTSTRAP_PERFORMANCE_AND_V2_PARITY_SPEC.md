@@ -53,6 +53,7 @@ adopt the same critical-path shape while keeping its own V3 contracts.
 ### 3.2 Allowed files and modules
 
 - `src_skeleton/app/static/app.js`
+- `src_skeleton/app/mobile_static/mobile.js`
 - `src_skeleton/app/main.py`
 - `alchemy_creative_agent_3_0/app/product_api/route_handlers.py`
 - `alchemy_creative_agent_3_0/app/project_mode/service.py`
@@ -73,7 +74,8 @@ use only persisted project fields and `_lightweight_memory_summary`; it must
 not call timeline, Job, output, review, reconciliation, or full-context
 builders. `view=full` and an omitted view retain the current behavior.
 
-The frontend home and project pagination requests use `view=summary`.
+The desktop and mobile frontend home and project pagination requests use
+`view=summary`.
 
 ### 4.2 Home preview output surface
 
@@ -82,12 +84,15 @@ additive global read surface. It returns at most the requested number of
 formal delivery preview items, respects authenticated project visibility,
 returns no `review_items`, performs no reconciliation, and uses the existing
 delivery predicates after using the output store's project index as a
-candidate locator. The ordinary endpoint and project-scoped full/history
-paths remain unchanged.
+candidate locator. Its `complete=false` marker is authoritative for the
+browser: a cover is never counted or labeled as the project's complete
+history. Opening a project history view must request the project-scoped full
+output surface, even when a home cover is already present. The ordinary
+endpoint and project-scoped full/history paths remain unchanged.
 
 ### 4.3 Browser first-paint contract
 
-V3 home initialization must:
+V3 desktop and mobile home initialization must:
 
 1. render cached/local project placeholders when available;
 2. await only the summary project catalog request;
@@ -107,6 +112,11 @@ revision is unchanged. `get_output` must retain its direct-file fallback for
 generation and cross-process freshness. Canonical original-content and image
 validation may be reused only for an unchanged file stat and record digest;
 changed files must be revalidated. No authorization check is removed.
+
+The global full output projection also builds one disposable request-scoped
+Job/output snapshot and derives both delivery and review projections from it.
+This is a read optimization only; it does not replace the existing delivery,
+review, owner, or retry predicates and it is never persisted as Job state.
 
 ## 5. Implementation plan
 
@@ -133,6 +143,9 @@ changed files must be revalidated. No authorization check is removed.
 - cache canonical integrity/image validation by unchanged file stat and
   expected digest, invalidating on any observed mutation;
 - keep private media authorization and canonical path checks intact.
+- share one request-scoped Job/output read snapshot between global delivery
+  and review projections; home preview uses the bounded project index and
+  only resolves candidate Jobs needed by its existing delivery gate.
 
 ## 6. Acceptance matrix
 
@@ -147,6 +160,8 @@ changed files must be revalidated. No authorization check is removed.
 | R7 | Record/integrity caching preserves direct fallback and revalidates changed files | output-store regression test |
 | R8 | JavaScript syntax, focused V3 tests, relevant full regression, diff hygiene pass | reproducible commands and exit codes |
 | R9 | Final fixed version is independently audited before GitHub/VPS delivery | separate read-only audit receipt |
+| R10 | A partial home cover cannot masquerade as complete history; opening history loads the full project surface | desktop/mobile contract test and scoped-history regression |
+| R11 | Global delivery and review reads share one request-scoped Job/output snapshot | instrumented snapshot regression |
 
 ## 7. Delivery gates
 
@@ -155,4 +170,3 @@ version must have: a clean diff review, focused and relevant regression tests,
 independent read-only audit, mainline integration re-test, GitHub push, VPS
 deployment, VPS health/read-only route verification, and a report that names
 any unverified browser or authenticated timing limitation.
-

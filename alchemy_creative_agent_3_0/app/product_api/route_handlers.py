@@ -129,11 +129,13 @@ class V3ProductRouteHandlers:
         limit: int = 20,
         owner_user_id: int | None = None,
         cursor: str | None = None,
+        view: str = "full",
     ) -> dict[str, Any]:
         return self.project_service.list_projects(
             limit=limit,
             owner_user_id=owner_user_id,
             cursor=cursor,
+            view=view,
         ).model_dump(mode="json")
 
     def get_project_outputs(

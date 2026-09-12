@@ -387,6 +387,7 @@ const v3State = {
   historyLoading: false,
   imageHistory: [],
   imageHistoryLoaded: false,
+  imageHistorySurface: "none",
   imageHistoryLoading: false,
   imageHistoryError: "",
   projectOutputsRequest: null,
@@ -925,13 +926,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   hydratePortalHomeLink();
   hydrateCachedVeyraAccount();
   bindControls();
-  restoreInitialModuleRoute();
   const hadVeyraTicket = new URLSearchParams(window.location.search).has("ticket");
   try {
     const ticketAccepted = await handleVeyraTicketFromUrl();
     if (hadVeyraTicket && !ticketAccepted) return;
     if (await enforceVeyraUiAuth({ target: "alchemy" })) return;
     await syncVeyraSessionCookie();
+    // Do not start a protected V3 bootstrap before the session cookie is
+    // synchronized.  This also prevents a direct V3 route from racing the
+    // auth gate with an avoidable catalog request.
+    restoreInitialModuleRoute();
     updateAdminSettingsEntry();
     await Promise.all([createSession({ announce: false }), loadProviders()]);
     scheduleInitialBackgroundLoads({ hadVeyraTicket });
@@ -1896,7 +1900,7 @@ async function initV3Shell({ force = false } = {}) {
   updateV3Notice("正在读取 V3 项目。", "info");
   try {
     await waitForV3Paint();
-    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`);
+    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}&view=summary`);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
     v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
     const apiProjects = Array.isArray(payload.projects) ? payload.projects : [];
@@ -1925,21 +1929,21 @@ async function initV3Shell({ force = false } = {}) {
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
-    await loadV3ProjectOutputs({ silent: true, force: true, limit: 1 });
-    renderV3History();
-    renderV3HeroHistory();
-    renderV3ProjectDetail();
-    renderV3Job(v3State.currentJob);
-    await waitForV3FirstHomePreviewImage();
     setV3PageLoading(false);
     // Project/template data is enough to make the V3 shell interactive. Keep
     // output reconciliation and thumbnail loading out of the first-paint gate.
-    void loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize })
+    void loadV3ProjectOutputs({
+      silent: true,
+      force: true,
+      limit: v3ProjectHomePageSize,
+      surface: "home_preview",
+    })
       .then(() => {
         renderV3History();
         renderV3HeroHistory();
         renderV3ProjectDetail();
         renderV3Job(v3State.currentJob);
+        return waitForV3HomePreviewImages({ blockPage: false });
       })
       .catch(() => {});
   } catch (error) {
@@ -1966,7 +1970,6 @@ async function initV3Shell({ force = false } = {}) {
     // available template catalog permanently hidden behind that placeholder.
     renderV3HomeTemplateChooser();
     setV3PageLoading(false);
-    void waitForV3HomePreviewImages({ blockPage: false });
     renderV3ScenarioState();
   }
 }
@@ -2010,7 +2013,7 @@ function openV3Home({ silent = false } = {}) {
   renderV3ProjectDetail();
   renderV3Job(null);
   window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
-  const shouldLoadProjects = !v3State.projectsLoaded && !v3State.projectsLoading;
+  const shouldLoadProjects = !v3State.projectsLoaded && !v3State.projectsLoading && !v3State.loading;
   const shouldLoadHistory = false;
   if (shouldLoadProjects || shouldLoadHistory) {
     updateV3Notice("正在后台同步最近项目。", "info");
@@ -3059,7 +3062,7 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
   const localItems = requestingMore ? [] : readV3LocalProjects();
   try {
     const cursor = requestingMore ? `&cursor=${encodeURIComponent(v3State.projectsNextCursor)}` : "";
-    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}${cursor}`);
+    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}&view=summary${cursor}`);
     const apiItems = Array.isArray(payload.projects) ? payload.projects : [];
     if (!requestingMore) {
       v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
@@ -3124,6 +3127,7 @@ async function loadV3ProjectOutputs({
   force = false,
   limit = 24,
   projectId = "",
+  surface = "",
   detailEpoch = null,
   shouldContinue = null,
   sessionReceipt = null,
@@ -3139,7 +3143,9 @@ async function loadV3ProjectOutputs({
     if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;
     return [];
   }
-  if (v3State.imageHistoryLoaded && !force) {
+  const completeImageHistoryLoaded = v3State.imageHistoryLoaded
+    && v3State.imageHistorySurface !== "home_preview";
+  if (completeImageHistoryLoaded && !force) {
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     if (scopedProjectId && Array.isArray(v3State.imageHistory)) {
       syncV3ProjectOutputsFromList(v3State.imageHistory, v3State.currentProject.project_id);
@@ -3158,9 +3164,12 @@ async function loadV3ProjectOutputs({
   let requestPromise = null;
   try {
     const cacheBust = force ? `&t=${Date.now()}` : "";
-    const boundedLimit = Math.max(12, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
+    const normalizedSurface = String(surface || "").trim().toLowerCase();
+    const minimumLimit = normalizedSurface === "home_preview" ? 1 : 12;
+    const boundedLimit = Math.max(minimumLimit, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
     const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
-    requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}`);
+    const surfaceQuery = normalizedSurface ? `&surface=${encodeURIComponent(normalizedSurface)}` : "";
+    requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${cacheBust}`);
     v3State.projectOutputsRequest = requestPromise;
     v3State.projectOutputsRequestOwner = requestOwner;
     const payload = await requestPromise;
@@ -3170,9 +3179,11 @@ async function loadV3ProjectOutputs({
     if (!scopedProjectId) {
       v3State.imageHistory = items;
       v3State.projectReviewOutputs = reviewItems;
+      v3State.imageHistorySurface = normalizedSurface || "full";
+      v3State.imageHistoryLoaded = normalizedSurface !== "home_preview";
+      if (normalizedSurface === "home_preview") syncV3HomeProjectCovers(items);
     }
     v3State.imageHistoryError = "";
-    v3State.imageHistoryLoaded = true;
     if (scopedProjectId) {
       syncV3ProjectOutputsFromList(items, scopedProjectId, reviewItems);
     }
@@ -3187,6 +3198,7 @@ async function loadV3ProjectOutputs({
   } catch (error) {
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     v3State.imageHistoryLoaded = false;
+    if (!scopedProjectId) v3State.imageHistorySurface = "none";
     v3State.imageHistoryError = friendlyError(error);
     if (scopedProjectId) {
       v3State.projectOutputs = [];
@@ -3310,6 +3322,25 @@ function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?
   if (Array.isArray(reviewItems)) {
     v3State.projectReviewOutputs = reviewItems.filter((item) => item?.project_id === projectId);
   }
+}
+
+function syncV3HomeProjectCovers(items) {
+  if (!Array.isArray(items) || !Array.isArray(v3State.projects)) return;
+  const covers = new Map();
+  items.forEach((item) => {
+    const projectId = String(item?.project_id || item?.metadata?.project_id || "").trim();
+    const thumbnail = item?.thumbnail_url || item?.preview_url || item?.download_url || "";
+    if (!projectId || !thumbnail || covers.has(projectId)) return;
+    covers.set(projectId, thumbnail);
+  });
+  if (!covers.size) return;
+  v3State.projects = v3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    const thumbnail = covers.get(projectId);
+    if (!thumbnail) return project;
+    return { ...project, latest_thumbnail_urls: [thumbnail] };
+  });
+  writeV3LocalProjects(v3State.projects);
 }
 
 function mergeV3ProjectItems(primaryItems, fallbackItems) {
@@ -3613,6 +3644,8 @@ function renderV3History() {
     const previewUrl = v3OutputStrictThumbImageUrl(group.latestItem || v3ProjectThumbnailItem(group.project));
     const emptyImageLabel = v3ProjectEmptyImageLabel(group.project);
     const stackCount = Math.min(Math.max(Number(group.count || 0), 1), 5);
+    const previewOnly = v3State.imageHistorySurface === "home_preview" && Boolean(group.items.length);
+    const countLabel = previewOnly ? "封面预览" : `${group.count} 张`;
     const groupTitle = v3ReadableText(group.title, group.goal || "V3 项目图片");
     const card = document.createElement("article");
     card.className = "v3-history-card v3-history-project-card";
@@ -3628,7 +3661,7 @@ function renderV3History() {
         <strong>${escapeHtml(v3ShortText(groupTitle, 32))}</strong>
         <div class="v3-history-meta">
           <span>${escapeHtml(v3TemplatePlainLabel(group.templateId || "general_template"))}</span>
-          <span>${group.count} 张</span>
+          <span>${countLabel}</span>
           <span>${escapeHtml(formatDate(group.latestAt))}</span>
         </div>
       </div>
@@ -3806,13 +3839,17 @@ function v3ProjectImageGroup(projectId) {
 function openV3ProjectHistoryModal(projectId) {
   const group = v3ProjectImageGroup(projectId);
   if (!group || !els.v3ProjectHistoryModal) return;
+  const scopedItems = Array.isArray(v3State.projectOutputs)
+    ? v3State.projectOutputs.filter((item) => String(item?.project_id || item?.metadata?.project_id || "") === group.projectId)
+    : [];
+  const previewOnly = v3State.imageHistorySurface === "home_preview" && scopedItems.length === 0;
   v3State.activeHistoryProjectId = group.projectId;
   const groupTitle = v3ReadableText(group.title, group.goal || "项目生成图片");
   if (els.v3ProjectHistoryTitle) els.v3ProjectHistoryTitle.textContent = groupTitle;
   if (els.v3ProjectHistorySummary) {
     els.v3ProjectHistorySummary.textContent = group.goal ? v3ShortText(group.goal, 88) : "这个项目生成过的图片都在这里。";
   }
-  if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = `${group.count} 张`;
+  if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = previewOnly ? "封面预览" : `${group.count} 张`;
   if (els.v3ProjectHistoryOpenProjectBtn) {
     els.v3ProjectHistoryOpenProjectBtn.dataset.v3HistoryProject = group.projectId;
     els.v3ProjectHistoryOpenProjectBtn.disabled = !group.projectId;
@@ -3821,7 +3858,7 @@ function openV3ProjectHistoryModal(projectId) {
   els.v3ProjectHistoryModal.hidden = false;
   document.body.classList.add("modal-open");
   els.v3ProjectHistoryCloseBtn?.focus();
-  if (!group.items.length && group.projectId) {
+  if ((!group.items.length || previewOnly) && group.projectId) {
     loadV3ProjectOutputs({ silent: true, force: true, limit: 120, projectId: group.projectId })
       .then(() => {
         const refreshed = v3ProjectImageGroup(group.projectId);

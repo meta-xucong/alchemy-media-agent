@@ -64,6 +64,9 @@ class V3GeneratedOutputStore:
         self._records_cache: list[V3GeneratedOutputRecord] | None = None
         self._records_by_job_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
         self._records_by_project_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
+        self._records_by_id_cache: dict[str, V3GeneratedOutputRecord] | None = None
+        self._integrity_validation_cache: dict[str, tuple[tuple[int, int, int], str | None, bool]] = {}
+        self._image_validation_cache: dict[str, tuple[tuple[int, int, int], bool]] = {}
 
     def save_base64_output(
         self,
@@ -182,6 +185,14 @@ class V3GeneratedOutputStore:
     def get_output(self, output_id: str) -> V3GeneratedOutputRecord | None:
         if not _valid_output_id(output_id):
             return None
+        revision = self._storage_revision()
+        with self._cache_lock:
+            if (
+                self._records_cache is not None
+                and revision == self._records_cache_revision
+                and self._records_by_id_cache is not None
+            ):
+                return self._records_by_id_cache.get(output_id)
         path = self._record_path(output_id)
         if not path.exists():
             return None
@@ -290,14 +301,12 @@ class V3GeneratedOutputStore:
         # Record paths are historical metadata and may be stale or hostile.
         # Serve only the canonical output directory after validating the
         # original content binding; never follow an arbitrary persisted path.
-        if not _canonical_output_files_match_record(record, output_dir):
+        if not self._canonical_output_files_match_record_cached(record, output_dir):
             return None
         path = fallback_path
         if not _path_is_within(output_dir, path) or not path.exists() or not path.is_file():
             return None
-        try:
-            _validate_image(path.read_bytes())
-        except (OSError, ValueError):
+        if not self._image_is_valid_cached(path):
             return None
         return path, media_type, filename
 
@@ -427,6 +436,52 @@ class V3GeneratedOutputStore:
             self._records_cache = None
             self._records_by_job_cache = None
             self._records_by_project_cache = None
+            self._records_by_id_cache = None
+            self._integrity_validation_cache.clear()
+            self._image_validation_cache.clear()
+
+    def _canonical_output_files_match_record_cached(
+        self,
+        record: V3GeneratedOutputRecord,
+        output_dir: Path,
+    ) -> bool:
+        original_path = output_dir / f"original{_FORMAT_SUFFIXES.get(record.output_format, '.png')}"
+        try:
+            stat = original_path.stat()
+        except OSError:
+            return False
+        fingerprint = (int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+        expected_sha = _expected_output_content_sha256(record)
+        key = str(record.output_id or "").strip()
+        with self._cache_lock:
+            cached = self._integrity_validation_cache.get(key)
+            if cached is not None and cached[:2] == (fingerprint, expected_sha):
+                return cached[2]
+        valid = _canonical_output_files_match_record(record, output_dir)
+        with self._cache_lock:
+            self._integrity_validation_cache[key] = (fingerprint, expected_sha, valid)
+        return valid
+
+    def _image_is_valid_cached(self, path: Path) -> bool:
+        key = str(path)
+        try:
+            stat = path.stat()
+        except OSError:
+            return False
+        fingerprint = (int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+        with self._cache_lock:
+            cached = self._image_validation_cache.get(key)
+            if cached is not None and cached[0] == fingerprint:
+                return cached[1]
+        try:
+            _validate_image(path.read_bytes())
+        except (OSError, ValueError):
+            valid = False
+        else:
+            valid = True
+        with self._cache_lock:
+            self._image_validation_cache[key] = (fingerprint, valid)
+        return valid
 
     def _storage_revision(self) -> tuple[int, int] | None:
         """Return a constant-time revision for the output directory.
@@ -474,8 +529,10 @@ class V3GeneratedOutputStore:
         records = sorted(records, key=lambda record: record.created_at or "", reverse=True)
         by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
         by_project: dict[str, list[V3GeneratedOutputRecord]] = {}
+        by_id: dict[str, V3GeneratedOutputRecord] = {}
         for record in records:
             by_job.setdefault(str(record.job_id or ""), []).append(record)
+            by_id[str(record.output_id)] = record
             project_id = str((record.metadata or {}).get("project_id") or "").strip()
             if project_id:
                 by_project.setdefault(project_id, []).append(record)
@@ -485,6 +542,7 @@ class V3GeneratedOutputStore:
             self._records_cache = list(records)
             self._records_by_job_cache = {key: list(value) for key, value in by_job.items()}
             self._records_by_project_cache = {key: list(value) for key, value in by_project.items()}
+            self._records_by_id_cache = dict(by_id)
         return list(records)
 
 

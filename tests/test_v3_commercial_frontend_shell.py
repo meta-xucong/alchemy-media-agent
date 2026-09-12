@@ -352,10 +352,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "mobileV3ProjectFetchLimit = mobileV3ProjectPageSize" in mobile_script.text
     assert "mobileV3ProjectPageSize = 4" in mobile_script.text
     mobile_shell_body = mobile_script.text.split("async function loadMobileV3Projects", 1)[1].split("function setMobileV3LoadingLayer", 1)[0]
-    assert "`/projects?limit=${mobileV3ProjectFetchLimit}${cursor}`" in mobile_shell_body
+    assert "`/projects?limit=${mobileV3ProjectFetchLimit}&view=summary${cursor}`" in mobile_shell_body
     assert "`/projects?limit=${mobileV3ProjectPageSize}`" not in mobile_shell_body
-    assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" in mobile_shell_body
-    assert "await waitForMobileV3FirstHomePreviewImage()" in mobile_shell_body
+    assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" not in mobile_shell_body
+    assert "surface=home_preview" in mobile_shell_body
+    assert "await waitForMobileV3FirstHomePreviewImage()" not in mobile_shell_body
     assert "waitForMobileV3HomePreviewImages({ blockPage: false })" in mobile_shell_body
     assert "project-outputs?limit=${mobileV3ProjectPageSize}&compact=true" in mobile_script.text
     assert "project?.visible_output_count || project?.memory_summary?.visible_output_count" in mobile_script.text
@@ -422,7 +423,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "async function loadV3Projects" in script.text
     assert "async function loadV3ProjectOutputs" in script.text
     assert "project_id=${encodeURIComponent(scopedProjectId)}" in script.text
-    assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}" in script.text
+    assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${cacheBust}" in script.text
     project_detail_sync = script.text.split(
         "async function syncV3ProjectDetailInBackground", 1
     )[1].split("\nfunction renderV3ProjectOpeningState", 1)[0]
@@ -455,14 +456,17 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "if (!v3JobDeliverySettled(job) && !persisted.length) return [];" in script.text
     assert "if (baseJob && !v3JobDeliverySettled(baseJob)) return null;" in script.text
     shell_body = script.text.split("async function initV3Shell", 1)[1].split("function clearV3PendingUploads", 1)[0]
-    assert "void loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize })" in shell_body
-    assert "await loadV3ProjectOutputs({ silent: true, force: true, limit: 1 })" in shell_body
-    assert "`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`" in shell_body
+    assert "void loadV3ProjectOutputs({" in shell_body
+    assert 'surface: "home_preview"' in shell_body
+    assert "await loadV3ProjectOutputs({ silent: true, force: true, limit: 1 })" not in shell_body
+    assert "await waitForV3FirstHomePreviewImage()" not in shell_body
+    assert "`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}&view=summary`" in shell_body
     assert "`${v3ApiBase}/projects?limit=${v3ProjectHomePageSize}`" not in shell_body
     assert "localItems.filter((item) => serverProjectIds.has(String(item?.project_id || \"\")))" in script.text
     assert "els.v3ProjectDeleteBtn.hidden = !project?.project_id;" in script.text
-    assert "waitForV3FirstHomePreviewImage" in shell_body
-    assert "void waitForV3HomePreviewImages({ blockPage: false });" in shell_body
+    assert "waitForV3FirstHomePreviewImage" in script.text
+    assert "return waitForV3HomePreviewImages({ blockPage: false });" in shell_body
+    assert "void waitForV3HomePreviewImages({ blockPage: false });" not in shell_body
     assert "await waitForV3HomePreviewImages();" not in shell_body
     assert "function v3ReviewCertification" in script.text
     assert "function v3JobDeliveryWithheld" in script.text
@@ -492,7 +496,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" not in recover_body
     assert "if (restored?.job_id === jobId && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" in recover_body
     assert "syncV3CurrentJobFromProjectOutputs({ preferLatest: false })" in script.text
-    assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}" in script.text
+    assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${cacheBust}" in script.text
     assert "imageHistory" in script.text
     assert "function v3OutputVisibleInProject" in script.text
     assert "function v3CanonicalFinalDelivery" in script.text

@@ -2418,8 +2418,11 @@ class V3ProjectModeService:
         limit: int = 20,
         owner_user_id: int | None = None,
         cursor: str | None = None,
+        view: str = "full",
     ) -> ProjectListResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
+        requested_view = str(view or "full").strip().lower()
+        lightweight_view = requested_view == "summary"
         list_all_projects = getattr(self.project_store, "list_all_projects", None)
         all_projects = (
             list(list_all_projects())
@@ -2437,10 +2440,8 @@ class V3ProjectModeService:
         if boundary is not None:
             eligible_projects = [project for project in eligible_projects if _project_listing_key(project) < boundary]
         projects = eligible_projects[:bounded_limit]
-        summaries = [
-            self._memory_summary(project, owner_user_id=owner_user_id)
-            for project in projects
-        ]
+        summary_builder = self._lightweight_memory_summary if lightweight_view else self._memory_summary
+        summaries = [summary_builder(project, owner_user_id=owner_user_id) for project in projects]
         has_more = len(eligible_projects) > len(projects)
         next_cursor = _encode_project_list_cursor(projects[-1]) if has_more and projects else None
         return ProjectListResponse(
@@ -2450,7 +2451,7 @@ class V3ProjectModeService:
             limit=bounded_limit,
             projects=summaries,
             templates=self.template_cards(),
-            metadata=self._metadata(),
+            metadata={**self._metadata(), "view": "summary" if lightweight_view else "full"},
             has_more=has_more,
             next_cursor=next_cursor,
         )
@@ -2464,6 +2465,7 @@ class V3ProjectModeService:
         surface: str | None = None,
     ) -> dict[str, Any]:
         bounded_limit = max(1, min(int(limit or 60), 200))
+        requested_surface = str(surface or "").strip().lower()
         items: list[dict[str, Any]] = []
         if project_id:
             project = self._require_project(project_id)
@@ -2517,19 +2519,72 @@ class V3ProjectModeService:
                 "review_items": review_items,
                 "metadata": {**self._metadata(), "compact": bool(compact), "project_scoped": True},
             }
+        if requested_surface == "home_preview":
+            # The home surface needs one formal cover per recent project, not
+            # the full delivery/review history.  The output index locates
+            # candidates; the existing delivery predicates remain the
+            # authority for what is safe to expose.
+            project_scan_limit = max(24, min(100, bounded_limit * 4))
+            preview_projects = [
+                project
+                for project in self.project_store.list_projects(limit=project_scan_limit)
+                if project.status != ProjectStatus.ARCHIVED
+                and self._project_visible_to_owner(project, owner_user_id)
+            ]
+            snapshot = self._project_output_read_snapshot(
+                preview_projects,
+                use_project_index=True,
+                prefetch_job_state=False,
+            )
+            for project in preview_projects:
+                preview_items = self._project_delivery_preview_items(
+                    project,
+                    limit=1,
+                    owner_user_id=owner_user_id,
+                    compact=compact,
+                    project_records=snapshot["records_by_project"].get(project.project_id, []),
+                    output_records_by_job=snapshot["records_by_job"],
+                    job_status_by_id=snapshot["job_status_by_id"],
+                    job_record_by_id=snapshot["job_record_by_id"],
+                )
+                if preview_items:
+                    items.extend(preview_items[:1])
+                if len(items) >= bounded_limit:
+                    break
+            items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
+            return {
+                "api_namespace": API_NAMESPACE,
+                "route": f"{API_NAMESPACE}/project-outputs",
+                "total": len(items),
+                "limit": bounded_limit,
+                "items": items,
+                "review_items": [],
+                "metadata": {
+                    **self._metadata(),
+                    "compact": bool(compact),
+                    "surface": "home_preview",
+                    "complete": False,
+                },
+            }
         project_scan_limit = max(12, min(100, bounded_limit * 2))
         review_items = []
-        for project in self.project_store.list_projects(limit=project_scan_limit):
-            if project.status == ProjectStatus.ARCHIVED:
-                continue
-            if not self._project_visible_to_owner(project, owner_user_id):
-                continue
+        output_projects = [
+            project
+            for project in self.project_store.list_projects(limit=project_scan_limit)
+            if project.status != ProjectStatus.ARCHIVED
+            and self._project_visible_to_owner(project, owner_user_id)
+        ]
+        snapshot = self._project_output_read_snapshot(output_projects)
+        for project in output_projects:
             items.extend(
                 self._project_output_items(
                     project,
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
                     compact=compact,
+                    output_records_by_job=snapshot["records_by_job"],
+                    job_status_by_id=snapshot["job_status_by_id"],
+                    job_record_by_id=snapshot["job_record_by_id"],
                 )
             )
             review_items.extend(
@@ -2538,6 +2593,9 @@ class V3ProjectModeService:
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
                     compact=compact,
+                    output_records_by_job=snapshot["records_by_job"],
+                    job_status_by_id=snapshot["job_status_by_id"],
+                    job_record_by_id=snapshot["job_record_by_id"],
                 )
             )
         items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
@@ -2551,6 +2609,101 @@ class V3ProjectModeService:
             "review_items": review_items,
             "metadata": {**self._metadata(), "compact": bool(compact)},
         }
+
+    def _project_output_read_snapshot(
+        self,
+        projects: list[ProjectRecord],
+        *,
+        use_project_index: bool = False,
+        prefetch_job_state: bool = True,
+    ) -> dict[str, dict[str, Any]]:
+        """Build one request-scoped Job/output read snapshot.
+
+        The snapshot is disposable and never becomes an authority. It keeps
+        the ordinary delivery and review projections on their existing
+        predicates while ensuring one request does not read the same Job or
+        output record once for delivery and again for review. Home preview can
+        use the output store's project index as its bounded candidate locator;
+        the compatibility path still uses the Job index so legacy records are
+        not hidden.
+        """
+
+        snapshot: dict[str, dict[str, Any]] = {
+            "records_by_project": {},
+            "records_by_job": {},
+            "job_status_by_id": {},
+            "job_record_by_id": {},
+        }
+        product_service = getattr(self, "product_service", None)
+        output_store = getattr(product_service, "output_store", None)
+        list_by_job = getattr(output_store, "list_by_job", None)
+        list_by_project = getattr(output_store, "list_by_project", None)
+        get_job = getattr(product_service, "get_job", None)
+        get_job_record = getattr(product_service, "get_job_record", None)
+        if not callable(get_job) or not callable(get_job_record):
+            return snapshot
+
+        for project in projects:
+            project_id = str(project.project_id or "").strip()
+            if not project_id:
+                continue
+            indexed_job_ids: set[str] = set()
+            if use_project_index and callable(list_by_project):
+                try:
+                    project_records = list(list_by_project(project_id, limit=256))
+                except Exception:
+                    project_records = []
+                snapshot["records_by_project"][project_id] = project_records
+                for record in project_records:
+                    job_id = str(getattr(record, "job_id", "") or "").strip()
+                    if not job_id:
+                        continue
+                    indexed_job_ids.add(job_id)
+                    bucket = snapshot["records_by_job"].setdefault(job_id, [])
+                    identity = str(getattr(record, "output_id", "") or "").strip()
+                    if identity and any(
+                        str(getattr(existing, "output_id", "") or "").strip() == identity
+                        for existing in bucket
+                    ):
+                        continue
+                    bucket.append(record)
+
+            if use_project_index and not prefetch_job_state:
+                continue
+            for raw_job_id in getattr(project, "job_ids", []) or []:
+                job_id = str(raw_job_id or "").strip()
+                if not job_id or job_id in snapshot["job_status_by_id"]:
+                    continue
+                if use_project_index and job_id not in indexed_job_ids:
+                    continue
+                try:
+                    job_status = get_job(job_id)
+                except Exception:
+                    job_status = None
+                snapshot["job_status_by_id"][job_id] = job_status
+                if job_status is None:
+                    snapshot["job_record_by_id"][job_id] = None
+                    if use_project_index:
+                        snapshot["records_by_job"].setdefault(job_id, [])
+                    continue
+                try:
+                    job_record = get_job_record(job_id)
+                except Exception:
+                    job_record = None
+                snapshot["job_record_by_id"][job_id] = job_record
+                if use_project_index:
+                    # A project index miss is a bounded preview miss. Do not
+                    # fall back to a full Job scan on the home surface.
+                    snapshot["records_by_job"].setdefault(job_id, [])
+                    continue
+                if callable(list_by_job):
+                    try:
+                        snapshot["records_by_job"][job_id] = list(list_by_job(job_id))
+                    except Exception:
+                        snapshot["records_by_job"][job_id] = []
+                else:
+                    snapshot["records_by_job"].setdefault(job_id, [])
+        return snapshot
 
     def create_project(self, request: CreateProjectRequest | dict[str, Any]) -> ProjectResponse:
         create_request = self._coerce_create_project_request(request)
@@ -2702,11 +2855,10 @@ class V3ProjectModeService:
                 ProjectOutputSelectionStateValue.SELECTED,
             ) == ProjectOutputSelectionStateValue.SELECTED
         ]
-        if owner_user_id is not None:
-            selected_refs = [
-                ref for ref in selected_refs
-                if self._output_ref_visible_to_owner(ref, owner_user_id)
-            ]
+        # The project itself has already passed the server-side owner filter.
+        # Do not dereference output records here: this view is deliberately a
+        # persisted project-card projection, and output authorization belongs
+        # to the full delivery/read paths.
         if selected_refs:
             next_actions = ["继续同风格生成", "上传新参考图继续", "下载已选图片"]
         elif project.job_ids:
@@ -10570,6 +10722,9 @@ class V3ProjectModeService:
         limit: int = 60,
         owner_user_id: int | None = None,
         compact: bool = False,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Return generated pixels kept for project review, never delivery.
 
@@ -10585,6 +10740,9 @@ class V3ProjectModeService:
             include_hidden=True,
             owner_user_id=owner_user_id,
             compact=compact,
+            output_records_by_job=output_records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
         )
         final_items = self._project_output_items(
             project,
@@ -10592,13 +10750,20 @@ class V3ProjectModeService:
             include_hidden=False,
             owner_user_id=owner_user_id,
             compact=compact,
+            output_records_by_job=output_records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
         )
         final_ids = {
             self._public_project_output_identity(item)
             for item in final_items
             if self._public_project_output_identity(item)
         }
-        auto_anchor = self._doc73_auto_identity_anchor_record(project, owner_user_id=owner_user_id)
+        auto_anchor = self._doc73_auto_identity_anchor_record(
+            project,
+            owner_user_id=owner_user_id,
+            output_records_by_job=output_records_by_job,
+        )
         auto_anchor_output_id = (
             str(getattr(auto_anchor.get("record"), "output_id", "") or "").strip()
             if auto_anchor is not None
@@ -11201,6 +11366,9 @@ class V3ProjectModeService:
         include_hidden: bool = False,
         owner_user_id: int | None = None,
         compact: bool = False,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None:
@@ -11209,18 +11377,38 @@ class V3ProjectModeService:
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for job_id in reversed(project.job_ids):
-            try:
-                job_status = self.product_service.get_job(job_id)
-            except Exception:
+            clean_job_id = str(job_id or "").strip()
+            if job_status_by_id is not None and clean_job_id in job_status_by_id:
+                job_status = job_status_by_id[clean_job_id]
+            else:
+                try:
+                    job_status = self.product_service.get_job(clean_job_id)
+                except Exception:
+                    if job_status_by_id is not None:
+                        job_status_by_id[clean_job_id] = None
+                    continue
+                if job_status_by_id is not None:
+                    job_status_by_id[clean_job_id] = job_status
+            if job_status is None:
+                if job_status_by_id is not None:
+                    job_status_by_id[clean_job_id] = None
                 continue
             if dict(job_status.metadata or {}).get("expired_failure_artifact") is True:
                 continue
-            job_record = self.product_service.get_job_record(job_id)
+            if job_record_by_id is not None and clean_job_id in job_record_by_id:
+                job_record = job_record_by_id[clean_job_id]
+            else:
+                try:
+                    job_record = self.product_service.get_job_record(clean_job_id)
+                except Exception:
+                    job_record = None
+                if job_record_by_id is not None:
+                    job_record_by_id[clean_job_id] = job_record
             has_doc267_review_closure = (
                 job_record is not None
                 and self._doc267_review_withheld_closure_is_valid(
                     dict(job_record.request.metadata or {}),
-                    job_id=job_id,
+                    job_id=clean_job_id,
                 )
             )
             if not self._job_delivery_is_settled(job_status):
@@ -11234,7 +11422,12 @@ class V3ProjectModeService:
                 elif not include_hidden or not self._job_has_terminal_review_state(job_status):
                     continue
             try:
-                records = output_store.list_by_job(job_id)
+                if output_records_by_job is not None and clean_job_id in output_records_by_job:
+                    records = list(output_records_by_job[clean_job_id])
+                else:
+                    records = output_store.list_by_job(clean_job_id)
+                    if output_records_by_job is not None:
+                        output_records_by_job[clean_job_id] = list(records)
             except Exception:
                 continue
             if not self._job_record_visible_to_owner(job_record, owner_user_id):
@@ -11290,6 +11483,7 @@ class V3ProjectModeService:
         *,
         output_id: str | None = None,
         owner_user_id: int | None = None,
+        output_records_by_job: dict[str, list[Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Read the one valid automatic identity anchor for this project.
 
@@ -11307,10 +11501,13 @@ class V3ProjectModeService:
             clean_job_id = str(job_id or "").strip()
             if not clean_job_id:
                 continue
-            try:
-                records = list(list_by_job(clean_job_id))
-            except Exception:
-                continue
+            if output_records_by_job is not None and clean_job_id in output_records_by_job:
+                records = list(output_records_by_job[clean_job_id])
+            else:
+                try:
+                    records = list(list_by_job(clean_job_id))
+                except Exception:
+                    continue
             for record in sorted(records, key=lambda item: str(getattr(item, "created_at", "") or "")):
                 record_output_id = str(getattr(record, "output_id", "") or "").strip()
                 if not record_output_id or (
@@ -11554,6 +11751,10 @@ class V3ProjectModeService:
         limit: int = 1,
         owner_user_id: int | None = None,
         compact: bool = True,
+        project_records: list[Any] | None = None,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Find one newest project output without scanning every project Job.
 
@@ -11565,12 +11766,15 @@ class V3ProjectModeService:
 
         output_store = getattr(self.product_service, "output_store", None)
         list_by_project = getattr(output_store, "list_by_project", None)
-        if not callable(list_by_project):
+        if project_records is None and not callable(list_by_project):
             return []
-        try:
-            records = list_by_project(project.project_id, limit=256)
-        except Exception:
-            return []
+        if project_records is None:
+            try:
+                records = list_by_project(project.project_id, limit=256)
+            except Exception:
+                return []
+        else:
+            records = list(project_records)
         allowed_job_ids = {
             str(job_id or "").strip()
             for job_id in project.job_ids
@@ -11598,11 +11802,19 @@ class V3ProjectModeService:
             update={"job_ids": candidate_job_ids},
             deep=False,
         )
+        snapshot_kwargs = {}
+        if output_records_by_job is not None:
+            snapshot_kwargs["output_records_by_job"] = output_records_by_job
+        if job_status_by_id is not None:
+            snapshot_kwargs["job_status_by_id"] = job_status_by_id
+        if job_record_by_id is not None:
+            snapshot_kwargs["job_record_by_id"] = job_record_by_id
         return self._project_output_items(
             preview_project,
             limit=min(max(1, int(limit or 1)), 1),
             owner_user_id=owner_user_id,
             compact=compact,
+            **snapshot_kwargs,
         )
 
     def _project_job_delivery_is_settled(self, job_id: str) -> bool:

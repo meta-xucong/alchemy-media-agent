@@ -1181,10 +1181,11 @@ def v3_projects_endpoint(
     request: Request,
     limit: int = 20,
     cursor: str | None = None,
+    view: str = "full",
     authorization: str = Header(default=""),
 ):
     user_id = _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_projects, limit, user_id, cursor)
+    return _run_v3_handler(v3_route_handlers.get_projects, limit, user_id, cursor, view)
 
 
 @app.get("/api/v3/creative-agent/project-outputs")
