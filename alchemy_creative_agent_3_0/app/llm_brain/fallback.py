@@ -24,6 +24,7 @@ from ..creative_core.prompt_language import (
 from ..creative_core.rules import stable_id
 from ..shared_capabilities.activation import build_task_profile_and_intent
 from ..shared_capabilities.visual_cluster.contracts import GENERAL_VARIATION_MAX_OUTPUTS
+from ..variation_modes import resolve_general_variation_mode
 
 
 SINGLE_FRAME_HARD_CONSTRAINT = (
@@ -781,6 +782,16 @@ def _variation_mode(request: BrainRunRequest) -> str:
     }
     metadata = dict(request.metadata or {})
     profile = dict(request.product_profile or {})
+    if request.scenario_id == "general_creative" and request.template_id == "general_template":
+        resolved = resolve_general_variation_mode(
+            metadata,
+            user_input=request.user_input,
+            requested_count=request.requested_image_count,
+            selected_size=request.requested_image_size,
+            fallback_metadata=[profile],
+        ).get("effective_variation_mode")
+        if resolved:
+            return str(resolved)
     value = (
         metadata.get("effective_variation_mode")
         or metadata.get("variation_mode")

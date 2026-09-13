@@ -1399,6 +1399,21 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
+        if (
+            request.metadata.get("variation_execution_semantic_evidence_required") is True
+            or isinstance(context.get("variation_execution_contract"), dict)
+            and context.get("variation_execution_semantic_evidence_required") is True
+        ):
+            prompt_schema["variation_execution_receipt"].update(
+                {
+                    "semantic_output_purpose": (
+                        "exact output_purpose from the matching frozen variation_execution_contract.outputs row"
+                    ),
+                    "semantic_variation_axes": (
+                        "exact ordered variation_axes from the matching frozen variation_execution_contract.outputs row"
+                    ),
+                }
+            )
     if request.metadata.get("require_lossless_user_direction") is True:
         prompt_schema["user_direction_integrity"] = {
             "contract_version": "v3_user_direction_integrity_v1",
@@ -1591,6 +1606,18 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "and owner remote_v3_llm_brain. The receipt is audit data, not renderer wording; do not copy contract "
             "fields, internal role language, or local recipe wording into the prompt."
         )
+        if (
+            request.metadata.get("variation_execution_semantic_evidence_required") is True
+            or isinstance(context.get("variation_execution_contract"), dict)
+            and context.get("variation_execution_semantic_evidence_required") is True
+        ):
+            response_contract += (
+                " Because the frozen context requires semantic evidence, also return semantic_output_purpose and "
+                "semantic_variation_axes in each variation_execution_receipt. Copy the exact output_purpose and "
+                "ordered variation_axes values from the matching frozen variation_execution_contract.outputs row; "
+                "do not summarize, rename, reorder, or invent them. These are schema-only audit fields and must "
+                "never be inserted into the renderer prompt."
+            )
     if preflight_required:
         response_contract += (
             " Before writing each canonical prompt, author one complete scene-aware human photographic direction "

@@ -7,6 +7,7 @@ from typing import Any
 
 from ...creative_core.prompt_language import product_language_allowed
 from ...creative_core.rules import stable_id
+from ...variation_modes import resolve_general_variation_mode
 from ..activation.fallback import has_product_profile_facts
 from ..base import SharedCapabilityModule
 from ..contracts import (
@@ -3728,19 +3729,24 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             return runtime_variation_contract.mode
         scenario_parameters = _as_dict(capability_input.metadata.get("scenario_parameters"))
         project_metadata = _as_dict(project_context.get("metadata"))
-        value = (
-            capability_input.metadata.get("effective_variation_mode")
-            or scenario_parameters.get("effective_variation_mode")
-            or project_metadata.get("effective_variation_mode")
-            or capability_input.metadata.get("variation_mode")
-            or scenario_parameters.get("variation_mode")
-            or project_metadata.get("variation_mode")
-            or "delivery_suite"
+        requested_count = (
+            capability_input.metadata.get("requested_image_count")
+            or scenario_parameters.get("requested_image_count")
+            or project_metadata.get("requested_image_count")
         )
-        value = str(value or "").strip()
-        if value == "format_adaptation":
-            value = "format_layout_adaptation"
-        return value if value in {"selection_candidates", "delivery_suite", "creative_exploration", "format_layout_adaptation"} else "delivery_suite"
+        value = resolve_general_variation_mode(
+            capability_input.metadata,
+            user_input=capability_input.user_input,
+            requested_count=requested_count,
+            has_reference=bool(
+                project_context.get("selected_output_assets")
+                or project_context.get("selected_references")
+                or project_context.get("uploaded_references")
+            ),
+            selected_size=capability_input.metadata.get("requested_image_size"),
+            fallback_metadata=[scenario_parameters, project_metadata],
+        ).get("effective_variation_mode")
+        return str(value or "delivery_suite")
 
     def _binding_profile(
         self,

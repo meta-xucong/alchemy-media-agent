@@ -44,6 +44,8 @@ def test_desktop_and_mobile_expose_only_canonical_general_mode_controls() -> Non
     assert 'data-mobile-v3-mode="layout_adaptation"' not in mobile_html
     assert "MOBILE_V3_VARIATION_MODE_ALIASES" in mobile_js
     assert "mobileV3CanonicalVariationMode" in mobile_js
+    assert 'creative_explore: "creative_exploration"' in desktop_js
+    assert 'creative_explore: "creative_exploration"' in mobile_js
 
 
 def test_doc59_auto_detection_priority_and_ambiguous_multi_image_contract() -> None:
@@ -111,6 +113,16 @@ def test_desktop_photography_reference_gate_has_both_new_and_saved_reference_inp
     payload = _function_body(desktop, "buildV3JobPayload")
     assert "const hasUploadedReference = uploadedAssets.length > 0" in payload
     assert "hasUploadedReference || existingPhotographyReferences.length > 0" in payload
+
+
+def test_general_mode_override_is_sent_as_current_request_authority() -> None:
+    desktop = _read(DESKTOP_JS)
+    mobile = _read(MOBILE_JS)
+    desktop_payload = _function_body(desktop, "buildV3JobPayload")
+    mobile_payload = _function_body(mobile, "buildMobileV3JobPayload")
+    for source in (desktop_payload, mobile_payload):
+        assert "variation_mode_override" in source
+        assert "selectedMode !== \"auto\"" in source or "selectedVariationMode !== \"auto\"" in source
 
 
 def test_frontends_do_not_boot_with_an_ecommerce_only_count_contract() -> None:

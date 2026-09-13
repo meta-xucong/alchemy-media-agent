@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...creative_core.rules import stable_id
+from ...variation_modes import canonical_general_variation_mode
 from .contracts import HumanIdentityAnchorProfile, HumanNaturalVariationPlan, ResolvedReferencePolicyPackage
 
 
@@ -214,7 +215,7 @@ class HumanNaturalVariationPolicy:
         return any(keyword in lowered or keyword in text for keyword in EXACT_COPY_KEYWORDS)
 
     def _normalize_mode(self, mode: str | None) -> str:
-        value = str(mode or "").strip()
+        value = canonical_general_variation_mode(mode, allow_auto=True)
         if value == "auto":
             return "delivery_suite"
         if value in MODE_DIVERSITY:

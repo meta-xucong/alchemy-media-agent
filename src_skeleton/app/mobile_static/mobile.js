@@ -2669,6 +2669,7 @@ const mobileV3CanonicalVariationModes = Object.freeze([
 const MOBILE_V3_VARIATION_MODE_ALIASES = Object.freeze({
   similar_options: "selection_candidates",
   suite_expansion: "delivery_suite",
+  creative_explore: "creative_exploration",
   layout_adaptation: "format_layout_adaptation",
   format_adaptation: "format_layout_adaptation",
 });
@@ -5058,6 +5059,7 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   const generationPreferences = scenarioId === "general_creative"
     ? {
         variation_mode: selectedMode,
+        variation_mode_override: selectedMode !== "auto" ? selectedMode : null,
         inferred_variation_mode: inferredMode,
         effective_variation_mode: effectiveMode,
         variation_mode_source: selectedMode === "auto" ? "auto" : "manual",
@@ -5114,6 +5116,9 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
       selected_mode_id: scenarioId === "photography" ? mobileV3State.selectedPhotographyMode : undefined,
       selected_preset_id: scenarioId === "photography" ? mobileV3State.selectedPhotographyMode : undefined,
       variation_mode: scenarioId === "general_creative" ? selectedMode : undefined,
+      variation_mode_override: scenarioId === "general_creative" && selectedMode !== "auto"
+        ? selectedMode
+        : undefined,
       inferred_variation_mode: scenarioId === "general_creative" ? inferredMode : undefined,
       effective_variation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
       continuation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
@@ -5156,6 +5161,9 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
         requested_image_size: size || null,
         advanced_reference_controls: advancedReferenceControls,
         variation_mode: scenarioId === "general_creative" ? selectedMode : undefined,
+        variation_mode_override: scenarioId === "general_creative" && selectedMode !== "auto"
+          ? selectedMode
+          : undefined,
         inferred_variation_mode: scenarioId === "general_creative" ? inferredMode : undefined,
         effective_variation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
         continuation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,

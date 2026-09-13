@@ -155,6 +155,10 @@ class CentralCreativeBrain:
                 "mode_role_recipe": mode_role_recipe,
                 "mode_role_key": mode_role_recipe.get("role_key") if mode_role_recipe else None,
                 "mode_role_label": mode_role_recipe.get("label") if mode_role_recipe else None,
+                "variation_mode_binding": context.metadata.get("variation_mode_binding"),
+                "variation_execution_semantic_evidence_required": context.metadata.get(
+                    "variation_execution_semantic_evidence_required"
+                ),
                 "output_index": index,
                 # Doc281 has a frozen server receipt per planned output. The
                 # router may transport these digest-only facts but Provider
@@ -476,6 +480,10 @@ class CentralCreativeBrain:
                 "mode_role_recipe": mode_role_recipe,
                 "mode_role_key": mode_role_recipe.get("role_key") if mode_role_recipe else None,
                 "mode_role_label": mode_role_recipe.get("label") if mode_role_recipe else None,
+                "variation_mode_binding": context.metadata.get("variation_mode_binding"),
+                "variation_execution_semantic_evidence_required": context.metadata.get(
+                    "variation_execution_semantic_evidence_required"
+                ),
                 "output_index": index,
                 "doc270_general_command_identity": context.metadata.get(
                     "doc270_general_command_identity"

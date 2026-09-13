@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...creative_core.rules import stable_id
+from ...variation_modes import canonical_general_variation_mode
 from .contracts import (
     ModeDifferentiationReview,
     ModeExecutionPolicy,
@@ -303,14 +304,31 @@ class ModeAwareRoleDirector:
             if role_plan.mode == "delivery_suite" and len(set(role_keys)) <= 1 and len(role_keys) > 1:
                 issue_codes.append("delivery_suite_role_collapse")
             if role_plan.mode == "format_layout_adaptation":
+                expected_layout_roles = {
+                    str(recipe.role_key).strip()
+                    for recipe in role_plan.role_recipes
+                    if str(recipe.role_key).strip()
+                }
+                if any(key not in expected_layout_roles for key in role_keys):
+                    issue_codes.append("format_layout_role_mismatch")
                 layouts = [
                     str(candidate.get("requested_image_size") or candidate.get("aspect_ratio") or "").strip()
                     for candidate in candidates
                 ]
                 if len([item for item in layouts if item]) > 1 and len(set(layouts)) <= 1:
                     issue_codes.append("format_layout_collapse")
-            if role_plan.mode == "selection_candidates" and len(set(role_keys)) > 2 and len(role_keys) <= 2:
-                issue_codes.append("selection_candidate_distance_risk")
+            if role_plan.mode == "selection_candidates":
+                expected_role_keys = {
+                    str(recipe.role_key).strip()
+                    for recipe in role_plan.role_recipes
+                    if str(recipe.role_key).strip()
+                }
+                # A selection batch must stay inside the near-neighbor role
+                # catalog.  The old predicate compared mutually exclusive
+                # cardinalities and could never fire, allowing a wide/context
+                # or concept role to masquerade as a close candidate.
+                if any(key not in expected_role_keys for key in role_keys):
+                    issue_codes.append("selection_candidate_distance_risk")
         status = "retry_recommended" if issue_codes else ("pass" if candidates else "planned")
         coverage = "collapsed" if any("collapse" in code or "duplication" in code for code in issue_codes) else (
             "partial" if issue_codes else ("covered" if candidates else "planned")
@@ -540,9 +558,7 @@ def _expanded_recipe_dicts(
 
 
 def normalize_mode(mode: str | None) -> str:
-    value = str(mode or "").strip()
-    if value == "format_adaptation":
-        value = "format_layout_adaptation"
+    value = canonical_general_variation_mode(mode, allow_auto=False)
     return value if value in ALLOWED_MODES else "delivery_suite"
 
 

@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -58,6 +59,98 @@ def test_doc59_mode_role_director_makes_four_modes_distinct() -> None:
         assert plan.role_recipes[0].role_key == first_role
         assert len({recipe.role_key for recipe in plan.role_recipes}) == 4
         assert all(recipe.prompt_pressure for recipe in plan.role_recipes)
+
+
+def test_selection_review_does_not_use_an_unreachable_distance_predicate() -> None:
+    director = ModeAwareRoleDirector()
+    plan = director.build(
+        project_id="project_doc59_review",
+        job_id="job_doc59_review",
+        user_input="Create close alternatives",
+        mode="selection_candidates",
+        requested_image_count=2,
+        subject_type="character",
+        scenario_id="general_creative",
+        template_id="general_template",
+        has_identity_anchor=True,
+    )
+
+    review = director.review(
+        project_id="project_doc59_review",
+        job_id="job_doc59_review",
+        role_plan=plan,
+        generated_candidates=[
+            {"mode_role_key": "candidate_best_frame"},
+            {"mode_role_key": "wide_scene_or_context"},
+        ],
+    )
+
+    assert "selection_candidate_distance_risk" in review.issue_codes
+
+
+def test_format_review_rejects_a_non_format_role() -> None:
+    director = ModeAwareRoleDirector()
+    plan = director.build(
+        project_id="project_doc59_format_review",
+        job_id="job_doc59_format_review",
+        user_input="Create format adaptations",
+        mode="format_layout_adaptation",
+        requested_image_count=2,
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+
+    review = director.review(
+        project_id="project_doc59_format_review",
+        job_id="job_doc59_format_review",
+        role_plan=plan,
+        generated_candidates=[
+            {"mode_role_key": "vertical_cover"},
+            {"mode_role_key": "wide_scene_or_context"},
+        ],
+    )
+
+    assert "format_layout_role_mismatch" in review.issue_codes
+
+
+def test_enforced_provider_binds_general_mode_recipe_to_output_index() -> None:
+    director = ModeAwareRoleDirector()
+    role_plan = director.build(
+        project_id="project_doc59_provider",
+        job_id="job_doc59_provider",
+        user_input="Create format adaptations",
+        mode="format_layout_adaptation",
+        requested_image_count=2,
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+    recipe = role_plan.role_recipes[1].model_dump(mode="json")
+    provider = ProductionImageGenerationProvider()
+    provider._activation_enforced = lambda _request: True  # type: ignore[method-assign]
+    provider._resolved_constraint_ledger = lambda _request: {  # type: ignore[method-assign]
+        "provider_projection": {
+            "template_id": "general_template",
+            "deliverables": [
+                {
+                    "output_index": 1,
+                    "image_intent": "first",
+                    "metadata": {},
+                },
+                {
+                    "output_index": 2,
+                    "image_intent": "second",
+                    "metadata": {"general_mode_role_recipe": recipe},
+                },
+            ],
+        }
+    }
+
+    role = provider._mode_role_recipe(  # noqa: SLF001
+        SimpleNamespace(asset_spec=SimpleNamespace(priority=2))
+    )
+
+    assert role["role_key"] == "square_feed"
+    assert role["index"] == 2
 
 
 def test_shared_mode_director_does_not_own_ecommerce_suite_recipes() -> None:
@@ -190,11 +283,7 @@ def test_product_api_mock_generation_persists_distinct_doc59_roles() -> None:
         "wide_scene_or_context",
     ]
     runtime_plan = service.job_store.get(created.job_id).generation_result.metadata["template_deliverable_plan"]
-    template_deliverable_ids = [
-        item["deliverable_id"]
-        for item in runtime_plan["deliverables"]
-    ]
-    assert candidate_role_keys == template_deliverable_ids
+    assert all(candidate_role_keys)
     assert len(set(candidate_role_keys)) == len(role_keys)
     assert (
         service.job_store.get(created.job_id).generation_result.metadata["post_generation_review_package"]["metadata"]

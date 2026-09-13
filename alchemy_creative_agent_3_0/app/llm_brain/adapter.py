@@ -75,6 +75,10 @@ from ..scenario_packs.ecommerce import (
 )
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
 from ..shared_capabilities.visual_cluster.contracts import VariationExecutionContract
+from ..variation_modes import (
+    build_general_variation_mode_binding,
+    resolve_general_variation_mode,
+)
 from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_prompt_findings,
 )
@@ -925,6 +929,15 @@ class V3LLMBrainAdapter:
             prompts_raw,
             expected_count=expected_count,
             expected_contract=variation_execution_contract,
+            require_semantic_evidence=(
+                request.metadata.get("variation_execution_semantic_evidence_required") is True
+                or (
+                    isinstance(request.metadata.get("canonical_prompt_context"), Mapping)
+                    and request.metadata["canonical_prompt_context"].get(
+                        "variation_execution_semantic_evidence_required"
+                    ) is True
+                )
+            ),
         ):
             raise BrainPromptContractInvalid(
                 "Remote Brain did not return the required General variation execution receipts."
@@ -1105,6 +1118,15 @@ class V3LLMBrainAdapter:
                     else None
                 ),
                 "variation_execution_receipts_signed": variation_execution_contract is not None,
+                "variation_execution_semantic_evidence_required": (
+                    request.metadata.get("variation_execution_semantic_evidence_required") is True
+                    or (
+                        isinstance(request.metadata.get("canonical_prompt_context"), Mapping)
+                        and request.metadata["canonical_prompt_context"].get(
+                            "variation_execution_semantic_evidence_required"
+                        ) is True
+                    )
+                ),
                 "remote_brain_call_count": remote_brain_call_count,
                 **({"remote_brain_transport": transport_receipt} if transport_receipt else {}),
                 "human_realism_semantic_preflight_required": semantic_preflight_required,
@@ -1225,13 +1247,28 @@ class V3LLMBrainAdapter:
             or as_dict(metadata.get("scenario_parameters")).get("requested_image_count")
             or 2
         )
-        variation_mode = (
-            clean_text(metadata.get("effective_variation_mode"), 80)
-            or clean_text(metadata.get("variation_mode"), 80)
-            or clean_text(metadata.get("continuation_mode"), 80)
-            or None
-        )
         scenario_parameters = as_dict(metadata.get("scenario_parameters"))
+        general_mode_scope = scenario_id == GENERAL_SCENARIO_ID and template_id == GENERAL_TEMPLATE_ID
+        mode_resolution = (
+            resolve_general_variation_mode(
+                metadata,
+                user_input=user_input,
+                requested_count=requested_count,
+                selected_size=metadata.get("requested_image_size"),
+                fallback_metadata=[scenario_parameters],
+            )
+            if general_mode_scope
+            else None
+        )
+        if mode_resolution is not None:
+            variation_mode = str(mode_resolution.get("effective_variation_mode") or "delivery_suite")
+        else:
+            variation_mode = (
+                clean_text(metadata.get("effective_variation_mode"), 80)
+                or clean_text(metadata.get("variation_mode"), 80)
+                or clean_text(metadata.get("continuation_mode"), 80)
+                or None
+            )
         provider_native_text_requirements = _provider_native_text_requirements(metadata, scenario_parameters)
         ecommerce_creative_context = _ecommerce_creative_context(
             metadata,
@@ -1269,8 +1306,16 @@ class V3LLMBrainAdapter:
             ),
             "variation_mode": variation_mode,
             "effective_variation_mode": variation_mode,
-            "inferred_variation_mode": clean_text(metadata.get("inferred_variation_mode"), 80) or None,
-            "variation_mode_source": clean_text(metadata.get("variation_mode_source"), 40) or None,
+            "inferred_variation_mode": (
+                mode_resolution.get("inferred_variation_mode")
+                if mode_resolution is not None
+                else clean_text(metadata.get("inferred_variation_mode"), 80) or None
+            ),
+            "variation_mode_source": (
+                mode_resolution.get("variation_mode_source")
+                if mode_resolution is not None
+                else clean_text(metadata.get("variation_mode_source"), 40) or None
+            ),
             "capability_hints": [clean_text(item, 100) for item in capability_hints if clean_text(item, 100)],
             "provider_native_text_requirements": provider_native_text_requirements,
             "specialized_scenario_plan_present": specialized_plan_present,
@@ -1285,6 +1330,15 @@ class V3LLMBrainAdapter:
             raw_binding = metadata.get("variation_execution_contract_binding")
             if isinstance(raw_binding, dict):
                 request_metadata["variation_execution_contract_binding"] = dict(raw_binding)
+            if metadata.get("variation_execution_semantic_evidence_required") is True:
+                request_metadata["variation_execution_semantic_evidence_required"] = True
+        if mode_resolution is not None:
+            raw_mode_binding = metadata.get("variation_mode_binding")
+            request_metadata["variation_mode_binding"] = (
+                dict(raw_mode_binding)
+                if isinstance(raw_mode_binding, dict)
+                else build_general_variation_mode_binding(mode_resolution)
+            )
         if metadata.get("professional_product_truth_required") is not None:
             request_metadata["professional_product_truth_required"] = bool(
                 metadata.get("professional_product_truth_required")
@@ -2838,6 +2892,7 @@ def _matches_variation_execution_receipts(
     *,
     expected_count: int,
     expected_contract: VariationExecutionContract,
+    require_semantic_evidence: bool = False,
 ) -> bool:
     """Require one exact Brain receipt for every frozen General output."""
 
@@ -2850,6 +2905,8 @@ def _matches_variation_execution_receipts(
         "status",
         "owner",
     }
+    if require_semantic_evidence:
+        expected_keys.update({"semantic_output_purpose", "semantic_variation_axes"})
     for expected_index, item in enumerate(candidate, start=1):
         if not isinstance(item, dict):
             return False
@@ -2864,6 +2921,13 @@ def _matches_variation_execution_receipts(
             or receipt.get("owner") != "remote_v3_llm_brain"
         ):
             return False
+        if require_semantic_evidence:
+            expected_output = expected_contract.outputs[expected_index - 1]
+            if (
+                receipt.get("semantic_output_purpose") != expected_output.output_purpose
+                or receipt.get("semantic_variation_axes") != list(expected_output.variation_axes)
+            ):
+                return False
     return True
 
 

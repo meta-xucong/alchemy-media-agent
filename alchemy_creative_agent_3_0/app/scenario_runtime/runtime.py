@@ -100,6 +100,10 @@ from ..shared_capabilities.visual_cluster.contracts import (
 )
 from ..shared_capabilities.visual_cluster.mode_role_director import ALLOWED_MODES, ModeAwareRoleDirector
 from ..shared_capabilities.visual_cluster.module import VisualCapabilityClusterModule
+from ..variation_modes import (
+    build_general_variation_mode_binding,
+    resolve_general_variation_mode,
+)
 from ..visual_assets import (
     CanonicalProviderPromptReceipt,
     FrozenVisualAssetBindingSet,
@@ -3492,6 +3496,7 @@ class ScenarioRuntime:
             "active_shared_capability_ids": list(plan.dependency_order),
             "active_semantic_capability_contracts": semantic_contracts,
             "variation_execution_contract_required": variation_execution_contract_required,
+            "variation_execution_semantic_evidence_required": bool(variation_execution_contract),
             "final_prompt_semantic_preflight": {
                 "required": bool(semantic_contracts),
                 "scope": "whole_image_human_photographic_plausibility",
@@ -3513,6 +3518,7 @@ class ScenarioRuntime:
             # translates it into complete prompts; local code does not append
             # role or recipe language.
             context["variation_execution_contract"] = variation_execution_contract
+            context["variation_execution_semantic_evidence_required"] = True
         raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
         if request.metadata.get("ecommerce_creative_context_server_owned") is True:
             try:
@@ -4504,6 +4510,28 @@ class ScenarioRuntime:
             raise CapabilityActivationError("general_variation_execution_contract_count_unsupported")
 
         metadata = dict(request.metadata or {})
+        parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
+        mode_metadata = dict(metadata)
+        raw_mode_contract = mode_metadata.get("variation_execution_contract")
+        if (
+            isinstance(raw_mode_contract, dict)
+            and raw_mode_contract.get("mode")
+            and "variation_execution_mode" not in mode_metadata
+        ):
+            # A historical frozen record may omit the copied mode marker. Use
+            # the typed contract only as a reuse fallback; a current explicit
+            # override still wins in the shared resolver below.
+            mode_metadata["variation_execution_mode"] = raw_mode_contract.get("mode")
+        mode_resolution = resolve_general_variation_mode(
+            mode_metadata,
+            user_input=request.user_input,
+            requested_count=requested_count,
+            has_reference=bool(request.uploaded_assets),
+            selected_size=metadata.get("requested_image_size"),
+            fallback_metadata=[parameters],
+        )
+        resolved_mode = str(mode_resolution.get("effective_variation_mode") or "delivery_suite")
+        role_plan_for_binding = None
         frozen_plan = metadata.get("capability_activation_plan")
         if isinstance(frozen_plan, dict) and frozen_plan.get("plan_id"):
             if (
@@ -4536,19 +4564,11 @@ class ScenarioRuntime:
                 raise CapabilityActivationError("general_variation_execution_director_missing")
             director = module.mode_role_director
             role_binding = self._resolved_general_variation_role_binding(request)
-            parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
-            mode = (
-                metadata.get("effective_variation_mode")
-                or metadata.get("variation_mode")
-                or parameters.get("effective_variation_mode")
-                or parameters.get("variation_mode")
-                or "delivery_suite"
-            )
             role_plan = director.build(
                 project_id=str(metadata.get("project_id") or "") or None,
                 job_id=self._runtime_job_id(request, resolution),
                 user_input=request.user_input,
-                mode=str(mode),
+                mode=resolved_mode,
                 requested_image_count=requested_count,
                 subject_type=role_binding["subject_type"],
                 scenario_id=scenario_id,
@@ -4562,6 +4582,28 @@ class ScenarioRuntime:
             )
             if contract is None:
                 raise CapabilityActivationError("general_variation_execution_contract_missing")
+
+        if contract.mode != resolved_mode:
+            raise CapabilityActivationError("general_variation_execution_contract_mode_conflict")
+        # Keep one server-owned role identity projection beside the neutral
+        # contract. It is used later to bind each TemplateDeliverable to the
+        # active General mode; it is not forwarded as Brain creative prose.
+        if role_plan_for_binding is None:
+            module = self.shared_capability_registry.get(VISUAL_CAPABILITY_CLUSTER_ID)
+            director = getattr(module, "mode_role_director", None)
+            if isinstance(director, ModeAwareRoleDirector):
+                role_binding = self._resolved_general_variation_role_binding(request)
+                role_plan_for_binding = director.build(
+                    project_id=str(metadata.get("project_id") or "") or None,
+                    job_id=self._runtime_job_id(request, resolution),
+                    user_input=request.user_input,
+                    mode=contract.mode,
+                    requested_image_count=contract.requested_image_count,
+                    subject_type=role_binding["subject_type"],
+                    scenario_id=scenario_id,
+                    template_id=template_id,
+                    has_identity_anchor=role_binding["has_identity_anchor"],
+                )
 
         if (
             not contract.contract_digest
@@ -4589,8 +4631,27 @@ class ScenarioRuntime:
                 "variation_execution_mode": contract.mode,
                 "variation_execution_requested_image_count": contract.requested_image_count,
                 "variation_execution_suite_direction_authoritative": True,
+                "variation_mode": mode_resolution.get("variation_mode"),
+                "effective_variation_mode": contract.mode,
+                "continuation_mode": contract.mode,
+                "inferred_variation_mode": mode_resolution.get("inferred_variation_mode"),
+                "variation_mode_source": mode_resolution.get("variation_mode_source"),
+                "variation_mode_binding": build_general_variation_mode_binding(
+                    mode_resolution,
+                    contract_version=contract.contract_version,
+                    contract_digest=contract.contract_digest,
+                ),
+                "variation_execution_semantic_evidence_required": True,
             }
         )
+        if role_plan_for_binding is not None and hasattr(role_plan_for_binding, "model_dump"):
+            role_plan_payload = role_plan_for_binding.model_dump(mode="json")
+            if (
+                isinstance(role_plan_payload, dict)
+                and role_plan_payload.get("mode") == contract.mode
+                and role_plan_payload.get("requested_image_count") == contract.requested_image_count
+            ):
+                metadata["variation_execution_role_plan"] = role_plan_payload
         role_binding = self._resolved_general_variation_role_binding(request)
         if role_binding["source"] == "runtime_typed_reference_facts":
             metadata["variation_execution_role_binding"] = role_binding
@@ -4874,6 +4935,27 @@ class ScenarioRuntime:
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
             else []
         )
+        general_role_recipes: list[dict[str, Any]] = []
+        if (
+            normalized_intent.scenario_id == "general_creative"
+            and normalized_intent.template_id == "general_template"
+        ):
+            raw_general_role_plan = request.metadata.get("variation_execution_role_plan")
+            raw_general_contract = request.metadata.get("variation_execution_contract")
+            if isinstance(raw_general_role_plan, dict) and isinstance(raw_general_contract, dict):
+                if (
+                    str(raw_general_role_plan.get("mode") or "").strip()
+                    == str(raw_general_contract.get("mode") or "").strip()
+                    and raw_general_role_plan.get("requested_image_count") == expected
+                    and raw_general_contract.get("requested_image_count") == expected
+                ):
+                    candidate_recipes = raw_general_role_plan.get("role_recipes")
+                    if isinstance(candidate_recipes, list):
+                        general_role_recipes = [
+                            dict(item)
+                            for item in candidate_recipes
+                            if isinstance(item, dict)
+                        ]
         specialized_policy = (
             dict(specialized_plan.execution_plan.get("policy") or {})
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
@@ -4883,6 +4965,12 @@ class ScenarioRuntime:
         deliverables: list[TemplateDeliverable] = []
         for index, direction in enumerate(directions, 1):
             recipe = role_recipes[index - 1] if index <= len(role_recipes) and isinstance(role_recipes[index - 1], dict) else {}
+            general_recipe = (
+                general_role_recipes[index - 1]
+                if index <= len(general_role_recipes)
+                and isinstance(general_role_recipes[index - 1], dict)
+                else {}
+            )
             factual_acceptance = (
                 ["product_truth", "platform_factual_constraints"]
                 if normalized_intent.scenario_id == "ecommerce"
@@ -4902,6 +4990,19 @@ class ScenarioRuntime:
                 if recipe.get("role_key")
                 else {}
             )
+            if general_recipe.get("role_key"):
+                # General mode roles are server-owned execution identity, not
+                # Brain prose. Keep the typed recipe in the frozen
+                # deliverable so Provider/Review can verify the output role
+                # without reconstructing it from stale job metadata.
+                deliverable_metadata.update(
+                    {
+                        "general_mode_role_key": str(general_recipe.get("role_key")),
+                        "general_mode_role_label": str(general_recipe.get("label") or ""),
+                        "general_mode_role_purpose": str(general_recipe.get("purpose") or ""),
+                        "general_mode_role_recipe": dict(general_recipe),
+                    }
+                )
             product_truth_selection = product_truth_selection_by_output.get(index, {})
             selected_product_truth = (
                 list(product_truth_selection.get("selected_product_truth_asset_ids") or [])
@@ -5479,6 +5580,9 @@ class ScenarioRuntime:
             "variation_execution_requested_image_count",
             "variation_execution_suite_direction_authoritative",
             "variation_execution_role_binding",
+            "variation_execution_role_plan",
+            "variation_mode_binding",
+            "variation_execution_semantic_evidence_required",
         ):
             if key in request.metadata:
                 active_metadata[key] = deepcopy(request.metadata[key])
@@ -6107,14 +6211,7 @@ class ScenarioRuntime:
         request: ScenarioRuntimeRequest,
         normalized_intent: NormalizedV3JobIntent,
     ) -> str | None:
-        """Carry only the already-resolved General mode into the ledger.
-
-        Project Mode canonicalizes the user-facing selection before runtime
-        preparation.  The ledger may preserve that identity, but it must not
-        infer a mode from prompt prose or accept the ``auto`` sentinel as an
-        effective mode.  Unknown values fail closed rather than becoming a
-        new public mode.
-        """
+        """Carry the shared General mode resolution into the ledger."""
 
         if (
             normalized_intent.scenario_id != "general_creative"
@@ -6122,18 +6219,16 @@ class ScenarioRuntime:
         ):
             return None
         parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
-        for raw_value in (
-            request.metadata.get("effective_variation_mode"),
-            parameters.get("effective_variation_mode"),
-            request.metadata.get("variation_mode"),
-            parameters.get("variation_mode"),
-        ):
-            value = str(raw_value or "").strip().lower()
-            if value == "format_adaptation":
-                value = "format_layout_adaptation"
-            if value in ALLOWED_MODES:
-                return value
-        return None
+        resolution = resolve_general_variation_mode(
+            request.metadata,
+            user_input=request.user_input,
+            requested_count=normalized_intent.effective_image_count,
+            has_reference=bool(request.uploaded_assets),
+            selected_size=request.metadata.get("requested_image_size"),
+            fallback_metadata=[parameters],
+        )
+        value = str(resolution.get("effective_variation_mode") or "").strip()
+        return value if value in ALLOWED_MODES else None
 
     @staticmethod
     def _template_delivery_evidence_retry_contract(deliverables: list[dict[str, Any]]) -> dict[str, Any]:
@@ -6259,6 +6354,8 @@ class ScenarioRuntime:
             "variation_execution_contract": {"suite_direction"},
             "mode_role_recipe": {"suite_direction"},
             "mode_quality_profile": {"suite_direction"},
+            "variation_mode_binding": {"suite_direction"},
+            "variation_execution_semantic_evidence_required": {"suite_direction"},
             "reference_truth_package": {
                 "portrait_identity",
                 "product_identity",
@@ -6308,6 +6405,7 @@ class ScenarioRuntime:
             projection["variation_execution_requested_image_count"] = (
                 variation_contract.requested_image_count
             )
+            projection["variation_execution_semantic_evidence_required"] = True
         if "suite_direction" in active and isinstance(raw_cluster.get("mode_role_plan_reconciled_to_series"), bool):
             projection["mode_role_plan_reconciled_to_series"] = raw_cluster["mode_role_plan_reconciled_to_series"]
         return projection
@@ -6737,6 +6835,12 @@ class ScenarioRuntime:
                             "variation_execution_suite_direction_authoritative": True,
                         }
                     )
+                for key in (
+                    "variation_mode_binding",
+                    "variation_execution_semantic_evidence_required",
+                ):
+                    if key in capability_projection:
+                        metadata[key] = deepcopy(capability_projection[key])
         if preparation.capability_execution_envelope is not None:
             envelope = preparation.capability_execution_envelope.safe_metadata()
             metadata.update(
@@ -7578,6 +7682,11 @@ class ScenarioRuntime:
             base_metadata["requested_image_count"] = variation_contract.requested_image_count
             base_metadata["effective_variation_mode"] = variation_contract.mode
             base_metadata["variation_mode"] = variation_contract.mode
+            base_metadata["continuation_mode"] = variation_contract.mode
+            base_metadata["variation_execution_semantic_evidence_required"] = True
+            mode_binding = request.metadata.get("variation_mode_binding")
+            if isinstance(mode_binding, dict):
+                base_metadata["variation_mode_binding"] = dict(mode_binding)
             visual_cluster_metadata = dict(shared_capability_metadata.get("visual_cluster") or {})
             visual_cluster_metadata["variation_execution_contract"] = deepcopy(
                 variation_contract.model_dump(mode="json")

@@ -7946,6 +7946,8 @@ class V3ProductApiService:
             "variation_execution_requested_image_count",
             "variation_execution_suite_direction_authoritative",
             "variation_execution_contract_enforced",
+            "variation_mode_binding",
+            "variation_execution_semantic_evidence_required",
         )
         result_metadata = getattr(result, "metadata", {})
         if not isinstance(result_metadata, dict):
@@ -8347,6 +8349,36 @@ class V3ProductApiService:
                 valid = False
             if sorted(output_indices) != list(range(1, requested_count + 1)):
                 valid = False
+            semantic_evidence_required = (
+                execution_projection.get("variation_execution_semantic_evidence_required") is True
+            )
+            if valid and semantic_evidence_required:
+                raw_contract = execution_projection.get("variation_execution_contract")
+                try:
+                    variation_contract = VariationExecutionContract.model_validate(raw_contract)
+                except (TypeError, ValueError, ValidationError):
+                    variation_contract = None
+                if variation_contract is None or variation_contract.requested_image_count != requested_count:
+                    valid = False
+                else:
+                    outputs_by_index = {
+                        item.output_index: item.model_dump(mode="json")
+                        for item in variation_contract.outputs
+                    }
+                    for item in prompts:
+                        if not isinstance(item, dict):
+                            valid = False
+                            break
+                        expected_output = outputs_by_index.get(item.get("output_index"))
+                        raw_axes = item.get("semantic_variation_axes")
+                        actual_axes = list(raw_axes) if isinstance(raw_axes, (list, tuple)) else None
+                        if (
+                            not isinstance(expected_output, dict)
+                            or item.get("semantic_output_purpose") != expected_output.get("output_purpose")
+                            or actual_axes != list(expected_output.get("variation_axes") or [])
+                        ):
+                            valid = False
+                            break
             if not valid:
                 return None
             return {

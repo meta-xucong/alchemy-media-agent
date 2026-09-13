@@ -314,6 +314,10 @@ def build_provider_generation_request(
             "mode_role_recipe": metadata.get("mode_role_recipe", {}),
             "mode_role_key": metadata.get("mode_role_key"),
             "mode_role_label": metadata.get("mode_role_label"),
+            "variation_mode_binding": metadata.get("variation_mode_binding"),
+            "variation_execution_semantic_evidence_required": metadata.get(
+                "variation_execution_semantic_evidence_required"
+            ),
             "project_id": metadata.get("project_id"),
             "template_id": metadata.get("template_id"),
             "scenario_id": metadata.get("scenario_id"),
@@ -495,6 +499,31 @@ class GenerationProvider:
             if not direction:
                 return {}
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            general_role = metadata.get("general_mode_role_recipe")
+            if (
+                str(projection.get("template_id") or "").strip() == "general_template"
+                and isinstance(general_role, dict)
+                and str(general_role.get("role_key") or "").strip()
+                and self._role_recipe_matches_output_index(general_role, index)
+            ):
+                # The General mode role was frozen alongside this exact
+                # TemplateDeliverable.  Materialize its typed recipe here so
+                # the Provider prompt compiler and output review see the
+                # active mode role, while the raw recipe remains outside the
+                # Brain prompt context.
+                role = dict(general_role)
+                role["index"] = index
+                role["metadata"] = {
+                    **(
+                        dict(role.get("metadata"))
+                        if isinstance(role.get("metadata"), dict)
+                        else {}
+                    ),
+                    "source": "resolved_constraint_ledger",
+                    "template_role_contract": True,
+                    "static_recipe_present": False,
+                }
+                return role
             specialized_contract = metadata.get("specialized_role_contract")
             if isinstance(specialized_contract, dict) and specialized_contract.get("role_key"):
                 # This contract entered the provider projection through the
@@ -569,6 +598,13 @@ class GenerationProvider:
             if isinstance(value, dict):
                 return dict(value)
         return {}
+
+    @staticmethod
+    def _role_recipe_matches_output_index(recipe: Any, output_index: int) -> bool:
+        if not isinstance(recipe, dict) or type(output_index) is not int or output_index < 1:
+            return False
+        recipe_index = recipe.get("output_index", recipe.get("index"))
+        return type(recipe_index) is int and recipe_index == output_index
 
     def _role_specific_generation_plan(self, request: GenerationRequest) -> dict[str, Any]:
         if self._activation_enforced(request):
@@ -1138,6 +1174,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "variation_execution_requested_image_count",
                         "variation_execution_suite_direction_authoritative",
                         "variation_execution_contract_enforced",
+                        "variation_mode_binding",
+                        "variation_execution_semantic_evidence_required",
                     )
                     if capability_projection.get(key) not in (None, "", {}, [], False)
                 }

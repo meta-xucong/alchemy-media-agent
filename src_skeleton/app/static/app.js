@@ -71,6 +71,7 @@ const v3CanonicalVariationModes = Object.freeze([
 const v3VariationModeAliases = Object.freeze({
   similar_options: "selection_candidates",
   suite_expansion: "delivery_suite",
+  creative_explore: "creative_exploration",
   layout_adaptation: "format_layout_adaptation",
   format_adaptation: "format_layout_adaptation",
 });
@@ -3003,6 +3004,7 @@ function v3GenerationPreferencesPayload(scenarioId, count, { hasReference = fals
     });
     return {
       variation_mode: variationMode,
+      variation_mode_override: variationMode !== "auto" ? variationMode : null,
       inferred_variation_mode: inferredMode,
       effective_variation_mode: variationMode !== "auto" ? variationMode : inferredMode,
       variation_mode_source: variationMode === "auto" ? "auto" : "manual",
@@ -9660,6 +9662,9 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       selected_mode_id: scenarioId === "ecommerce" ? undefined : v3State.selectedPreset,
       selected_preset_id: scenarioId === "ecommerce" ? undefined : v3State.selectedPreset,
       variation_mode: scenarioId === "general_creative" ? selectedVariationMode : undefined,
+      variation_mode_override: scenarioId === "general_creative" && selectedVariationMode !== "auto"
+        ? selectedVariationMode
+        : undefined,
       inferred_variation_mode: scenarioId === "general_creative" ? inferredVariationMode : undefined,
       effective_variation_mode: scenarioId === "general_creative" ? effectiveVariationMode : undefined,
       continuation_mode: scenarioId === "general_creative" ? effectiveVariationMode : undefined,
@@ -9767,6 +9772,7 @@ async function createV3Job() {
         requested_image_size: generationSettings.size || null,
         advanced_reference_controls: payload.metadata.advanced_reference_controls,
         variation_mode: payload.metadata.variation_mode,
+        variation_mode_override: payload.metadata.variation_mode_override,
         inferred_variation_mode: payload.metadata.inferred_variation_mode,
         effective_variation_mode: payload.metadata.effective_variation_mode,
         continuation_mode: payload.metadata.continuation_mode,

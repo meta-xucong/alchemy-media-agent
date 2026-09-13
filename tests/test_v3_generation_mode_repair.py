@@ -9,6 +9,10 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode.contracts import CreateProjectJobRequest
 from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
+from alchemy_creative_agent_3_0.app.variation_modes import (
+    canonical_general_variation_mode,
+    resolve_general_variation_mode,
+)
 
 
 def test_selection_request_accepts_plural_ids_and_legacy_singular_ids() -> None:
@@ -183,6 +187,67 @@ def test_server_resolves_general_mode_from_raw_request_without_metadata(
     assert contract["continuation_mode"] == expected_mode
 
 
+def test_explicit_general_override_wins_over_stale_effective_mode() -> None:
+    handlers = V3ProductRouteHandlers()
+    service = handlers.project_service
+
+    contract = service._general_variation_contract(  # noqa: SLF001
+        {
+            "variation_mode_override": "creative_exploration",
+            "variation_mode": "auto",
+            "effective_variation_mode": "selection_candidates",
+            "inferred_variation_mode": "selection_candidates",
+            "requested_image_count": 2,
+        },
+        user_input="Create the next image set.",
+        requested_count=2,
+    )
+
+    assert contract["variation_mode"] == "creative_exploration"
+    assert contract["effective_variation_mode"] == "creative_exploration"
+    assert contract["continuation_mode"] == "creative_exploration"
+
+
+def test_general_mode_aliases_are_canonical_across_shared_resolver() -> None:
+    expected = {
+        "similar_options": "selection_candidates",
+        "suite_expansion": "delivery_suite",
+        "creative_explore": "creative_exploration",
+        "layout_adaptation": "format_layout_adaptation",
+        "format_adaptation": "format_layout_adaptation",
+    }
+
+    for alias, mode in expected.items():
+        assert canonical_general_variation_mode(alias) == mode
+        resolved = resolve_general_variation_mode(
+            {"variation_mode_override": alias},
+            user_input="Create a set.",
+            requested_count=2,
+        )
+        assert resolved["effective_variation_mode"] == mode
+
+
+def test_project_context_override_suppresses_persisted_effective_mode() -> None:
+    handlers = V3ProductRouteHandlers()
+    project = handlers.post_projects({"user_goal": "Create a visual set"})["project"]
+    project_record = handlers.project_service._require_project(project["project_id"])
+
+    context = handlers.project_service._build_context(  # noqa: SLF001
+        project_record,
+        template_id="general_template",
+        continuation_instruction="Create the next image set.",
+        generation_overrides={
+            "variation_mode_override": "format_adaptation",
+            "variation_mode": "auto",
+            "effective_variation_mode": "selection_candidates",
+            "requested_image_count": 2,
+        },
+    )
+
+    assert context.general_suite_role_plan["variation_mode"] == "format_layout_adaptation"
+    assert context.metadata["effective_variation_mode"] == "format_layout_adaptation"
+
+
 def test_project_job_carries_server_resolved_mode_through_context_and_brain_request(monkeypatch) -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects({"user_goal": "Create a visual set"})["project"]
@@ -228,6 +293,7 @@ def test_project_job_carries_server_resolved_mode_through_context_and_brain_requ
         metadata=metadata,
     )
     assert brain_request.metadata["effective_variation_mode"] == "creative_exploration"
+    assert brain_request.metadata["variation_mode_binding"]["effective_mode"] == "creative_exploration"
     assert brain_request.requested_image_count == 3
 
 

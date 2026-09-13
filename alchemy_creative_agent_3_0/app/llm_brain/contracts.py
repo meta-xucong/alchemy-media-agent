@@ -312,6 +312,11 @@ class VariationExecutionReceipt(V3BaseModel):
     output_index: StrictInt = Field(ge=1, le=16)
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
+    # Fresh enforced General runs may require the Brain to acknowledge the
+    # exact neutral semantic row it used. These fields remain optional so
+    # historical/specialized records stay readable.
+    semantic_output_purpose: str | None = None
+    semantic_variation_axes: tuple[str, ...] = Field(default_factory=tuple, max_length=6)
 
     @field_validator("contract_digest")
     @classmethod

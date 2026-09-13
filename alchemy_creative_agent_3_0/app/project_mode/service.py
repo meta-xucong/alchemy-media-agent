@@ -58,6 +58,12 @@ from ..scenario_packs.ecommerce.provider_deliverability_closure import (
 from ..schemas import BrandProfile, ProviderStrategy, ReferenceAsset
 from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
+from ..variation_modes import (
+    GENERAL_VARIATION_MODE_ALIASES,
+    GENERAL_VARIATION_MODES,
+    infer_general_variation_mode,
+    resolve_general_variation_mode,
+)
 from ..visual_assets import ProjectVisualAssetBindingService
 from .contracts import (
     ECOMMERCE_TEMPLATE_ID,
@@ -140,22 +146,8 @@ from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 ECOMMERCE_PRODUCT_UPLOAD_ROLES = {"product_reference", "subject_reference"}
 PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
 _PROJECT_LIST_CURSOR_SCHEMA = "v3_project_list_cursor_v1"
-_GENERAL_VARIATION_MODES = frozenset(
-    {
-        "auto",
-        "selection_candidates",
-        "delivery_suite",
-        "creative_exploration",
-        "format_layout_adaptation",
-    }
-)
-_GENERAL_VARIATION_MODE_ALIASES = {
-    "similar_options": "selection_candidates",
-    "suite_expansion": "delivery_suite",
-    "creative_explore": "creative_exploration",
-    "layout_adaptation": "format_layout_adaptation",
-    "format_adaptation": "format_layout_adaptation",
-}
+_GENERAL_VARIATION_MODES = GENERAL_VARIATION_MODES
+_GENERAL_VARIATION_MODE_ALIASES = GENERAL_VARIATION_MODE_ALIASES
 
 
 def _project_listing_key(project: ProjectRecord) -> tuple[str, str, str]:
@@ -8142,52 +8134,21 @@ class V3ProjectModeService:
         selected_size: object | None = None,
     ) -> dict[str, Any]:
         metadata = dict(metadata or {})
-        allowed = _GENERAL_VARIATION_MODES
-
-        def canonical(value: object) -> str:
-            normalized = str(value or "").strip().lower()
-            normalized = _GENERAL_VARIATION_MODE_ALIASES.get(normalized, normalized)
-            return normalized if normalized in allowed else ""
-
-        requested = canonical(
-            metadata.get("variation_mode_override")
-            or metadata.get("variation_mode")
-            or metadata.get("continuation_mode")
-            or metadata.get("effective_variation_mode")
-        ) or "auto"
-        inferred = canonical(metadata.get("inferred_variation_mode"))
-        if inferred == "auto":
-            inferred = ""
-        if not inferred:
-            inferred = _infer_general_variation_mode(
-                user_input,
-                requested_count=(
-                    requested_count
-                    if requested_count is not None
-                    else metadata.get("requested_image_count")
-                ),
-                has_reference=bool(
-                    has_reference
-                    or metadata.get("has_reference")
-                    or metadata.get("has_product_reference")
-                ),
-                selected_size=(
-                    selected_size
-                    if selected_size is not None
-                    else metadata.get("requested_image_size")
-                ),
-            )
-        effective = canonical(metadata.get("effective_variation_mode")) or requested
-        if effective == "auto":
-            effective = inferred or "delivery_suite"
-        source = str(metadata.get("variation_mode_source") or ("auto" if requested == "auto" else "manual")).strip()
-        return {
-            "variation_mode": requested,
-            "effective_variation_mode": effective,
-            "continuation_mode": effective,
-            "inferred_variation_mode": inferred or None,
-            "variation_mode_source": source,
-        }
+        return resolve_general_variation_mode(
+            metadata,
+            user_input=user_input,
+            requested_count=(
+                requested_count
+                if requested_count is not None
+                else metadata.get("requested_image_count")
+            ),
+            has_reference=has_reference,
+            selected_size=(
+                selected_size
+                if selected_size is not None
+                else metadata.get("requested_image_size")
+            ),
+        )
 
     def _generation_preferences_for_job(
         self,
@@ -9594,6 +9555,18 @@ class V3ProjectModeService:
         tone = self._style_chips(project)
         context_generation_metadata = dict(project.metadata or {})
         persisted_preferences = project.generation_preferences
+        current_mode_override = bool(
+            generation_overrides
+            and any(
+                key in generation_overrides
+                for key in (
+                    "variation_mode_override",
+                    "variation_mode",
+                    "continuation_mode",
+                    "effective_variation_mode",
+                )
+            )
+        )
         if persisted_preferences is not None and persisted_preferences.general is not None:
             general_preferences = persisted_preferences.general
             if (
@@ -9603,12 +9576,12 @@ class V3ProjectModeService:
                 context_generation_metadata["requested_image_count"] = general_preferences.requested_image_count
             if (
                 general_preferences.variation_mode is not None
-                and (not generation_overrides or "variation_mode" not in generation_overrides)
+                and not current_mode_override
             ):
                 context_generation_metadata["variation_mode"] = general_preferences.variation_mode
             if (
                 general_preferences.effective_variation_mode is not None
-                and (not generation_overrides or "effective_variation_mode" not in generation_overrides)
+                and not current_mode_override
             ):
                 context_generation_metadata["effective_variation_mode"] = general_preferences.effective_variation_mode
         if generation_overrides:
@@ -10257,9 +10230,15 @@ class V3ProjectModeService:
             return {}
         requested_count = _bounded_requested_image_count(metadata.get("requested_image_count")) or 2
         requested_count = max(1, requested_count)
-        mode = str(metadata.get("effective_variation_mode") or metadata.get("variation_mode") or "delivery_suite")
-        if mode not in {"selection_candidates", "delivery_suite", "creative_exploration", "format_layout_adaptation"}:
-            mode = "delivery_suite"
+        mode = str(
+            resolve_general_variation_mode(
+                metadata,
+                user_input=continuation_instruction or project.user_goal,
+                requested_count=requested_count,
+                has_reference=bool(project.selected_output_refs),
+            ).get("effective_variation_mode")
+            or "delivery_suite"
+        )
         roles = self._suite_roles_for_mode(mode, requested_count, has_anchor=bool(project.selected_output_refs))
         return {
             "plan_id": stable_id("general_suite_role_plan", project.project_id, mode, requested_count, continuation_instruction or project.user_goal),
@@ -13599,44 +13578,14 @@ def _infer_general_variation_mode(
     has_reference: bool = False,
     selected_size: object | None = None,
 ) -> str:
-    """Resolve the neutral General mode when a legacy caller omits metadata.
+    """Keep legacy Project Mode callers on the shared inference authority."""
 
-    The browser normally sends a normalized contract, but Project Mode also
-    accepts older clients and direct API callers.  Those callers must receive
-    the same semantic mode instead of silently inheriting the delivery-suite
-    fallback.  The order mirrors the public General controls: explicit layout
-    language, creative exploration, delivery/set language, close candidates,
-    then evidence/count fallbacks.
-    """
-
-    text = re.sub(r"\s+", " ", str(user_input or "").strip().lower())
-    if re.search(
-        r"尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|留白|裁切|裁剪|layout|format|ratio|size|crop|adapt",
-        text,
-    ):
-        return "format_layout_adaptation"
-    if re.search(
-        r"探索|不同方向|不同概念|尝试新风格|不同风格|多种风格|explore|different directions|different concepts|try new styles|different styles|new concepts",
-        text,
-    ):
-        return "creative_exploration"
-    if re.search(
-        r"沿.{0,12}方向.{0,12}(一组|系列|套图)|套图|一组|系列|组图|延展|扩展|\b(series|suite|set|extend|campaign)\b",
-        text,
-    ):
-        return "delivery_suite"
-    if re.search(
-        r"相似|备选|多给|挑选|同一|同款|不同姿势|不同角度|similar|alternative|same person|same product|different pose|different angle",
-        text,
-    ):
-        return "selection_candidates"
-    if _bounded_requested_image_count(requested_count) and _bounded_requested_image_count(requested_count) > 1:
-        return "selection_candidates"
-    if has_reference:
-        return "selection_candidates"
-    if _explicit_requested_image_size(selected_size):
-        return "format_layout_adaptation"
-    return "delivery_suite"
+    return infer_general_variation_mode(
+        user_input,
+        requested_count=requested_count,
+        has_reference=has_reference,
+        selected_size=selected_size,
+    )
 
 
 def _infer_general_requested_image_size(user_input: str | None) -> str | None:

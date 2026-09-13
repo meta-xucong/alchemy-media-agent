@@ -440,7 +440,11 @@ def test_finalizer_context_keeps_frozen_contract_and_old_cluster_records_stay_re
     assert old_cluster.variation_execution_contract is None
 
 
-def _finalizer_request(contract: VariationExecutionContract | None) -> BrainRunRequest:
+def _finalizer_request(
+    contract: VariationExecutionContract | None,
+    *,
+    require_semantic_evidence: bool = False,
+) -> BrainRunRequest:
     context: dict[str, object] = {"variation_execution_contract_required": contract is not None}
     if contract is not None:
         context["variation_execution_contract"] = contract.model_dump(mode="json")
@@ -450,6 +454,8 @@ def _finalizer_request(contract: VariationExecutionContract | None) -> BrainRunR
                 "contract_digest": contract.contract_digest,
             }
         }
+        if require_semantic_evidence:
+            context["variation_execution_semantic_evidence_required"] = True
     return BrainRunRequest(
         user_input="Create the approved real image set.",
         stage="provider_prompt_finalize",
@@ -770,7 +776,12 @@ def test_compact_general_helper_fails_closed_for_missing_or_invalid_bound_contra
         build_remote_payload(request)
 
 
-def _canonical_prompts_for(contract: VariationExecutionContract, *, include_receipts: bool = True) -> list[dict]:
+def _canonical_prompts_for(
+    contract: VariationExecutionContract,
+    *,
+    include_receipts: bool = True,
+    include_semantic_evidence: bool = False,
+) -> list[dict]:
     prompts = []
     for output_index in range(1, contract.requested_image_count + 1):
         item = {
@@ -786,8 +797,133 @@ def _canonical_prompts_for(contract: VariationExecutionContract, *, include_rece
                 "status": "approved",
                 "owner": "remote_v3_llm_brain",
             }
+            if include_semantic_evidence:
+                semantic_output = contract.outputs[output_index - 1]
+                item["variation_execution_receipt"].update(
+                    {
+                        "semantic_output_purpose": semantic_output.output_purpose,
+                        "semantic_variation_axes": list(semantic_output.variation_axes),
+                    }
+                )
         prompts.append(item)
     return prompts
+
+
+def test_runtime_override_rebuilds_instead_of_reusing_a_stale_mode_contract() -> None:
+    runtime = ScenarioRuntime()
+    request = ScenarioRuntimeRequest(
+        user_input="Create a varied General image set.",
+        metadata={
+            "requested_image_count": 2,
+            "variation_mode_override": "creative_exploration",
+            "variation_mode": "auto",
+            "effective_variation_mode": "selection_candidates",
+            "variation_execution_mode": "selection_candidates",
+        },
+    )
+    resolution = SimpleNamespace(
+        manifest=SimpleNamespace(scenario_id="general_creative"),
+        selected_mode_id=None,
+        selected_preset_id=None,
+    )
+
+    bound = runtime._bind_initial_general_variation_contract(  # noqa: SLF001
+        request,
+        resolution,
+        SimpleNamespace(effective_image_count=2),
+    )
+
+    contract = VariationExecutionContract.model_validate(
+        bound.metadata["variation_execution_contract"]
+    )
+    assert contract.mode == "creative_exploration"
+    assert bound.metadata["variation_execution_mode"] == "creative_exploration"
+    role_plan = bound.metadata["variation_execution_role_plan"]
+    assert role_plan["mode"] == "creative_exploration"
+    assert [item["role_key"] for item in role_plan["role_recipes"]] == [
+        "concept_clean_bright",
+        "concept_editorial",
+    ]
+
+
+def test_mode_director_canonicalizes_legacy_creative_alias() -> None:
+    plan = ModeAwareRoleDirector().build(
+        project_id="project_alias",
+        job_id="job_alias",
+        user_input="Create a set.",
+        mode="creative_explore",
+        requested_image_count=2,
+        subject_type="generic",
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+
+    assert plan.mode == "creative_exploration"
+
+
+def test_selection_review_flags_an_unexpected_wide_role_as_distance_risk() -> None:
+    director = ModeAwareRoleDirector()
+    plan = director.build(
+        project_id="project_selection_review",
+        job_id="job_selection_review",
+        user_input="Create close alternatives.",
+        mode="selection_candidates",
+        requested_image_count=2,
+        subject_type="character",
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+
+    review = director.review(
+        project_id="project_selection_review",
+        job_id="job_selection_review",
+        role_plan=plan,
+        generated_candidates=[
+            {"mode_role_key": "candidate_best_frame"},
+            {"mode_role_key": "wide_scene_or_context"},
+        ],
+    )
+
+    assert "selection_candidate_distance_risk" in review.issue_codes
+
+
+def test_finalizer_requires_exact_semantic_receipts_when_frozen_context_requests_them(monkeypatch) -> None:
+    contract = _general_contract(count=3, mode="selection_candidates")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    adapter = V3LLMBrainAdapter(
+        provider=_CanonicalPromptProvider(
+            {
+                "canonical_provider_prompts": _canonical_prompts_for(
+                    contract,
+                    include_semantic_evidence=True,
+                )
+            }
+        )
+    )
+
+    prompts, _audit = adapter.finalize_canonical_provider_prompts(
+        _finalizer_request(contract, require_semantic_evidence=True)
+    )
+
+    assert prompts[0].variation_execution_receipt is not None
+    assert prompts[0].variation_execution_receipt.semantic_output_purpose == (
+        contract.outputs[0].output_purpose
+    )
+
+
+def test_finalizer_rejects_semantic_receipt_for_the_wrong_contract_output(monkeypatch) -> None:
+    contract = _general_contract(count=2, mode="selection_candidates")
+    prompts = _canonical_prompts_for(contract, include_semantic_evidence=True)
+    prompts[1]["variation_execution_receipt"]["semantic_variation_axes"] = ["context"]
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    adapter = V3LLMBrainAdapter(
+        provider=_CanonicalPromptProvider({"canonical_provider_prompts": prompts})
+    )
+
+    with pytest.raises(BrainPromptContractInvalid):
+        adapter.finalize_canonical_provider_prompts(
+            _finalizer_request(contract, require_semantic_evidence=True)
+        )
 
 
 class _CanonicalPromptProvider:
