@@ -247,8 +247,10 @@ def build_task_profile_and_intent(
         requested.append(RequestedCapability(capability_id="typography_layout", reason_codes=["layout_or_text_requested"], evidence_ids=[layout_evidence], confidence=0.8))
 
     requested_count = _int_value(metadata.get("requested_image_count"), 1)
-    variation_mode = str(metadata.get("variation_mode") or metadata.get("effective_variation_mode") or "")
-    if requested_count > 1 or variation_mode:
+    # General variation modes are multi-output contracts.  A stale/default
+    # mode field must not activate the Suite Director for a one-image job;
+    # single-image routing keeps the shared foundation only.
+    if requested_count > 1:
         suite_evidence = add_evidence("multiple_outputs", "explicit_control", requested_count, 1.0)
         requested.append(RequestedCapability(capability_id="suite_direction", reason_codes=["multiple_outputs"], evidence_ids=[suite_evidence], confidence=1.0))
 

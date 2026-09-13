@@ -627,7 +627,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function inferV3VariationMode" in script.text
     assert "variation_mode: scenarioId" in script.text
     assert "effective_variation_mode" in script.text
-    assert "continuation_mode: scenarioId" in script.text
+    assert "continuation_mode: scenarioId" not in script.text
     assert "variation_mode_source" in script.text
     assert "function v3CurrentGenerationSettings" in script.text
     assert "requested_image_count: generationSettings.count" in script.text

@@ -22,6 +22,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_evidence import (
     ExactReviewEvidenceResolver,
 )
+from alchemy_creative_agent_3_0.app.variation_modes import build_general_variation_mode_binding
 
 
 def _enforced_plan() -> dict:
@@ -103,6 +104,15 @@ def _cluster_metadata(*, scenario_id: str, template_id: str) -> dict:
                 },
                 "variation_execution_mode": "delivery_suite",
                 "variation_execution_requested_image_count": 2,
+                "variation_mode_binding": build_general_variation_mode_binding(
+                    {
+                        "variation_mode": "auto",
+                        "effective_variation_mode": "delivery_suite",
+                        "variation_mode_source": "auto",
+                    },
+                    contract_version=contract.contract_version,
+                    contract_digest=contract.contract_digest,
+                ),
             }
         )
     return metadata

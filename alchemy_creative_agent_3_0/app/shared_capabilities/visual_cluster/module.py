@@ -26,6 +26,7 @@ from .contracts import (
     BeautifulRealismBalanceReview,
     BoneStructureRetryPatch,
     CommercialOutputSelection,
+    GeneralVariationModeBinding,
     GeneralSuiteRolePlan,
     HumanBatchDiversityReview,
     HumanIdentityAnchorProfile,
@@ -627,6 +628,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             else None
         )
         runtime_general_contract_scope = runtime_variation_contract is not None
+        runtime_variation_mode_binding = self._variation_mode_binding_from_runtime(
+            capability_input,
+            runtime_variation_contract,
+        )
         project_id = str(project_context.get("project_id") or "") or None
         if subject_continuity_active:
             identity_drift_guard = self.identity_drift_guard.build(
@@ -1234,6 +1239,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             strong_reference_continuation_plan=strong_reference_plan,
             general_suite_role_plan=suite_role_plan,
             variation_execution_contract=variation_execution_contract,
+            variation_mode_binding=runtime_variation_mode_binding,
             mode_execution_policy=role_specific_plan.policy,
             role_specific_generation_plan=role_specific_plan,
             mode_differentiation_review=mode_review,
@@ -3700,6 +3706,30 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         ):
             raise ValueError("general variation execution contract frozen binding mismatch")
         return contract
+
+    @staticmethod
+    def _variation_mode_binding_from_runtime(
+        capability_input: CapabilityInput,
+        contract: VariationExecutionContract | None,
+    ) -> GeneralVariationModeBinding | None:
+        """Validate mode provenance beside the runtime-bound contract."""
+
+        if contract is None:
+            return None
+        raw_binding = capability_input.metadata.get("variation_mode_binding")
+        if not isinstance(raw_binding, dict):
+            raise ValueError("general variation mode binding is missing")
+        try:
+            binding = GeneralVariationModeBinding.model_validate(raw_binding)
+        except Exception as exc:
+            raise ValueError("general variation mode binding is invalid") from exc
+        if (
+            binding.effective_mode != contract.mode
+            or binding.contract_version != contract.contract_version
+            or binding.contract_digest != contract.contract_digest
+        ):
+            raise ValueError("general variation mode binding does not match contract")
+        return binding
 
     def _requested_image_count(self, capability_input: CapabilityInput, project_context: dict[str, Any]) -> int:
         runtime_variation_contract = self._variation_execution_contract_from_runtime(capability_input)

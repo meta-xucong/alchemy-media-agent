@@ -12,6 +12,7 @@ from .contracts import (
     GeneratedOutputResolution,
     GeneralSuiteRole,
     GeneralSuiteRolePlan,
+    GeneralVariationModeBinding,
     HumanBatchDiversityReview,
     HumanIdentityAnchorProfile,
     HumanNaturalVariationPlan,

@@ -104,7 +104,12 @@ from ..shared_capabilities.visual_cluster import (
     VisionOutputInspector,
     reference_channel_retry_patch,
 )
-from ..shared_capabilities.visual_cluster.contracts import ReviewEvidencePlan, VariationExecutionContract
+from ..shared_capabilities.visual_cluster.contracts import (
+    GeneralVariationModeBinding,
+    ModeRoleRecipe,
+    ReviewEvidencePlan,
+    VariationExecutionContract,
+)
 from ..shared_capabilities.visual_cluster.human_photorealism import (
     HUMAN_REALISM_REVIEW_DIMENSIONS,
     normalize_human_realism_issue_code,
@@ -1282,6 +1287,8 @@ class V3ProductApiService:
             "variation_execution_requested_image_count",
             "variation_execution_suite_direction_authoritative",
             "variation_execution_role_binding",
+            "variation_execution_role_plan",
+            "variation_mode_binding",
         }
     )
 
@@ -1968,13 +1975,11 @@ class V3ProductApiService:
         job_id = (
             planning_result.creative_job.job_id
             if planning_result
-            else stable_id(
-                "job",
-                create_request.user_input,
-                create_request.effective_brand_id,
-                runtime_result.scenario_resolution.manifest.scenario_id,
-                create_request.metadata.get("v3_job_instance_id") or server_job_instance_id,
-            )
+            # A blocked planning result still has one authoritative Runtime
+            # identity.  Do not derive a second fallback ID here: a frozen
+            # visual-asset snapshot, lifecycle receipt, and public status
+            # must all address the same Job even when Brain sign-off fails.
+            else self._planned_job_id_for_request(create_request)
         )
         activation_metadata = {
             key: runtime_result.metadata[key]
@@ -1995,6 +2000,8 @@ class V3ProductApiService:
                 "resolved_constraint_ledger_id",
                 "capability_execution_envelope",
                 "capability_execution_envelope_id",
+                "variation_execution_role_plan",
+                "variation_mode_binding",
                 "remote_creative_brain_outcome",
                 "specialized_scenario_plan",
                 "specialized_scenario_plan_summary",
@@ -16476,7 +16483,20 @@ class V3ProductApiService:
             for key in cls._VARIATION_EXECUTION_RUNTIME_METADATA
             if key in source_metadata
         }
-        if not source_variation:
+        contract_marker_fields = {
+            "variation_execution_contract",
+            "variation_execution_contract_binding",
+            "variation_execution_contract_enforced",
+            "variation_execution_mode",
+            "variation_execution_requested_image_count",
+            "variation_execution_suite_direction_authoritative",
+            "variation_execution_role_plan",
+        }
+        # ``variation_mode_binding`` is also emitted for ordinary single-image
+        # jobs so Brain can keep a compact mode receipt. It is not, by itself,
+        # a variation-execution continuation. Only enter the trusted contract
+        # validator when a source record actually carries an execution marker.
+        if not source_variation or not (contract_marker_fields & source_variation.keys()):
             return cleaned
         required = {
             "variation_execution_contract",
@@ -16485,9 +16505,23 @@ class V3ProductApiService:
             "variation_execution_mode",
             "variation_execution_requested_image_count",
             "variation_execution_suite_direction_authoritative",
+            "variation_execution_role_plan",
+            "variation_mode_binding",
         }
+        legacy_compatibility = False
         if not required.issubset(source_variation):
-            raise ValueError("trusted_variation_execution_contract_invalid")
+            compatibility_fields = {
+                "variation_execution_role_plan",
+                "variation_mode_binding",
+            }
+            # Pre-hardening records did not persist the two provenance
+            # projections. Keep those records readable, but do not accept a
+            # partially upgraded record: a new record must carry both fields
+            # and will be revalidated by ScenarioRuntime before execution.
+            if not (compatibility_fields & source_variation.keys()):
+                legacy_compatibility = True
+            else:
+                raise ValueError("trusted_variation_execution_contract_invalid")
         try:
             contract = VariationExecutionContract.model_validate(source_variation["variation_execution_contract"])
         except Exception as exc:
@@ -16504,6 +16538,35 @@ class V3ProductApiService:
             or source_variation["variation_execution_suite_direction_authoritative"] is not True
         ):
             raise ValueError("trusted_variation_execution_contract_invalid")
+        if not legacy_compatibility:
+            try:
+                mode_binding = GeneralVariationModeBinding.model_validate(
+                    source_variation["variation_mode_binding"]
+                )
+            except Exception as exc:
+                raise ValueError("trusted_variation_mode_binding_invalid") from exc
+            if (
+                mode_binding.effective_mode != contract.mode
+                or mode_binding.contract_version != contract.contract_version
+                or mode_binding.contract_digest != contract.contract_digest
+            ):
+                raise ValueError("trusted_variation_mode_binding_invalid")
+            role_plan = source_variation["variation_execution_role_plan"]
+            if not isinstance(role_plan, dict) or role_plan.get("mode") != contract.mode:
+                raise ValueError("trusted_variation_role_plan_invalid")
+            recipes = role_plan.get("role_recipes")
+            if not isinstance(recipes, list) or len(recipes) != contract.requested_image_count:
+                raise ValueError("trusted_variation_role_plan_invalid")
+            seen_role_keys: set[str] = set()
+            for expected_index, raw_recipe in enumerate(recipes, 1):
+                try:
+                    recipe = ModeRoleRecipe.model_validate(raw_recipe)
+                except Exception as exc:
+                    raise ValueError("trusted_variation_role_plan_invalid") from exc
+                role_key = str(recipe.role_key or "").strip()
+                if recipe.index != expected_index or not role_key or role_key in seen_role_keys:
+                    raise ValueError("trusted_variation_role_plan_invalid")
+                seen_role_keys.add(role_key)
         cleaned.update(source_variation)
         return cleaned
 

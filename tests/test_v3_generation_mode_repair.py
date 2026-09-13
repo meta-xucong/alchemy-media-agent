@@ -227,6 +227,40 @@ def test_general_mode_aliases_are_canonical_across_shared_resolver() -> None:
         assert resolved["effective_variation_mode"] == mode
 
 
+def test_auto_browser_derived_continuation_does_not_become_manual_mode() -> None:
+    resolved = resolve_general_variation_mode(
+        {
+            "variation_mode": "auto",
+            "effective_variation_mode": "selection_candidates",
+            "continuation_mode": "selection_candidates",
+            "inferred_variation_mode": "creative_exploration",
+            "variation_mode_source": "auto",
+        },
+        user_input="Explore different directions and try a new style.",
+        requested_count=2,
+    )
+
+    assert resolved["variation_mode"] == "auto"
+    assert resolved["effective_variation_mode"] == "creative_exploration"
+    assert resolved["variation_mode_source"] == "auto"
+
+
+def test_current_inferred_mode_wins_over_a_reused_frozen_contract() -> None:
+    resolved = resolve_general_variation_mode(
+        {
+            "variation_mode": "auto",
+            "inferred_variation_mode": "creative_exploration",
+            "variation_execution_mode": "selection_candidates",
+            "variation_execution_contract": {"mode": "selection_candidates"},
+        },
+        user_input="Explore different directions and try a new style.",
+        requested_count=2,
+    )
+
+    assert resolved["effective_variation_mode"] == "creative_exploration"
+    assert resolved["variation_mode_source"] == "auto"
+
+
 def test_project_context_override_suppresses_persisted_effective_mode() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects({"user_goal": "Create a visual set"})["project"]

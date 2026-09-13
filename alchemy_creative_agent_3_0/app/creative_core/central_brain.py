@@ -1436,49 +1436,34 @@ class CentralCreativeBrain:
         if max(requested_count, asset_count) < 2:
             return False
         profile = self._llm_brain_metadata(context).get("visual_task_profile")
-        if isinstance(profile, dict):
-            rendering_intent = profile.get("rendering_intent")
-            if isinstance(rendering_intent, dict):
-                rendering_mode = str(rendering_intent.get("rendering_mode") or "").strip().lower()
-                stylization_scope = str(rendering_intent.get("stylization_scope") or "").strip().lower()
-                photoreal_modes = {
-                    "photo",
-                    "photographic",
-                    "photoreal",
-                    "photorealistic",
-                    "realistic_photo",
-                    "naturalistic",
-                }
-                if rendering_mode and rendering_mode not in photoreal_modes:
-                    return False
-                if stylization_scope in {"whole_image", "full_frame", "entire_image", "scene"} and rendering_mode not in photoreal_modes:
-                    return False
+        if not isinstance(profile, dict):
+            return False
+        rendering_intent = profile.get("rendering_intent")
+        if not isinstance(rendering_intent, dict):
+            return False
+        rendering_mode = str(rendering_intent.get("rendering_mode") or "").strip().lower()
+        stylization_scope = str(rendering_intent.get("stylization_scope") or "").strip().lower()
+        photoreal_modes = {
+            "photo",
+            "photographic",
+            "photoreal",
+            "photorealistic",
+            "realistic_photo",
+            "naturalistic",
+        }
+        if rendering_mode not in photoreal_modes:
+            return False
+        if stylization_scope not in {"none", "object_surface"}:
+            return False
         profile_subject_types = self._llm_profile_subject_entity_types(context)
-        if profile_subject_types:
-            # The frozen task profile is the best available statement of what
-            # the image set is about.  In particular, do not let incidental
-            # words from generic prompt guidance (for example, "model") turn a
-            # product or still-life delivery into an image-edit continuation.
-            return bool(
-                profile_subject_types
-                & {"person", "human", "character", "portrait", "portrait_subject", "human_subject"}
-            )
-        role_plan = self._role_specific_generation_plan_metadata(context)
-        recipes = role_plan.get("role_recipes")
-        if isinstance(recipes, list):
-            for recipe in recipes:
-                if not isinstance(recipe, dict):
-                    continue
-                metadata = recipe.get("metadata")
-                if isinstance(metadata, dict) and str(metadata.get("subject_type") or "").strip().lower() == "character":
-                    return True
-        # Do not infer a human identity suite, or negate it because a word such
-        # as "cartoon" appears in the user request.  A cartoon print on a real
-        # garment is not an illustration request for the whole frame.  New V3
-        # jobs must supply the frozen Brain task profile above; older records
-        # without that evidence remain readable but do not gain an automatic
-        # generated-image identity chain from keyword matching.
-        return False
+        # The frozen task profile is the best available statement of what the
+        # image set is about. In particular, do not let incidental words from
+        # generic prompt guidance or a role-plan label turn a product/stylized
+        # delivery into an image-edit continuation.
+        return bool(
+            profile_subject_types
+            & {"person", "human", "character", "portrait", "portrait_subject", "human_subject"}
+        )
 
     def _llm_profile_subject_entity_types(self, context: PipelineContext) -> set[str]:
         """Return non-empty subject types from the frozen central-brain profile.

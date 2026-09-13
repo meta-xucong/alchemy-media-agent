@@ -51,6 +51,7 @@ def infer_general_variation_mode(
     requested_count: object | None = None,
     has_reference: bool = False,
     selected_size: object | None = None,
+    default_mode: str = "delivery_suite",
 ) -> str:
     """Infer a neutral mode for callers that omit an explicit selection.
 
@@ -89,7 +90,7 @@ def infer_general_variation_mode(
         return "selection_candidates"
     if str(selected_size or "").strip():
         return "format_layout_adaptation"
-    return "delivery_suite"
+    return default_mode
 
 
 def _safe_mapping(value: object) -> Mapping[str, Any] | None:
@@ -164,69 +165,74 @@ def resolve_general_variation_mode(
     else:
         explicit = _first_mode(current, "variation_mode")
         if explicit is None:
-            explicit = _first_mode(current, "continuation_mode")
+            continuation = _first_mode(current, "continuation_mode")
+            if continuation is not None and _continuation_mode_is_authoritative(primary, current):
+                explicit = continuation
         if explicit is not None:
             requested_mode, _ = explicit
             source = "manual"
 
     inferred = _first_mode(current, "inferred_variation_mode")
     inferred_mode = inferred[0] if inferred is not None else ""
+    if not inferred_mode:
+        inferred_mode = infer_general_variation_mode(user_input, default_mode="")
     if requested_mode != "auto":
         effective_mode = requested_mode
     else:
-        # An already frozen contract is reusable evidence, but only after a
-        # new explicit/inferred choice had its opportunity to win.
-        frozen = _first_mode(current, "variation_execution_mode")
-        has_frozen_contract = bool(
-            primary.get("variation_execution_contract_enforced") is True
-            or isinstance(primary.get("variation_execution_contract"), Mapping)
-        )
-        if frozen is not None and has_frozen_contract:
-            effective_mode = frozen[0]
-            source = "frozen_contract"
-        elif inferred_mode:
+        if inferred_mode:
             effective_mode = inferred_mode
             source = "auto"
         else:
-            current_effective = _first_mode(current, "effective_variation_mode")
-            if current_effective is not None:
-                # Frontend/direct API callers may send only the already
-                # resolved current value. Preserve it before using the
-                # generic count/reference compatibility inference.
-                effective_mode = current_effective[0]
-                source = "current_derived"
+            # An already frozen contract is reusable evidence, but only after
+            # a new explicit/inferred choice had its opportunity to win.
+            frozen = _first_mode(current, "variation_execution_mode")
+            has_frozen_contract = bool(
+                primary.get("variation_execution_contract_enforced") is True
+                or isinstance(primary.get("variation_execution_contract"), Mapping)
+            )
+            if frozen is not None and has_frozen_contract:
+                effective_mode = frozen[0]
+                source = "frozen_contract"
             else:
-                inferred_mode = infer_general_variation_mode(
-                    user_input,
-                    requested_count=(
-                        requested_count
-                        if requested_count is not None
-                        else primary.get("requested_image_count")
-                    ),
-                    has_reference=bool(
-                        has_reference
-                        or primary.get("has_reference")
-                        or primary.get("has_product_reference")
-                    ),
-                    selected_size=(
-                        selected_size
-                        if selected_size is not None
-                        else primary.get("requested_image_size")
-                    ),
-                )
-                if inferred_mode:
-                    effective_mode = inferred_mode
-                    source = "auto"
+                current_effective = _first_mode(current, "effective_variation_mode")
+                if current_effective is not None:
+                    # Frontend/direct API callers may send only the already
+                    # resolved current value. Preserve it before using the
+                    # generic count/reference compatibility inference.
+                    effective_mode = current_effective[0]
+                    source = "current_derived"
                 else:
-                    persisted = _first_mode(fallback, "effective_variation_mode")
-                    if persisted is None:
-                        persisted = _first_mode(fallback, "variation_mode")
-                    if persisted is not None:
-                        effective_mode = persisted[0]
-                        source = "persisted"
+                    inferred_mode = infer_general_variation_mode(
+                        user_input,
+                        requested_count=(
+                            requested_count
+                            if requested_count is not None
+                            else primary.get("requested_image_count")
+                        ),
+                        has_reference=bool(
+                            has_reference
+                            or primary.get("has_reference")
+                            or primary.get("has_product_reference")
+                        ),
+                        selected_size=(
+                            selected_size
+                            if selected_size is not None
+                            else primary.get("requested_image_size")
+                        ),
+                    )
+                    if inferred_mode:
+                        effective_mode = inferred_mode
+                        source = "auto"
                     else:
-                        effective_mode = "delivery_suite"
-                        source = "default"
+                        persisted = _first_mode(fallback, "effective_variation_mode")
+                        if persisted is None:
+                            persisted = _first_mode(fallback, "variation_mode")
+                        if persisted is not None:
+                            effective_mode = persisted[0]
+                            source = "persisted"
+                        else:
+                            effective_mode = "delivery_suite"
+                            source = "default"
 
     return {
         "variation_mode": requested_mode,
@@ -235,6 +241,24 @@ def resolve_general_variation_mode(
         "inferred_variation_mode": inferred_mode or None,
         "variation_mode_source": source,
     }
+
+
+def _continuation_mode_is_authoritative(
+    primary: Mapping[str, Any],
+    current: Iterable[tuple[str, Mapping[str, Any]]],
+) -> bool:
+    """Reject the browser's derived ``auto`` continuation compatibility field."""
+
+    if primary.get("continuation_mode_explicit") is True:
+        return True
+    override = _first_mode(current, "variation_mode_override", include_auto=True)
+    if override is not None and override[0] != "auto":
+        return True
+    requested = _first_mode(current, "variation_mode", include_auto=True)
+    source = str(primary.get("variation_mode_source") or "").strip().lower()
+    if source == "auto" or (requested is not None and requested[0] == "auto"):
+        return False
+    return True
 
 
 def build_general_variation_mode_binding(

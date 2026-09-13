@@ -321,6 +321,36 @@ class VariationExecutionContract(V3BaseModel):
         return self.model_copy(update={"contract_digest": self.computed_digest()})
 
 
+class GeneralVariationModeBinding(V3BaseModel):
+    """Typed server-owned provenance for an enforced General mode contract."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["v3_general_variation_mode_binding_v1"]
+    requested_mode: Literal[
+        "auto",
+        "selection_candidates",
+        "delivery_suite",
+        "creative_exploration",
+        "format_layout_adaptation",
+    ]
+    effective_mode: GeneralVariationMode
+    source: str = Field(min_length=1, max_length=40)
+    contract_version: Literal["v3_general_variation_execution_v1"] | None = None
+    contract_digest: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def contract_binding_is_complete(self) -> "GeneralVariationModeBinding":
+        if bool(self.contract_version) != bool(self.contract_digest):
+            raise ValueError("general variation mode binding contract fields must be paired")
+        if self.contract_digest and (
+            len(self.contract_digest) != 64
+            or any(char not in "0123456789abcdefABCDEF" for char in self.contract_digest)
+        ):
+            raise ValueError("general variation mode binding contract digest is invalid")
+        return self
+
+
 class ModeExecutionPolicy(V3BaseModel):
     policy_id: str
     mode: str = "delivery_suite"
@@ -1268,6 +1298,7 @@ class VisualCapabilityClusterResult(V3BaseModel):
     strong_reference_continuation_plan: StrongReferenceContinuationPlan | None = None
     general_suite_role_plan: GeneralSuiteRolePlan | None = None
     variation_execution_contract: VariationExecutionContract | None = None
+    variation_mode_binding: GeneralVariationModeBinding | None = None
     mode_execution_policy: ModeExecutionPolicy | None = None
     role_specific_generation_plan: RoleSpecificGenerationPlan | None = None
     mode_differentiation_review: ModeDifferentiationReview | None = None

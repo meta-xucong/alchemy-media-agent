@@ -145,6 +145,10 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
             "effective_variation_mode": "delivery_suite",
             "llm_brain": {
                 "visual_task_profile": {
+                    "rendering_intent": {
+                        "rendering_mode": "photoreal",
+                        "stylization_scope": "none",
+                    },
                     "subject_entities": [
                         {"entity_id": "portrait_subject_1", "entity_type": "person", "confidence": 0.98}
                     ]
@@ -206,6 +210,10 @@ def test_doc73_unbound_project_anchor_does_not_reenter_next_generation(tmp_path)
             },
             "llm_brain": {
                 "visual_task_profile": {
+                    "rendering_intent": {
+                        "rendering_mode": "photoreal",
+                        "stylization_scope": "none",
+                    },
                     "subject_entities": [
                         {"entity_id": "portrait_subject_1", "entity_type": "person", "confidence": 0.98}
                     ]
@@ -377,6 +385,83 @@ def test_doc73_stylized_brain_profile_does_not_start_an_identity_edit_chain(tmp_
     )
     assert all(
         not any(item.get("source_type") == "auto_batch_continuity" for item in request["metadata"].get("reference_assets", []))
+        for request in provider.requests
+    )
+
+
+@pytest.mark.parametrize(
+    "rendering_intent",
+    [
+        None,
+        {"rendering_mode": "photoreal"},
+        {"rendering_mode": "photoreal", "stylization_scope": "ambiguous"},
+        {"rendering_mode": "photoreal", "stylization_scope": "whole_image"},
+        {"rendering_mode": "stylized", "stylization_scope": "object_surface"},
+    ],
+)
+def test_doc287_incomplete_or_ambiguous_rendering_profile_closes_auto_anchor(
+    tmp_path,
+    rendering_intent,
+) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+    profile = {
+        "subject_entities": [
+            {"entity_id": "portrait_subject_1", "entity_type": "person", "confidence": 0.98}
+        ],
+    }
+    if rendering_intent is not None:
+        profile["rendering_intent"] = rendering_intent
+
+    brain.run_generation_loop(
+        "Create two portrait options with the same adult subject and natural camera realism.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 2,
+            "requested_image_size": "1024x1024",
+            "project_id": "project_doc287_profile_gate",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "delivery_suite",
+            "effective_variation_mode": "delivery_suite",
+            "llm_brain": {"visual_task_profile": profile},
+        },
+    )
+
+    assert len(provider.requests) >= 2
+    assert all(
+        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False
+        for request in provider.requests
+    )
+
+
+def test_doc287_role_plan_character_without_typed_profile_cannot_enable_auto_anchor(tmp_path) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+
+    brain.run_generation_loop(
+        "Create two portrait options with the same adult subject and natural camera realism.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 2,
+            "requested_image_size": "1024x1024",
+            "project_id": "project_doc287_role_fallback",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "delivery_suite",
+            "effective_variation_mode": "delivery_suite",
+            "role_specific_generation_plan": {
+                "role_recipes": [
+                    {"metadata": {"subject_type": "character"}},
+                    {"metadata": {"subject_type": "character"}},
+                ]
+            },
+        },
+    )
+
+    assert len(provider.requests) >= 2
+    assert all(
+        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False
         for request in provider.requests
     )
 

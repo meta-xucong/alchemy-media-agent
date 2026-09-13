@@ -671,6 +671,10 @@ class EcommerceRemoteBrainTestProvider:
                             "output_index": index,
                             "status": "approved",
                             "owner": "remote_v3_llm_brain",
+                            "semantic_output_purpose": variation_contract.outputs[index - 1].output_purpose,
+                            "semantic_variation_axes": list(
+                                variation_contract.outputs[index - 1].variation_axes
+                            ),
                         }
                     }
                     if variation_contract is not None

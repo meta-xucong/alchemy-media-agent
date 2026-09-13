@@ -96,6 +96,8 @@ from ..shared_capabilities.visual_cluster.expression_review import (
 from ..shared_capabilities.visual_cluster.review_repair import shared_review_repair_prompt_delta
 from ..shared_capabilities.visual_cluster.contracts import (
     GENERAL_VARIATION_MAX_OUTPUTS,
+    GeneralVariationModeBinding,
+    ModeRoleRecipe,
     VariationExecutionContract,
 )
 from ..shared_capabilities.visual_cluster.mode_role_director import ALLOWED_MODES, ModeAwareRoleDirector
@@ -4940,22 +4942,28 @@ class ScenarioRuntime:
             normalized_intent.scenario_id == "general_creative"
             and normalized_intent.template_id == "general_template"
         ):
-            raw_general_role_plan = request.metadata.get("variation_execution_role_plan")
-            raw_general_contract = request.metadata.get("variation_execution_contract")
-            if isinstance(raw_general_role_plan, dict) and isinstance(raw_general_contract, dict):
-                if (
-                    str(raw_general_role_plan.get("mode") or "").strip()
-                    == str(raw_general_contract.get("mode") or "").strip()
-                    and raw_general_role_plan.get("requested_image_count") == expected
-                    and raw_general_contract.get("requested_image_count") == expected
-                ):
-                    candidate_recipes = raw_general_role_plan.get("role_recipes")
-                    if isinstance(candidate_recipes, list):
-                        general_role_recipes = [
-                            dict(item)
-                            for item in candidate_recipes
-                            if isinstance(item, dict)
-                        ]
+            if request.metadata.get("variation_execution_contract_enforced") is True:
+                general_role_recipes = self._validated_general_role_recipes(
+                    request.metadata,
+                    expected_count=expected,
+                )
+            else:
+                raw_general_role_plan = request.metadata.get("variation_execution_role_plan")
+                raw_general_contract = request.metadata.get("variation_execution_contract")
+                if isinstance(raw_general_role_plan, dict) and isinstance(raw_general_contract, dict):
+                    if (
+                        str(raw_general_role_plan.get("mode") or "").strip()
+                        == str(raw_general_contract.get("mode") or "").strip()
+                        and raw_general_role_plan.get("requested_image_count") == expected
+                        and raw_general_contract.get("requested_image_count") == expected
+                    ):
+                        candidate_recipes = raw_general_role_plan.get("role_recipes")
+                        if isinstance(candidate_recipes, list):
+                            general_role_recipes = [
+                                dict(item)
+                                for item in candidate_recipes
+                                if isinstance(item, dict)
+                            ]
         specialized_policy = (
             dict(specialized_plan.execution_plan.get("policy") or {})
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
@@ -5078,6 +5086,42 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _validated_general_role_recipes(
+        metadata: dict[str, Any],
+        *,
+        expected_count: int,
+    ) -> list[dict[str, Any]]:
+        """Fail closed when an enforced General output lacks its role binding."""
+
+        raw_plan = metadata.get("variation_execution_role_plan")
+        raw_contract = metadata.get("variation_execution_contract")
+        if not isinstance(raw_plan, dict) or not isinstance(raw_contract, dict):
+            raise CapabilityActivationError("general_variation_role_plan_missing")
+        if (
+            str(raw_plan.get("mode") or "").strip()
+            != str(raw_contract.get("mode") or "").strip()
+            or raw_plan.get("requested_image_count") != expected_count
+            or raw_contract.get("requested_image_count") != expected_count
+        ):
+            raise CapabilityActivationError("general_variation_role_plan_binding_mismatch")
+        raw_recipes = raw_plan.get("role_recipes")
+        if not isinstance(raw_recipes, list) or len(raw_recipes) != expected_count:
+            raise CapabilityActivationError("general_variation_role_plan_count_mismatch")
+        validated: list[dict[str, Any]] = []
+        seen_role_keys: set[str] = set()
+        for expected_index, raw_recipe in enumerate(raw_recipes, 1):
+            try:
+                recipe = ModeRoleRecipe.model_validate(raw_recipe)
+            except Exception as exc:
+                raise CapabilityActivationError("general_variation_role_recipe_invalid") from exc
+            role_key = str(recipe.role_key or "").strip()
+            if recipe.index != expected_index or not role_key or role_key in seen_role_keys:
+                raise CapabilityActivationError("general_variation_role_plan_binding_mismatch")
+            seen_role_keys.add(role_key)
+            validated.append(recipe.model_dump(mode="json"))
+        return validated
 
     @staticmethod
     def _uploaded_asset_reference_channel(asset: Any) -> str:
@@ -6406,6 +6450,20 @@ class ScenarioRuntime:
                 variation_contract.requested_image_count
             )
             projection["variation_execution_semantic_evidence_required"] = True
+            raw_mode_binding = raw_cluster.get("variation_mode_binding")
+            if not isinstance(raw_mode_binding, dict):
+                raise CapabilityActivationError("general_variation_mode_binding_missing")
+            try:
+                mode_binding = GeneralVariationModeBinding.model_validate(raw_mode_binding)
+            except Exception as exc:
+                raise CapabilityActivationError("general_variation_mode_binding_invalid") from exc
+            if (
+                mode_binding.effective_mode != variation_contract.mode
+                or mode_binding.contract_version != variation_contract.contract_version
+                or mode_binding.contract_digest != variation_contract.contract_digest
+            ):
+                raise CapabilityActivationError("general_variation_mode_binding_mismatch")
+            projection["variation_mode_binding"] = mode_binding.model_dump(mode="json")
         if "suite_direction" in active and isinstance(raw_cluster.get("mode_role_plan_reconciled_to_series"), bool):
             projection["mode_role_plan_reconciled_to_series"] = raw_cluster["mode_role_plan_reconciled_to_series"]
         return projection
@@ -6835,6 +6893,14 @@ class ScenarioRuntime:
                             "variation_execution_suite_direction_authoritative": True,
                         }
                     )
+                    role_plan = capability_projection.get("role_specific_generation_plan")
+                    if isinstance(role_plan, dict):
+                        # The role plan is an execution-contract projection,
+                        # not a generic single-image capability fact. Keep it
+                        # scoped to the same validated General contract so
+                        # professional anchor continuations cannot be
+                        # mistaken for variation jobs.
+                        metadata["variation_execution_role_plan"] = deepcopy(role_plan)
                 for key in (
                     "variation_mode_binding",
                     "variation_execution_semantic_evidence_required",

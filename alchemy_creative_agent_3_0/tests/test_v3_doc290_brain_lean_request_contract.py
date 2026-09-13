@@ -76,9 +76,9 @@ GATE_A_BASELINE = {
     "general_multi": {
         "plan": (21480, 14997, 40889, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
         # Doc299 closes the finalizer lifecycle/source-projection contract;
-        # keep the measured current schema hash instead of the retired
-        # pre-closure baseline.
-        "provider_prompt_finalize": (5359, 65281, 88469, "281b1f19db0d63a292c197ea1443ddb8e5ef7f4de5b03a9fa35c2d7e951a4b49"),
+        # Doc306 adds the required semantic variation evidence fields; keep
+        # the measured current schema hash instead of the retired baseline.
+        "provider_prompt_finalize": (5359, 65281, 88469, "d43ce91665ce9b0b9b0e50543db67f327ec246fe995c3db3897914d823737c9d"),
     },
     "professional_ecommerce": {
         "plan": (21480, 21210, 47495, "5c485b5493ae3538fe006292cf296adde4e1a3d464fd01d0964c7dab33badd5b"),
@@ -413,12 +413,15 @@ def test_doc290_bound_contracts_survive_both_stages(captured_entry):
         assert plan["variation_execution_contract"] == context["variation_execution_contract"]
         assert context["variation_execution_contract_required"] is True
         for prompt in prompts:
+            output = contract.outputs[prompt["output_index"] - 1]
             assert prompt["variation_execution_receipt"] == {
                 "contract_version": contract.contract_version,
                 "contract_digest": contract.contract_digest,
                 "output_index": prompt["output_index"],
                 "status": "approved",
                 "owner": "remote_v3_llm_brain",
+                "semantic_output_purpose": output.output_purpose,
+                "semantic_variation_axes": list(output.variation_axes),
             }
         projection = metadata["doc270_general_original_source_projection"]
         assert [item["asset_id"] for item in projection["sources"]] == state.source_ids
