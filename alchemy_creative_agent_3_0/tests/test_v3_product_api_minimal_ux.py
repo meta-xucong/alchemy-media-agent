@@ -445,6 +445,9 @@ class _RemoteFinalizerTimeoutRuntime:
         self.block_stage = block_stage
         self.outcome = outcome or _remote_finalizer_timeout_outcome()
 
+    def _runtime_job_id(self, request, resolution):  # noqa: ANN001, ANN201
+        return self.base_runtime._runtime_job_id(request, resolution)  # noqa: SLF001
+
     def plan_job(self, payload):  # noqa: ANN001, ANN201
         selection = payload.get("scenario_selection", {}) if isinstance(payload, dict) else {}
         resolution = self.scenario_registry.resolve(selection)
@@ -476,7 +479,11 @@ class _RemoteFinalizerTimeoutRuntime:
 
 class _LocalCapabilityActivationFailureRuntime:
     def __init__(self, base_runtime: object) -> None:
+        self._base_runtime = base_runtime
         self.scenario_registry = base_runtime.scenario_registry
+
+    def _runtime_job_id(self, request, resolution):  # noqa: ANN001, ANN201
+        return self._base_runtime._runtime_job_id(request, resolution)  # noqa: SLF001
 
     def plan_job(self, payload):  # noqa: ANN001, ANN201
         selection = payload.get("scenario_selection", {}) if isinstance(payload, dict) else {}

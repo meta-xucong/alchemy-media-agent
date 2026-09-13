@@ -520,15 +520,42 @@ def _compact_human_realism_execution_contract(shared_capabilities: dict[str, obj
     }
 
 
-def _compact_general_variation_execution_contract(request: BrainRunRequest) -> dict[str, object]:
-    """Project only the typed neutral variation bridge into a General request."""
+def _general_variation_contract_in_scope(
+    request: BrainRunRequest,
+    *,
+    context: dict[str, object] | None = None,
+    raw_contract: object = None,
+) -> bool:
+    """Keep the multi-output bridge plus the explicit single-format bridge."""
 
     if (
         request.scenario_id != "general_creative"
         or request.template_id != "general_template"
-        or request.requested_image_count <= 1
     ):
-        return {}
+        return False
+    if request.requested_image_count > 1:
+        return True
+    if request.requested_image_count != 1:
+        return False
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = context if isinstance(context, dict) else {}
+    raw_mode = str(metadata.get("variation_execution_mode") or "").strip()
+    if not raw_mode:
+        raw_mode = str(context.get("variation_execution_mode") or "").strip()
+    if not raw_mode and isinstance(raw_contract, dict):
+        raw_mode = str(raw_contract.get("mode") or "").strip()
+    if raw_mode != "format_layout_adaptation":
+        return False
+    return bool(
+        metadata.get("variation_execution_contract_enforced") is True
+        or context.get("variation_execution_contract_required") is True
+        or context.get("variation_execution_semantic_evidence_required") is True
+    )
+
+
+def _compact_general_variation_execution_contract(request: BrainRunRequest) -> dict[str, object]:
+    """Project only the typed neutral variation bridge into a General request."""
+
     if request.metadata.get("variation_execution_contract_enforced") is not True:
         return {}
 
@@ -543,6 +570,8 @@ def _compact_general_variation_execution_contract(request: BrainRunRequest) -> d
     cluster = shared_capabilities.get("visual_cluster") if isinstance(shared_capabilities, dict) else None
     cluster = cluster if isinstance(cluster, dict) else {}
     raw_contract = cluster.get("variation_execution_contract")
+    if not _general_variation_contract_in_scope(request, raw_contract=raw_contract):
+        return {}
     if not isinstance(raw_contract, dict):
         contract_error("is missing from the enforced Brain request")
     try:
@@ -572,12 +601,11 @@ def _validated_general_variation_contract_for_finalizer(
 ) -> VariationExecutionContract | None:
     """Validate the frozen bridge, while leaving legacy/specialized records alone."""
 
-    in_general_multi_image_scope = (
-        request.scenario_id == "general_creative"
-        and request.template_id == "general_template"
-        and request.requested_image_count > 1
-    )
-    if not in_general_multi_image_scope:
+    if not _general_variation_contract_in_scope(
+        request,
+        context=context,
+        raw_contract=context.get("variation_execution_contract"),
+    ):
         context.pop("variation_execution_contract", None)
         return None
     raw_contract = context.get("variation_execution_contract")

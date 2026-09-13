@@ -111,7 +111,11 @@ def test_general_creative_history_continuation_is_brand_scoped(tmp_path) -> None
     assert any(check["id"] == "history_continuation" and check["status"] == "done" for check in summary.closure_checks)
 
 
-def test_general_creative_summary_is_not_used_for_active_ecommerce(tmp_path) -> None:
+def test_general_creative_summary_is_not_used_for_active_ecommerce(tmp_path, monkeypatch) -> None:
+    # This test asserts the no-remote-provider branch.  The development host
+    # may have real Brain credentials configured, so make that premise
+    # explicit instead of accidentally sending a live request.
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "0")
     service = _service(tmp_path)
 
     ecommerce = service.create_job(

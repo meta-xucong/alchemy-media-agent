@@ -1320,10 +1320,21 @@ class V3LLMBrainAdapter:
             "provider_native_text_requirements": provider_native_text_requirements,
             "specialized_scenario_plan_present": specialized_plan_present,
         }
+        raw_variation_contract = metadata.get("variation_execution_contract")
+        single_format_contract = (
+            requested_count == 1
+            and str(metadata.get("variation_execution_mode") or "").strip()
+            == "format_layout_adaptation"
+        ) or (
+            requested_count == 1
+            and isinstance(raw_variation_contract, dict)
+            and str(raw_variation_contract.get("mode") or "").strip()
+            == "format_layout_adaptation"
+        )
         if (
             scenario_id == "general_creative"
             and template_id == "general_template"
-            and requested_count > 1
+            and (requested_count > 1 or single_format_contract)
             and metadata.get("variation_execution_contract_enforced") is True
         ):
             request_metadata["variation_execution_contract_enforced"] = True
@@ -2836,12 +2847,24 @@ def _general_variation_execution_contract_for_request(
     if (
         request.scenario_id != GENERAL_SCENARIO_ID
         or request.template_id != GENERAL_TEMPLATE_ID
-        or request.requested_image_count <= 1
     ):
         return None
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     context = metadata.get("canonical_prompt_context")
     context = context if isinstance(context, dict) else {}
+    if request.requested_image_count == 1:
+        raw_context_contract = context.get("variation_execution_contract")
+        mode = str(metadata.get("variation_execution_mode") or "").strip()
+        if not mode and isinstance(raw_context_contract, dict):
+            mode = str(raw_context_contract.get("mode") or "").strip()
+        if mode != "format_layout_adaptation" or not (
+            metadata.get("variation_execution_contract_enforced") is True
+            or context.get("variation_execution_contract_required") is True
+            or context.get("variation_execution_semantic_evidence_required") is True
+        ):
+            return None
+    elif request.requested_image_count < 1:
+        return None
     raw_contract = context.get("variation_execution_contract")
     if raw_contract is None:
         if context.get("variation_execution_contract_required") is True:

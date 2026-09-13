@@ -2,6 +2,7 @@
 
 Status: implementation and audit-repair contract
 Scope: V3 foundation/runtime for enforced `general_template` multi-image jobs
+and explicitly selected single-output `format_layout_adaptation` jobs
 Baseline: `c748a5597d1ee8f19998ae3c2027e089dfd20053`
 
 ## 1. Objective
@@ -18,11 +19,11 @@ deliverable map or change the Core candidate-to-slot acceptance path.
 ## 2. Evidence and exact mismatch
 
 The controlled VPS run used the approved safe comparison project and the same
-original request for all four General modes. Selection, delivery, and creative
-exploration produced two real images each and their Brain review records were
-`hybrid/pass` with no detected issues. The format mode produced a valid single
-image, proving the renderer route itself was available, but its two-output run
-was blocked once by the upstream provider policy gate.
+original request for all four General modes. Selection and creative exploration
+produced two real images each and their Brain review records were `hybrid/pass`
+with no detected issues. Delivery and the two-output format run were blocked by
+the upstream provider policy gate; the format route therefore also needs a
+single-output control when its contract path is repaired.
 
 The read-only prompt audit found a local semantic loss independent of that
 upstream block:
@@ -103,6 +104,12 @@ The same rule applies to a single-output request only when the format mode is
 explicitly server-bound; an incidental legacy role label on an ordinary
 single-image job remains compatible.
 
+The typed variation contract now permits one output only for that explicit
+single-format exception. Ordinary General single-image requests remain on the
+single-image path and do not activate `suite_direction`. English mode inference
+uses word boundaries so a normal word such as `illustration` cannot be read as
+the substring `ratio` and accidentally activate the format contract.
+
 The reference-edit transport is also covered. If a constrained square edit
 profile cannot carry a contract-required vertical, horizontal, or tight
 canvas, `_resolve_provider_size` preserves the contract size and lets the
@@ -117,7 +124,8 @@ output into a square image merely because a reference is present.
    `ModeAwareRoleDirector`; keep all other modes byte/semantic-compatible.
 3. Apply the same target map to General asset/layout planning in Central Brain.
 4. Teach the compact Brain payload and canonical finalizer contract to honor
-   the exact format axis and preserve its semantic receipt.
+   the exact format axis and preserve its semantic receipt for both multi-output
+   and explicit single-output format requests.
 5. Make the production Provider resolve the validated output-index contract
    to a per-output canvas and persist the target/size audit facts.
 6. Add regression tests for contract projection, Brain instructions and
@@ -137,9 +145,9 @@ template change is part of this repair.
 * The exact committed mainline is pushed and deployed to VPS.
 * The safe comparison project is run again in all four General modes. Each
   successful output has the expected role, Brain semantic receipt, final
-  prompt direction, and canvas metadata. The format two-output run is retried
-  after the upstream policy result; if the same terminal upstream block recurs,
-  it is reported separately from local correctness and the single-output
-  format route remains the provider-availability control.
+  prompt direction, and canvas metadata. The format mode is checked both as a
+  single-output local-contract control and, when the upstream policy permits,
+  as a two-output layout set. If the same terminal upstream block recurs, it is
+  reported separately from local correctness.
 * Downloaded pixels are inspected. Contract/receipt success alone is never
   reported as visual-quality acceptance.

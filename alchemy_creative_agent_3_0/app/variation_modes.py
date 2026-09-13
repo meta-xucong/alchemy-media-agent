@@ -61,7 +61,7 @@ def infer_general_variation_mode(
 
     text = re.sub(r"\s+", " ", str(user_input or "").strip().lower())
     if re.search(
-        r"尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|留白|裁切|裁剪|layout|format|ratio|size|crop|adapt",
+        r"尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|留白|裁切|裁剪|\b(?:layout|format|ratio|size|crop(?:ping|ped)?|adapt(?:ation|ed|ing)?)\b",
         text,
     ):
         return "format_layout_adaptation"
@@ -88,7 +88,12 @@ def infer_general_variation_mode(
         return "selection_candidates"
     if has_reference:
         return "selection_candidates"
-    if str(selected_size or "").strip():
+    # A single-output canvas selection is a transport/layout constraint, not
+    # a request for the General format-adaptation suite.  Only infer the
+    # format mode from a selected size when the caller is resolving a
+    # multi-output job; explicit format language above remains authoritative
+    # for either cardinality.
+    if str(selected_size or "").strip() and count != 1:
         return "format_layout_adaptation"
     return default_mode
 

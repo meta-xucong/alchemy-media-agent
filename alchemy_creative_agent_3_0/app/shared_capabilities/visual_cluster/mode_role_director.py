@@ -244,7 +244,14 @@ class ModeAwareRoleDirector:
             1,
             min(GENERAL_VARIATION_MAX_OUTPUTS, int(role_plan.requested_image_count or 1)),
         )
-        if requested_count <= 1 or len(role_plan.role_recipes) < requested_count:
+        # A single row is meaningful only for explicit format execution.  The
+        # other General modes remain single-image Core paths and must not gain
+        # an unrelated suite contract merely because this bridge can represent
+        # one row.
+        if (
+            requested_count <= 1
+            and role_plan.mode != "format_layout_adaptation"
+        ) or len(role_plan.role_recipes) < requested_count:
             return None
 
         outputs: list[VariationExecutionOutput] = []

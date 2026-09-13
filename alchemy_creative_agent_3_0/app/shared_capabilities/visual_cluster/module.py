@@ -3656,7 +3656,17 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             capability_input.scenario_id == "general_creative"
             and resolved_scenario_id == "general_creative"
             and resolved_template_id == "general_template"
-            and expected_count > 1
+            and (
+                expected_count > 1
+                or (
+                    expected_count == 1
+                    and str(
+                        metadata.get("variation_execution_mode")
+                        or (raw_contract.get("mode") if isinstance(raw_contract, dict) else "")
+                    ).strip()
+                    == "format_layout_adaptation"
+                )
+            )
         )
         if not in_general_scope:
             return None

@@ -338,7 +338,14 @@ class EcommerceRemoteBrainTestProvider:
             request.stage == "provider_prompt_finalize"
             and request.scenario_id == "general_creative"
             and request.template_id == "general_template"
-            and count > 1
+            and (
+                count > 1
+                or (
+                    count == 1
+                    and isinstance(raw_variation_contract, dict)
+                    and raw_variation_contract.get("mode") == "format_layout_adaptation"
+                )
+            )
             and isinstance(context, dict)
             and context.get("variation_execution_contract_required") is True
             and isinstance(raw_variation_contract, dict)

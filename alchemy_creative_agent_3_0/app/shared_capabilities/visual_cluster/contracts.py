@@ -313,23 +313,33 @@ class VariationExecutionOutput(V3BaseModel):
 
 
 class VariationExecutionContract(V3BaseModel):
-    """Compact projection of a General role plan without renderer recipes."""
+    """Compact projection of a General role plan without renderer recipes.
+
+    The bridge normally describes a multi-output variation set.  An explicit
+    single-output ``format_layout_adaptation`` request is also a real mode
+    execution, so it uses one typed row rather than being forced through a
+    multi-output-only contract or an untyped renderer fallback.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     contract_version: Literal["v3_general_variation_execution_v1"]
     contract_digest: str = Field(default="", max_length=64)
     mode: GeneralVariationMode = "delivery_suite"
-    requested_image_count: int = Field(ge=2, le=GENERAL_VARIATION_MAX_OUTPUTS)
+    requested_image_count: int = Field(ge=1, le=GENERAL_VARIATION_MAX_OUTPUTS)
     preserve_subject: bool = True
     preserve_style: bool = True
     outputs: tuple[VariationExecutionOutput, ...] = Field(
-        min_length=2,
+        min_length=1,
         max_length=GENERAL_VARIATION_MAX_OUTPUTS,
     )
 
     @model_validator(mode="after")
     def output_indices_cover_requested_count(self) -> "VariationExecutionContract":
+        if self.requested_image_count == 1 and self.mode != "format_layout_adaptation":
+            raise ValueError(
+                "single-output variation execution is reserved for explicit format layout adaptation"
+            )
         indices = [item.output_index for item in self.outputs]
         if indices != list(range(1, self.requested_image_count + 1)):
             raise ValueError("variation execution outputs must cover requested image count in order")

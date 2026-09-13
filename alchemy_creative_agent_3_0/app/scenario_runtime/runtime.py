@@ -3380,7 +3380,15 @@ class ScenarioRuntime:
         general_variation_scope = (
             str(projection.get("scenario_id") or "").strip() == "general_creative"
             and str(projection.get("template_id") or "").strip() == "general_template"
-            and effective_image_count > 1
+            and (
+                effective_image_count > 1
+                or (
+                    effective_image_count == 1
+                    and request.metadata.get("variation_execution_contract_enforced") is True
+                    and str(request.metadata.get("variation_execution_mode") or "").strip()
+                    == "format_layout_adaptation"
+                )
+            )
         )
         variation_contract_enforced = request.metadata.get("variation_execution_contract_enforced") is True
         if general_variation_scope and variation_contract_enforced and not variation_execution_contract:
@@ -3916,14 +3924,22 @@ class ScenarioRuntime:
             effective_count = int(provider_projection.get("effective_image_count") or 1)
         except (TypeError, ValueError):
             return {}
+        capabilities = provider_projection.get("capability_projection")
+        raw_contract = capabilities.get("variation_execution_contract") if isinstance(capabilities, dict) else None
         if (
             str(provider_projection.get("scenario_id") or "").strip() != "general_creative"
             or str(provider_projection.get("template_id") or "").strip() != "general_template"
-            or effective_count <= 1
+            or not (
+                effective_count > 1
+                or (
+                    effective_count == 1
+                    and isinstance(raw_contract, dict)
+                    and str(raw_contract.get("mode") or "").strip()
+                    == "format_layout_adaptation"
+                )
+            )
         ):
             return {}
-        capabilities = provider_projection.get("capability_projection")
-        raw_contract = capabilities.get("variation_execution_contract") if isinstance(capabilities, dict) else None
         if not isinstance(raw_contract, dict):
             return {}
         try:
@@ -4505,11 +4521,8 @@ class ScenarioRuntime:
         if (
             scenario_id != "general_creative"
             or template_id != "general_template"
-            or requested_count <= 1
         ):
             return request
-        if requested_count > GENERAL_VARIATION_MAX_OUTPUTS:
-            raise CapabilityActivationError("general_variation_execution_contract_count_unsupported")
 
         metadata = dict(request.metadata or {})
         parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
@@ -4533,6 +4546,14 @@ class ScenarioRuntime:
             fallback_metadata=[parameters],
         )
         resolved_mode = str(mode_resolution.get("effective_variation_mode") or "delivery_suite")
+        # The typed bridge is a multi-output contract for the ordinary General
+        # modes.  The one-output exception is deliberately limited to an
+        # explicit format request, where the canvas still needs one shared
+        # authority across Brain, Provider, and Review.
+        if requested_count <= 1 and resolved_mode != "format_layout_adaptation":
+            return request
+        if requested_count > GENERAL_VARIATION_MAX_OUTPUTS:
+            raise CapabilityActivationError("general_variation_execution_contract_count_unsupported")
         role_plan_for_binding = None
         frozen_plan = metadata.get("capability_activation_plan")
         if isinstance(frozen_plan, dict) and frozen_plan.get("plan_id"):
@@ -6602,8 +6623,12 @@ class ScenarioRuntime:
         if (
             str(resolution.manifest.scenario_id or "").strip() != "general_creative"
             or str(self._template_id(request, resolution) or "").strip() != "general_template"
-            or self._requested_image_count_for_brain(request) <= 1
         ):
+            return []
+        requested_count = self._requested_image_count_for_brain(request)
+        if requested_count <= 1 and str(
+            request.metadata.get("variation_execution_mode") or ""
+        ).strip() != "format_layout_adaptation":
             return []
         return ["suite_direction"]
 
@@ -7696,7 +7721,15 @@ class ScenarioRuntime:
         general_variation_scope = bool(
             resolution.manifest.scenario_id == "general_creative"
             and self._template_id(request, resolution) == "general_template"
-            and self._requested_image_count_for_brain(request) > 1
+            and (
+                self._requested_image_count_for_brain(request) > 1
+                or (
+                    self._requested_image_count_for_brain(request) == 1
+                    and request.metadata.get("variation_execution_contract_enforced") is True
+                    and str(request.metadata.get("variation_execution_mode") or "").strip()
+                    == "format_layout_adaptation"
+                )
+            )
         )
         general_variation_contract_active = False
         if general_variation_scope and request.metadata.get("variation_execution_contract_enforced") is True:
