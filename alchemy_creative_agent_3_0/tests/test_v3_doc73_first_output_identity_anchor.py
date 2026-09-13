@@ -341,6 +341,46 @@ def test_doc134_raw_person_or_cartoon_words_do_not_start_an_identity_chain_witho
     assert provider.requests[1]["metadata"].get("auto_batch_identity_anchor_applied") is not True
 
 
+def test_doc73_stylized_brain_profile_does_not_start_an_identity_edit_chain(tmp_path) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+
+    brain.run_generation_loop(
+        "Create two distinct vertical anime-inspired editorial covers with the same original adult heroine.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 2,
+            "requested_image_size": "1024x1536",
+            "project_id": "project_doc73_stylized",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "creative_exploration",
+            "effective_variation_mode": "creative_exploration",
+            "llm_brain": {
+                "visual_task_profile": {
+                    "rendering_intent": {
+                        "rendering_mode": "stylized",
+                        "stylization_scope": "whole_image",
+                    },
+                    "subject_entities": [
+                        {"entity_id": "heroine", "entity_type": "person", "confidence": 0.98}
+                    ],
+                }
+            },
+        },
+    )
+
+    assert len(provider.requests) >= 2
+    assert all(
+        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False
+        for request in provider.requests
+    )
+    assert all(
+        not any(item.get("source_type") == "auto_batch_continuity" for item in request["metadata"].get("reference_assets", []))
+        for request in provider.requests
+    )
+
+
 def test_doc73_product_profile_does_not_turn_a_no_reference_set_into_an_edit_chain(tmp_path) -> None:
     provider = RecordingImageProvider(tmp_path / "outputs")
     brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))

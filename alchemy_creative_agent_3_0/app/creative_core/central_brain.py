@@ -1435,6 +1435,24 @@ class CentralCreativeBrain:
         asset_count = len(context.series_plan.assets) if context.series_plan is not None else 0
         if max(requested_count, asset_count) < 2:
             return False
+        profile = self._llm_brain_metadata(context).get("visual_task_profile")
+        if isinstance(profile, dict):
+            rendering_intent = profile.get("rendering_intent")
+            if isinstance(rendering_intent, dict):
+                rendering_mode = str(rendering_intent.get("rendering_mode") or "").strip().lower()
+                stylization_scope = str(rendering_intent.get("stylization_scope") or "").strip().lower()
+                photoreal_modes = {
+                    "photo",
+                    "photographic",
+                    "photoreal",
+                    "photorealistic",
+                    "realistic_photo",
+                    "naturalistic",
+                }
+                if rendering_mode and rendering_mode not in photoreal_modes:
+                    return False
+                if stylization_scope in {"whole_image", "full_frame", "entire_image", "scene"} and rendering_mode not in photoreal_modes:
+                    return False
         profile_subject_types = self._llm_profile_subject_entity_types(context)
         if profile_subject_types:
             # The frozen task profile is the best available statement of what
