@@ -37,6 +37,11 @@ from ..creative_core.doc281_output_plan_binding import (
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
+from ..shared_capabilities.visual_cluster.contracts import (
+    VariationExecutionContractResolutionError,
+    VariationExecutionContract,
+    resolve_general_format_layout_render_spec,
+)
 from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
     body_silhouette_age6_cross_view_naturalness_contract,
@@ -1182,6 +1187,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
         mode_role_recipe = self._mode_role_recipe(request)
         role_specific_plan = self._role_specific_generation_plan(request)
         mode_policy = self._mode_execution_policy(request)
+        general_format_layout_spec = self._general_format_layout_render_spec(request)
+        provider_image_options = self._provider_image_options(request)
+        general_format_layout_audit = (
+            {
+                "source": "frozen_general_variation_execution_contract",
+                "target": general_format_layout_spec.get("target"),
+                "aspect_ratio": general_format_layout_spec.get("aspect_ratio"),
+                "size": general_format_layout_spec.get("size"),
+                "requested_size": app_request.prompt_plan.size,
+                "frozen_job_size": self._base_size_for_request(request),
+                "size_source": (
+                    "explicit_provider_option"
+                    if provider_image_options.get("size")
+                    else "format_layout_contract"
+                ),
+            }
+            if general_format_layout_spec
+            else {}
+        )
         strong_reference_closure = self._strong_reference_closure_package(request)
         mode_quality_profile = self._mode_quality_profile(request)
         auto_identity_anchor_applied = bool(request.metadata.get("auto_batch_identity_anchor_applied"))
@@ -1402,6 +1426,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "request_index": output.get("request_index"),
                     "requested_image_count": requested_group_count,
                     "requested_image_size": app_request.prompt_plan.size,
+                    "general_format_layout": general_format_layout_audit,
                     "provider_size_adaptation": provider_size_adaptation,
                     "requested_image_aspect_ratio": request.metadata.get(
                         "requested_image_aspect_ratio"
@@ -1514,6 +1539,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "v3_owned_output": True,
                         "requested_image_count": requested_group_count,
                         "requested_image_size": app_request.prompt_plan.size,
+                        "general_format_layout": general_format_layout_audit,
                         "provider_size_adaptation": provider_size_adaptation,
                         "project_id": request.metadata.get("project_id"),
                         "template_id": request.metadata.get("template_id"),
@@ -1568,6 +1594,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "visual_capability_cluster": visual_cluster,
                 "requested_image_count": requested_group_count,
                 "requested_image_size": app_request.prompt_plan.size,
+                "general_format_layout": general_format_layout_audit,
                 "provider_size_adaptation": provider_size_adaptation,
                 "project_id": request.metadata.get("project_id"),
                 "template_id": request.metadata.get("template_id"),
@@ -7179,7 +7206,99 @@ class ProductionImageGenerationProvider(GenerationProvider):
         except (TypeError, ValueError):
             return 2
 
-    def _size_for_request(self, request: GenerationRequest) -> str:
+    def _general_format_layout_render_spec(self, request: GenerationRequest) -> dict[str, str | None]:
+        """Resolve the current output's typed General format target.
+
+        The role recipe is useful for local planning, but it is not a
+        renderer authority on an enforced request.  Only the validated,
+        output-index-bound variation contract may choose a per-output canvas.
+        Missing or historical contracts deliberately return no override and
+        leave the existing job-level size path untouched.
+        """
+
+        metadata = self._generation_request_metadata(request)
+        if (
+            str(metadata.get("scenario_id") or "").strip() != "general_creative"
+            or str(metadata.get("template_id") or "").strip() != "general_template"
+        ):
+            return {}
+        # A Boolean compatibility marker is not enough to authorize a new
+        # renderer canvas. The live route must be enforced so that
+        # ``_visual_cluster`` reads the resolved ledger projection rather than
+        # a mutable request payload.
+        if not self._activation_enforced(request):
+            return {}
+        cluster = self._visual_cluster(request)
+        raw_contract = cluster.get("variation_execution_contract") if isinstance(cluster, dict) else None
+        if not isinstance(raw_contract, dict):
+            mode_source = str(metadata.get("variation_mode_source") or "").strip().lower()
+            explicit_mode_sources = [
+                metadata.get("variation_mode_override"),
+                metadata.get("variation_execution_mode"),
+            ]
+            role_plan = metadata.get("role_specific_generation_plan")
+            explicit_format_mode = any(
+                str(value or "").strip() == "format_layout_adaptation"
+                for value in explicit_mode_sources
+            ) or (
+                mode_source == "manual"
+                and any(
+                    str(metadata.get(key) or "").strip() == "format_layout_adaptation"
+                    for key in ("effective_variation_mode", "variation_mode")
+                )
+            )
+            role_plan_format_mode = isinstance(role_plan, dict) and str(
+                role_plan.get("mode") or ""
+            ).strip() == "format_layout_adaptation"
+            if explicit_format_mode or (self._group_count_for_request(request) > 1 and role_plan_format_mode):
+                raise ProviderRuntimeError(
+                    "General format-layout execution contract is missing.",
+                    provider=self.provider_name,
+                    detail={"failure_code": "general_format_layout_contract_missing"},
+                )
+            return {}
+        try:
+            contract_mode = VariationExecutionContract.model_validate(raw_contract).mode
+        except Exception as exc:
+            raise ProviderRuntimeError(
+                "General variation execution contract is invalid.",
+                provider=self.provider_name,
+                detail={"failure_code": "general_variation_execution_contract_invalid"},
+            ) from exc
+        if contract_mode != "format_layout_adaptation":
+            return {}
+        generation_plan = getattr(request, "generation_plan", None)
+        generation_metadata = getattr(generation_plan, "metadata", None)
+        generation_metadata = generation_metadata if isinstance(generation_metadata, dict) else {}
+        raw_index = generation_metadata.get("output_index", metadata.get("output_index"))
+        if type(raw_index) is not int or raw_index < 0:
+            raise ProviderRuntimeError(
+                "General format-layout generation output index is unavailable.",
+                provider=self.provider_name,
+                detail={"failure_code": "general_format_layout_output_index_missing"},
+            )
+        try:
+            resolved = resolve_general_format_layout_render_spec(
+                raw_contract,
+                raw_index + 1,
+                contract_binding=cluster.get("variation_execution_contract_binding"),
+                require_binding=True,
+                require_format_mode=True,
+            )
+        except VariationExecutionContractResolutionError as exc:
+            raise ProviderRuntimeError(
+                "General format-layout execution contract cannot authorize a physical canvas.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "general_format_layout_contract_invalid",
+                    "reason": str(exc),
+                },
+            ) from exc
+        return dict(resolved or {})
+
+    def _base_size_for_request(self, request: GenerationRequest) -> str:
+        """Return the frozen job-level canvas before a format override."""
+
         image_options = self._provider_image_options(request)
         requested_size = str(
             image_options.get("size")
@@ -7204,6 +7323,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
         }
         return mapping.get(ratio, "1024x1024")
 
+    def _size_for_request(self, request: GenerationRequest) -> str:
+        image_options = self._provider_image_options(request)
+        format_spec = self._general_format_layout_render_spec(request)
+        # An explicit typed Provider option remains a transport override. In
+        # its absence, the General format contract owns this output's canvas,
+        # even when the original job has one shared/default size.
+        if not image_options.get("size") and format_spec.get("size"):
+            return str(format_spec["size"])
+        return self._base_size_for_request(request)
+
     def _resolve_provider_size(
         self,
         request: GenerationRequest,
@@ -7220,6 +7349,23 @@ class ProductionImageGenerationProvider(GenerationProvider):
         """
 
         planned_size = self._size_for_request(request)
+        # A format contract is a hard output-canvas requirement. A constrained
+        # reference-edit transport may only support a square wire canvas, but
+        # changing a vertical/horizontal/tight target to square would produce
+        # a successful-looking output for the wrong mode. Preserve the typed
+        # size and let the provider capability guard reject the request (or
+        # accept it when the configured edit transport supports that canvas).
+        format_spec = self._general_format_layout_render_spec(request)
+        provider_image_options = self._provider_image_options(request)
+        if format_spec.get("target") and not provider_image_options.get("size"):
+            required_size = str(format_spec.get("size") or "").strip()
+            if required_size and planned_size != required_size:
+                raise ProviderRuntimeError(
+                    "General format-layout canvas was changed before reference-edit transport.",
+                    provider=self.provider_name,
+                    detail={"failure_code": "general_format_layout_canvas_drift"},
+                )
+            return planned_size, {}
         if not reference_assets or planned_size == "1024x1024":
             return planned_size, {}
 
@@ -7233,7 +7379,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             or request.generation_plan.metadata.get("requested_image_aspect_ratio")
             or ""
         ).strip()
-        if self._provider_image_options(request).get("size") or explicit_size_source or explicit_aspect:
+        if provider_image_options.get("size") or explicit_size_source or explicit_aspect:
             return planned_size, {}
 
         try:
@@ -7258,11 +7404,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _asset_canvas_instruction(self, request: GenerationRequest, asset: AssetSpec | None) -> str:
         if asset is None:
             return ""
-        requested_size = str(
-            request.metadata.get("requested_image_size")
-            or request.generation_plan.metadata.get("requested_image_size")
-            or ""
-        ).strip()
+        requested_size = self._size_for_request(request)
         explicit_ratio = {
             "1024x1024": "1:1",
             "1024x1536": "2:3",

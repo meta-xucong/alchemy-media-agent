@@ -35,6 +35,10 @@ from ..generation_router import (
 from ..schemas import CandidateResult, EvaluationReport, PlanningResult, ProviderStrategy, Recommendation, ReferenceAsset
 from ..visual_assets.body_proportion_evidence_profile import BodyRefreshAnalysisContext
 from ..vertical_agents import VerticalAgentRegistry
+from ..shared_capabilities.visual_cluster.contracts import (
+    VariationExecutionContractResolutionError,
+    resolve_general_format_layout_render_spec,
+)
 
 
 def _bounded_requested_image_count(value: object) -> int:
@@ -1182,6 +1186,53 @@ class CentralCreativeBrain:
             "mode_execution_policy": policy,
             "variation_mode": role_plan.get("mode") or policy.get("mode") or dict(asset.metadata).get("variation_mode"),
         }
+        # The General format role owns an output-specific canvas. Apply the
+        # same server-owned target used later by the typed Brain contract so
+        # Layout Agent and Provider cannot observe different aspect ratios.
+        # Tight framing intentionally keeps the frozen job canvas. There is
+        # no role-key fallback here: the frozen contract row is the only
+        # authority shared with Provider and post-generation review.
+        format_render_spec = None
+        if (
+            str(context.metadata.get("scenario_id") or "").strip() == "general_creative"
+            and str(context.metadata.get("template_id") or "").strip() == "general_template"
+            and str(role_plan.get("mode") or "").strip() == "format_layout_adaptation"
+        ):
+            raw_contract = context.metadata.get("variation_execution_contract")
+            requested_count = _bounded_requested_image_count(
+                role_plan.get("requested_image_count")
+                or context.metadata.get("requested_image_count")
+            )
+            mode_source = str(context.metadata.get("variation_mode_source") or "").strip().lower()
+            explicit_format_mode = any(
+                str(context.metadata.get(key) or "").strip() == "format_layout_adaptation"
+                for key in ("variation_mode_override", "variation_execution_mode")
+            ) or (
+                mode_source == "manual"
+                and any(
+                    str(context.metadata.get(key) or "").strip() == "format_layout_adaptation"
+                    for key in ("effective_variation_mode", "variation_mode")
+                )
+            )
+            if (requested_count > 1 or explicit_format_mode) and not isinstance(raw_contract, dict):
+                raise VariationExecutionContractResolutionError(
+                    "general format-layout execution contract is missing"
+                )
+            if isinstance(raw_contract, dict):
+                format_render_spec = resolve_general_format_layout_render_spec(
+                    raw_contract,
+                    index + 1,
+                    contract_binding=context.metadata.get("variation_execution_contract_binding"),
+                    require_binding=True,
+                    require_format_mode=True,
+                )
+        target_aspect_ratio = (
+            str(format_render_spec.get("aspect_ratio") or "").strip()
+            if isinstance(format_render_spec, dict)
+            else ""
+        )
+        if target_aspect_ratio:
+            return asset.model_copy(update={"aspect_ratio": target_aspect_ratio, "metadata": metadata})
         return asset.model_copy(update={"metadata": metadata})
 
     def _has_explicit_user_reference_assets(self, context: PipelineContext) -> bool:

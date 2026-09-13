@@ -19,7 +19,10 @@ from .prompt_policy import (
 from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
 from ..shared_capabilities.visual_cluster.expression_review import LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
-from ..shared_capabilities.visual_cluster.contracts import VariationExecutionContract
+from ..shared_capabilities.visual_cluster.contracts import (
+    GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS,
+    VariationExecutionContract,
+)
 from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
 
 
@@ -70,7 +73,7 @@ SYSTEM_PROMPT = (
 CANONICAL_FINALIZER_SYSTEM_PROMPT = """You are the V3 Creative OS final prompt-signing brain. Return JSON only and never reveal hidden reasoning.
 Author the exact complete natural-language renderer prompt requested by the schema. The frozen render context is authoritative for protected user intent, reference-channel ownership, template/cardinality, capability obligations, and normalized review evidence. Reconcile all of it as one whole image; do not emit IDs, diagnostics, prompt fragments, checklists, local recipes, or markdown.
 The Remote Brain is the sole final prompt author. Do not replace an explicit current-request choice with an inherited reference style, age, camera, hair, wardrobe, expression, complexion, or scene unless the frozen ownership context explicitly assigns it to the reference.
-When frozen_render_context.variation_execution_contract is present, use its neutral output purposes, variation axes, must-keep meaning, and anti-drift meaning to make the outputs materially distinct. Translate that contract into complete prompts without copying its fields, local role language, or any recipe wording into renderer text.
+When frozen_render_context.variation_execution_contract is present, use its neutral output purposes, variation axes, must-keep meaning, and anti-drift meaning to make the outputs materially distinct. For the exact format axes format_vertical, format_square, format_horizontal, and format_tight, preserve the corresponding per-output canvas/layout meaning: tall portrait 2:3, balanced square 1:1, wide horizontal 3:2, or tight/detail framing on the frozen canvas. Translate that contract into complete prompts without copying its fields, axis identifiers, local role language, or any recipe wording into renderer text.
 Treat every explicit current-request choice of atmosphere, palette, time of day, lighting color or direction, lens, film finish, environment, composition, and mood as protected user-owned intent. Human Realism may improve the camera-observed rendering of people and materials inside that direction, but it must not replace, brighten, cool, warm, modernize, soften, or otherwise redesign those channels. When a channel is not defined by the request, resolve it conservatively from the complete meaning; do not invent a new location, palette, lighting setup, or cinematic mood merely to demonstrate realism.
 For a visible real person, resolve identity, current developmental stage, expression, photographic material, and scene together. Keep the person age-appropriate and non-sexual. Do not turn age, expression, complexion, skin, anatomy, or beauty into a feature formula or word stack. Preserve an explicitly user-owned commercial aesthetic while keeping the person materially camera-observed and individual; a pleasant or commercial frame alone does not justify a generic presenter expression.
 When multiple visible people share the frame, preserve the user's desired beauty, appeal, facial harmony, styling, and mood as the first visual priority while authoring them as distinct individuals observed in one real moment. Let their attention, timing, posture, expression, facial character, and light-dependent surface response differ naturally with the situation, without making faces interchangeable, retouching uniform, or skin artificially plastic. Keep the beauty direction flattering and coherent across the group; realism should add camera-observed material detail and presence, not make the people less attractive. Do not equate realism with dullness, harshness, fatigue, roughness, or deliberately imperfect facial features: preserve balanced attractive features, healthy complexion, and expressive eyes. If realism and texture compete with beauty, reduce the texture intervention before reducing facial appeal. Resolve skin as natural human material with restrained local highlights and soft highlight rolloff, preserving fine nonuniform texture without oily sheen or waxy gloss. Keep each face readable through scene-consistent reflected or ambient fill from the existing light, without replacing directional light with flat frontal studio fill. Preserve the prompt's light direction, color, mood, and contrast; keep facial shadow detail open without lifting the whole scene, and keep highlight rolloff physically coherent with the background and hair rim light. If warm backlight, retro color, soft focus, diffusion, or halation is requested, balance those effects against neutral skin color, gentle highlight transitions, and open shadow detail rather than intensifying amber saturation or contrast. When soft focus, diffusion, or halation is requested, keep it an optical property of the scene and highlights while retaining local face and material contrast at the focal plane.
@@ -803,8 +806,11 @@ def _compact_remote_creative_payload(
         payload["variation_execution_contract_instructions"] = (
             "Use this typed contract as neutral per-output semantic guidance. Preserve its subject/style and "
             "anti-drift meaning, make each output serve its own purpose and variation axes, and author the "
-            "complete Brain-owned direction for each output. Do not echo the contract fields, internal role "
-            "language, or any local recipe in a renderer prompt."
+            "complete Brain-owned direction for each output. If a row contains format_vertical, format_square, "
+            "format_horizontal, or format_tight, make that output respectively a tall portrait 2:3 layout, a "
+            "balanced square 1:1 layout, a wide horizontal 3:2 layout, or a tight/detail framing on the frozen "
+            "canvas. Do not echo the contract fields, axis identifiers, internal role language, or any local "
+            "recipe in a renderer prompt."
         )
     if ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
@@ -893,7 +899,10 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             payload["remote_response_contract"] += (
                 " When variation_execution_contract is present, use its neutral per-output purpose and variation "
                 "axes to make image_set_plan.shot_plan materially distinct while preserving its must-keep and "
-                "anti-drift meaning. Do not return the contract itself as prompt text or add local recipe wording."
+                "anti-drift meaning. For format_vertical, format_square, format_horizontal, and format_tight, "
+                "preserve the matching tall portrait 2:3, balanced square 1:1, wide horizontal 3:2, or "
+                "tight/detail-on-the-frozen-canvas layout meaning. Do not return the contract itself as prompt "
+                "text or add local recipe wording."
             )
         if professional_ecommerce_pose_contract:
             payload["professional_ecommerce_pose_contract_instructions"] = (
@@ -1606,6 +1615,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "and owner remote_v3_llm_brain. The receipt is audit data, not renderer wording; do not copy contract "
             "fields, internal role language, or local recipe wording into the prompt."
         )
+        if any(
+            any(axis in GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS for axis in output.variation_axes)
+            for output in variation_execution_contract.outputs
+        ):
+            response_contract += (
+                " For any output whose exact frozen axes include format_vertical, format_square, "
+                "format_horizontal, or format_tight, preserve its corresponding tall portrait 2:3, balanced "
+                "square 1:1, wide horizontal 3:2, or tight/detail framing on the frozen canvas in the complete "
+                "renderer prompt. Do not copy the axis identifier into the prompt."
+            )
         if (
             request.metadata.get("variation_execution_semantic_evidence_required") is True
             or isinstance(context.get("variation_execution_contract"), dict)

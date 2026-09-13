@@ -6863,11 +6863,18 @@ class V3ProductApiService:
         except Exception:
             return {}
         candidates = self._mode_review_candidates(generation_result)
+        variation_contract = visual_cluster.get("variation_execution_contract")
+        variation_binding = visual_cluster.get("variation_execution_contract_binding")
         review = self.mode_role_director.review(
             project_id=project_id,
             job_id=generation_result.creative_job.job_id,
             role_plan=role_plan,
             generated_candidates=candidates,
+            variation_execution_contract=variation_contract,
+            variation_execution_contract_binding=(
+                dict(variation_binding) if isinstance(variation_binding, dict) else None
+            ),
+            validate_rendered_canvas=True,
         )
         return review.model_dump(mode="json")
 
@@ -6940,6 +6947,7 @@ class V3ProductApiService:
                     "candidate_id": packaged.metadata.get("selected_candidate_id"),
                     "asset_id": packaged.asset_id,
                     "output_id": candidate_metadata.get("output_id"),
+                    "output_index": output_index if type(output_index) is int else candidate_metadata.get("output_index"),
                     "mode_role_recipe": recipe if isinstance(recipe, dict) else {},
                     "mode_role_key": review_candidate_metadata.get("mode_role_key")
                     or review_asset_metadata.get("mode_role_key"),

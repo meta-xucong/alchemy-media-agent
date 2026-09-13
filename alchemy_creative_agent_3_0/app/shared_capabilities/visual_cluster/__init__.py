@@ -51,6 +51,7 @@ from .contracts import (
     SubjectContinuityAssetPackage,
     SubjectContinuityEvidence,
     VariationExecutionContract,
+    VariationExecutionContractResolutionError,
     VariationExecutionOutput,
     VisualCapabilityClusterResult,
     VisualCommercialQualityReview,
@@ -64,6 +65,7 @@ from .contracts import (
     ProjectVisualGrammarSnapshot,
     ReviewEvidenceChannel,
     ReviewEvidencePlan,
+    resolve_general_format_layout_render_spec,
 )
 from .adaptive_reference import ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID, AdaptiveReferenceRetriever
 from .batch_identity_review import BatchIdentityDiversityReviewer
@@ -238,7 +240,9 @@ __all__ = [
     "StrictVisualReviewPolicy",
     "StylingDeltaPolicy",
     "VariationExecutionContract",
+    "VariationExecutionContractResolutionError",
     "VariationExecutionOutput",
+    "resolve_general_format_layout_render_spec",
     "SHARED_REVIEW_REPAIR_CONTEXT_VERSION",
     "SHARED_REVIEW_REPAIR_ISSUE_CODES",
     "shared_review_observations_for_issue_codes",

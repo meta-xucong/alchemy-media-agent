@@ -14,10 +14,12 @@ from .contracts import (
     VariationAxis,
     VariationAvoid,
     VariationExecutionContract,
+    VariationExecutionContractResolutionError,
     VariationExecutionOutput,
     VariationKeep,
     VariationPurpose,
     GENERAL_VARIATION_MAX_OUTPUTS,
+    resolve_general_format_layout_render_spec,
 )
 
 
@@ -64,13 +66,13 @@ _NEUTRAL_VARIATION_AXIS_MAP: dict[str, VariationAxis] = {
     "light": "mood",
     "depth": "depth",
     "shape": "composition",
-    "vertical crop": "layout",
+    "vertical crop": "format_vertical",
     "top/bottom space": "layout",
-    "square crop": "layout",
+    "square crop": "format_square",
     "balanced subject": "composition",
-    "wide crop": "layout",
+    "wide crop": "format_horizontal",
     "side negative space": "placement",
-    "tight crop": "framing",
+    "tight crop": "format_tight",
 }
 
 _NEUTRAL_MUST_KEEP_MAP = {
@@ -282,9 +284,13 @@ class ModeAwareRoleDirector:
         job_id: str | None,
         role_plan: RoleSpecificGenerationPlan,
         generated_candidates: list[dict[str, Any]] | None = None,
+        variation_execution_contract: dict[str, Any] | VariationExecutionContract | None = None,
+        variation_execution_contract_binding: dict[str, Any] | None = None,
+        validate_rendered_canvas: bool = False,
     ) -> ModeDifferentiationReview:
         candidates = [dict(item) for item in generated_candidates or [] if isinstance(item, dict)]
         issue_codes: list[str] = []
+        format_canvas_audit: list[dict[str, Any]] = []
         role_checks = [
             f"{recipe.index}. {recipe.label}: {recipe.purpose}"
             for recipe in role_plan.role_recipes
@@ -317,6 +323,13 @@ class ModeAwareRoleDirector:
                 ]
                 if len([item for item in layouts if item]) > 1 and len(set(layouts)) <= 1:
                     issue_codes.append("format_layout_collapse")
+                if validate_rendered_canvas:
+                    canvas_issues, format_canvas_audit = self._review_rendered_format_canvas(
+                        candidates,
+                        variation_execution_contract=variation_execution_contract,
+                        variation_execution_contract_binding=variation_execution_contract_binding,
+                    )
+                    issue_codes.extend(canvas_issues)
             if role_plan.mode == "selection_candidates":
                 expected_role_keys = {
                     str(recipe.role_key).strip()
@@ -356,8 +369,147 @@ class ModeAwareRoleDirector:
                 "candidate_count": len(candidates),
                 "role_count": len(role_plan.role_recipes),
                 "append_only": True,
+                "format_canvas_review": format_canvas_audit,
             },
         )
+
+    @staticmethod
+    def _review_rendered_format_canvas(
+        candidates: list[dict[str, Any]],
+        *,
+        variation_execution_contract: dict[str, Any] | VariationExecutionContract | None,
+        variation_execution_contract_binding: dict[str, Any] | None,
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Verify the persisted provider canvas against the same contract row."""
+
+        issue_codes: list[str] = []
+        evidence: list[dict[str, Any]] = []
+        if variation_execution_contract is None:
+            return ["format_layout_contract_invalid"], evidence
+        try:
+            parsed_contract = (
+                variation_execution_contract
+                if isinstance(variation_execution_contract, VariationExecutionContract)
+                else VariationExecutionContract.model_validate(variation_execution_contract)
+            )
+            first_target = resolve_general_format_layout_render_spec(
+                parsed_contract,
+                1,
+                contract_binding=variation_execution_contract_binding,
+                require_binding=True,
+                require_format_mode=True,
+            )
+        except Exception:
+            return ["format_layout_contract_invalid"], evidence
+        if first_target is None:
+            # A pre-Doc307 format contract has no physical target axes. Keep
+            # it readable and do not retrofit a new review failure onto old
+            # jobs whose renderer intentionally used one frozen canvas.
+            evidence.append(
+                {
+                    "status": "historical_compatibility",
+                    "contract_version": parsed_contract.contract_version,
+                    "requested_image_count": parsed_contract.requested_image_count,
+                }
+            )
+            return [], evidence
+        if len(candidates) != parsed_contract.requested_image_count:
+            issue_codes.append("format_layout_output_count_mismatch")
+        seen_indices: set[int] = set()
+        for candidate in candidates:
+            candidate_issue_codes: list[str] = []
+            metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+            raw_index = candidate.get("output_index")
+            if type(raw_index) is not int:
+                raw_index = metadata.get("output_index")
+            if type(raw_index) is not int or raw_index < 1:
+                candidate_issue_codes.append("format_layout_output_index_missing")
+                issue_codes.extend(candidate_issue_codes)
+                continue
+            if raw_index in seen_indices:
+                candidate_issue_codes.append("format_layout_output_index_duplicate")
+            seen_indices.add(raw_index)
+            try:
+                expected = resolve_general_format_layout_render_spec(
+                    variation_execution_contract,
+                    raw_index,
+                    contract_binding=variation_execution_contract_binding,
+                    require_binding=True,
+                    require_format_mode=True,
+                )
+            except VariationExecutionContractResolutionError:
+                candidate_issue_codes.append("format_layout_contract_invalid")
+                issue_codes.extend(candidate_issue_codes)
+                continue
+            if not expected:
+                candidate_issue_codes.append("format_layout_physical_target_missing")
+                issue_codes.extend(candidate_issue_codes)
+                continue
+            raw_audit = candidate.get("general_format_layout")
+            if not isinstance(raw_audit, dict):
+                raw_audit = metadata.get("general_format_layout")
+            if not isinstance(raw_audit, dict):
+                candidate_issue_codes.append("format_layout_render_audit_missing")
+                issue_codes.extend(candidate_issue_codes)
+                continue
+            target_ok = (
+                str(raw_audit.get("target") or "").strip() == str(expected.get("target") or "").strip()
+                and str(raw_audit.get("aspect_ratio") or "").strip()
+                == str(expected.get("aspect_ratio") or "").strip()
+            )
+            if not target_ok:
+                candidate_issue_codes.append("format_layout_target_mismatch")
+
+            requested_size = str(
+                raw_audit.get("requested_size")
+                or candidate.get("requested_image_size")
+                or metadata.get("requested_image_size")
+                or ""
+            ).strip()
+            size_source = str(raw_audit.get("size_source") or "").strip()
+            expected_size = (
+                requested_size
+                if size_source == "explicit_provider_option"
+                else str(expected.get("size") or raw_audit.get("frozen_job_size") or "").strip()
+            )
+            declared_size = str(raw_audit.get("size") or "").strip()
+            if size_source != "explicit_provider_option" and declared_size != str(expected.get("size") or "").strip():
+                candidate_issue_codes.append("format_layout_canvas_metadata_mismatch")
+            if size_source != "explicit_provider_option" and requested_size and requested_size != expected_size:
+                candidate_issue_codes.append("format_layout_canvas_metadata_mismatch")
+            if not expected_size:
+                candidate_issue_codes.append("format_layout_canvas_metadata_mismatch")
+
+            raw_width = candidate.get("width")
+            raw_height = candidate.get("height")
+            if raw_width is None:
+                raw_width = metadata.get("width")
+            if raw_height is None:
+                raw_height = metadata.get("height")
+            if type(raw_width) is not int or type(raw_height) is not int or raw_width < 1 or raw_height < 1:
+                candidate_issue_codes.append("format_layout_pixel_dimensions_missing")
+                actual_dimensions = None
+            else:
+                actual_dimensions = (raw_width, raw_height)
+            expected_dimensions = _size_dimensions(expected_size)
+            if actual_dimensions is not None and expected_dimensions is not None:
+                if actual_dimensions != expected_dimensions:
+                    candidate_issue_codes.append("format_layout_pixel_dimensions_mismatch")
+            elif actual_dimensions is not None and expected_size:
+                candidate_issue_codes.append("format_layout_pixel_dimensions_mismatch")
+            evidence.append(
+                {
+                    "output_index": raw_index,
+                    "expected": dict(expected),
+                    "declared": dict(raw_audit),
+                    "expected_size": expected_size,
+                    "actual_dimensions": list(actual_dimensions) if actual_dimensions else None,
+                    "status": "pass" if not candidate_issue_codes else "review",
+                    "issue_codes": list(dict.fromkeys(candidate_issue_codes)),
+                }
+            )
+            issue_codes.extend(candidate_issue_codes)
+        return _dedupe(issue_codes), evidence
 
     def _policy(self, mode: str, *, has_identity_anchor: bool) -> ModeExecutionPolicy:
         data = {
@@ -878,6 +1030,19 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _size_dimensions(value: Any) -> tuple[int, int] | None:
+    """Parse a canonical Provider canvas string for exact pixel review."""
+
+    text = str(value or "").strip().lower()
+    if "x" not in text:
+        return None
+    width, height = (part.strip() for part in text.split("x", 1))
+    if not width.isdigit() or not height.isdigit():
+        return None
+    parsed = (int(width), int(height))
+    return parsed if parsed[0] > 0 and parsed[1] > 0 else None
 
 
 def _dedupe(values: Any) -> list[str]:

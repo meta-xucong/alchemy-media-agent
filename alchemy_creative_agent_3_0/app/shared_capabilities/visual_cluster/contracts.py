@@ -227,7 +227,49 @@ VariationAxis = Literal[
     "placement",
     "concept",
     "composition",
+    # These four axes are deliberately neutral semantic evidence for the
+    # General format-layout bridge. They are not local role names and must
+    # never be copied verbatim into renderer prompt text.
+    "format_vertical",
+    "format_square",
+    "format_horizontal",
+    "format_tight",
 ]
+
+# One server-owned map is shared by the General role director, Central Brain,
+# and Provider projection. Keeping the semantic axis, visible target, aspect
+# ratio, and certified provider canvas together prevents a role from being
+# acknowledged in metadata while the renderer still receives the job-level
+# canvas. ``None`` for tight framing means preserve the frozen job canvas.
+GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS: dict[str, dict[str, str | None]] = {
+    "format_vertical": {
+        "target": "vertical",
+        "aspect_ratio": "2:3",
+        "size": "1024x1536",
+    },
+    "format_square": {
+        "target": "square",
+        "aspect_ratio": "1:1",
+        "size": "1024x1024",
+    },
+    "format_horizontal": {
+        "target": "horizontal",
+        "aspect_ratio": "3:2",
+        "size": "1536x1024",
+    },
+    "format_tight": {
+        "target": "tight",
+        "aspect_ratio": None,
+        "size": None,
+    },
+}
+
+GENERAL_FORMAT_LAYOUT_ROLE_RENDER_SPECS: dict[str, dict[str, str | None]] = {
+    "vertical_cover": dict(GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS["format_vertical"]),
+    "square_feed": dict(GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS["format_square"]),
+    "horizontal_banner": dict(GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS["format_horizontal"]),
+    "tight_crop_or_detail": dict(GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS["format_tight"]),
+}
 
 VariationPurpose = Literal[
     "primary_presentation",
@@ -319,6 +361,87 @@ class VariationExecutionContract(V3BaseModel):
     def bind_digest(self) -> "VariationExecutionContract":
         """Return an immutable-value copy bound to its semantic contents."""
         return self.model_copy(update={"contract_digest": self.computed_digest()})
+
+
+class VariationExecutionContractResolutionError(ValueError):
+    """Raised when a current General variation contract cannot be rendered safely."""
+
+
+def resolve_general_format_layout_render_spec(
+    raw_contract: VariationExecutionContract | Mapping[str, Any] | None,
+    output_index: int | None,
+    *,
+    contract_binding: Mapping[str, Any] | None = None,
+    require_binding: bool = False,
+    require_format_mode: bool = False,
+) -> dict[str, str | None] | None:
+    """Resolve one format output from the immutable execution contract.
+
+    This is the single authority consumed by Central Brain, Provider, and
+    post-generation review.  A historical format contract whose rows contain
+    no physical format axes remains readable and deliberately returns
+    ``None`` so old jobs keep their original shared canvas.  A partially
+    materialized or ambiguous current contract fails closed instead of
+    silently falling back to a job-level canvas.
+    """
+
+    if raw_contract is None:
+        return None
+    try:
+        contract = (
+            raw_contract
+            if isinstance(raw_contract, VariationExecutionContract)
+            else VariationExecutionContract.model_validate(raw_contract)
+        )
+    except Exception as exc:
+        raise VariationExecutionContractResolutionError(
+            "general format-layout execution contract is invalid"
+        ) from exc
+    if contract.mode != "format_layout_adaptation":
+        if require_format_mode:
+            raise VariationExecutionContractResolutionError(
+                "general format-layout execution contract mode is not format_layout_adaptation"
+            )
+        return None
+    if not contract.contract_digest or contract.contract_digest != contract.computed_digest():
+        raise VariationExecutionContractResolutionError(
+            "general format-layout execution contract digest is not bound"
+        )
+    if type(output_index) is not int or output_index < 1 or output_index > len(contract.outputs):
+        raise VariationExecutionContractResolutionError(
+            "general format-layout output index is not bound to the execution contract"
+        )
+    expected_binding = {
+        "contract_version": contract.contract_version,
+        "contract_digest": contract.contract_digest,
+    }
+    if require_binding and dict(contract_binding or {}) != expected_binding:
+        raise VariationExecutionContractResolutionError(
+            "general format-layout execution contract binding is missing or mismatched"
+        )
+    if contract_binding is not None and dict(contract_binding) != expected_binding:
+        raise VariationExecutionContractResolutionError(
+            "general format-layout execution contract binding is mismatched"
+        )
+
+    target_specs_by_output: list[list[dict[str, str | None]]] = []
+    for output in contract.outputs:
+        target_specs_by_output.append(
+            [
+                GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS[axis]
+                for axis in output.variation_axes
+                if axis in GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS
+            ]
+        )
+    if all(not specs for specs in target_specs_by_output):
+        # v1 contracts created before the physical format bridge are
+        # intentionally compatible with the old single-canvas renderer.
+        return None
+    if any(len(specs) != 1 for specs in target_specs_by_output):
+        raise VariationExecutionContractResolutionError(
+            "general format-layout execution contract must bind exactly one physical target per output"
+        )
+    return dict(target_specs_by_output[output_index - 1][0])
 
 
 class GeneralVariationModeBinding(V3BaseModel):
