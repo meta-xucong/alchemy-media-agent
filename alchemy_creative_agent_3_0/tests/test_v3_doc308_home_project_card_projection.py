@@ -160,6 +160,82 @@ def test_cache_covers_survive_empty_lightweight_summaries_and_preview_url_is_dis
             browser.close()
 
 
+def test_desktop_unknown_home_count_never_renders_zero() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            text = page.evaluate(
+                """
+                () => {
+                  v3State.workspaceMode = "standard";
+                  v3State.projects = [{
+                    project_id: "unknown-count-project",
+                    status: "active",
+                    title: "Unknown count",
+                    user_goal: "goal",
+                    short_summary: "summary",
+                    primary_template_id: "general_template",
+                    job_count: 1,
+                    updated_at: "2026-09-14T00:01:00Z",
+                    latest_thumbnail_urls: [],
+                  }];
+                  v3State.projectRenderLimit = 9;
+                  v3State.projectsHasMore = false;
+                  v3State.projectsLoading = false;
+                  v3State.imageHistory = [];
+                  v3State.imageHistorySurface = "home_preview";
+                  v3State.imageHistoryLoaded = false;
+                  v3State.imageHistoryError = "";
+                  renderV3History();
+                  return document.querySelector("#v3HistoryList")?.textContent || "";
+                }
+                """,
+            )
+            assert "图片数量未同步" in text
+            assert "0 张" not in text
+        finally:
+            browser.close()
+
+
+def test_mobile_unknown_home_count_never_renders_zero() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            text = page.evaluate(
+                """
+                () => {
+                  mobileV3State.workspaceMode = "standard";
+                  mobileV3State.projects = [{
+                    project_id: "mobile-unknown-count-project",
+                    status: "active",
+                    title: "Unknown count",
+                    user_goal: "goal",
+                    short_summary: "summary",
+                    primary_template_id: "general_template",
+                    job_count: 1,
+                    updated_at: "2026-09-14T00:01:00Z",
+                    latest_thumbnail_urls: [],
+                  }];
+                  mobileV3State.projectRenderLimit = 4;
+                  mobileV3State.projectsHasMore = false;
+                  mobileV3State.outputs = [];
+                  mobileV3State.outputsLoaded = true;
+                  mobileV3State.outputsSurface = "home_preview";
+                  mobileV3State.outputError = "";
+                  mobileV3State.previewProjectIds = new Set();
+                  renderMobileV3ProjectCards();
+                  return document.querySelector("#mobileV3ProjectGrid")?.textContent || "";
+                }
+                """,
+            )
+            assert "图片数量未同步" in text
+            assert "0 张" not in text
+        finally:
+            browser.close()
+
+
 def test_desktop_load_more_requests_only_new_project_previews_and_keeps_old_cover() -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
