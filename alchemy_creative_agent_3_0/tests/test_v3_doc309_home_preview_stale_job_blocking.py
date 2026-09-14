@@ -65,9 +65,9 @@ def test_doc309_contract_and_frontend_timeouts_are_present() -> None:
     doc = DOC.read_text(encoding="utf-8")
 
     assert 'update={"job_ids": list(reversed(candidate_job_ids))}' in service_source
-    assert "v3HomePreviewRequestTimeoutMs = 10000" in desktop_source
+    assert "v3HomePreviewRequestTimeoutMs = 30000" in desktop_source
     assert "v3RequestWithTimeout(outputRequestPath, v3HomePreviewRequestTimeoutMs)" in desktop_source
-    assert "mobileV3HomePreviewRequestTimeoutMs = 10000" in mobile_source
+    assert "mobileV3HomePreviewRequestTimeoutMs = 30000" in mobile_source
     assert "mobileV3RequestWithTimeout(" in mobile_source
     assert "mobileV3HomePreviewRequestTimeoutMs" in mobile_source
     assert "let homePreviewSettled = false" in mobile_source

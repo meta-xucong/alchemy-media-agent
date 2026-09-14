@@ -83,6 +83,12 @@ the project catalog/cache, but must not clear usable project cards or render an
 incomplete summary as an authoritative `0 张` result. Normal project detail
 and full history requests keep their existing behavior.
 
+The bound is 30 seconds. A cold VPS batch read was measured at about 19.3
+seconds immediately after the V1 container restart, while warmed reads were
+about 2.7 seconds. A 10-second bound therefore converted a recoverable cold
+start into a false empty-preview state; 30 seconds remains finite while
+covering the observed production cold-start envelope.
+
 The timeout is a resilience boundary, not a delivery fallback: it must not
 invent covers, bypass authentication, or replace the server delivery gate.
 
