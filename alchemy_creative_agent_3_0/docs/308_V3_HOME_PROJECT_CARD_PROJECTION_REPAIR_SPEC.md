@@ -1,6 +1,7 @@
 # Doc308 - V3 Home Project Card Projection And Image Count Repair
 
-Status: implementation contract for the V3 home project-card repair. This
+Status: local implementation and audit passed; VPS deployment blocked by an
+unhealthy SSH/application endpoint. This
 document is the authoritative correction model for the `0 张`/missing-cover
 regression found after the Doc301 bootstrap optimization. It changes the
 authenticated read projection only; it does not change Brain, Provider,
@@ -176,7 +177,21 @@ home performance contract. Existing detail/gallery URL behavior is unchanged.
 
 ## 6. Delivery status
 
-At document freeze: `PLANNED`, baseline `e037db54`, no implementation or
-external mutation performed. This status must be updated only after the
-implementation version is frozen, tests are rerun, the independent audit is
-complete, and GitHub/VPS evidence is bound to the same commit.
+Implementation and local acceptance are fixed at code commit `e81b6dd9`:
+
+- `42 passed` across Doc308, Doc300, Doc301, and progressive-loading
+  regressions; desktop and mobile `node --check` passed.
+- Independent read-only audit passed: only the eight allowed files changed,
+  `HEAD` matched `origin/main`, the additive scope/owner filter and both
+  browser projections were present, and the output failure path retained
+  project-card cache state.
+- GitHub push passed for `origin/main` at `e81b6dd9`.
+
+VPS deployment is not accepted yet. Two bounded SSH attempts both ended with
+`Connection timed out during banner exchange` (exit 255), while a local TCP
+probe showed port `11506` open, the public V2 health URL timed out, and direct
+V1 health returned `502 Bad Gateway`. No remote release command or remote
+mutation ran. The remaining delivery dependency is VPS/SSH and reverse-proxy
+health; once that external condition is restored, deploy exactly
+`e81b6dd95731edf110bbcd6ac01aa1c717506a4d` and rerun the governed read-only
+health/static-marker verification before marking this document fully accepted.
