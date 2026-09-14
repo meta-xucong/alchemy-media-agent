@@ -32,6 +32,7 @@ const historyFetchPageSize = 48;
 const heroHistoryPageSize = 8;
 const v3ProjectHomePageSize = 9;
 const v3ProjectFetchLimit = v3ProjectHomePageSize;
+const v3HomePreviewRequestTimeoutMs = 10000;
 const v3ProjectCacheLimit = 80;
 const v2TemplatePageSize = 16;
 const v2TemplateEagerImageCount = 6;
@@ -3216,7 +3217,10 @@ async function loadV3ProjectOutputs({
     const projectIdsQuery = requestedHomeProjectIds
       ? `&project_ids=${encodeURIComponent(requestedHomeProjectIds.join(","))}`
       : "";
-    requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}`);
+    const outputRequestPath = `${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}`;
+    requestPromise = normalizedSurface === "home_preview"
+      ? v3RequestWithTimeout(outputRequestPath, v3HomePreviewRequestTimeoutMs)
+      : request(outputRequestPath);
     v3State.projectOutputsRequest = requestPromise;
     v3State.projectOutputsRequestOwner = requestOwner;
     v3State.projectOutputsRequestKey = requestKey;

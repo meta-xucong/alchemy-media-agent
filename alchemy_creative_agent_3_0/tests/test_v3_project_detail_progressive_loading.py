@@ -109,7 +109,7 @@ def test_delivery_preview_uses_project_index_and_passes_only_newest_jobs_to_exis
         )
     )
     service._project_output_items = lambda candidate, *, limit, owner_user_id, compact: (
-        gate_calls.append((list(candidate.job_ids), limit))
+        gate_calls.append((list(reversed(candidate.job_ids)), limit))
         or [{"output_id": "v3_output_preview"}]
     )
 

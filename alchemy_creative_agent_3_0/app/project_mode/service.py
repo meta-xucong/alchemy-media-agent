@@ -11806,8 +11806,12 @@ class V3ProjectModeService:
                 reverse=True,
             )
         ]
+        # ``_project_output_items`` preserves the Project record's historical
+        # oldest-to-newest order by iterating ``project.job_ids`` in reverse.
+        # Keep that invariant here so a stale legacy job cannot run before the
+        # newest indexed candidate and block the home cover.
         preview_project = project.model_copy(
-            update={"job_ids": candidate_job_ids},
+            update={"job_ids": list(reversed(candidate_job_ids))},
             deep=False,
         )
         snapshot_kwargs = {}
