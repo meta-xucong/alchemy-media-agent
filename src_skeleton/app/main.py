@@ -1306,10 +1306,26 @@ def v3_project_outputs_endpoint(
     compact: bool = True,
     project_id: str | None = None,
     surface: str | None = None,
+    project_ids: str | None = None,
     authorization: str = Header(default=""),
 ):
     user_id = _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project_outputs, limit, user_id, compact, project_id, surface)
+    requested_project_ids = None
+    if project_ids is not None:
+        requested_project_ids = list(dict.fromkeys(
+            value.strip()
+            for value in str(project_ids).split(",")
+            if value.strip()
+        ))[:100]
+    return _run_v3_handler(
+        v3_route_handlers.get_project_outputs,
+        limit,
+        user_id,
+        compact,
+        project_id,
+        surface,
+        requested_project_ids,
+    )
 
 
 @app.post("/api/v3/creative-agent/projects")

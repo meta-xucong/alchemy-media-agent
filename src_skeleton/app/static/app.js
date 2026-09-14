@@ -1936,13 +1936,20 @@ async function initV3Shell({ force = false } = {}) {
     // has rendered and every first-page thumbnail has settled. Keep this
     // request on the initial mask path so slow images cannot be mistaken for
     // missing projects.
+    const firstPageProjectIds = v3State.projects
+      .slice(0, v3ProjectHomePageSize)
+      .map((project) => String(project?.project_id || "").trim())
+      .filter(Boolean);
     try {
-      await loadV3ProjectOutputs({
-        silent: true,
-        force: true,
-        limit: v3ProjectHomePageSize,
-        surface: "home_preview",
-      });
+      if (firstPageProjectIds.length) {
+        await loadV3ProjectOutputs({
+          silent: true,
+          force: true,
+          limit: firstPageProjectIds.length,
+          surface: "home_preview",
+          projectIds: firstPageProjectIds,
+        });
+      }
     } catch (error) {
       console.warn("Initial V3 home preview failed", error);
     }
@@ -3083,6 +3090,9 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
       v3State.projects = appendV3ProjectItems(v3State.projects, apiItems);
       v3State.projectRenderLimit = Math.max(v3State.projectRenderLimit, v3State.projects.length);
     }
+    const previewProjectIds = (requestingMore ? apiItems : v3State.projects.slice(0, v3ProjectHomePageSize))
+      .map((project) => String(project?.project_id || "").trim())
+      .filter(Boolean);
     v3State.projectsNextCursor = payload.next_cursor || null;
     v3State.projectsHasMore = Boolean(payload.has_more && v3State.projectsNextCursor);
     const serverTotal = Number(payload.total);
@@ -3096,6 +3106,16 @@ async function loadV3Projects({ silent = false, force = false, loadMore = false 
     renderV3Projects();
     renderV3History();
     renderV3HeroHistory();
+    if (previewProjectIds.length) {
+      await loadV3ProjectOutputs({
+        silent: true,
+        force: true,
+        limit: previewProjectIds.length,
+        surface: "home_preview",
+        projectIds: previewProjectIds,
+        appendHomePreview: requestingMore,
+      });
+    }
   } catch (error) {
     if (!requestingMore) {
       v3State.templates = [];
@@ -3135,6 +3155,8 @@ async function loadV3ProjectOutputs({
   limit = 24,
   projectId = "",
   surface = "",
+  projectIds = null,
+  appendHomePreview = false,
   detailEpoch = null,
   shouldContinue = null,
   sessionReceipt = null,
@@ -3144,6 +3166,10 @@ async function loadV3ProjectOutputs({
   const normalizedSurface = String(surface || "").trim().toLowerCase();
   const minimumLimit = normalizedSurface === "home_preview" ? 1 : 12;
   const boundedLimit = Math.max(minimumLimit, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
+  const requestedHomeProjectIds = normalizedSurface === "home_preview" && Array.isArray(projectIds)
+    ? [...new Set(projectIds.map((project) => String(project || "").trim()).filter(Boolean))]
+    : null;
+  if (requestedHomeProjectIds && !requestedHomeProjectIds.length) return [];
   // A global home preview and a project-scoped full history may overlap. Only
   // coalesce requests with the same semantic scope/surface/limit; otherwise a
   // home preview can swallow the full history request opened by the user.
@@ -3151,6 +3177,8 @@ async function loadV3ProjectOutputs({
     String(scopedProjectId || ""),
     normalizedSurface || "full",
     String(boundedLimit),
+    requestedHomeProjectIds ? requestedHomeProjectIds.join(",") : "global",
+    appendHomePreview ? "append" : "replace",
   ].join("\u0001");
   if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
   if (
@@ -3185,7 +3213,10 @@ async function loadV3ProjectOutputs({
     const cacheBust = force ? `&t=${Date.now()}` : "";
     const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
     const surfaceQuery = normalizedSurface ? `&surface=${encodeURIComponent(normalizedSurface)}` : "";
-    requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${cacheBust}`);
+    const projectIdsQuery = requestedHomeProjectIds
+      ? `&project_ids=${encodeURIComponent(requestedHomeProjectIds.join(","))}`
+      : "";
+    requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}`);
     v3State.projectOutputsRequest = requestPromise;
     v3State.projectOutputsRequestOwner = requestOwner;
     v3State.projectOutputsRequestKey = requestKey;
@@ -3194,7 +3225,12 @@ async function loadV3ProjectOutputs({
     const items = Array.isArray(payload.items) ? payload.items : [];
     const reviewItems = Array.isArray(payload.review_items) ? payload.review_items : [];
     if (!scopedProjectId) {
-      v3State.imageHistory = items;
+      const appendPreviewItems = normalizedSurface === "home_preview"
+        && appendHomePreview
+        && v3State.imageHistorySurface === "home_preview";
+      v3State.imageHistory = appendPreviewItems
+        ? mergeV3HomePreviewItems(v3State.imageHistory, items)
+        : items;
       v3State.projectReviewOutputs = reviewItems;
       v3State.imageHistorySurface = normalizedSurface || "full";
       v3State.imageHistoryLoaded = normalizedSurface !== "home_preview";
@@ -3222,12 +3258,10 @@ async function loadV3ProjectOutputs({
       v3State.projectOutputItems = [];
       v3State.projectReviewOutputs = [];
     } else {
-      v3State.imageHistory = [];
       v3State.projectOutputs = [];
       v3State.projectOutputItems = [];
       v3State.projectReviewOutputs = [];
     }
-    clearV3LocalCaches();
     renderV3History();
     renderV3HeroHistory();
     renderV3ProjectOutputBoard();
@@ -3348,7 +3382,8 @@ function syncV3HomeProjectCovers(items) {
   const covers = new Map();
   items.forEach((item) => {
     const projectId = String(item?.project_id || item?.metadata?.project_id || "").trim();
-    const thumbnail = item?.thumbnail_url || item?.preview_url || item?.download_url || "";
+    const thumbnail = item?.thumbnail_url || item?.metadata?.thumbnail_url
+      || item?.preview_url || item?.metadata?.preview_url || "";
     if (!projectId || !thumbnail || covers.has(projectId)) return;
     covers.set(projectId, thumbnail);
   });
@@ -3362,12 +3397,34 @@ function syncV3HomeProjectCovers(items) {
   writeV3LocalProjects(v3State.projects);
 }
 
+function mergeV3HomePreviewItems(existingItems, incomingItems) {
+  const byProject = new Map();
+  [...(Array.isArray(existingItems) ? existingItems : []), ...(Array.isArray(incomingItems) ? incomingItems : [])]
+    .forEach((item) => {
+      const projectId = String(item?.project_id || item?.metadata?.project_id || "").trim();
+      const identity = projectId || String(item?.output_id || item?.id || "").trim();
+      if (!identity) return;
+      byProject.set(identity, item);
+    });
+  return Array.from(byProject.values()).sort((a, b) => v3OutputItemTime(b) - v3OutputItemTime(a));
+}
+
 function mergeV3ProjectItems(primaryItems, fallbackItems) {
   const byId = new Map();
   [...fallbackItems, ...primaryItems].forEach((item) => {
     if (!item?.project_id) return;
     const existing = byId.get(item.project_id) || {};
-    byId.set(item.project_id, { ...existing, ...item });
+    const merged = { ...existing, ...item };
+    const cachedThumbnails = Array.isArray(existing.latest_thumbnail_urls)
+      ? existing.latest_thumbnail_urls.filter(Boolean)
+      : [];
+    const incomingThumbnails = Array.isArray(item.latest_thumbnail_urls)
+      ? item.latest_thumbnail_urls.filter(Boolean)
+      : [];
+    if (!incomingThumbnails.length && cachedThumbnails.length) {
+      merged.latest_thumbnail_urls = cachedThumbnails;
+    }
+    byId.set(item.project_id, merged);
   });
   return Array.from(byId.values()).sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
 }
@@ -3458,6 +3515,15 @@ function v3ProjectEmptyImageLabel(project) {
   if (["generating", "finalizing", "planned"].includes(status)) return "图片准备中";
   if (Number(project?.job_count || 0) > 0) return "等待生成结果";
   return "尚未生成图片";
+}
+
+function v3ProjectImageCountLabel(group) {
+  if (v3State.imageHistorySurface === "home_preview" && group?.items?.length) return "封面预览";
+  if (v3State.imageHistoryError) return "图片暂时无法读取";
+  if (v3State.imageHistorySurface !== "full" || !v3State.imageHistoryLoaded) {
+    return Number(group?.project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
+  }
+  return `${Number(group?.count || 0)} 张`;
 }
 
 async function createV3Project() {
@@ -3664,7 +3730,7 @@ function renderV3History() {
     const emptyImageLabel = v3ProjectEmptyImageLabel(group.project);
     const stackCount = Math.min(Math.max(Number(group.count || 0), 1), 5);
     const previewOnly = v3State.imageHistorySurface === "home_preview" && Boolean(group.items.length);
-    const countLabel = previewOnly ? "封面预览" : `${group.count} 张`;
+    const countLabel = v3ProjectImageCountLabel(group);
     const groupTitle = v3ReadableText(group.title, group.goal || "V3 项目图片");
     const card = document.createElement("article");
     card.className = "v3-history-card v3-history-project-card";
@@ -11238,6 +11304,8 @@ function v3OutputStrictThumbImageUrl(item) {
   return uniqueNonEmpty([
     item?.thumbnail_url,
     metadata.thumbnail_url,
+    item?.preview_url,
+    metadata.preview_url,
   ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl)[0] || "";
 }
 

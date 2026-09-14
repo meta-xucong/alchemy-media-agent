@@ -3503,6 +3503,78 @@ function appendMobileV3ProjectItems(existingItems, incomingItems) {
   return result;
 }
 
+function mergeMobileV3ProjectItems(primaryItems, fallbackItems) {
+  const fallbackById = new Map(
+    (Array.isArray(fallbackItems) ? fallbackItems : [])
+      .filter((item) => item?.project_id)
+      .map((item) => [String(item.project_id), item]),
+  );
+  return (Array.isArray(primaryItems) ? primaryItems : [])
+    .filter((item) => item?.project_id)
+    .map((item) => {
+      const cached = fallbackById.get(String(item.project_id)) || {};
+      const merged = { ...cached, ...item };
+      const cachedThumbnails = Array.isArray(cached.latest_thumbnail_urls)
+        ? cached.latest_thumbnail_urls.filter(Boolean)
+        : [];
+      const incomingThumbnails = Array.isArray(item.latest_thumbnail_urls)
+        ? item.latest_thumbnail_urls.filter(Boolean)
+        : [];
+      if (!incomingThumbnails.length && cachedThumbnails.length) {
+        merged.latest_thumbnail_urls = cachedThumbnails;
+      }
+      return merged;
+    });
+}
+
+function mergeMobileV3HomePreviewItems(existingItems, incomingItems) {
+  const byProject = new Map();
+  [...(Array.isArray(existingItems) ? existingItems : []), ...(Array.isArray(incomingItems) ? incomingItems : [])]
+    .forEach((item) => {
+      const projectId = String(item?.project_id || item?.metadata?.project_id || "").trim();
+      const identity = projectId || String(item?.output_id || item?.id || "").trim();
+      if (!identity) return;
+      byProject.set(identity, item);
+    });
+  return Array.from(byProject.values()).sort((a, b) => mobileV3OutputTime(b) - mobileV3OutputTime(a));
+}
+
+async function loadMobileV3HomePreviews(projectIds, { append = false } = {}) {
+  const requestedProjectIds = [...new Set(
+    (Array.isArray(projectIds) ? projectIds : [])
+      .map((projectId) => String(projectId || "").trim())
+      .filter(Boolean),
+  )];
+  if (!requestedProjectIds.length) {
+    mobileV3State.outputs = [];
+    mobileV3State.reviewOutputs = [];
+    mobileV3State.outputsLoaded = true;
+    mobileV3State.outputsSurface = "home_preview";
+    mobileV3State.previewProjectIds = new Set();
+    return [];
+  }
+  const payload = await mobileV3Request(
+    `/project-outputs?limit=${requestedProjectIds.length}&compact=true&surface=home_preview&project_ids=${encodeURIComponent(requestedProjectIds.join(","))}`,
+  );
+  const incoming = Array.isArray(payload?.items) ? payload.items : [];
+  const appendItems = append && mobileV3State.outputsSurface === "home_preview";
+  mobileV3State.outputError = "";
+  mobileV3State.outputsLoaded = true;
+  mobileV3State.outputsSurface = "home_preview";
+  mobileV3State.outputs = appendItems
+    ? mergeMobileV3HomePreviewItems(mobileV3State.outputs, incoming)
+    : incoming;
+  mobileV3State.reviewOutputs = [];
+  mobileV3State.previewProjectIds = new Set(
+    mobileV3State.outputs
+      .map((item) => String(item?.project_id || item?.metadata?.project_id || ""))
+      .filter(Boolean),
+  );
+  persistMobileV3Caches();
+  renderMobileV3ProjectCards();
+  return incoming;
+}
+
 function expandMobileV3ProjectRenderWindow() {
   const currentLimit = Math.max(1, Number(mobileV3State.projectRenderLimit) || mobileV3ProjectPageSize);
   const loadedProjectCount = Array.isArray(mobileV3State.projects) ? mobileV3State.projects.length : 0;
@@ -3690,14 +3762,12 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
       mobileV3State.projects = appendMobileV3ProjectItems(mobileV3State.projects, apiProjects);
       mobileV3State.projectRenderLimit = Math.max(mobileV3State.projectRenderLimit, mobileV3State.projects.length);
     } else {
-      mobileV3State.projects = apiProjects;
-      mobileV3State.outputsLoaded = false;
-      mobileV3State.outputsSurface = "none";
-      mobileV3State.previewProjectIds = new Set();
+      mobileV3State.projects = mergeMobileV3ProjectItems(apiProjects, mobileV3State.projects);
       mobileV3State.outputError = "";
-      mobileV3State.outputs = [];
-      mobileV3State.reviewOutputs = [];
     }
+    const previewProjectIds = (requestingMore ? apiProjects : mobileV3State.projects.slice(0, mobileV3ProjectPageSize))
+      .map((project) => String(project?.project_id || "").trim())
+      .filter(Boolean);
     mobileV3State.projectsNextCursor = projectsPayload.next_cursor || null;
     mobileV3State.projectsHasMore = Boolean(projectsPayload.has_more && mobileV3State.projectsNextCursor);
     const serverTotal = Number(projectsPayload.total);
@@ -3711,32 +3781,21 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
     renderMobileV3ProjectCards();
     const projectCount = mobileV3VisibleProjects().length;
     updateMobileV3Status(mobileV3ProjectCountLabel(projectCount));
-    if (!requestingMore) {
+    if (requestingMore) {
+      if (previewProjectIds.length) {
+        try {
+          await loadMobileV3HomePreviews(previewProjectIds, { append: true });
+        } catch (error) {
+          mobileV3State.outputError = friendlyError(error);
+          renderMobileV3ProjectCards();
+        }
+      }
+    } else {
       try {
-        const initialOutputs = await mobileV3Request(
-          `/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true&surface=home_preview`,
-        );
-        mobileV3State.outputError = "";
-        mobileV3State.outputsLoaded = true;
-        mobileV3State.outputsSurface = "home_preview";
-        mobileV3State.outputs = Array.isArray(initialOutputs?.items) ? initialOutputs.items : [];
-        mobileV3State.reviewOutputs = [];
-        mobileV3State.previewProjectIds = new Set(
-          mobileV3State.outputs
-            .map((item) => String(item?.project_id || item?.metadata?.project_id || ""))
-            .filter(Boolean),
-        );
-        persistMobileV3Caches();
-        renderMobileV3ProjectCards();
+        await loadMobileV3HomePreviews(previewProjectIds);
       } catch (error) {
         mobileV3State.outputError = friendlyError(error);
-        mobileV3State.outputsLoaded = false;
-        mobileV3State.outputsSurface = "none";
-        mobileV3State.previewProjectIds = new Set();
-        mobileV3State.outputs = [];
-        mobileV3State.reviewOutputs = [];
         renderMobileV3ProjectCards();
-        clearMobileV3Caches();
         updateMobileV3Status(`${mobileV3ProjectCountLabel(projectCount)} · 图片暂时无法读取`);
       }
       // Keep the mobile first page masked until the visible preview images
@@ -3963,7 +4022,7 @@ function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
     user_goal: goal,
     short_summary: goal,
     primary_template_id: latestItem?.template_id || latestItem?.metadata?.template_id || null,
-    latest_thumbnail_urls: [mobileV3ThumbUrl(latestItem)].filter(Boolean),
+    latest_thumbnail_urls: [mobileV3HomeThumbUrl(latestItem)].filter(Boolean),
     created_at: latestItem?.created_at || "",
     updated_at: latestItem?.created_at || latestItem?.updated_at || "",
   };
@@ -4016,6 +4075,15 @@ function mobileV3GroupFromProject(project, outputGroup = null) {
   };
 }
 
+function mobileV3ProjectImageCountLabel(group) {
+  if (group?.previewOnly && group?.items?.length) return "已有封面 · 点击查看全部";
+  if (mobileV3State.outputError) return "图片暂时无法读取";
+  if (mobileV3State.outputsSurface !== "full" || !mobileV3State.outputsLoaded) {
+    return Number(group?.project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
+  }
+  return `${Number(group?.count || 0)} 张图片`;
+}
+
 function mobileV3ProjectGroupsFromProjects() {
   const outputGroups = mobileV3RecentProjectGroupMap();
   const professional = mobileV3State.workspaceMode === "professional";
@@ -4060,9 +4128,13 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     const project = group.project;
     const finalOutputs = group.items;
     const latest = group.latestItem || finalOutputs[0] || mobileV3SummaryThumbOutputs(project)[0] || null;
-    const thumb = deferImages ? "" : mobileV3ThumbUrl(latest) || "";
+    const thumb = deferImages ? "" : mobileV3HomeThumbUrl(latest) || "";
     const visualCount = group.previewOnly ? group.count : group.count || finalOutputs.length || 0;
-    const visualCountLabel = group.previewOnly && latest ? "已有封面 · 点击查看全部" : visualCount ? `${visualCount} 张图片` : "还未出图";
+    const visualCountLabel = group.previewOnly && latest
+      ? "已有封面 · 点击查看全部"
+      : visualCount
+        ? `${visualCount} 张图片`
+        : mobileV3ProjectImageCountLabel(group);
     const stackCount = Math.min(Math.max(Number(visualCount || 0), 1), 5);
     const card = document.createElement("article");
     card.className = "v3-mobile-project-card v3-mobile-project-stack-card";
@@ -7333,6 +7405,16 @@ function mobileV3MediaUrl(url) {
 
 function mobileV3ThumbUrl(item) {
   return mobileV3MediaUrl(item?.thumbnail_url || item?.metadata?.thumbnail_url || item?.preview_url || item?.download_url || "");
+}
+
+function mobileV3HomeThumbUrl(item) {
+  return mobileV3MediaUrl(
+    item?.thumbnail_url
+      || item?.metadata?.thumbnail_url
+      || item?.preview_url
+      || item?.metadata?.preview_url
+      || "",
+  );
 }
 
 function mobileV3PreviewUrl(item) {

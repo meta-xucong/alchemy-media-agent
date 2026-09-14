@@ -205,10 +205,11 @@ def test_mobile_home_bootstrap_waits_for_first_page_output_and_images() -> None:
     )[0]
 
     assert "&view=summary${cursor}" in loader
-    assert "surface=home_preview" in loader
+    assert "surface=home_preview" in source
+    assert "loadMobileV3HomePreviews" in loader
     assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" not in loader
     assert "await waitForMobileV3FirstHomePreviewImage()" not in loader
-    assert "await mobileV3Request(" in loader
+    assert "await loadMobileV3HomePreviews" in loader
     assert "await waitForMobileV3HomePreviewImages({ blockPage: true });" in loader
     assert loader.index("await mobileV3Request(") < loader.index("await waitForMobileV3HomePreviewImages")
     assert "previewProjectIds" in source

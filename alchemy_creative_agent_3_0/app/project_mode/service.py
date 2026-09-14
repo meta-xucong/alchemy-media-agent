@@ -2455,6 +2455,7 @@ class V3ProjectModeService:
         compact: bool = False,
         project_id: str | None = None,
         surface: str | None = None,
+        project_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         bounded_limit = max(1, min(int(limit or 60), 200))
         requested_surface = str(surface or "").strip().lower()
@@ -2515,14 +2516,41 @@ class V3ProjectModeService:
             # The home surface needs one formal cover per recent project, not
             # the full delivery/review history.  The output index locates
             # candidates; the existing delivery predicates remain the
-            # authority for what is safe to expose.
-            project_scan_limit = max(24, min(100, bounded_limit * 4))
-            preview_projects = [
-                project
-                for project in self.project_store.list_projects(limit=project_scan_limit)
-                if project.status != ProjectStatus.ARCHIVED
-                and self._project_visible_to_owner(project, owner_user_id)
-            ]
+            # authority for what is safe to expose.  A browser page can opt
+            # into an explicit project allowlist so a global quota cannot
+            # consume covers belonging to projects outside the visible page.
+            requested_project_ids = None
+            if project_ids is not None:
+                requested_project_ids = list(dict.fromkeys(
+                    str(project_id_value or "").strip()
+                    for project_id_value in project_ids
+                    if str(project_id_value or "").strip()
+                ))[:100]
+                list_all_projects = getattr(self.project_store, "list_all_projects", None)
+                all_projects = (
+                    list(list_all_projects())
+                    if callable(list_all_projects)
+                    else list(self.project_store.list_projects(limit=max(100, len(requested_project_ids))))
+                )
+                projects_by_id = {
+                    str(project.project_id): project
+                    for project in all_projects
+                    if project.status != ProjectStatus.ARCHIVED
+                    and self._project_visible_to_owner(project, owner_user_id)
+                }
+                preview_projects = [
+                    projects_by_id[project_id_value]
+                    for project_id_value in requested_project_ids
+                    if project_id_value in projects_by_id
+                ]
+            else:
+                project_scan_limit = max(24, min(100, bounded_limit * 4))
+                preview_projects = [
+                    project
+                    for project in self.project_store.list_projects(limit=project_scan_limit)
+                    if project.status != ProjectStatus.ARCHIVED
+                    and self._project_visible_to_owner(project, owner_user_id)
+                ]
             snapshot = self._project_output_read_snapshot(
                 preview_projects,
                 use_project_index=True,
@@ -2556,6 +2584,7 @@ class V3ProjectModeService:
                     "compact": bool(compact),
                     "surface": "home_preview",
                     "complete": False,
+                    "project_scope": "requested" if requested_project_ids is not None else "global",
                 },
             }
         project_scan_limit = max(12, min(100, bounded_limit * 2))

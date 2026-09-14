@@ -146,6 +146,7 @@ class V3ProductRouteHandlers:
         compact: bool = False,
         project_id: str | None = None,
         surface: str | None = None,
+        project_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         return self.project_service.list_project_outputs(
             limit=limit,
@@ -153,6 +154,7 @@ class V3ProductRouteHandlers:
             compact=compact,
             project_id=project_id,
             surface=surface,
+            project_ids=project_ids,
         )
 
     def post_projects(self, payload: dict[str, Any]) -> dict[str, Any]:
