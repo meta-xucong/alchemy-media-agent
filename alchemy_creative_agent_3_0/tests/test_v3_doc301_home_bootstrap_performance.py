@@ -213,7 +213,7 @@ def test_mobile_home_bootstrap_waits_for_first_page_output_and_images() -> None:
     assert "await waitForMobileV3HomePreviewImages({ blockPage: true });" in loader
     assert loader.index("await mobileV3Request(") < loader.index("await waitForMobileV3HomePreviewImages")
     assert "previewProjectIds" in source
-    assert "已有封面 · 点击查看全部" in source
+    assert "已有封面 · 数量同步中" in source
 
 
 def test_desktop_home_mask_stays_visible_until_slow_first_page_image_settles() -> None:

@@ -368,6 +368,10 @@ class ProjectMemorySummary(V3BaseModel):
     active_template_label: str = "通用模板"
     latest_thumbnail_urls: list[str] = Field(default_factory=list)
     visible_output_count: int = 0
+    # Summary views intentionally avoid reading Jobs/outputs.  Keep an
+    # explicit marker so their zero is never mistaken for an authoritative
+    # empty delivery set.
+    visible_output_count_known: bool = False
     confirmed_style_chips: list[str] = Field(default_factory=list)
     selected_asset_count: int = 0
     generation_preferences: ProjectGenerationPreferences | None = None

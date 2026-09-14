@@ -3238,7 +3238,10 @@ async function loadV3ProjectOutputs({
       v3State.projectReviewOutputs = reviewItems;
       v3State.imageHistorySurface = normalizedSurface || "full";
       v3State.imageHistoryLoaded = normalizedSurface !== "home_preview";
-      if (normalizedSurface === "home_preview") syncV3HomeProjectCovers(items);
+      if (normalizedSurface === "home_preview") {
+        syncV3HomeProjectCounts(payload.project_output_counts);
+        syncV3HomeProjectCovers(items);
+      }
     }
     v3State.imageHistoryError = "";
     if (scopedProjectId) {
@@ -3401,6 +3404,24 @@ function syncV3HomeProjectCovers(items) {
   writeV3LocalProjects(v3State.projects);
 }
 
+function syncV3HomeProjectCounts(counts) {
+  if (!counts || typeof counts !== "object" || !Array.isArray(v3State.projects)) return;
+  let changed = false;
+  v3State.projects = v3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    if (!projectId || !Object.prototype.hasOwnProperty.call(counts, projectId)) return project;
+    const value = Number(counts[projectId]);
+    if (!Number.isFinite(value) || value < 0) return project;
+    changed = true;
+    return {
+      ...project,
+      visible_output_count: Math.floor(value),
+      visible_output_count_known: true,
+    };
+  });
+  if (changed) writeV3LocalProjects(v3State.projects);
+}
+
 function mergeV3HomePreviewItems(existingItems, incomingItems) {
   const byProject = new Map();
   [...(Array.isArray(existingItems) ? existingItems : []), ...(Array.isArray(incomingItems) ? incomingItems : [])]
@@ -3427,6 +3448,10 @@ function mergeV3ProjectItems(primaryItems, fallbackItems) {
       : [];
     if (!incomingThumbnails.length && cachedThumbnails.length) {
       merged.latest_thumbnail_urls = cachedThumbnails;
+    }
+    if (existing.visible_output_count_known === true && item.visible_output_count_known !== true) {
+      merged.visible_output_count = existing.visible_output_count;
+      merged.visible_output_count_known = true;
     }
     byId.set(item.project_id, merged);
   });
@@ -3503,6 +3528,8 @@ function v3ProjectSummaryFromProject(project) {
       ? [project.confirmed_style_summary]
       : [v3ProjectTemplateLabel(project)],
     selected_asset_count: referenceGroups.continuation_outputs.length || selectedRefs.length,
+    visible_output_count: 0,
+    visible_output_count_known: false,
     job_count: Array.isArray(project.job_ids) ? project.job_ids.length : 0,
     latest_job_status: project.latest_job_status
       || (v3State.currentJob?.project_id === project.project_id ? v3State.currentJob.status : null),
@@ -3522,12 +3549,35 @@ function v3ProjectEmptyImageLabel(project) {
 }
 
 function v3ProjectImageCountLabel(group) {
-  if (v3State.imageHistorySurface === "home_preview" && group?.items?.length) return "封面预览";
   if (v3State.imageHistoryError) return "图片暂时无法读取";
-  if (v3State.imageHistorySurface !== "full" || !v3State.imageHistoryLoaded) {
-    return Number(group?.project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
+  if (v3State.imageHistorySurface === "full" && v3State.imageHistoryLoaded) {
+    return `${Number(group?.count || 0)} 张图片`;
   }
-  return `${Number(group?.count || 0)} 张`;
+  if (v3ProjectVisibleOutputCountKnown(group?.project)) {
+    return `${v3ProjectVisibleOutputCount(group.project)} 张图片`;
+  }
+  if (v3State.imageHistorySurface === "home_preview" && group?.items?.length) {
+    return "封面预览 · 数量同步中";
+  }
+  return Number(group?.project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
+}
+
+function v3ProjectVisibleOutputCount(project) {
+  const raw = project?.visible_output_count ?? project?.memory_summary?.visible_output_count;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function v3ProjectVisibleOutputCountKnown(project) {
+  return project?.visible_output_count_known === true
+    || project?.memory_summary?.visible_output_count_known === true;
+}
+
+function v3ProjectImageCountText(project) {
+  if (v3ProjectVisibleOutputCountKnown(project)) {
+    return `${v3ProjectVisibleOutputCount(project)} 张图片`;
+  }
+  return Number(project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
 }
 
 async function createV3Project() {
@@ -3682,7 +3732,7 @@ function renderV3Projects() {
       </div>
       <div class="v3-history-meta">
         <span>${escapeHtml(v3ProjectTemplateLabel(item))}</span>
-        <span>${Number(item.job_count || 0)} 次生成 · ${Number(item.selected_asset_count || 0)} 个已选</span>
+        <span>${escapeHtml(v3ProjectImageCountText(item))} · ${Number(item.job_count || 0)} 次生成 · ${Number(item.selected_asset_count || 0)} 个已选</span>
       </div>
       <div class="v3-project-card-actions">
         <button type="button" class="button compact secondary" data-v3-project-action="open_project" data-v3-project-id="${escapeHtml(item.project_id)}">继续项目</button>
@@ -3938,7 +3988,13 @@ function openV3ProjectHistoryModal(projectId) {
   if (els.v3ProjectHistorySummary) {
     els.v3ProjectHistorySummary.textContent = group.goal ? v3ShortText(group.goal, 88) : "这个项目生成过的图片都在这里。";
   }
-  if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = previewOnly ? "封面预览" : `${group.count} 张`;
+  if (els.v3ProjectHistoryCount) {
+    els.v3ProjectHistoryCount.textContent = v3ProjectVisibleOutputCountKnown(group.project)
+      ? `${v3ProjectVisibleOutputCount(group.project)} 张图片`
+      : previewOnly
+        ? "封面预览 · 数量同步中"
+        : `${group.count} 张图片`;
+  }
   if (els.v3ProjectHistoryOpenProjectBtn) {
     els.v3ProjectHistoryOpenProjectBtn.dataset.v3HistoryProject = group.projectId;
     els.v3ProjectHistoryOpenProjectBtn.disabled = !group.projectId;
@@ -3952,7 +4008,7 @@ function openV3ProjectHistoryModal(projectId) {
       .then(() => {
         const refreshed = v3ProjectImageGroup(group.projectId);
         if (refreshed && !els.v3ProjectHistoryModal.hidden) {
-          if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = `${refreshed.count || refreshed.items.length} 张`;
+          if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = `${refreshed.count || refreshed.items.length} 张图片`;
           renderV3ProjectHistoryGrid(refreshed);
         }
       })

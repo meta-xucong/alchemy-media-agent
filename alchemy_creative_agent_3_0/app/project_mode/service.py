@@ -2556,20 +2556,42 @@ class V3ProjectModeService:
                 use_project_index=True,
                 prefetch_job_state=False,
             )
+            project_output_counts: dict[str, int] = {}
+            project_index_complete = snapshot.get("project_index_complete", {})
             for project in preview_projects:
-                preview_items = self._project_delivery_preview_items(
-                    project,
-                    limit=1,
-                    owner_user_id=owner_user_id,
-                    compact=compact,
-                    project_records=snapshot["records_by_project"].get(project.project_id, []),
-                    output_records_by_job=snapshot["records_by_job"],
-                    job_status_by_id=snapshot["job_status_by_id"],
-                    job_record_by_id=snapshot["job_record_by_id"],
+                index_complete = project_index_complete.get(project.project_id, True)
+                output_count = None
+                if index_complete:
+                    output_count = self._project_visible_output_count(
+                        project,
+                        owner_user_id=owner_user_id,
+                        project_records=snapshot["records_by_project"].get(project.project_id, []),
+                        output_records_by_job=snapshot["records_by_job"],
+                        job_status_by_id=snapshot["job_status_by_id"],
+                        job_record_by_id=snapshot["job_record_by_id"],
+                    )
+                if output_count is not None:
+                    project_output_counts[project.project_id] = output_count
+                preview_items = []
+                project_records = (
+                    snapshot["records_by_project"].get(project.project_id, [])
+                    if index_complete
+                    else None
                 )
+                if len(items) < bounded_limit:
+                    preview_items = self._project_delivery_preview_items(
+                        project,
+                        limit=1,
+                        owner_user_id=owner_user_id,
+                        compact=compact,
+                        project_records=project_records,
+                        output_records_by_job=snapshot["records_by_job"],
+                        job_status_by_id=snapshot["job_status_by_id"],
+                        job_record_by_id=snapshot["job_record_by_id"],
+                    )
                 if preview_items:
                     items.extend(preview_items[:1])
-                if len(items) >= bounded_limit:
+                if len(items) >= bounded_limit and requested_project_ids is None:
                     break
             items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
             return {
@@ -2586,6 +2608,7 @@ class V3ProjectModeService:
                     "complete": False,
                     "project_scope": "requested" if requested_project_ids is not None else "global",
                 },
+                "project_output_counts": project_output_counts,
             }
         project_scan_limit = max(12, min(100, bounded_limit * 2))
         review_items = []
@@ -2654,6 +2677,7 @@ class V3ProjectModeService:
             "records_by_job": {},
             "job_status_by_id": {},
             "job_record_by_id": {},
+            "project_index_complete": {},
         }
         product_service = getattr(self, "product_service", None)
         output_store = getattr(product_service, "output_store", None)
@@ -2662,6 +2686,11 @@ class V3ProjectModeService:
         get_job = getattr(product_service, "get_job", None)
         get_job_record = getattr(product_service, "get_job_record", None)
         if not callable(get_job) or not callable(get_job_record):
+            if use_project_index:
+                for project in projects:
+                    project_id = str(project.project_id or "").strip()
+                    if project_id:
+                        snapshot["project_index_complete"][project_id] = False
             return snapshot
 
         for project in projects:
@@ -2669,11 +2698,16 @@ class V3ProjectModeService:
             if not project_id:
                 continue
             indexed_job_ids: set[str] = set()
-            if use_project_index and callable(list_by_project):
-                try:
-                    project_records = list(list_by_project(project_id, limit=256))
-                except Exception:
-                    project_records = []
+            if use_project_index:
+                project_index_complete = callable(list_by_project)
+                project_records: list[Any] = []
+                if project_index_complete:
+                    try:
+                        project_records = list(list_by_project(project_id, limit=4096))
+                    except Exception:
+                        project_records = []
+                        project_index_complete = False
+                snapshot["project_index_complete"][project_id] = project_index_complete
                 snapshot["records_by_project"][project_id] = project_records
                 for record in project_records:
                     job_id = str(getattr(record, "job_id", "") or "").strip()
@@ -2690,6 +2724,13 @@ class V3ProjectModeService:
                     bucket.append(record)
 
             if use_project_index and not prefetch_job_state:
+                # The home count projection reuses this snapshot with the
+                # existing delivery gate. Mark indexed misses as empty so a
+                # count read never falls back to an unbounded per-Job scan.
+                for raw_job_id in getattr(project, "job_ids", []) or []:
+                    job_id = str(raw_job_id or "").strip()
+                    if job_id:
+                        snapshot["records_by_job"].setdefault(job_id, [])
                 continue
             for raw_job_id in getattr(project, "job_ids", []) or []:
                 job_id = str(raw_job_id or "").strip()
@@ -2895,6 +2936,7 @@ class V3ProjectModeService:
             active_template_label=self._template_label(project.primary_template_id),
             latest_thumbnail_urls=[],
             visible_output_count=0,
+            visible_output_count_known=False,
             confirmed_style_chips=self._style_chips(project),
             selected_asset_count=len(selected_refs),
             generation_preferences=project.generation_preferences,
@@ -10548,6 +10590,7 @@ class V3ProjectModeService:
             active_template_label=self._template_label(project.primary_template_id),
             latest_thumbnail_urls=latest_thumbnails,
             visible_output_count=len(visible_output_items),
+            visible_output_count_known=True,
             confirmed_style_chips=self._style_chips(project),
             selected_asset_count=len(selected_refs),
             generation_preferences=project.generation_preferences,
@@ -11751,6 +11794,77 @@ class V3ProjectModeService:
             "can_unbind": bound,
             "can_bind": not bound,
         }
+
+    def _project_visible_output_count(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+        project_records: list[Any] | None = None,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
+    ) -> int | None:
+        """Count formal delivery outputs without inventing a second gate.
+
+        Home cards need a number, but the one-cover preview cannot provide it.
+        Reuse the same Project Mode delivery projection that owns visibility,
+        review, retry, selection, and owner predicates; this helper only
+        changes the result shape from output items to a count.
+        """
+
+        product_service = getattr(self, "product_service", None)
+        output_store = getattr(product_service, "output_store", None)
+        list_by_project = getattr(output_store, "list_by_project", None)
+        if output_store is None or not callable(list_by_project):
+            return None
+        if project_records is None:
+            try:
+                project_records = list(list_by_project(project.project_id, limit=4096))
+            except Exception:
+                return None
+        records = list(project_records)
+        if not records:
+            return 0
+        records_by_job = output_records_by_job if output_records_by_job is not None else {}
+        for record in records:
+            job_id = str(getattr(record, "job_id", "") or "").strip()
+            if not job_id:
+                continue
+            bucket = records_by_job.setdefault(job_id, [])
+            output_id = str(getattr(record, "output_id", "") or "").strip()
+            if output_id and any(
+                str(getattr(existing, "output_id", "") or "").strip() == output_id
+                for existing in bucket
+            ):
+                continue
+            bucket.append(record)
+        indexed_job_ids = {
+            str(getattr(record, "job_id", "") or "").strip()
+            for record in records
+            if str(getattr(record, "job_id", "") or "").strip()
+        }
+        candidate_job_ids = [
+            str(job_id or "").strip()
+            for job_id in project.job_ids
+            if str(job_id or "").strip() in indexed_job_ids
+        ]
+        if not candidate_job_ids:
+            return 0
+        count_project = project
+        model_copy = getattr(project, "model_copy", None)
+        if callable(model_copy):
+            count_project = model_copy(update={"job_ids": candidate_job_ids}, deep=False)
+        visible_items = self._project_output_items(
+            count_project,
+            limit=max(1, len(records)),
+            owner_user_id=owner_user_id,
+            compact=True,
+            output_records_by_job=records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
+        )
+        return len(visible_items)
 
     def _project_delivery_preview_items(
         self,

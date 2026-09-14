@@ -3524,6 +3524,10 @@ function mergeMobileV3ProjectItems(primaryItems, fallbackItems) {
       if (!incomingThumbnails.length && cachedThumbnails.length) {
         merged.latest_thumbnail_urls = cachedThumbnails;
       }
+      if (cached.visible_output_count_known === true && item.visible_output_count_known !== true) {
+        merged.visible_output_count = cached.visible_output_count;
+        merged.visible_output_count_known = true;
+      }
       return merged;
     });
 }
@@ -3566,6 +3570,7 @@ async function loadMobileV3HomePreviews(projectIds, { append = false } = {}) {
   mobileV3State.outputs = appendItems
     ? mergeMobileV3HomePreviewItems(mobileV3State.outputs, incoming)
     : incoming;
+  syncMobileV3HomeProjectCounts(payload?.project_output_counts);
   mobileV3State.reviewOutputs = [];
   mobileV3State.previewProjectIds = new Set(
     mobileV3State.outputs
@@ -3575,6 +3580,24 @@ async function loadMobileV3HomePreviews(projectIds, { append = false } = {}) {
   persistMobileV3Caches();
   renderMobileV3ProjectCards();
   return incoming;
+}
+
+function syncMobileV3HomeProjectCounts(counts) {
+  if (!counts || typeof counts !== "object" || !Array.isArray(mobileV3State.projects)) return;
+  let changed = false;
+  mobileV3State.projects = mobileV3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    if (!projectId || !Object.prototype.hasOwnProperty.call(counts, projectId)) return project;
+    const value = Number(counts[projectId]);
+    if (!Number.isFinite(value) || value < 0) return project;
+    changed = true;
+    return {
+      ...project,
+      visible_output_count: Math.floor(value),
+      visible_output_count_known: true,
+    };
+  });
+  if (changed) persistMobileV3Caches();
 }
 
 function expandMobileV3ProjectRenderWindow() {
@@ -4080,12 +4103,28 @@ function mobileV3GroupFromProject(project, outputGroup = null) {
 }
 
 function mobileV3ProjectImageCountLabel(group) {
-  if (group?.previewOnly && group?.items?.length) return "已有封面 · 点击查看全部";
   if (mobileV3State.outputError) return "图片暂时无法读取";
-  if (mobileV3State.outputsSurface !== "full" || !mobileV3State.outputsLoaded) {
-    return Number(group?.project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
+  if (mobileV3State.outputsSurface === "full" && mobileV3State.outputsLoaded) {
+    return `${Number(group?.count || 0)} 张图片`;
   }
-  return `${Number(group?.count || 0)} 张图片`;
+  if (mobileV3ProjectVisibleOutputCountKnown(group?.project)) {
+    return `${mobileV3ProjectVisibleOutputCount(group.project)} 张图片`;
+  }
+  if (group?.previewOnly && group?.items?.length) {
+    return "已有封面 · 数量同步中";
+  }
+  return Number(group?.project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
+}
+
+function mobileV3ProjectVisibleOutputCount(project) {
+  const raw = project?.visible_output_count ?? project?.memory_summary?.visible_output_count;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function mobileV3ProjectVisibleOutputCountKnown(project) {
+  return project?.visible_output_count_known === true
+    || project?.memory_summary?.visible_output_count_known === true;
 }
 
 function mobileV3ProjectGroupsFromProjects() {
@@ -4133,12 +4172,15 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     const finalOutputs = group.items;
     const latest = group.latestItem || finalOutputs[0] || mobileV3SummaryThumbOutputs(project)[0] || null;
     const thumb = deferImages ? "" : mobileV3HomeThumbUrl(latest) || "";
-    const visualCount = group.previewOnly ? group.count : group.count || finalOutputs.length || 0;
-    const visualCountLabel = group.previewOnly && latest
-      ? "已有封面 · 点击查看全部"
-      : visualCount
-        ? `${visualCount} 张图片`
-        : mobileV3ProjectImageCountLabel(group);
+    const countKnown = mobileV3ProjectVisibleOutputCountKnown(project);
+    const visualCount = countKnown
+      ? mobileV3ProjectVisibleOutputCount(project)
+      : group.previewOnly
+        ? group.count
+        : group.count || finalOutputs.length || 0;
+    const visualCountLabel = countKnown
+      ? `${visualCount} 张图片`
+      : mobileV3ProjectImageCountLabel(group);
     const stackCount = Math.min(Math.max(Number(visualCount || 0), 1), 5);
     const card = document.createElement("article");
     card.className = "v3-mobile-project-card v3-mobile-project-stack-card";
