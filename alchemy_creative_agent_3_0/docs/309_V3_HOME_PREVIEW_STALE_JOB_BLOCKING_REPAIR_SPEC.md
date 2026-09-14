@@ -127,11 +127,13 @@ repeat read-only health and preview checks.
 
 ## 7. Final delivery receipt
 
-The final accepted commit is `a6e0d5921d130f19ec75bb5236d3b2f5583d16a9`.
-It is present on `origin/main` and was deployed through
+The code-acceptance commit is `a6e0d5921d130f19ec75bb5236d3b2f5583d16a9`.
+The final mainline release commit, including this receipt, is
+`2df5a9136a680ddc24f0cf5c19c13c02b02e00cd`. It is present on `origin/main`
+and was deployed through
 `scripts/vps_migrate_release_layout.sh` to:
 
-`/opt/alchemy-media-agent-releases/v3-release-governed-20260914T141313Z-a6e0d5921d13`
+`/opt/alchemy-media-agent-releases/v3-release-governed-20260914T141645Z-2df5a9136a68`
 
 Local evidence bound to the final implementation includes:
 
@@ -149,7 +151,7 @@ Post-deployment evidence:
 - all three Alchemy V2 systemd units were `active`;
 - the public desktop and mobile static resources returned HTTP 200 and served
   the 30-second preview boundary plus the mobile redraw guard;
-- an authenticated cold `home_preview` batch returned HTTP 200 in `13.508s`,
+- an authenticated cold `home_preview` batch returned HTTP 200 in `8.857s`,
   returned a formal output item, and its thumbnail returned HTTP 200;
 - subsequent warmed preview reads were approximately `2.7s`.
 
