@@ -1,6 +1,8 @@
 # Doc301 - V3 Home Bootstrap Performance And V2 Parity
 
-Status: implementation contract for the V3 home loading repair.
+Status: implementation contract for the V3 home loading repair. The
+2026-09-14 first-page image-readiness amendment below is authoritative for
+mask release timing.
 
 ## 1. User objective and phase objective
 
@@ -8,10 +10,10 @@ The total objective is to make the V3 home surface feel as fast as the V2
 surface without weakening V3 project ownership, pagination, output-delivery,
 review, or workspace contracts.
 
-This phase repairs the V3 home read path. It must make the shell interactive
-after the project catalog is available, move output and image work behind the
-first-paint boundary, and remove the duplicated and unnecessarily full read
-paths identified by the code audit.
+This phase repairs the V3 home read path. It must keep the initial page masked
+until the first-page project data and preview images have settled, while still
+keeping later-page/full-history work outside the critical path. It also removes
+the duplicated and unnecessarily full read paths identified by the code audit.
 
 ## 2. Evidence and correction model
 
@@ -96,10 +98,19 @@ V3 desktop and mobile home initialization must:
 
 1. render cached/local project placeholders when available;
 2. await only the summary project catalog request;
-3. render an interactive project shell and release the page mask;
-4. start one `home_preview` output request in the background;
-5. treat thumbnails as progressive media; a failed or slow image must never
-   keep the page locked.
+3. render the first-page project shell and start one bounded `home_preview`
+   request;
+4. render the returned first-page project covers, then wait for every
+   first-page preview image to either load successfully or reach a terminal
+   error/timeout state;
+5. release the page mask only after that first-page image readiness gate has
+   settled. Later-page images and full project history remain progressive and
+   outside this gate.
+
+An image failure is a settled, visibly marked state rather than an empty
+placeholder. The readiness gate uses the existing bounded timeout as a safety
+escape for a request that never emits `load` or `error`; it must not wait on
+unbounded full history or unrelated asset-library requests.
 
 Direct V3 route restoration must not create a second catalog request while
 the shell bootstrap is active. The auth/session cookie must be established
@@ -129,8 +140,10 @@ review, owner, or retry predicates and it is never persisted as Job state.
 
 - add `view=summary` to the V3 project route and service;
 - switch desktop V3 catalog calls to the summary view;
-- remove the initial global output wait and first-image wait;
-- run one background home-preview request after the catalog render;
+- keep one bounded home-preview request and first-page image readiness on the
+  initial mask critical path;
+- release only after the first-page image gate settles; keep full history and
+  later-page work progressive;
 - deduplicate direct-route initialization and move route restoration after V3
   session-cookie synchronization.
 
@@ -159,7 +172,7 @@ review, owner, or retry predicates and it is never persisted as Job state.
 | R1 | Summary catalog has the old response shape and pagination | route/service regression test |
 | R2 | Summary catalog does not read Jobs, outputs, timeline, review, or context | instrumented service test |
 | R3 | Home preview is delivery-only, owner-scoped, non-reconciling, and bounded | service regression test |
-| R4 | V3 shell unlocks before output/image work and makes one background preview request | desktop browser/contract test |
+| R4 | V3 shell releases only after one first-page preview request and all first-page images settle; full history stays out of the gate | desktop/mobile browser/contract test |
 | R5 | Direct V3 route cannot duplicate the catalog request | frontend contract test |
 | R6 | Full project/output compatibility path remains unchanged | existing project/output regression suite |
 | R7 | Record/integrity caching preserves direct fallback and revalidates changed files | output-store regression test |

@@ -1931,23 +1931,27 @@ async function initV3Shell({ force = false } = {}) {
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
-    setV3PageLoading(false);
-    // Project/template data is enough to make the V3 shell interactive. Keep
-    // output reconciliation and thumbnail loading out of the first-paint gate.
-    void loadV3ProjectOutputs({
-      silent: true,
-      force: true,
-      limit: v3ProjectHomePageSize,
-      surface: "home_preview",
-    })
-      .then(() => {
-        renderV3History();
-        renderV3HeroHistory();
-        renderV3ProjectDetail();
-        renderV3Job(v3State.currentJob);
-        return waitForV3HomePreviewImages({ blockPage: false });
-      })
-      .catch(() => {});
+    // The project catalog establishes the first-page data contract, but the
+    // home surface is not visually ready until its bounded delivery preview
+    // has rendered and every first-page thumbnail has settled. Keep this
+    // request on the initial mask path so slow images cannot be mistaken for
+    // missing projects.
+    try {
+      await loadV3ProjectOutputs({
+        silent: true,
+        force: true,
+        limit: v3ProjectHomePageSize,
+        surface: "home_preview",
+      });
+    } catch (error) {
+      console.warn("Initial V3 home preview failed", error);
+    }
+    renderV3Projects();
+    renderV3History();
+    renderV3HeroHistory();
+    renderV3ProjectDetail();
+    renderV3Job(v3State.currentJob);
+    await waitForV3HomePreviewImages({ blockPage: true });
   } catch (error) {
     v3State.templates = [];
     v3State.templateCatalogStatus = "failed";

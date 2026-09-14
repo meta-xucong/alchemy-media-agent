@@ -1,13 +1,24 @@
 """Regression contracts for the V3 home bootstrap performance repair."""
 
+import base64
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore, V3ProjectModeService
 from alchemy_creative_agent_3_0.app.project_mode.contracts import OutputRef
+from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_browser import (
+    DESKTOP_HTML,
+    DESKTOP_JS,
+    MOBILE_HTML,
+    MOBILE_JS,
+    _browser_page,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -162,7 +173,7 @@ def test_home_preview_is_bounded_delivery_only_and_skips_full_history_paths() ->
     assert response["metadata"]["complete"] is False
 
 
-def test_desktop_home_bootstrap_releases_before_output_and_image_work() -> None:
+def test_desktop_home_bootstrap_waits_for_first_page_output_and_images() -> None:
     source = DESKTOP.read_text(encoding="utf-8")
     shell = source.split("async function initV3Shell", 1)[1].split(
         "function clearV3PendingUploads", 1
@@ -173,9 +184,11 @@ def test_desktop_home_bootstrap_releases_before_output_and_image_work() -> None:
 
     assert "&view=summary" in shell
     assert "surface: \"home_preview\"" in shell
-    assert "await loadV3ProjectOutputs" not in shell
+    assert "await loadV3ProjectOutputs" in shell
     assert "await waitForV3FirstHomePreviewImage" not in shell
-    assert "return waitForV3HomePreviewImages({ blockPage: false });" in shell
+    assert "await waitForV3HomePreviewImages({ blockPage: true });" in shell
+    assert "void loadV3ProjectOutputs({" not in shell
+    assert shell.index("await loadV3ProjectOutputs") < shell.index("await waitForV3HomePreviewImages")
     assert 'v3State.imageHistoryLoaded = normalizedSurface !== "home_preview"' in source
     assert 'const previewOnly = v3State.imageHistorySurface === "home_preview"' in source
     assert "if ((!group.items.length || previewOnly) && group.projectId)" in source
@@ -185,7 +198,7 @@ def test_desktop_home_bootstrap_releases_before_output_and_image_work() -> None:
     )[0]
 
 
-def test_mobile_home_bootstrap_releases_before_output_and_image_work() -> None:
+def test_mobile_home_bootstrap_waits_for_first_page_output_and_images() -> None:
     source = MOBILE.read_text(encoding="utf-8")
     loader = source.split("async function loadMobileV3Projects", 1)[1].split(
         "function setMobileV3LoadingLayer", 1
@@ -195,9 +208,201 @@ def test_mobile_home_bootstrap_releases_before_output_and_image_work() -> None:
     assert "surface=home_preview" in loader
     assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" not in loader
     assert "await waitForMobileV3FirstHomePreviewImage()" not in loader
-    assert "return waitForMobileV3HomePreviewImages({ blockPage: false });" in loader
+    assert "await mobileV3Request(" in loader
+    assert "await waitForMobileV3HomePreviewImages({ blockPage: true });" in loader
+    assert loader.index("await mobileV3Request(") < loader.index("await waitForMobileV3HomePreviewImages")
     assert "previewProjectIds" in source
     assert "已有封面 · 点击查看全部" in source
+
+
+def test_desktop_home_mask_stays_visible_until_slow_first_page_image_settles() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+
+            def fulfill_slow_image(route) -> None:
+                time.sleep(0.28)
+                route.fulfill(
+                    status=200,
+                    content_type="image/png",
+                    body=base64.b64decode(ONE_PIXEL_PNG),
+                )
+
+            page.route("http://image.test/home-cover.png", fulfill_slow_image)
+            result = page.evaluate(
+                """
+                async () => {
+                  const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+                  const project = {
+                    project_id: "home-bootstrap-project",
+                    title: "Home bootstrap project",
+                    user_goal: "Create a useful project preview.",
+                    short_summary: "Create a useful project preview.",
+                    primary_template_id: "general_template",
+                    status: "active",
+                    updated_at: "2026-09-14T00:01:00Z",
+                    latest_thumbnail_urls: [],
+                  };
+                  const template = {
+                    template_id: "general_template",
+                    display_name: "通用创意",
+                    project_can_create_jobs: true,
+                  };
+                  const output = {
+                    output_id: "home-bootstrap-output",
+                    project_id: project.project_id,
+                    delivery_state: "final_delivery",
+                    created_at: "2026-09-14T00:02:00Z",
+                    thumbnail_url: "http://image.test/home-cover.png",
+                  };
+                  window.fetch = async (input) => {
+                    const url = String(input);
+                    if (url.includes("/projects?") && url.includes("view=summary")) {
+                      await delay(20);
+                      return new Response(JSON.stringify({
+                        projects: [project],
+                        templates: [template],
+                        total: 1,
+                        has_more: false,
+                        next_cursor: null,
+                      }), { status: 200 });
+                    }
+                    if (url.includes("/project-outputs?") && url.includes("surface=home_preview")) {
+                      await delay(20);
+                      return new Response(JSON.stringify({ items: [output], review_items: [] }), { status: 200 });
+                    }
+                    return new Response(JSON.stringify({}), { status: 200 });
+                  };
+                  v3State.loaded = false;
+                  v3State.loading = false;
+                  v3State.projects = [];
+                  v3State.projectsLoaded = false;
+                  v3State.projectsLoading = false;
+                  v3State.templates = [];
+                  v3State.templateCatalogStatus = "idle";
+                  v3State.imageHistory = [];
+                  v3State.imageHistoryLoaded = false;
+                  v3State.imageHistoryLoading = false;
+                  v3State.imageHistorySurface = "none";
+                  v3State.imageHistoryError = "";
+                  v3State.projectOutputsRequest = null;
+                  v3State.projectOutputsRequestOwner = null;
+                  v3State.projectOutputsRequestKey = "";
+                  const bootstrap = initV3Shell();
+                  await delay(100);
+                  const during = {
+                    maskHidden: Boolean(document.querySelector("#v3PageLoadingOverlay")?.hidden),
+                    imageComplete: Boolean(document.querySelector("img[data-v3-home-thumb='true']")?.complete),
+                  };
+                  await bootstrap;
+                  return {
+                    during,
+                    maskHidden: Boolean(document.querySelector("#v3PageLoadingOverlay")?.hidden),
+                    imageLoaded: Boolean(document.querySelector("img[data-v3-home-thumb='true']")?.naturalWidth),
+                  };
+                }
+                """,
+            )
+            assert result["during"]["maskHidden"] is False
+            assert result["during"]["imageComplete"] is False
+            assert result["maskHidden"] is True
+            assert result["imageLoaded"] is True
+        finally:
+            browser.close()
+
+
+def test_mobile_home_mask_stays_visible_until_slow_first_page_image_settles() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+
+            def fulfill_slow_image(route) -> None:
+                time.sleep(0.28)
+                route.fulfill(
+                    status=200,
+                    content_type="image/png",
+                    body=base64.b64decode(ONE_PIXEL_PNG),
+                )
+
+            page.route("http://image.test/mobile-home-cover.png", fulfill_slow_image)
+            result = page.evaluate(
+                """
+                async () => {
+                  const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+                  const project = {
+                    project_id: "mobile-home-bootstrap-project",
+                    title: "Mobile home bootstrap project",
+                    user_goal: "Create a useful project preview.",
+                    short_summary: "Create a useful project preview.",
+                    primary_template_id: "general_template",
+                    status: "active",
+                    updated_at: "2026-09-14T00:01:00Z",
+                    latest_thumbnail_urls: [],
+                  };
+                  const template = {
+                    template_id: "general_template",
+                    display_name: "通用创意",
+                    project_can_create_jobs: true,
+                  };
+                  const output = {
+                    output_id: "mobile-home-bootstrap-output",
+                    project_id: project.project_id,
+                    delivery_state: "final_delivery",
+                    created_at: "2026-09-14T00:02:00Z",
+                    thumbnail_url: "http://image.test/mobile-home-cover.png",
+                  };
+                  window.fetch = async (input) => {
+                    const url = String(input);
+                    if (url.includes("/projects?") && url.includes("view=summary")) {
+                      await delay(20);
+                      return new Response(JSON.stringify({
+                        projects: [project],
+                        templates: [template],
+                        total: 1,
+                        has_more: false,
+                        next_cursor: null,
+                      }), { status: 200 });
+                    }
+                    if (url.includes("/project-outputs?") && url.includes("surface=home_preview")) {
+                      await delay(20);
+                      return new Response(JSON.stringify({ items: [output], review_items: [] }), { status: 200 });
+                    }
+                    return new Response(JSON.stringify({}), { status: 200 });
+                  };
+                  mobileV3State.loaded = false;
+                  mobileV3State.loading = false;
+                  mobileV3State.projects = [];
+                  mobileV3State.projectsNextCursor = null;
+                  mobileV3State.projectsHasMore = false;
+                  mobileV3State.templates = [];
+                  mobileV3State.templatesLoaded = false;
+                  mobileV3State.outputs = [];
+                  mobileV3State.outputsLoaded = false;
+                  mobileV3State.outputsSurface = "none";
+                  mobileV3State.outputError = "";
+                  const bootstrap = loadMobileV3Projects({ silent: true, force: true });
+                  await delay(100);
+                  const during = {
+                    maskHidden: Boolean(document.querySelector("#mobileV3LoadingLayer")?.hidden),
+                    imageComplete: Boolean(document.querySelector("img[data-mobile-v3-home-thumb='true']")?.complete),
+                  };
+                  await bootstrap;
+                  return {
+                    during,
+                    maskHidden: Boolean(document.querySelector("#mobileV3LoadingLayer")?.hidden),
+                    imageLoaded: Boolean(document.querySelector("img[data-mobile-v3-home-thumb='true']")?.naturalWidth),
+                  };
+                }
+                """,
+            )
+            assert result["during"]["maskHidden"] is False
+            assert result["during"]["imageComplete"] is False
+            assert result["maskHidden"] is True
+            assert result["imageLoaded"] is True
+        finally:
+            browser.close()
 
 
 def test_home_output_loader_allows_small_preview_limit_without_global_minimum() -> None:

@@ -3709,39 +3709,39 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
     persistMobileV3Caches();
     renderMobileV3ProjectCards({ deferImages: true });
     renderMobileV3ProjectCards();
-    setMobileV3LoadingLayer(false);
     const projectCount = mobileV3VisibleProjects().length;
     updateMobileV3Status(mobileV3ProjectCountLabel(projectCount));
     if (!requestingMore) {
-      void mobileV3Request(
-        `/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true&surface=home_preview`,
-      )
-        .then((initialOutputs) => {
-          mobileV3State.outputError = "";
-          mobileV3State.outputsLoaded = true;
-          mobileV3State.outputsSurface = "home_preview";
-          mobileV3State.outputs = Array.isArray(initialOutputs?.items) ? initialOutputs.items : [];
-          mobileV3State.reviewOutputs = [];
-          mobileV3State.previewProjectIds = new Set(
-            mobileV3State.outputs
-              .map((item) => String(item?.project_id || item?.metadata?.project_id || ""))
-              .filter(Boolean),
-          );
-          persistMobileV3Caches();
-          renderMobileV3ProjectCards();
-          return waitForMobileV3HomePreviewImages({ blockPage: false });
-        })
-        .catch((error) => {
-          mobileV3State.outputError = friendlyError(error);
-          mobileV3State.outputsLoaded = false;
-          mobileV3State.outputsSurface = "none";
-          mobileV3State.previewProjectIds = new Set();
-          mobileV3State.outputs = [];
-          mobileV3State.reviewOutputs = [];
-          renderMobileV3ProjectCards();
-          clearMobileV3Caches();
-          updateMobileV3Status(`${mobileV3ProjectCountLabel(projectCount)} · 图片暂时无法读取`);
-        });
+      try {
+        const initialOutputs = await mobileV3Request(
+          `/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true&surface=home_preview`,
+        );
+        mobileV3State.outputError = "";
+        mobileV3State.outputsLoaded = true;
+        mobileV3State.outputsSurface = "home_preview";
+        mobileV3State.outputs = Array.isArray(initialOutputs?.items) ? initialOutputs.items : [];
+        mobileV3State.reviewOutputs = [];
+        mobileV3State.previewProjectIds = new Set(
+          mobileV3State.outputs
+            .map((item) => String(item?.project_id || item?.metadata?.project_id || ""))
+            .filter(Boolean),
+        );
+        persistMobileV3Caches();
+        renderMobileV3ProjectCards();
+      } catch (error) {
+        mobileV3State.outputError = friendlyError(error);
+        mobileV3State.outputsLoaded = false;
+        mobileV3State.outputsSurface = "none";
+        mobileV3State.previewProjectIds = new Set();
+        mobileV3State.outputs = [];
+        mobileV3State.reviewOutputs = [];
+        renderMobileV3ProjectCards();
+        clearMobileV3Caches();
+        updateMobileV3Status(`${mobileV3ProjectCountLabel(projectCount)} · 图片暂时无法读取`);
+      }
+      // Keep the mobile first page masked until the visible preview images
+      // have loaded or reached an explicit terminal failure state.
+      await waitForMobileV3HomePreviewImages({ blockPage: true });
     }
   } catch (error) {
     setMobileV3LoadingLayer(false);

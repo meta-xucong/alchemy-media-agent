@@ -360,7 +360,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" not in mobile_shell_body
     assert "surface=home_preview" in mobile_shell_body
     assert "await waitForMobileV3FirstHomePreviewImage()" not in mobile_shell_body
-    assert "waitForMobileV3HomePreviewImages({ blockPage: false })" in mobile_shell_body
+    assert "await waitForMobileV3HomePreviewImages({ blockPage: true });" in mobile_shell_body
     assert "project-outputs?limit=${mobileV3ProjectPageSize}&compact=true" in mobile_script.text
     assert "project?.visible_output_count || project?.memory_summary?.visible_output_count" in mobile_script.text
     assert "mobileV3SummaryThumbOutputs(project)[0]" in mobile_script.text
@@ -459,7 +459,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "if (!v3JobDeliverySettled(job) && !persisted.length) return [];" in script.text
     assert "if (baseJob && !v3JobDeliverySettled(baseJob)) return null;" in script.text
     shell_body = script.text.split("async function initV3Shell", 1)[1].split("function clearV3PendingUploads", 1)[0]
-    assert "void loadV3ProjectOutputs({" in shell_body
+    assert "await loadV3ProjectOutputs({" in shell_body
     assert 'surface: "home_preview"' in shell_body
     assert "await loadV3ProjectOutputs({ silent: true, force: true, limit: 1 })" not in shell_body
     assert "await waitForV3FirstHomePreviewImage()" not in shell_body
@@ -468,9 +468,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "localItems.filter((item) => serverProjectIds.has(String(item?.project_id || \"\")))" in script.text
     assert "els.v3ProjectDeleteBtn.hidden = !project?.project_id;" in script.text
     assert "waitForV3FirstHomePreviewImage" in script.text
-    assert "return waitForV3HomePreviewImages({ blockPage: false });" in shell_body
+    assert "await waitForV3HomePreviewImages({ blockPage: true });" in shell_body
     assert "void waitForV3HomePreviewImages({ blockPage: false });" not in shell_body
-    assert "await waitForV3HomePreviewImages();" not in shell_body
     assert "function v3ReviewCertification" in script.text
     assert "function v3JobDeliveryWithheld" in script.text
     assert "manual_confirmation_required" in script.text
