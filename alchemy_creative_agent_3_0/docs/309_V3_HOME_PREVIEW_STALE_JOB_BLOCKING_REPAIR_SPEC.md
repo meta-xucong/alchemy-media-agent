@@ -1,8 +1,9 @@
 # Doc309 - V3 Home Preview Stale-Job Blocking Repair
 
-Status: implementation in progress. This document records the correction
-model for the VPS regression where V3 project cards remain on placeholders even
-though output files and thumbnail endpoints are healthy.
+Status: implemented, audited, pushed, and deployed. This document records the
+correction model and final evidence for the VPS regression where V3 project
+cards remained on placeholders even though output files and thumbnail
+endpoints were healthy.
 
 ## 1. Task record
 
@@ -123,3 +124,37 @@ After a clean fixed commit, run the local focused and adjacent regressions,
 freeze the version, perform a read-only audit without editing, then push
 `origin/main`, deploy that exact commit to the governed VPS release path, and
 repeat read-only health and preview checks.
+
+## 7. Final delivery receipt
+
+The final accepted commit is `a6e0d5921d130f19ec75bb5236d3b2f5583d16a9`.
+It is present on `origin/main` and was deployed through
+`scripts/vps_migrate_release_layout.sh` to:
+
+`/opt/alchemy-media-agent-releases/v3-release-governed-20260914T141313Z-a6e0d5921d13`
+
+Local evidence bound to the final implementation includes:
+
+- Doc309, Doc301, Doc308, and project-detail regressions: `35 passed`;
+- adjacent project/public/mode-closure regressions: `37 passed`;
+- additional Doc306/Doc307/public-projection closure tests: `49 passed`;
+- Python compilation, JavaScript syntax checks, and `git diff --check` passed;
+- a separate read-only code audit confirmed that Brain, Provider, Review,
+  ownership, persistence, public schemas, and generation semantics were not
+  changed.
+
+Post-deployment evidence:
+
+- V1 and V2 local and public health endpoints returned HTTP 200;
+- all three Alchemy V2 systemd units were `active`;
+- the public desktop and mobile static resources returned HTTP 200 and served
+  the 30-second preview boundary plus the mobile redraw guard;
+- an authenticated cold `home_preview` batch returned HTTP 200 in `13.508s`,
+  returned a formal output item, and its thumbnail returned HTTP 200;
+- subsequent warmed preview reads were approximately `2.7s`.
+
+The broader legacy `test_v3_project_mode.py` run was not used as a release
+gate because its seventh real runtime-planning test stopped producing output;
+the focused and adjacent acceptance suites above completed successfully. No
+VPS project, job, output, media, Brain, Provider, or Sub2API record was
+created or rewritten by this repair or its read-only acceptance probes.
