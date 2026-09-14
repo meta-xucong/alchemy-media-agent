@@ -125,6 +125,13 @@ implementation may be changed.
   Retry, generation, media, or V2 path changed.
 - Local acceptance: complete. Focused and adjacent V3 regressions passed;
   Python and JavaScript syntax checks passed; `git diff --check` passed.
-- Remaining release action: commit and push the mainline change after the
-  final frozen test receipt. VPS deployment is intentionally not part of this
-  read-projection repair unless separately requested.
+- VPS acceptance: complete for the runtime implementation commit
+  `44048483077a309b28f231684d505585c6f5befd`. It was deployed through the
+  governed release procedure to
+  `/opt/alchemy-media-agent-releases/v3-release-governed-20260914T221051Z-44048483077a`.
+  The active release commit, container environment mount, V3 count field, and
+  desktop/mobile count-sync markers were verified. Internal V3 health, V2
+  health, and public `/healthz` each returned HTTP 200. The previous release
+  remains available for rollback.
+- Release receipt: complete. The runtime implementation is on the VPS; this
+  final documentation update is a no-code follow-up pushed to GitHub.
