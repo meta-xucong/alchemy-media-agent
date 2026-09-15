@@ -965,6 +965,13 @@ class PersistentProductJobStore(InMemoryProductJobStore):
     def __init__(self, storage_root: str | Path | None = None) -> None:
         super().__init__()
         self.storage_root = Path(storage_root) if storage_root else _default_product_job_storage_root()
+        # Durable records are refreshed when their atomic-replace fingerprint
+        # changes.  Project output reads ask for the same large Job several
+        # times (status, owner metadata, review projection); reparsing the
+        # unchanged JSON for each read made legacy project pages time out.
+        # This is a revision-aware cache, not a time-based cache, so a writer
+        # in another process is still observed on its next changed stat.
+        self._record_revisions: dict[str, tuple[int, int, int]] = {}
         self._mcp_operation_index: dict[str, set[str]] = {}
         self._mcp_operation_index_loaded = False
         self._mcp_operation_index_complete = False
@@ -972,26 +979,39 @@ class PersistentProductJobStore(InMemoryProductJobStore):
     def save(self, record: ProductJobRecord) -> ProductJobRecord:
         saved = super().save(record)
         self._write_record(saved)
+        revision = self._record_revision(saved.job_id)
+        if revision is not None:
+            self._record_revisions[saved.job_id] = revision
         self._index_mcp_operation_record(saved)
         return saved
 
     def get(self, job_id: str) -> ProductJobRecord | None:
         # Project generation runs in a background worker and the browser may
         # poll through a second service instance (or after a controlled
-        # reload).  The JSON record is the durable lifecycle authority.  A
-        # cache-first read can therefore leave the user seeing ``generating``
-        # after the worker has already persisted a terminal review/delivery
-        # outcome.  Refresh this one record before falling back to the cache;
-        # writes use atomic replacement, so a reader sees either the prior
-        # complete record or the new complete record, never a partial file.
+        # reload). The JSON record remains the durable lifecycle authority.
+        # Refresh when the atomic-replace fingerprint changes; otherwise
+        # reuse the already parsed record so one request does not repeatedly
+        # deserialize multi-megabyte historical Jobs.
+        revision = self._record_revision(job_id)
+        cached = self._records.get(job_id)
+        if (
+            cached is not None
+            and revision is not None
+            and self._record_revisions.get(job_id) == revision
+        ):
+            return cached
         restored = self._read_record(job_id)
         if restored is not None:
             self._records[restored.job_id] = restored
+            refreshed_revision = self._record_revision(restored.job_id)
+            if refreshed_revision is not None:
+                self._record_revisions[restored.job_id] = refreshed_revision
             return restored
         # The maintenance timer may remove an expired failure while this
         # process stays alive. A missing durable record must not resurrect its
         # cached copy into API history or Project Mode projections.
         self._records.pop(job_id, None)
+        self._record_revisions.pop(job_id, None)
         return None
 
     def list_recent(self, limit: int = 20) -> list[ProductJobRecord]:
@@ -1040,17 +1060,31 @@ class PersistentProductJobStore(InMemoryProductJobStore):
             if path.exists():
                 path.unlink()
                 deleted += 1
+            self._record_revisions.pop(job_id, None)
         return deleted
 
     def _load_all_records(self) -> None:
         # Disk is the authoritative catalog after an external maintenance run.
         self._records.clear()
+        self._record_revisions.clear()
         if not self.storage_root.exists():
             return
         for path in self.storage_root.glob("job_*.json"):
             restored = self._read_record(path.stem)
             if restored is not None:
                 self._records[restored.job_id] = restored
+                revision = self._record_revision(restored.job_id)
+                if revision is not None:
+                    self._record_revisions[restored.job_id] = revision
+
+    def _record_revision(self, job_id: str) -> tuple[int, int, int] | None:
+        if not _valid_product_job_id(job_id):
+            return None
+        try:
+            stat = self._record_path(job_id).stat()
+        except OSError:
+            return None
+        return int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size)
 
     @property
     def _mcp_operation_index_path(self) -> Path:

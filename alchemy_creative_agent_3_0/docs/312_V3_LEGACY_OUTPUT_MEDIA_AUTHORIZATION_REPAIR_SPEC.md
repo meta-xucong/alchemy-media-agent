@@ -1,6 +1,6 @@
 # V3 Legacy Output Media Authorization Repair
 
-Status: implementation in progress
+Status: implementation in progress; performance follow-up under audit
 Contract revision: `DOC312_V3_LEGACY_OUTPUT_MEDIA_AUTHORIZATION`
 Upstream read-path authority: `DOC311_V1_LEGACY_PROJECT_OUTPUT_PROJECTION`
 
@@ -81,6 +81,25 @@ projection and the authenticated V3 media route. Generic output references,
 uploaded assets, jobs, V2/V1 routes, generation, review decisions, and
 continuation admission retain their existing predicates.
 
+### 3.1 VPS performance correction model
+
+The first deployed ownership correction made the legacy records addressable,
+but real VPS verification exposed a separate projection defect. A project
+detail read was still walking every historical `job_id`, including Jobs with
+no output record, and then parsing the same large durable Job JSON again for
+the review projection. Some legacy Job files are 6--20 MB and some declared
+IDs no longer have a file. The client-side symptom was another apparent empty
+project because the synchronous read exceeded the request timeout.
+
+The authority decision is unchanged: the durable Job status and the shared
+delivery/review predicates remain authoritative. The output store's project
+and Job indexes are only candidate locators. The minimal complete correction
+is to build one request-scoped snapshot, load Job state only for candidate
+Jobs that actually have output records, reuse that snapshot across formal,
+review, and history projections, and keep deleted/no-output Jobs as an
+authoritative empty result. This removes duplicate parsing without widening
+ownership, delivery, review, selection, retry, or continuation semantics.
+
 ## 4. Bounded implementation
 
 1. Add a read-only project-owner resolver for an ownerless V3 output in the
@@ -88,9 +107,12 @@ continuation admission retain their existing predicates.
 2. Add project-scoped Job/output visibility helpers in Project Mode and use
    them for formal output projection, legacy history projection, and the
    existing project-specific identity-anchor read projection.
-3. Keep output metadata and project JSON append-only during reads; no VPS data
+3. Build a request-scoped candidate/output snapshot for project-scoped reads;
+   do not parse declared Jobs that have no output records, and reuse parsed
+   Job state across formal/review/history projections.
+4. Keep output metadata and project JSON append-only during reads; no VPS data
    migration is required for this repair.
-4. Add regression coverage for the positive legacy case and for foreign,
+5. Add regression coverage for the positive legacy case and for foreign,
    malformed/unlinked, and ownerless-project negative cases.
 
 ## 5. Acceptance matrix
@@ -116,6 +138,8 @@ Required before reporting completion:
 - focused Doc312/auth route tests pass;
 - relevant Project Mode/account-boundary regression tests pass;
 - syntax, diff, and source audit pass;
+- a regression proves project-scoped formal/review/history reads reuse one
+  snapshot and skip declared Jobs with no output candidates;
 - the deployed VPS container reports healthy;
 - a real VPS output with project owner 1 and missing output owner is read via
   the same container code path and returns image bytes for thumbnail/preview/

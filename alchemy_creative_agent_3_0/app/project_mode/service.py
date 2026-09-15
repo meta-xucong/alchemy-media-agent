@@ -2490,25 +2490,56 @@ class V3ProjectModeService:
                             "complete": False,
                         },
                     }
-                self._reconcile_project_outputs(project)
-                output_projection_project = self._project_with_indexed_output_jobs(project)
+                # Build one candidate snapshot before reconciliation.  Older
+                # projects can retain dozens of historical Job ids while
+                # only a small subset has output records.  The snapshot
+                # keeps the existing Job/output predicates authoritative, but
+                # prevents a read-only image request from parsing every
+                # no-output Job (and then parsing output-bearing Jobs again
+                # for review/history projections).
+                read_snapshot = self._project_output_read_snapshot(
+                    [project],
+                    use_project_index=True,
+                    prefetch_job_state=True,
+                    candidate_job_outputs_only=True,
+                )
+                self._reconcile_project_outputs(
+                    project,
+                    output_records_by_job=read_snapshot["records_by_job"],
+                    job_status_by_id=read_snapshot["job_status_by_id"],
+                )
+                project_records = read_snapshot["records_by_project"].get(project.project_id, [])
+                output_projection_project = self._project_with_indexed_output_jobs(
+                    project,
+                    project_records,
+                )
                 items = self._project_output_items(
                     output_projection_project,
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
                     compact=compact,
+                    output_records_by_job=read_snapshot["records_by_job"],
+                    job_status_by_id=read_snapshot["job_status_by_id"],
+                    job_record_by_id=read_snapshot["job_record_by_id"],
                 )
                 review_items = self._project_review_output_items(
                     project,
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
                     compact=compact,
+                    output_records_by_job=read_snapshot["records_by_job"],
+                    job_status_by_id=read_snapshot["job_status_by_id"],
+                    job_record_by_id=read_snapshot["job_record_by_id"],
                 )
                 history_items = self._project_legacy_history_items(
                     project,
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
                     compact=compact,
+                    project_records=project_records,
+                    output_records_by_job=read_snapshot["records_by_job"],
+                    job_status_by_id=read_snapshot["job_status_by_id"],
+                    job_record_by_id=read_snapshot["job_record_by_id"],
                 )
             items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
             review_items = sorted(review_items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
@@ -2722,6 +2753,7 @@ class V3ProjectModeService:
         *,
         use_project_index: bool = False,
         prefetch_job_state: bool = True,
+        candidate_job_outputs_only: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """Build one request-scoped Job/output read snapshot.
 
@@ -2759,6 +2791,11 @@ class V3ProjectModeService:
             project_id = str(project.project_id or "").strip()
             if not project_id:
                 continue
+            declared_job_ids = list(dict.fromkeys(
+                str(raw_job_id or "").strip()
+                for raw_job_id in (getattr(project, "job_ids", []) or [])
+                if str(raw_job_id or "").strip()
+            ))
             indexed_job_ids: set[str] = set()
             if use_project_index:
                 project_index_complete = callable(list_by_project)
@@ -2785,20 +2822,35 @@ class V3ProjectModeService:
                         continue
                     bucket.append(record)
 
-            if use_project_index and not prefetch_job_state:
+            if use_project_index and not prefetch_job_state and not candidate_job_outputs_only:
                 # The home count projection reuses this snapshot with the
                 # existing delivery gate. Mark indexed misses as empty so a
                 # count read never falls back to an unbounded per-Job scan.
-                for raw_job_id in getattr(project, "job_ids", []) or []:
-                    job_id = str(raw_job_id or "").strip()
+                for job_id in declared_job_ids:
                     if job_id:
                         snapshot["records_by_job"].setdefault(job_id, [])
                 continue
-            for raw_job_id in getattr(project, "job_ids", []) or []:
-                job_id = str(raw_job_id or "").strip()
+            candidate_job_ids = declared_job_ids or sorted(indexed_job_ids)
+            for job_id in candidate_job_ids:
                 if not job_id or job_id in snapshot["job_status_by_id"]:
                     continue
-                if use_project_index and job_id not in indexed_job_ids:
+                if candidate_job_outputs_only and job_id not in snapshot["records_by_job"]:
+                    if callable(list_by_job):
+                        try:
+                            snapshot["records_by_job"][job_id] = list(list_by_job(job_id))
+                        except Exception:
+                            snapshot["records_by_job"][job_id] = []
+                    else:
+                        snapshot["records_by_job"][job_id] = []
+                if candidate_job_outputs_only and not snapshot["records_by_job"].get(job_id):
+                    # A declared but output-less Job cannot contribute a
+                    # project image. Mark it as an authoritative empty
+                    # candidate so downstream projections do not call
+                    # get_job() a second time.
+                    snapshot["job_status_by_id"][job_id] = None
+                    snapshot["job_record_by_id"][job_id] = None
+                    continue
+                if use_project_index and job_id not in indexed_job_ids and not candidate_job_outputs_only:
                     continue
                 try:
                     job_status = get_job(job_id)
@@ -2815,7 +2867,7 @@ class V3ProjectModeService:
                 except Exception:
                     job_record = None
                 snapshot["job_record_by_id"][job_id] = job_record
-                if use_project_index:
+                if use_project_index and not candidate_job_outputs_only:
                     # A project index miss is a bounded preview miss. Do not
                     # fall back to a full Job scan on the home surface.
                     snapshot["records_by_job"].setdefault(job_id, [])
@@ -8743,7 +8795,13 @@ class V3ProjectModeService:
         )
         return self.project_store.append_timeline(item)
 
-    def _reconcile_project_outputs(self, project: ProjectRecord) -> bool:
+    def _reconcile_project_outputs(
+        self,
+        project: ProjectRecord,
+        *,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+    ) -> bool:
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None or not project.job_ids:
             return False
@@ -8759,16 +8817,39 @@ class V3ProjectModeService:
             if item.item_type == TimelineItemType.VISUAL_REVIEW and (item.job_id or item.related_job_id)
         }
         changed = False
-        for job_id in list(dict.fromkeys(project.job_ids)):
-            job_status = self.product_service.get_job(job_id)
+        candidate_job_ids = list(dict.fromkeys(project.job_ids))
+        if output_records_by_job is not None:
+            # The output index is only a candidate locator.  It is safe to
+            # skip a declared Job here because there are no pixels to
+            # reconcile; Job membership remains authoritative everywhere
+            # that makes delivery, review, or continuation decisions.
+            candidate_job_ids = [
+                job_id
+                for job_id in candidate_job_ids
+                if job_id in output_records_by_job and output_records_by_job[job_id]
+            ]
+        for job_id in candidate_job_ids:
+            if job_status_by_id is not None and job_id in job_status_by_id:
+                job_status = job_status_by_id[job_id]
+            else:
+                job_status = self.product_service.get_job(job_id)
+                if job_status_by_id is not None:
+                    job_status_by_id[job_id] = job_status
+            if job_status is None:
+                continue
             if job_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
                 # An output file can appear before shared review/retry settles
                 # delivery.  Never create a completed timeline entry from it.
                 continue
-            try:
-                records = list(output_store.list_by_job(job_id))
-            except Exception:
-                continue
+            if output_records_by_job is not None and job_id in output_records_by_job:
+                records = list(output_records_by_job[job_id])
+            else:
+                try:
+                    records = list(output_store.list_by_job(job_id))
+                except Exception:
+                    continue
+                if output_records_by_job is not None:
+                    output_records_by_job[job_id] = list(records)
             if not records:
                 continue
             records = sorted(records, key=lambda item: item.created_at or "")

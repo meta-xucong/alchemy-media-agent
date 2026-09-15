@@ -254,6 +254,74 @@ def test_ownerless_legacy_job_and_output_can_use_exact_owned_project_scope(tmp_p
     assert items == [{"output_id": record.output_id, "project_id": project.project_id}]
 
 
+def test_project_scoped_read_snapshots_only_output_jobs_and_reuses_job_state(tmp_path: Path) -> None:
+    project_id = "project_scoped_snapshot"
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = output_store.save_base64_output(
+        job_id="job_with_output",
+        candidate_id="candidate_scoped_snapshot",
+        asset_id="asset_scoped_snapshot",
+        provider="fixture_provider",
+        model="fixture_model",
+        encoded_image=_ONE_PIXEL_PNG,
+        output_id="v3_output_00000000000000000005",
+        metadata={"project_id": project_id},
+    )
+    job_calls: list[str] = []
+    job_record_calls: list[str] = []
+    product_service = SimpleNamespace(
+        output_store=output_store,
+        get_job=lambda job_id: (
+            job_calls.append(job_id)
+            or SimpleNamespace(metadata={})
+        ),
+        get_job_record=lambda job_id: (
+            job_record_calls.append(job_id)
+            or SimpleNamespace(request=SimpleNamespace(metadata={}))
+        ),
+    )
+    project_store = InMemoryProjectStore()
+    service = V3ProjectModeService(product_service=product_service, project_store=project_store)
+    project = ProjectRecord(
+        project_id=project_id,
+        title="Scoped snapshot",
+        user_goal="Keep the existing image readable.",
+        short_summary="Keep the existing image readable.",
+        job_ids=[record.job_id, "job_without_output"],
+        created_at="2026-09-01T00:00:00+00:00",
+        updated_at="2026-09-14T00:00:00+00:00",
+        metadata={"veyra_user_id": 7},
+    )
+    project_store.save_project(project)
+    service._reconcile_project_outputs = lambda *_args, **_kwargs: False
+    service._job_delivery_is_settled = lambda _status: True
+    service._selected_output_state_map = lambda _project: {}
+    service._public_output_review_projection = lambda *_args: {}
+    service._review_projection_allows_project_delivery = lambda _projection: True
+    service._canonical_final_delivery_output_ids = lambda _status: set()
+    service._delivery_annotations_for_records = lambda records, **_kwargs: {
+        item.output_id: {"delivery_state": "final_delivery"}
+        for item in records
+    }
+    service._output_item_from_record = lambda project, item, state, **_kwargs: {
+        "output_id": item.output_id,
+        "project_id": project.project_id,
+        "created_at": item.created_at,
+    }
+
+    response = service.list_project_outputs(
+        project_id=project_id,
+        owner_user_id=7,
+        compact=True,
+    )
+
+    assert [item["output_id"] for item in response["items"]] == [record.output_id]
+    assert response["review_items"] == []
+    assert response["history_items"] == []
+    assert job_calls == [record.job_id]
+    assert job_record_calls == [record.job_id]
+
+
 def test_explicit_project_job_recovery_remains_review_only(tmp_path: Path) -> None:
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")
     record = output_store.save_base64_output(
