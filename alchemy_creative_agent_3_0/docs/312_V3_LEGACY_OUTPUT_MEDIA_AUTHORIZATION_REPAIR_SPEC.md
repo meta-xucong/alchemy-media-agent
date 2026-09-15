@@ -100,6 +100,22 @@ review, and history projections, and keep deleted/no-output Jobs as an
 authoritative empty result. This removes duplicate parsing without widening
 ownership, delivery, review, selection, retry, or continuation semantics.
 
+### 3.2 Legacy file-integrity compatibility model
+
+The VPS audit then found a second, narrower read failure: several review-only
+records had valid canonical `original.png`, `preview.png`, and `thumbnail.png`
+files, but their old `width`/`height` metadata no longer matched the actual
+PNG dimensions. Those records predate the immutable content-hash fields. The
+stored dimensions are descriptive metadata, not an authorization or file
+identity proof; rejecting the real image solely for that drift produced a
+false 404.
+
+The file authority remains the canonical output directory and actual image
+decoder. New or hash-bound records must still match their SHA-256 and retain
+the strict dimension/integrity checks. Only hashless legacy records may pass
+when the canonical original and requested variant are real, in-root, valid
+images; no path fallback or hash mismatch is accepted.
+
 ## 4. Bounded implementation
 
 1. Add a read-only project-owner resolver for an ownerless V3 output in the
@@ -110,9 +126,12 @@ ownership, delivery, review, selection, retry, or continuation semantics.
 3. Build a request-scoped candidate/output snapshot for project-scoped reads;
    do not parse declared Jobs that have no output records, and reuse parsed
    Job state across formal/review/history projections.
-4. Keep output metadata and project JSON append-only during reads; no VPS data
+4. Allow hashless legacy records with stale descriptive dimensions to use
+   canonical validated files without rewriting their metadata; keep hash-bound
+   records strict.
+5. Keep output metadata and project JSON append-only during reads; no VPS data
    migration is required for this repair.
-5. Add regression coverage for the positive legacy case and for foreign,
+6. Add regression coverage for the positive legacy case and for foreign,
    malformed/unlinked, and ownerless-project negative cases.
 
 ## 5. Acceptance matrix
@@ -140,6 +159,8 @@ Required before reporting completion:
 - syntax, diff, and source audit pass;
 - a regression proves project-scoped formal/review/history reads reuse one
   snapshot and skip declared Jobs with no output candidates;
+- a regression proves stale dimensions on a hashless legacy record do not
+  hide valid canonical image files, while hash-bound mismatches remain denied;
 - the deployed VPS container reports healthy;
 - a real VPS output with project owner 1 and missing output owner is read via
   the same container code path and returns image bytes for thumbnail/preview/

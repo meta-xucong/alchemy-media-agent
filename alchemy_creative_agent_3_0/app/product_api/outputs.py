@@ -629,9 +629,17 @@ def _canonical_output_files_match_record(record: V3GeneratedOutputRecord, output
     except ValueError:
         return False
     if record.width is not None and int(record.width) != int(width):
-        return False
+        # Pre-hash V3 records occasionally contain the provider's requested
+        # dimensions instead of the dimensions of the persisted PNG.  The
+        # canonical file has already been decoded successfully above, so a
+        # hashless legacy dimension mismatch is descriptive metadata drift,
+        # not evidence that the file is unsafe. Hash-bound records remain
+        # strict because their metadata is part of the immutable contract.
+        if canonical_hash_present or expected_sha:
+            return False
     if record.height is not None and int(record.height) != int(height):
-        return False
+        if canonical_hash_present or expected_sha:
+            return False
     return True
 
 

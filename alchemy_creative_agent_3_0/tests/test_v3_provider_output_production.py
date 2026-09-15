@@ -1756,6 +1756,34 @@ def test_v3_output_store_serves_canonical_files_when_migrated_record_paths_are_s
     assert migrated_reader.file_for_variant(record.output_id, "thumbnail")[0] == output_dir / "thumbnail.png"
 
 
+def test_v3_output_store_serves_hashless_legacy_files_when_dimensions_are_stale(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = store.save_base64_output(
+        job_id="job_legacy_dimension_drift",
+        candidate_id="candidate_legacy_dimension_drift",
+        asset_id="asset_legacy_dimension_drift",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(128, 96),
+        mime_type="image/png",
+        output_format="png",
+        output_id="v3_output_dddd1234dddd1234dddd",
+    )
+    output_dir = Path(record.preview_path).parent
+    payload = json.loads((output_dir / "output.json").read_text(encoding="utf-8"))
+    payload["width"] = 1024
+    payload["height"] = 1536
+    payload["metadata"].pop("content_sha256", None)
+    payload["metadata"].pop("source_integrity_id", None)
+    (output_dir / "output.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    migrated_reader = V3GeneratedOutputStore(tmp_path / "outputs")
+
+    assert migrated_reader.file_for_variant(record.output_id, "download") is not None
+    assert migrated_reader.file_for_variant(record.output_id, "preview") is not None
+    assert migrated_reader.file_for_variant(record.output_id, "thumbnail") is not None
+
+
 def test_v3_output_store_rejects_canonical_fallback_when_original_file_is_missing(tmp_path) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     record = store.save_base64_output(
