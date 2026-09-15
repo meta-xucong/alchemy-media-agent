@@ -544,14 +544,13 @@ def test_desktop_explicit_history_modal_reveals_project_review_pixels() -> None:
                   };
                   const review = {
                     output_id: "desktop-review-output",
-                    project_id: project.project_id,
                     job_id: "desktop-review-job",
-                    thumbnail_url: "http://image.test/desktop-review.png",
-                    preview_url: "http://image.test/desktop-review.png",
+                    thumbnail_url: "http://image.test/desktop-review-thumbnail.png",
+                    preview_url: "http://image.test/desktop-review-preview.png",
                     delivery_state: "review_only",
                     review_only: true,
                     review_reason: "保留供复核",
-                    metadata: { review_only: true },
+                    metadata: { project_id: project.project_id, review_only: true },
                   };
                   window.fetch = async (input) => {
                     const url = String(input);
@@ -581,6 +580,7 @@ def test_desktop_explicit_history_modal_reveals_project_review_pixels() -> None:
                   return {
                     homeImageCount,
                     modalImage: document.querySelector("#v3ProjectHistoryGrid img")?.getAttribute("src") || "",
+                    modalFallbackUrls: document.querySelector("#v3ProjectHistoryGrid img")?.dataset.fallbackUrls || "",
                     modalText: document.querySelector("#v3ProjectHistoryCount")?.textContent || "",
                     modalCards: document.querySelectorAll("#v3ProjectHistoryGrid .v3-project-history-image-card").length,
                   };
@@ -588,7 +588,8 @@ def test_desktop_explicit_history_modal_reveals_project_review_pixels() -> None:
                 """,
             )
             assert result["homeImageCount"] == 0
-            assert result["modalImage"] == "http://image.test/desktop-review.png"
+            assert result["modalImage"] == "http://image.test/desktop-review-thumbnail.png"
+            assert "http://image.test/desktop-review-preview.png" in result["modalFallbackUrls"]
             assert result["modalCards"] == 1
             assert result["modalText"] == "1 张待复核图片"
         finally:

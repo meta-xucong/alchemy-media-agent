@@ -3385,9 +3385,13 @@ function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?
     ...items,
     ...(Array.isArray(historyItems) ? historyItems : []),
   ];
-  v3State.projectOutputs = displayItems.filter((item) => item?.project_id === projectId);
+  v3State.projectOutputs = displayItems.filter(
+    (item) => String(item?.project_id || item?.metadata?.project_id || "") === String(projectId),
+  );
   if (Array.isArray(reviewItems)) {
-    v3State.projectReviewOutputs = reviewItems.filter((item) => item?.project_id === projectId);
+    v3State.projectReviewOutputs = reviewItems.filter(
+      (item) => String(item?.project_id || item?.metadata?.project_id || "") === String(projectId),
+    );
   }
 }
 
@@ -4181,7 +4185,14 @@ function renderV3ProjectHistoryGrid(group) {
     return;
   }
   items.forEach((item, index) => {
-    const previewUrl = v3OutputStrictThumbImageUrl(item) || v3OutputPreviewImageUrl(item);
+    const metadata = item?.metadata || {};
+    const previewCandidates = uniqueNonEmpty([
+      item?.thumbnail_url,
+      metadata.thumbnail_url,
+      item?.preview_url,
+      metadata.preview_url,
+    ]).filter((url) => !String(url).startsWith("mock://")).map(v3MediaUrl);
+    const previewUrl = previewCandidates[0] || "";
     const imageTitle = v3ReadableText(item.title, group.title || `图片 ${index + 1}`);
     const card = document.createElement("article");
     card.className = "v3-project-history-image-card";
@@ -4194,6 +4205,8 @@ function renderV3ProjectHistoryGrid(group) {
         <span>${escapeHtml(formatDate(item.created_at || item.updated_at))}</span>
       </div>
     `;
+    const image = card.querySelector("img");
+    if (image) bindImageWithFallback(image, previewCandidates, { emptyAlt: "图片暂不可用" });
     els.v3ProjectHistoryGrid.appendChild(card);
   });
 }
