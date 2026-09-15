@@ -1,6 +1,6 @@
 # V3 Legacy Output Media Authorization Repair
 
-Status: implementation in progress; cold scoped-index follow-up under audit
+Status: implementation in progress; explicit history-surface follow-up under audit
 Contract revision: `DOC312_V3_LEGACY_OUTPUT_MEDIA_AUTHORIZATION`
 Upstream read-path authority: `DOC311_V1_LEGACY_PROJECT_OUTPUT_PROJECTION`
 
@@ -133,6 +133,24 @@ authorization source. Full-history listing keeps its existing complete index;
 normal writes advance the existing storage revision so the scoped locator is
 rebuilt when records change.
 
+### 3.4 Explicit history-surface review projection correction model
+
+The VPS response audit then separated a second user-visible symptom from the
+media authorization path. A project-scoped full read returned valid legacy
+pixels in `review_items`, but the desktop home "查看图片" modal built its
+gallery only from the formal/history collections. The server therefore had
+returned the image and the authenticated media route could serve it, while the
+explicit gallery still rendered an empty state.
+
+The authority decision is unchanged: `items` remains formal delivery,
+`history_items` remains legacy history-only output, and `review_items` remains
+non-delivery review evidence. Home first paint must stay formal-only and
+review-free. The minimal complete correction is for the explicit project
+history modal to merge safe, image-bearing review items after its scoped full
+read, label them as review-only, and keep them outside formal counts,
+selection, continuation, and home-preview projections. This makes the
+existing image inspectable without silently promoting a withheld result.
+
 ## 4. Bounded implementation
 
 1. Add a read-only project-owner resolver for an ownerless V3 output in the
@@ -151,7 +169,10 @@ rebuilt when records change.
 6. Use a revision-aware lightweight locator for project/Job-scoped output
    reads; retain full record parsing and exact field filters after candidate
    selection.
-7. Add regression coverage for the positive legacy case and for foreign,
+7. Merge review-only output pointers into the explicit desktop project history
+   modal only after the scoped full read; preserve the formal/history/home
+   separation and review-only labeling.
+8. Add regression coverage for the positive legacy case and for foreign,
    malformed/unlinked, and ownerless-project negative cases.
 
 ## 5. Acceptance matrix
@@ -183,6 +204,9 @@ Required before reporting completion:
   hide valid canonical image files, while hash-bound mismatches remain denied;
 - a regression proves scoped output lookups do not invoke the full-history
   deserializer on a cold store and still exact-match the returned records;
+- a browser regression proves a review-only image returned by a project-scoped
+  full read is visible in the explicit project history modal while remaining
+  absent from the home formal-preview collection;
 - the deployed VPS container reports healthy;
 - a real VPS output with project owner 1 and missing output owner is read via
   the same container code path and returns image bytes for thumbnail/preview/

@@ -4055,8 +4055,48 @@ function v3ProjectImageGroup(projectId) {
     : [];
   const scopedGroup = v3OutputProjectGroupMap(scopedItems).get(cleanProjectId);
   const project = (Array.isArray(v3State.projects) ? v3State.projects : []).find((item) => String(item?.project_id || "") === cleanProjectId);
-  if (project) return v3ProjectGroupFromProject(project, scopedGroup || v3OutputProjectGroupMap(v3State.imageHistory).get(cleanProjectId));
+  if (project) {
+    const baseGroup = scopedGroup || v3OutputProjectGroupMap(v3State.imageHistory).get(cleanProjectId);
+    const reviewItems = v3ProjectReviewImageItems(cleanProjectId);
+    if (!reviewItems.length) return v3ProjectGroupFromProject(project, baseGroup);
+    const group = v3ProjectGroupFromProject(project, baseGroup);
+    const items = v3DedupeOutputItems([...(group.items || []), ...reviewItems])
+      .sort((a, b) => v3OutputItemTime(b) - v3OutputItemTime(a));
+    const latestItem = items.reduce(
+      (latest, item) => (!latest || v3OutputItemTime(item) >= v3OutputItemTime(latest) ? item : latest),
+      null,
+    );
+    return {
+      ...group,
+      items,
+      latestItem: latestItem || group.latestItem,
+      latestAt: latestItem?.created_at || latestItem?.updated_at || group.latestAt,
+      count: Math.max(Number(group.count || 0), items.length),
+      reviewOnlyCount: items.filter((item) => item?._v3ReviewOnly === true).length,
+    };
+  }
   return scopedGroup || v3ProjectImageGroups().find((group) => group.projectId === cleanProjectId) || null;
+}
+
+function v3ProjectReviewImageItems(projectId) {
+  const cleanProjectId = String(projectId || "").trim();
+  if (!cleanProjectId || !Array.isArray(v3State.projectReviewOutputs)) return [];
+  return v3State.projectReviewOutputs
+    .filter((item) => String(item?.project_id || item?.metadata?.project_id || "") === cleanProjectId)
+    .filter((item) => !v3FailureArtifactExpired(item) && v3OutputImageCandidates(item).length > 0)
+    .map((item) => ({ ...item, _v3ReviewOnly: true, _v3Source: "project_review_output" }));
+}
+
+function v3ProjectHistoryModalCountLabel(group) {
+  const reviewOnlyCount = Number(group?.reviewOnlyCount || 0);
+  if (reviewOnlyCount > 0) {
+    const total = Math.max(Number(group?.items?.length || 0), reviewOnlyCount);
+    const nonReviewCount = Math.max(0, total - reviewOnlyCount);
+    return nonReviewCount > 0
+      ? `${nonReviewCount} 张正式/历史图片 · ${reviewOnlyCount} 张待复核`
+      : `${reviewOnlyCount} 张待复核图片`;
+  }
+  return v3ProjectImageCountLabel(group);
 }
 
 function openV3ProjectHistoryModal(projectId) {
@@ -4073,7 +4113,7 @@ function openV3ProjectHistoryModal(projectId) {
     els.v3ProjectHistorySummary.textContent = group.goal ? v3ShortText(group.goal, 88) : "这个项目生成过的图片都在这里。";
   }
   if (els.v3ProjectHistoryCount) {
-    els.v3ProjectHistoryCount.textContent = v3ProjectImageCountLabel(group);
+    els.v3ProjectHistoryCount.textContent = v3ProjectHistoryModalCountLabel(group);
   }
   if (els.v3ProjectHistoryOpenProjectBtn) {
     els.v3ProjectHistoryOpenProjectBtn.dataset.v3HistoryProject = group.projectId;
@@ -4088,7 +4128,7 @@ function openV3ProjectHistoryModal(projectId) {
       .then(() => {
         const refreshed = v3ProjectImageGroup(group.projectId);
         if (refreshed && !els.v3ProjectHistoryModal.hidden) {
-          if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = v3ProjectImageCountLabel(refreshed);
+          if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = v3ProjectHistoryModalCountLabel(refreshed);
           renderV3ProjectHistoryGrid(refreshed);
         }
       })

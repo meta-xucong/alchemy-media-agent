@@ -518,6 +518,83 @@ def test_desktop_home_loader_consumes_history_projection() -> None:
             browser.close()
 
 
+def test_desktop_explicit_history_modal_reveals_project_review_pixels() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            result = page.evaluate(
+                """
+                async () => {
+                  const project = {
+                    project_id: "desktop-review-project",
+                    title: "Legacy review project",
+                    user_goal: "Keep the review image inspectable.",
+                    short_summary: "Keep the review image inspectable.",
+                    primary_template_id: "general_template",
+                    status: "active",
+                    job_ids: ["desktop-review-job"],
+                    visible_output_count: 0,
+                    visible_output_count_known: true,
+                    history_output_count: 0,
+                    history_output_count_known: true,
+                    job_count: 1,
+                    updated_at: "2026-09-14T00:00:00Z",
+                    latest_thumbnail_urls: [],
+                  };
+                  const review = {
+                    output_id: "desktop-review-output",
+                    project_id: project.project_id,
+                    job_id: "desktop-review-job",
+                    thumbnail_url: "http://image.test/desktop-review.png",
+                    preview_url: "http://image.test/desktop-review.png",
+                    delivery_state: "review_only",
+                    review_only: true,
+                    review_reason: "保留供复核",
+                    metadata: { review_only: true },
+                  };
+                  window.fetch = async (input) => {
+                    const url = String(input);
+                    if (/\\/project-outputs/.test(url)) {
+                      return new Response(JSON.stringify({ items: [], review_items: [review], history_items: [] }), {
+                        status: 200,
+                        headers: { "Content-Type": "application/json" },
+                      });
+                    }
+                    return new Response(JSON.stringify({}), {
+                      status: 200,
+                      headers: { "Content-Type": "application/json" },
+                    });
+                  };
+                  v3State.workspaceMode = "standard";
+                  v3State.projects = [project];
+                  v3State.imageHistory = [];
+                  v3State.imageHistorySurface = "home_preview";
+                  v3State.imageHistoryLoaded = false;
+                  v3State.imageHistoryError = "";
+                  v3State.projectOutputs = [];
+                  v3State.projectReviewOutputs = [];
+                  renderV3History();
+                  const homeImageCount = document.querySelectorAll("#v3HistoryList img").length;
+                  openV3ProjectHistoryModal(project.project_id);
+                  await new Promise((resolve) => window.setTimeout(resolve, 120));
+                  return {
+                    homeImageCount,
+                    modalImage: document.querySelector("#v3ProjectHistoryGrid img")?.getAttribute("src") || "",
+                    modalText: document.querySelector("#v3ProjectHistoryCount")?.textContent || "",
+                    modalCards: document.querySelectorAll("#v3ProjectHistoryGrid .v3-project-history-image-card").length,
+                  };
+                }
+                """,
+            )
+            assert result["homeImageCount"] == 0
+            assert result["modalImage"] == "http://image.test/desktop-review.png"
+            assert result["modalCards"] == 1
+            assert result["modalText"] == "1 张待复核图片"
+        finally:
+            browser.close()
+
+
 def test_mobile_history_projection_renders_media_without_formal_result_actions() -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
