@@ -148,6 +148,12 @@ PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
 _PROJECT_LIST_CURSOR_SCHEMA = "v3_project_list_cursor_v1"
 _GENERAL_VARIATION_MODES = GENERAL_VARIATION_MODES
 _GENERAL_VARIATION_MODE_ALIASES = GENERAL_VARIATION_MODE_ALIASES
+# Home cards are a bounded read surface.  A project with more indexed Jobs
+# than this can still receive a newest-candidate cover, but its exact formal
+# and review counts stay unknown instead of making a long-tail read block the
+# whole page or silently undercounting it.
+_HOME_PREVIEW_MAX_JOB_STATES = 64
+_HOME_PREVIEW_MAX_INDEX_RECORDS = 4096
 
 
 def _project_listing_key(project: ProjectRecord) -> tuple[str, str, str]:
@@ -2602,32 +2608,57 @@ class V3ProjectModeService:
             snapshot = self._project_output_read_snapshot(
                 preview_projects,
                 use_project_index=True,
+                # Home must read Job state lazily through the existing
+                # newest-first delivery/review projections.  Eager prefetch
+                # walks stored Job ids oldest-first and lets a cold legacy
+                # Job block every card in the batch.
                 prefetch_job_state=False,
+                include_declared_job_output_fallback=True,
+                project_index_limit=_HOME_PREVIEW_MAX_INDEX_RECORDS,
             )
             project_output_counts: dict[str, int] = {}
+            project_review_counts: dict[str, int] = {}
             project_history_counts: dict[str, int] = {}
+            project_review_preview_items: list[dict[str, Any]] = []
             history_items: list[dict[str, Any]] = []
             project_index_complete = snapshot.get("project_index_complete", {})
+            home_candidate_job_ids_by_project = snapshot.get("home_candidate_job_ids", {})
+            home_declared_job_scan_complete = snapshot.get(
+                "home_declared_job_scan_complete",
+                {},
+            )
+            job_read_failures = snapshot.get("job_read_failures", set())
             for project in preview_projects:
                 index_complete = project_index_complete.get(project.project_id, True)
-                output_count = None
-                if index_complete:
-                    output_count = self._project_visible_output_count(
-                        project,
-                        owner_user_id=owner_user_id,
-                        project_records=snapshot["records_by_project"].get(project.project_id, []),
-                        output_records_by_job=snapshot["records_by_job"],
-                        job_status_by_id=snapshot["job_status_by_id"],
-                        job_record_by_id=snapshot["job_record_by_id"],
+                project_records = snapshot["records_by_project"].get(project.project_id, [])
+                declared_job_ids = [
+                    str(job_id or "").strip()
+                    for job_id in (getattr(project, "job_ids", []) or [])
+                    if str(job_id or "").strip()
+                ]
+                candidate_job_ids = home_candidate_job_ids_by_project.get(project.project_id)
+                if candidate_job_ids is None:
+                    candidate_job_ids = (
+                        self._project_home_candidate_job_ids(project, project_records)
+                        if index_complete
+                        else []
                     )
-                if output_count is not None:
-                    project_output_counts[project.project_id] = output_count
-                preview_items = []
-                project_records = (
-                    snapshot["records_by_project"].get(project.project_id, [])
-                    if index_complete
-                    else None
+                bounded_candidate_job_ids = self._project_home_bounded_candidate_job_ids(
+                    project,
+                    project_records,
+                    candidate_job_ids,
                 )
+                declared_job_scan_is_complete = home_declared_job_scan_complete.get(
+                    project.project_id,
+                    not declared_job_ids,
+                )
+                bounded_job_state_complete = (
+                    index_complete
+                    and declared_job_scan_is_complete
+                    and len(declared_job_ids) <= _HOME_PREVIEW_MAX_JOB_STATES
+                    and len(candidate_job_ids) <= _HOME_PREVIEW_MAX_JOB_STATES
+                )
+                preview_items = []
                 if len(items) < bounded_limit:
                     preview_items = self._project_delivery_preview_items(
                         project,
@@ -2638,25 +2669,124 @@ class V3ProjectModeService:
                         output_records_by_job=snapshot["records_by_job"],
                         job_status_by_id=snapshot["job_status_by_id"],
                         job_record_by_id=snapshot["job_record_by_id"],
+                        job_read_failures=job_read_failures,
+                        candidate_job_limit=_HOME_PREVIEW_MAX_JOB_STATES,
+                        home_candidate_job_ids=bounded_candidate_job_ids,
                     )
                 if preview_items:
                     items.extend(preview_items[:1])
-                legacy_history_items: list[dict[str, Any]] = []
-                if index_complete:
-                    legacy_history_items = self._project_legacy_history_items(
+                job_state_complete = (
+                    bounded_job_state_complete
+                    and not set(candidate_job_ids).intersection(job_read_failures)
+                )
+                formal_count_complete = False
+                if job_state_complete:
+                    output_count = self._project_visible_output_count(
                         project,
-                        limit=max(1, len(project_records or [])),
                         owner_user_id=owner_user_id,
-                        compact=compact,
                         project_records=project_records,
                         output_records_by_job=snapshot["records_by_job"],
                         job_status_by_id=snapshot["job_status_by_id"],
                         job_record_by_id=snapshot["job_record_by_id"],
+                        job_read_failures=job_read_failures,
                     )
-                    project_history_counts[project.project_id] = len(legacy_history_items)
+                    formal_count_complete = (
+                        output_count is not None
+                        and not set(candidate_job_ids).intersection(job_read_failures)
+                    )
+                    if output_count is not None and formal_count_complete:
+                        project_output_counts[project.project_id] = output_count
+                if index_complete:
+                    # Output-only legacy projects have no declared Job
+                    # membership.  They remain history-only and must not
+                    # enter the modern review projection on the home path.
+                    review_items: list[dict[str, Any]] = []
+                    review_count_known = False
+                    if declared_job_ids and formal_count_complete:
+                        review_project = self._project_home_review_projection_project(
+                            project,
+                            project_records,
+                            candidate_job_ids=candidate_job_ids,
+                        )
+                        review_items = self._project_review_output_items(
+                            review_project,
+                            limit=max(1, len(project_records or [])),
+                            owner_user_id=owner_user_id,
+                            compact=compact,
+                            output_records_by_job=snapshot["records_by_job"],
+                            job_status_by_id=snapshot["job_status_by_id"],
+                            job_record_by_id=snapshot["job_record_by_id"],
+                            job_read_failures=job_read_failures,
+                        )
+                        review_count_known = (
+                            not set(candidate_job_ids).intersection(job_read_failures)
+                        )
+                    elif not declared_job_ids:
+                        # Output-only legacy projects are handled by the
+                        # history adapter and can never contribute modern
+                        # review_items on the home surface.
+                        review_count_known = True
+                    if review_count_known:
+                        review_items = sorted(
+                            review_items,
+                            key=lambda item: str(item.get("created_at") or ""),
+                            reverse=True,
+                        )
+                        project_review_counts[project.project_id] = len(review_items)
+                        if review_items:
+                            review_preview = self._home_review_preview_item(review_items[0])
+                            if review_preview is not None:
+                                project_review_preview_items.append(review_preview)
+                legacy_history_items: list[dict[str, Any]] = []
+                if index_complete:
+                    # History is a compatibility projection, not an excuse
+                    # to turn the home request into an unbounded Job walk.
+                    # The output index can contain many declared jobs, so
+                    # keep this adapter on the same bounded newest-first
+                    # candidate set used by the home preview.
+                    # Preview and history must share one candidate budget and
+                    # one newest-first ordering.  Otherwise a project with a
+                    # long tail can read 64 Jobs for the cover and another 64
+                    # for legacy history, while also letting the two
+                    # projections disagree about which pixels are current.
+                    history_candidate_job_ids = bounded_candidate_job_ids
+                    history_candidate_job_id_set = set(history_candidate_job_ids)
+                    history_project_records = [
+                        record
+                        for record in project_records
+                        if str(getattr(record, "job_id", "") or "").strip()
+                        in history_candidate_job_id_set
+                    ]
+                    legacy_history_items = self._project_legacy_history_items(
+                        self._project_home_review_projection_project(
+                            project,
+                            history_project_records,
+                            # Project.job_ids retain the persisted
+                            # oldest-to-newest convention; the shared home
+                            # candidate list itself is newest-first.
+                            candidate_job_ids=list(reversed(history_candidate_job_ids)),
+                        ),
+                        limit=max(1, len(history_project_records or [])),
+                        owner_user_id=owner_user_id,
+                        compact=compact,
+                        project_records=history_project_records,
+                        output_records_by_job=snapshot["records_by_job"],
+                        job_status_by_id=snapshot["job_status_by_id"],
+                        job_record_by_id=snapshot["job_record_by_id"],
+                        job_read_failures=job_read_failures,
+                    )
+                    history_count_complete = (
+                        bounded_job_state_complete
+                        and not set(history_candidate_job_ids).intersection(job_read_failures)
+                    )
+                    if history_count_complete:
+                        project_history_counts[project.project_id] = len(legacy_history_items)
                 if not preview_items and legacy_history_items:
                     history_items.extend(legacy_history_items[:1])
-                if len(items) + len(history_items) >= bounded_limit and requested_project_ids is None:
+                if (
+                    len(items) + len(history_items) + len(project_review_preview_items) >= bounded_limit
+                    and requested_project_ids is None
+                ):
                     break
             items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
             history_items = sorted(
@@ -2664,6 +2794,8 @@ class V3ProjectModeService:
                 key=lambda item: str(item.get("created_at") or ""),
                 reverse=True,
             )[:bounded_limit]
+            if requested_project_ids is None:
+                project_review_preview_items = project_review_preview_items[:bounded_limit]
             return {
                 "api_namespace": API_NAMESPACE,
                 "route": f"{API_NAMESPACE}/project-outputs",
@@ -2681,6 +2813,8 @@ class V3ProjectModeService:
                     "project_scope": "requested" if requested_project_ids is not None else "global",
                 },
                 "project_output_counts": project_output_counts,
+                "project_review_counts": project_review_counts,
+                "project_review_preview_items": project_review_preview_items,
                 "project_history_counts": project_history_counts,
             }
         project_scan_limit = max(12, min(100, bounded_limit * 2))
@@ -2754,6 +2888,8 @@ class V3ProjectModeService:
         use_project_index: bool = False,
         prefetch_job_state: bool = True,
         candidate_job_outputs_only: bool = False,
+        include_declared_job_output_fallback: bool = False,
+        project_index_limit: int = _HOME_PREVIEW_MAX_INDEX_RECORDS,
     ) -> dict[str, dict[str, Any]]:
         """Build one request-scoped Job/output read snapshot.
 
@@ -2772,6 +2908,9 @@ class V3ProjectModeService:
             "job_status_by_id": {},
             "job_record_by_id": {},
             "project_index_complete": {},
+            "home_candidate_job_ids": {},
+            "home_declared_job_scan_complete": {},
+            "job_read_failures": set(),
         }
         product_service = getattr(self, "product_service", None)
         output_store = getattr(product_service, "output_store", None)
@@ -2802,7 +2941,12 @@ class V3ProjectModeService:
                 project_records: list[Any] = []
                 if project_index_complete:
                     try:
-                        project_records = list(list_by_project(project_id, limit=4096))
+                        bounded_index_limit = max(1, int(project_index_limit or _HOME_PREVIEW_MAX_INDEX_RECORDS))
+                        project_records = list(list_by_project(project_id, limit=bounded_index_limit + 1))
+                        # ``list_by_project`` is a bounded locator.  Read one
+                        # sentinel record so an exact-count home response
+                        # cannot call a truncated index "complete".
+                        project_index_complete = len(project_records) <= bounded_index_limit
                     except Exception:
                         project_records = []
                         project_index_complete = False
@@ -2823,12 +2967,79 @@ class V3ProjectModeService:
                     bucket.append(record)
 
             if use_project_index and not prefetch_job_state and not candidate_job_outputs_only:
+                home_candidate_job_ids = [
+                    job_id for job_id in declared_job_ids if job_id in indexed_job_ids
+                ]
+                declared_job_scan_complete = not declared_job_ids
+                if include_declared_job_output_fallback and declared_job_ids:
+                    fallback_job_ids = (
+                        declared_job_ids[-_HOME_PREVIEW_MAX_JOB_STATES:]
+                        if len(declared_job_ids) > _HOME_PREVIEW_MAX_JOB_STATES
+                        else declared_job_ids
+                    )
+                    # The project index already covers records carrying the
+                    # current project link.  Use the compatibility outlet
+                    # only for declared Jobs missing from that index; this
+                    # keeps normal home loads from issuing a redundant
+                    # list_by_job call for every card while still repairing
+                    # old records whose project link was lost.
+                    fallback_job_ids = [
+                        job_id for job_id in fallback_job_ids
+                        if job_id not in indexed_job_ids
+                    ]
+                    declared_job_scan_complete = (
+                        len(declared_job_ids) <= _HOME_PREVIEW_MAX_JOB_STATES
+                        and (not fallback_job_ids or callable(list_by_job))
+                    )
+                    fallback_jobs_with_records: set[str] = set()
+                    for fallback_job_id in fallback_job_ids:
+                        if not callable(list_by_job):
+                            break
+                        try:
+                            fallback_records = list(list_by_job(fallback_job_id))
+                        except Exception:
+                            declared_job_scan_complete = False
+                            continue
+                        if fallback_records:
+                            fallback_jobs_with_records.add(fallback_job_id)
+                        bucket = snapshot["records_by_job"].setdefault(fallback_job_id, [])
+                        bucket_ids = {
+                            str(getattr(existing, "output_id", "") or "").strip()
+                            for existing in bucket
+                        }
+                        project_record_ids = {
+                            self._output_record_identity(existing)
+                            for existing in project_records
+                            if self._output_record_identity(existing)
+                        }
+                        for fallback_record in fallback_records:
+                            output_id = str(
+                                getattr(fallback_record, "output_id", "") or ""
+                            ).strip()
+                            if output_id and output_id not in bucket_ids:
+                                bucket.append(fallback_record)
+                                bucket_ids.add(output_id)
+                            if output_id and output_id not in project_record_ids:
+                                project_records.append(fallback_record)
+                                project_record_ids.add(output_id)
+                        if not fallback_records:
+                            snapshot["records_by_job"].setdefault(fallback_job_id, [])
+                    home_candidate_job_ids.extend(
+                        job_id
+                        for job_id in fallback_job_ids
+                        if job_id in fallback_jobs_with_records
+                    )
+                    home_candidate_job_ids = list(dict.fromkeys(home_candidate_job_ids))
+                if declared_job_ids:
+                    snapshot["home_candidate_job_ids"][project_id] = home_candidate_job_ids
+                    snapshot["home_declared_job_scan_complete"][project_id] = declared_job_scan_complete
                 # The home count projection reuses this snapshot with the
                 # existing delivery gate. Mark indexed misses as empty so a
                 # count read never falls back to an unbounded per-Job scan.
                 for job_id in declared_job_ids:
                     if job_id:
                         snapshot["records_by_job"].setdefault(job_id, [])
+                snapshot["records_by_project"][project_id] = project_records
                 continue
             candidate_job_ids = declared_job_ids or sorted(indexed_job_ids)
             for job_id in candidate_job_ids:
@@ -2855,6 +3066,7 @@ class V3ProjectModeService:
                 try:
                     job_status = get_job(job_id)
                 except Exception:
+                    snapshot["job_read_failures"].add(job_id)
                     job_status = None
                 snapshot["job_status_by_id"][job_id] = job_status
                 if job_status is None:
@@ -2865,6 +3077,7 @@ class V3ProjectModeService:
                 try:
                     job_record = get_job_record(job_id)
                 except Exception:
+                    snapshot["job_read_failures"].add(job_id)
                     job_record = None
                 snapshot["job_record_by_id"][job_id] = job_record
                 if use_project_index and not candidate_job_outputs_only:
@@ -10919,6 +11132,7 @@ class V3ProjectModeService:
         output_records_by_job: dict[str, list[Any]] | None = None,
         job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
         job_record_by_id: dict[str, Any] | None = None,
+        job_read_failures: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Return generated pixels kept for project review, never delivery.
 
@@ -10943,6 +11157,7 @@ class V3ProjectModeService:
             output_records_by_job=output_records_by_job,
             job_status_by_id=job_status_by_id,
             job_record_by_id=job_record_by_id,
+            job_read_failures=job_read_failures,
         )
         final_items = self._project_output_items(
             project,
@@ -10953,6 +11168,7 @@ class V3ProjectModeService:
             output_records_by_job=output_records_by_job,
             job_status_by_id=job_status_by_id,
             job_record_by_id=job_record_by_id,
+            job_read_failures=job_read_failures,
         )
         final_ids = {
             self._public_project_output_identity(item)
@@ -11000,6 +11216,160 @@ class V3ProjectModeService:
             if len(review_items) >= max(1, int(limit or 60)):
                 break
         return review_items
+
+    def _project_home_review_projection_project(
+        self,
+        project: ProjectRecord,
+        project_records: list[Any] | None,
+        *,
+        candidate_job_ids: list[str] | None = None,
+    ) -> ProjectRecord:
+        """Limit the home review pass to declared Jobs with indexed pixels.
+
+        ``ProjectRecord.job_ids`` remains the membership authority.  The
+        output project index only narrows that declared set for a read-only
+        home request, so stale Jobs without output records cannot make the
+        review summary walk large or missing Job files.  Output-only legacy
+        projects intentionally remain on the separate history adapter.
+        """
+
+        declared_job_ids = [
+            str(job_id or "").strip()
+            for job_id in (getattr(project, "job_ids", []) or [])
+            if str(job_id or "").strip()
+        ]
+        if not declared_job_ids:
+            return project
+        candidate_job_ids = (
+            list(candidate_job_ids)
+            if candidate_job_ids is not None
+            else self._project_home_candidate_job_ids(project, project_records)
+        )
+        model_copy = getattr(project, "model_copy", None)
+        if not callable(model_copy):
+            return project
+        return model_copy(update={"job_ids": candidate_job_ids}, deep=False)
+
+    def _project_home_candidate_job_ids(
+        self,
+        project: ProjectRecord,
+        project_records: list[Any] | None,
+        *,
+        candidate_job_ids: list[str] | None = None,
+    ) -> list[str]:
+        """Return output-bearing Job ids in the existing newest-first order.
+
+        Declared project membership remains authoritative.  The indexed
+        records only narrow the read to Jobs that can contribute a pixel; the
+        returned list keeps the persisted chronological order because the
+        shared output projection iterates it in reverse.
+        """
+
+        indexed_records = self._project_indexed_output_records(project, project_records)
+        indexed_job_ids = {
+            str(getattr(record, "job_id", "") or "").strip()
+            for record in indexed_records
+            if str(getattr(record, "job_id", "") or "").strip()
+        }
+        declared_job_ids = [
+            str(job_id or "").strip()
+            for job_id in (getattr(project, "job_ids", []) or [])
+            if str(job_id or "").strip()
+        ]
+        if declared_job_ids:
+            if candidate_job_ids is not None:
+                allowed_job_ids = {
+                    str(job_id or "").strip()
+                    for job_id in candidate_job_ids
+                    if str(job_id or "").strip()
+                }
+                return [
+                    job_id
+                    for job_id in declared_job_ids
+                    if job_id in allowed_job_ids
+                ]
+            return [job_id for job_id in declared_job_ids if job_id in indexed_job_ids]
+        return self._project_indexed_job_ids(project, indexed_records)
+
+    def _project_home_bounded_candidate_job_ids(
+        self,
+        project: ProjectRecord,
+        project_records: list[Any] | None,
+        candidate_job_ids: list[str] | None,
+        *,
+        limit: int = _HOME_PREVIEW_MAX_JOB_STATES,
+    ) -> list[str]:
+        """Choose one newest-first bounded Job set for every home projection.
+
+        Home cover, formal-count probing, review probing, and the legacy
+        history adapter must not each choose their own candidate window.  The
+        shared window is only a read locator; formal/review/history predicates
+        still decide the public classification.
+        """
+
+        allowed_job_ids = {
+            str(job_id or "").strip()
+            for job_id in (candidate_job_ids or [])
+            if str(job_id or "").strip()
+        }
+        if not allowed_job_ids:
+            return []
+        newest_by_job: dict[str, str] = {}
+        for record in list(project_records or []):
+            job_id = str(getattr(record, "job_id", "") or "").strip()
+            if not job_id or job_id not in allowed_job_ids:
+                continue
+            created_at = str(getattr(record, "created_at", "") or "")
+            if created_at > newest_by_job.get(job_id, ""):
+                newest_by_job[job_id] = created_at
+        bounded_limit = max(1, int(limit or _HOME_PREVIEW_MAX_JOB_STATES))
+        return [
+            job_id
+            for job_id, _created_at in sorted(
+                newest_by_job.items(),
+                key=lambda entry: (entry[1], entry[0]),
+                reverse=True,
+            )[:bounded_limit]
+        ]
+
+    @staticmethod
+    def _home_review_preview_item(item: dict[str, Any]) -> dict[str, Any] | None:
+        """Project one review pixel into a display-only home cover.
+
+        Review metadata is intentionally not copied into the home response.
+        The explicit project read remains the only surface for review details;
+        this compact pointer exists solely to make a non-empty card
+        discoverable without promoting it to formal delivery.
+        """
+
+        if not isinstance(item, dict):
+            return None
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        project_id = str(item.get("project_id") or metadata.get("project_id") or "").strip()
+        output_id = str(item.get("output_id") or "").strip()
+        thumbnail_url = str(
+            item.get("thumbnail_url")
+            or item.get("preview_url")
+            or item.get("download_url")
+            or ""
+        ).strip()
+        if not project_id or not output_id or not thumbnail_url:
+            return None
+        return {
+            "project_id": project_id,
+            "output_id": output_id,
+            "job_id": str(item.get("job_id") or "").strip() or None,
+            "thumbnail_url": thumbnail_url,
+            "preview_url": str(item.get("preview_url") or thumbnail_url).strip(),
+            "created_at": item.get("created_at"),
+            "review_only": True,
+            "metadata": {
+                "project_id": project_id,
+                "review_only": True,
+                "home_review_preview": True,
+                "display_only_project_cover": True,
+            },
+        }
 
     def _ecommerce_project_view(self, project: ProjectRecord) -> dict[str, Any]:
         """Build the Doc263 public read model from Project Mode-owned records."""
@@ -11649,6 +12019,7 @@ class V3ProjectModeService:
         output_records_by_job: dict[str, list[Any]] | None = None,
         job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
         job_record_by_id: dict[str, Any] | None = None,
+        job_read_failures: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Expose readable output-only legacy pixels as non-delivery history.
 
@@ -11679,6 +12050,7 @@ class V3ProjectModeService:
                 output_records_by_job=output_records_by_job,
                 job_status_by_id=job_status_by_id,
                 job_record_by_id=job_record_by_id,
+                job_read_failures=job_read_failures,
             )
         formal_ids = {
             self._public_project_output_identity(item)
@@ -11750,6 +12122,7 @@ class V3ProjectModeService:
         output_records_by_job: dict[str, list[Any]] | None = None,
         job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
         job_record_by_id: dict[str, Any] | None = None,
+        job_read_failures: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None:
@@ -11765,6 +12138,8 @@ class V3ProjectModeService:
                 try:
                     job_status = self.product_service.get_job(clean_job_id)
                 except Exception:
+                    if job_read_failures is not None:
+                        job_read_failures.add(clean_job_id)
                     if job_status_by_id is not None:
                         job_status_by_id[clean_job_id] = None
                     continue
@@ -11782,6 +12157,8 @@ class V3ProjectModeService:
                 try:
                     job_record = self.product_service.get_job_record(clean_job_id)
                 except Exception:
+                    if job_read_failures is not None:
+                        job_read_failures.add(clean_job_id)
                     job_record = None
                 if job_record_by_id is not None:
                     job_record_by_id[clean_job_id] = job_record
@@ -11810,6 +12187,8 @@ class V3ProjectModeService:
                     if output_records_by_job is not None:
                         output_records_by_job[clean_job_id] = list(records)
             except Exception:
+                if job_read_failures is not None:
+                    job_read_failures.add(clean_job_id)
                 continue
             job_visible = self._project_job_record_visible_to_owner(
                 project,
@@ -12144,6 +12523,7 @@ class V3ProjectModeService:
         output_records_by_job: dict[str, list[Any]] | None = None,
         job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
         job_record_by_id: dict[str, Any] | None = None,
+        job_read_failures: set[str] | None = None,
     ) -> int | None:
         """Count formal delivery outputs without inventing a second gate.
 
@@ -12208,6 +12588,7 @@ class V3ProjectModeService:
             output_records_by_job=records_by_job,
             job_status_by_id=job_status_by_id,
             job_record_by_id=job_record_by_id,
+            job_read_failures=job_read_failures,
         )
         return len(visible_items)
 
@@ -12222,6 +12603,9 @@ class V3ProjectModeService:
         output_records_by_job: dict[str, list[Any]] | None = None,
         job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
         job_record_by_id: dict[str, Any] | None = None,
+        job_read_failures: set[str] | None = None,
+        candidate_job_limit: int | None = None,
+        home_candidate_job_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Find one newest project output without scanning every project Job.
 
@@ -12242,25 +12626,37 @@ class V3ProjectModeService:
                 return []
         else:
             records = list(project_records)
-        allowed_job_ids = set(self._project_indexed_job_ids(project, records))
-        newest_by_job: dict[str, str] = {}
-        for record in records:
-            job_id = str(getattr(record, "job_id", "") or "").strip()
-            if not job_id or job_id not in allowed_job_ids:
-                continue
-            created_at = str(getattr(record, "created_at", "") or "")
-            if created_at > newest_by_job.get(job_id, ""):
-                newest_by_job[job_id] = created_at
-        if not newest_by_job:
+        if home_candidate_job_ids is not None:
+            candidate_job_ids = list(dict.fromkeys(
+                str(job_id or "").strip()
+                for job_id in home_candidate_job_ids
+                if str(job_id or "").strip()
+            ))
+        else:
+            allowed_job_ids = set(self._project_indexed_job_ids(project, records))
+            newest_by_job: dict[str, str] = {}
+            for record in records:
+                job_id = str(getattr(record, "job_id", "") or "").strip()
+                if not job_id or job_id not in allowed_job_ids:
+                    continue
+                created_at = str(getattr(record, "created_at", "") or "")
+                if created_at > newest_by_job.get(job_id, ""):
+                    newest_by_job[job_id] = created_at
+            if not newest_by_job:
+                return []
+            candidate_job_ids = [
+                job_id
+                for job_id, _created_at in sorted(
+                    newest_by_job.items(),
+                    key=lambda entry: (entry[1], entry[0]),
+                    reverse=True,
+                )
+            ]
+            if candidate_job_limit is not None:
+                bounded_candidate_limit = max(1, int(candidate_job_limit or 1))
+                candidate_job_ids = candidate_job_ids[:bounded_candidate_limit]
+        if not candidate_job_ids:
             return []
-        candidate_job_ids = [
-            job_id
-            for job_id, _created_at in sorted(
-                newest_by_job.items(),
-                key=lambda entry: (entry[1], entry[0]),
-                reverse=True,
-            )
-        ]
         # ``_project_output_items`` preserves the Project record's historical
         # oldest-to-newest order by iterating ``project.job_ids`` in reverse.
         # Keep that invariant here so a stale legacy job cannot run before the
@@ -12276,6 +12672,8 @@ class V3ProjectModeService:
             snapshot_kwargs["job_status_by_id"] = job_status_by_id
         if job_record_by_id is not None:
             snapshot_kwargs["job_record_by_id"] = job_record_by_id
+        if job_read_failures is not None:
+            snapshot_kwargs["job_read_failures"] = job_read_failures
         return self._project_output_items(
             preview_project,
             limit=min(max(1, int(limit or 1)), 1),

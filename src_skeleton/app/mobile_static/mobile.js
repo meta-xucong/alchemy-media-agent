@@ -3532,6 +3532,19 @@ function mergeMobileV3ProjectItems(primaryItems, fallbackItems) {
         merged.history_output_count = cached.history_output_count;
         merged.history_output_count_known = true;
       }
+      if (cached.review_output_count_known === true && item.review_output_count_known !== true) {
+        merged.review_output_count = cached.review_output_count;
+        merged.review_output_count_known = true;
+      }
+      const cachedReviewThumbnails = Array.isArray(cached.latest_review_thumbnail_urls)
+        ? cached.latest_review_thumbnail_urls.filter(Boolean)
+        : [];
+      const incomingReviewThumbnails = Array.isArray(item.latest_review_thumbnail_urls)
+        ? item.latest_review_thumbnail_urls.filter(Boolean)
+        : [];
+      if (!incomingReviewThumbnails.length && cachedReviewThumbnails.length) {
+        merged.latest_review_thumbnail_urls = cachedReviewThumbnails;
+      }
       return merged;
     });
 }
@@ -3576,8 +3589,14 @@ async function loadMobileV3HomePreviews(projectIds, { append = false } = {}) {
   mobileV3State.outputs = appendItems
     ? mergeMobileV3HomePreviewItems(mobileV3State.outputs, displayItems)
     : displayItems;
-  syncMobileV3HomeProjectCounts(payload?.project_output_counts);
-  syncMobileV3HomeProjectHistoryCounts(payload?.project_history_counts);
+  syncMobileV3HomeProjectProjection({
+    projectIds: requestedProjectIds,
+    formalCounts: payload?.project_output_counts,
+    historyCounts: payload?.project_history_counts,
+    reviewCounts: payload?.project_review_counts,
+    displayItems,
+    reviewPreviewItems: payload?.project_review_preview_items,
+  });
   mobileV3State.reviewOutputs = [];
   mobileV3State.previewProjectIds = new Set(
     mobileV3State.outputs
@@ -3623,6 +3642,127 @@ function syncMobileV3HomeProjectHistoryCounts(counts) {
     };
   });
   if (changed) persistMobileV3Caches();
+}
+
+function syncMobileV3HomeProjectReviewCounts(counts) {
+  if (!counts || typeof counts !== "object" || !Array.isArray(mobileV3State.projects)) return;
+  let changed = false;
+  mobileV3State.projects = mobileV3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    if (!projectId || !Object.prototype.hasOwnProperty.call(counts, projectId)) return project;
+    const value = Number(counts[projectId]);
+    if (!Number.isFinite(value) || value < 0) return project;
+    changed = true;
+    return {
+      ...project,
+      review_output_count: Math.floor(value),
+      review_output_count_known: true,
+      // The response evaluated this project.  Drop stale review artwork;
+      // the cover sync below will attach the current safe pointer if any.
+      latest_review_thumbnail_urls: [],
+    };
+  });
+  if (changed) persistMobileV3Caches();
+}
+
+function syncMobileV3HomeProjectReviewCovers(items) {
+  if (!Array.isArray(items) || !Array.isArray(mobileV3State.projects)) return;
+  const covers = new Map();
+  items.forEach((item) => {
+    const projectId = String(item?.project_id || item?.metadata?.project_id || "").trim();
+    const thumbnail = item?.thumbnail_url || item?.metadata?.thumbnail_url
+      || item?.preview_url || item?.metadata?.preview_url || "";
+    if (!projectId || !thumbnail || covers.has(projectId)) return;
+    covers.set(projectId, thumbnail);
+  });
+  if (!covers.size) return;
+  mobileV3State.projects = mobileV3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    const thumbnail = covers.get(projectId);
+    if (!thumbnail) return project;
+    return { ...project, latest_review_thumbnail_urls: [thumbnail] };
+  });
+  persistMobileV3Caches();
+}
+
+function syncMobileV3HomeProjectProjection({
+  projectIds = null,
+  formalCounts = null,
+  historyCounts = null,
+  reviewCounts = null,
+  displayItems = [],
+  reviewPreviewItems = [],
+} = {}) {
+  if (!Array.isArray(mobileV3State.projects)) return;
+  const displayCovers = new Map();
+  const reviewCovers = new Map();
+  const collectCovers = (items, target) => {
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      const projectId = String(item?.project_id || item?.metadata?.project_id || "").trim();
+      const thumbnail = item?.thumbnail_url || item?.metadata?.thumbnail_url
+        || item?.preview_url || item?.metadata?.preview_url || "";
+      if (projectId && thumbnail && !target.has(projectId)) target.set(projectId, thumbnail);
+    });
+  };
+  collectCovers(displayItems, displayCovers);
+  collectCovers(reviewPreviewItems, reviewCovers);
+  const targetIds = new Set(
+    Array.isArray(projectIds)
+      ? projectIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : [
+          ...Object.keys(formalCounts || {}),
+          ...Object.keys(historyCounts || {}),
+          ...Object.keys(reviewCounts || {}),
+          ...displayCovers.keys(),
+          ...reviewCovers.keys(),
+        ],
+  );
+  if (!targetIds.size) return;
+  const readCount = (map, projectId) => {
+    if (!map || typeof map !== "object" || !Object.prototype.hasOwnProperty.call(map, projectId)) {
+      return { known: false, value: 0 };
+    }
+    const value = Number(map[projectId]);
+    return Number.isFinite(value) && value >= 0
+      ? { known: true, value: Math.floor(value) }
+      : { known: false, value: 0 };
+  };
+  mobileV3State.projects = mobileV3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    if (!projectId || !targetIds.has(projectId)) return project;
+    const formal = readCount(formalCounts, projectId);
+    const history = readCount(historyCounts, projectId);
+    const review = readCount(reviewCounts, projectId);
+    return {
+      ...project,
+      visible_output_count: formal.value,
+      visible_output_count_known: formal.known,
+      history_output_count: history.value,
+      history_output_count_known: history.known,
+      review_output_count: review.value,
+      review_output_count_known: review.known,
+      latest_thumbnail_urls: displayCovers.has(projectId) ? [displayCovers.get(projectId)] : [],
+      latest_review_thumbnail_urls: reviewCovers.has(projectId) ? [reviewCovers.get(projectId)] : [],
+      home_preview_stale: false,
+    };
+  });
+  persistMobileV3Caches();
+}
+
+function markMobileV3HomePreviewStale(projectIds = null) {
+  if (!Array.isArray(mobileV3State.projects)) return;
+  const targetIds = new Set(
+    Array.isArray(projectIds)
+      ? projectIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : mobileV3State.projects.map((project) => String(project?.project_id || "").trim()).filter(Boolean),
+  );
+  if (!targetIds.size) return;
+  mobileV3State.projects = mobileV3State.projects.map((project) => (
+    targetIds.has(String(project?.project_id || "").trim())
+      ? { ...project, home_preview_stale: true }
+      : project
+  ));
+  persistMobileV3Caches();
 }
 
 function expandMobileV3ProjectRenderWindow() {
@@ -3837,6 +3977,7 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
         try {
           await loadMobileV3HomePreviews(previewProjectIds, { append: true });
         } catch (error) {
+          markMobileV3HomePreviewStale(previewProjectIds);
           mobileV3State.outputError = friendlyError(error);
           renderMobileV3ProjectCards();
         }
@@ -3845,6 +3986,7 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
       try {
         await loadMobileV3HomePreviews(previewProjectIds);
       } catch (error) {
+        markMobileV3HomePreviewStale(previewProjectIds);
         mobileV3State.outputError = friendlyError(error);
         renderMobileV3ProjectCards();
         updateMobileV3Status(`${mobileV3ProjectCountLabel(projectCount)} · 图片暂时无法读取`);
@@ -4060,7 +4202,10 @@ function mobileV3FailureArtifactExpired(item) {
 }
 
 function mobileV3ExpiredFailureOnlyProject(project) {
-  const thumbnails = Array.isArray(project?.latest_thumbnail_urls) ? project.latest_thumbnail_urls : [];
+  const thumbnails = [
+    ...(Array.isArray(project?.latest_thumbnail_urls) ? project.latest_thumbnail_urls : []),
+    ...(Array.isArray(project?.latest_review_thumbnail_urls) ? project.latest_review_thumbnail_urls : []),
+  ];
   return mobileV3FailureArtifactExpired(project) && !thumbnails.some(Boolean);
 }
 
@@ -4135,9 +4280,10 @@ function mobileV3HistoryOnlyOutputsForProject(projectId) {
 }
 
 function mobileV3GroupFromProject(project, outputGroup = null) {
-  const latestItem = outputGroup?.latestItem || null;
+  const latestItem = outputGroup?.latestItem || mobileV3ProjectThumbnailItem(project);
   const visibleOutputCount = mobileV3ProjectVisibleOutputCount(project);
   const historyOutputCount = mobileV3ProjectHistoryOutputCount(project);
+  const reviewOutputCount = mobileV3ProjectReviewOutputCount(project);
   const previewOnly = mobileV3State.previewProjectIds.has(String(project?.project_id || ""))
     && Boolean(outputGroup?.items?.length);
   return {
@@ -4145,37 +4291,63 @@ function mobileV3GroupFromProject(project, outputGroup = null) {
     project,
     items: outputGroup?.items || [],
     latestItem,
-    latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
+    latestAt: outputGroup?.latestAt || latestItem?.created_at || project.updated_at || project.created_at || "",
     formalCount: Math.max(outputGroup?.formalCount || 0, visibleOutputCount),
     historyCount: Math.max(outputGroup?.historyCount || 0, historyOutputCount),
-    count: Math.max(outputGroup?.count || 0, visibleOutputCount, historyOutputCount),
+    reviewCount: Math.max(outputGroup?.reviewCount || 0, reviewOutputCount),
+    count: Math.max(outputGroup?.count || 0, visibleOutputCount, historyOutputCount, reviewOutputCount),
     previewOnly,
   };
 }
 
 function mobileV3ProjectImageCountLabel(group) {
-  if (mobileV3State.outputError) return "图片暂时无法读取";
   const formalKnown = mobileV3ProjectVisibleOutputCountKnown(group?.project);
   const formalCount = mobileV3ProjectVisibleOutputCount(group?.project);
   const historyCount = mobileV3ProjectHistoryOutputCount(group?.project);
-  const observedFormalCount = Math.max(Number(group?.formalCount || 0), formalCount);
-  const observedHistoryCount = Math.max(Number(group?.historyCount || 0), historyCount);
+  const historyKnown = mobileV3ProjectHistoryOutputCountKnown(group?.project);
+  const reviewKnown = mobileV3ProjectReviewOutputCountKnown(group?.project);
+  const reviewCount = mobileV3ProjectReviewOutputCount(group?.project);
+  const fullSurface = mobileV3State.outputsSurface === "full" && mobileV3State.outputsLoaded;
+  const observedFormalCount = fullSurface
+    ? Math.max(Number(group?.formalCount || 0), formalCount)
+    : (formalKnown ? formalCount : 0);
+  const observedHistoryCount = fullSurface
+    ? Math.max(Number(group?.historyCount || 0), historyCount)
+    : (historyKnown ? historyCount : 0);
+  const observedReviewCount = fullSurface
+    ? Math.max(Number(group?.reviewCount || 0), reviewCount)
+    : (reviewKnown ? reviewCount : 0);
+  const hasKnownCount = formalKnown || historyKnown || reviewKnown;
+  if (group?.project?.home_preview_stale === true) {
+    return "图片暂时无法读取";
+  }
+  if (mobileV3State.outputError && !hasKnownCount) {
+    return "图片暂时无法读取";
+  }
+  const parts = [];
   if (mobileV3State.outputsSurface === "full" && mobileV3State.outputsLoaded) {
-    if (observedFormalCount === 0 && observedHistoryCount > 0) return `${observedHistoryCount} 张历史图片`;
-    if (observedFormalCount > 0 && observedHistoryCount > 0) return `${observedFormalCount} 张图片 · ${observedHistoryCount} 张历史`;
-    if (formalKnown) {
-      return `${formalCount} 张图片`;
+    // A full response can still be page-limited.  Group counts are only the
+    // number currently loaded, not an exact project total, so use them only
+    // when the corresponding server-side count is explicitly known.
+    if (formalKnown && formalCount > 0) parts.push(`${formalCount} 张图片`);
+    if (historyKnown && historyCount > 0) parts.push(`${historyCount} 张历史`);
+    if (reviewKnown && reviewCount > 0) parts.push(`${reviewCount} 张待复核`);
+    const completeCountSet = formalKnown && historyKnown && reviewKnown;
+    if (!completeCountSet) {
+      return parts.length ? `${parts.join(" · ")} · 数量未同步` : "图片数量未同步";
     }
-    if (observedFormalCount > 0) return `${observedFormalCount} 张图片`;
-    return `${Number(group?.count || 0)} 张图片`;
-  }
-  if (formalKnown) {
-    if (observedHistoryCount > 0 && observedFormalCount === 0) return `${observedHistoryCount} 张历史图片`;
-    if (observedHistoryCount > 0 && observedFormalCount > 0) return `${observedFormalCount} 张图片 · ${observedHistoryCount} 张历史`;
+    if (parts.length) return parts.join(" · ");
     return `${formalCount} 张图片`;
-  }
-  if (observedHistoryCount > 0) {
-    return `${observedHistoryCount} 张历史图片`;
+  } else {
+    if (observedFormalCount > 0 || (formalKnown && observedHistoryCount === 0 && observedReviewCount === 0)) {
+      parts.push(`${formalCount || observedFormalCount} 张图片`);
+    }
+    if (observedHistoryCount > 0) parts.push(`${observedHistoryCount} 张历史图片`);
+    if (observedReviewCount > 0) {
+      parts.push(parts.length ? `${observedReviewCount} 张待复核` : `${observedReviewCount} 张待复核图片`);
+    }
+    if (parts.length) return parts.join(" · ");
+    if (formalKnown) return `${formalCount} 张图片`;
   }
   if (group?.previewOnly && group?.items?.length) {
     return "已有封面 · 数量同步中";
@@ -4190,8 +4362,13 @@ function mobileV3ProjectVisibleOutputCount(project) {
 }
 
 function mobileV3ProjectVisibleOutputCountKnown(project) {
-  return project?.visible_output_count_known === true
-    || project?.memory_summary?.visible_output_count_known === true;
+  const hasDirectValue = Boolean(
+    project
+    && Object.prototype.hasOwnProperty.call(project, "visible_output_count_known"),
+  );
+  return hasDirectValue
+    ? project.visible_output_count_known === true
+    : project?.memory_summary?.visible_output_count_known === true;
 }
 
 function mobileV3ProjectHistoryOutputCount(project) {
@@ -4201,8 +4378,29 @@ function mobileV3ProjectHistoryOutputCount(project) {
 }
 
 function mobileV3ProjectHistoryOutputCountKnown(project) {
-  return project?.history_output_count_known === true
-    || project?.memory_summary?.history_output_count_known === true;
+  const hasDirectValue = Boolean(
+    project
+    && Object.prototype.hasOwnProperty.call(project, "history_output_count_known"),
+  );
+  return hasDirectValue
+    ? project.history_output_count_known === true
+    : project?.memory_summary?.history_output_count_known === true;
+}
+
+function mobileV3ProjectReviewOutputCount(project) {
+  const raw = project?.review_output_count ?? project?.memory_summary?.review_output_count;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function mobileV3ProjectReviewOutputCountKnown(project) {
+  const hasDirectValue = Boolean(
+    project
+    && Object.prototype.hasOwnProperty.call(project, "review_output_count_known"),
+  );
+  return hasDirectValue
+    ? project.review_output_count_known === true
+    : project?.memory_summary?.review_output_count_known === true;
 }
 
 function mobileV3ProjectGroupsFromProjects() {
@@ -4248,11 +4446,16 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
   visibleGroups.forEach((group) => {
     const project = group.project;
     const finalOutputs = group.items;
-    const latest = group.latestItem || finalOutputs[0] || mobileV3SummaryThumbOutputs(project)[0] || null;
+    const latest = group.latestItem
+      || finalOutputs[0]
+      || mobileV3ProjectThumbnailItem(project)
+      || (mobileV3ProjectHomeThumbnailUrls(project).length ? mobileV3SummaryThumbOutputs(project)[0] : null)
+      || null;
     const thumb = deferImages ? "" : mobileV3HomeThumbUrl(latest) || "";
     const visualCount = Math.max(
       Number(group.formalCount || 0),
       Number(group.historyCount || 0),
+      Number(group.reviewCount || 0),
       Number(group.count || 0),
       finalOutputs.length,
     );
@@ -7260,6 +7463,55 @@ function mobileV3SummaryThumbOutputs(project) {
     created_at: project?.updated_at || project?.created_at || "",
     metadata: { summary_only: true },
   }));
+}
+
+function mobileV3ProjectThumbnailItem(project) {
+  const thumbnails = mobileV3ProjectHomeThumbnailUrls(project);
+  const formalThumbnails = mobileV3ProjectHomeFormalThumbnailUrls(project);
+  const reviewThumbnails = Array.isArray(project?.latest_review_thumbnail_urls)
+    ? project.latest_review_thumbnail_urls.filter(Boolean)
+    : [];
+  const reviewOnly = !formalThumbnails.length && reviewThumbnails.length > 0;
+  const thumbnailUrl = thumbnails[0] || "";
+  if (!thumbnailUrl) return null;
+  return {
+    project_id: project.project_id,
+    project_title: mobileV3ProjectTitle(project),
+    project_goal: mobileV3ProjectGoal(project),
+    template_id: project?.primary_template_id || project?.template_id || "general_template",
+    thumbnail_url: thumbnailUrl,
+    preview_url: thumbnailUrl,
+    download_url: thumbnailUrl,
+    created_at: project.updated_at || project.created_at || "",
+    updated_at: project.updated_at || project.created_at || "",
+    ...(reviewOnly ? { review_only: true } : {}),
+    metadata: {
+      project_id: project.project_id,
+      template_id: project?.primary_template_id || project?.template_id || "general_template",
+      thumbnail_url: thumbnailUrl,
+      display_only_project_cover: true,
+      ...(reviewOnly ? { review_only: true, home_review_preview: true } : {}),
+    },
+  };
+}
+
+function mobileV3ProjectHomeFormalThumbnailUrls(project) {
+  const thumbnails = Array.isArray(project?.latest_thumbnail_urls)
+    ? project.latest_thumbnail_urls.filter(Boolean)
+    : [];
+  const formalEmpty = mobileV3ProjectVisibleOutputCountKnown(project)
+    && mobileV3ProjectVisibleOutputCount(project) === 0
+    && mobileV3ProjectHistoryOutputCountKnown(project)
+    && mobileV3ProjectHistoryOutputCount(project) === 0;
+  return formalEmpty ? [] : thumbnails;
+}
+
+function mobileV3ProjectHomeThumbnailUrls(project) {
+  const formalThumbnails = mobileV3ProjectHomeFormalThumbnailUrls(project);
+  const reviewThumbnails = Array.isArray(project?.latest_review_thumbnail_urls)
+    ? project.latest_review_thumbnail_urls.filter(Boolean)
+    : [];
+  return [...formalThumbnails, ...reviewThumbnails];
 }
 
 function mobileV3ProjectTitle(project) {

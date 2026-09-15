@@ -144,12 +144,15 @@ explicit gallery still rendered an empty state.
 
 The authority decision is unchanged: `items` remains formal delivery,
 `history_items` remains legacy history-only output, and `review_items` remains
-non-delivery review evidence. Home first paint must stay formal-only and
-review-free. The minimal complete correction is for the explicit project
-history modal to merge safe, image-bearing review items after its scoped full
-read, label them as review-only, and keep them outside formal counts,
-selection, continuation, and home-preview projections. This makes the
-existing image inspectable without silently promoting a withheld result.
+non-delivery review evidence. The formal home-preview collection remains
+review-free. Doc313 supersedes only the earlier home-presentation wording:
+the home card may now add one safe, display-only review cover and an explicit
+`待复核` count after the bounded home read, while keeping that pointer outside
+formal items, history items, selection, continuation, and provider input
+resolution. The minimal complete correction for the explicit project history
+modal remains to merge safe, image-bearing review items after its scoped full
+read and label them as review-only. This makes the existing image
+inspectable and discoverable without silently promoting a withheld result.
 
 ### 3.5 Stale project-history request failure correction model
 
@@ -184,8 +187,9 @@ authority once and does not change output authorization or delivery status.
    reads; retain full record parsing and exact field filters after candidate
    selection.
 7. Merge review-only output pointers into the explicit desktop project history
-   modal only after the scoped full read; preserve the formal/history/home
-   separation and review-only labeling.
+   modal only after the scoped full read, and expose only the bounded,
+   display-only review cover/count allowed by Doc313 on the home card;
+   preserve the formal/history/home separation and review-only labeling.
 8. Guard both stale success and stale failure callbacks from a previous
    project-history modal session; add deterministic regression coverage for
    both orderings.
@@ -255,8 +259,8 @@ and the final audit/coverage commit `ea0483832404adf75ba5aa94c7f545f935b50c33`.
   loaded their actual images; the professional workspace loaded its project
   after paging. The forced stale-failure race aborted the old request and
   still rendered project B's 9/9 images with no page errors.
-- Product meaning: a home card showing `0 张图片` for a review-only legacy
-  project means zero formal delivery images in the home contract, not that the
-  stored review pixels are inaccessible. The explicit “查看图片” modal now
-  exposes those pixels with a `待复核` label and never promotes them to formal
-  delivery.
+- Product meaning: a review-only legacy project still has zero formal delivery
+  images in the home contract, but its card now says `N 张待复核图片` and can
+  show one display-only cover rather than presenting a misleading bare
+  `0 张图片`. The explicit “查看图片” modal exposes those pixels with a
+  `待复核` label and never promotes them to formal delivery.

@@ -1,6 +1,8 @@
 # Doc310 - V3 Home Project Image Count Synchronization Repair
 
-Status: implemented, audited, and locally accepted. This document freezes the
+Status: implemented, audited, and locally accepted. Doc313 supersedes only the
+home-card presentation portion of this contract; formal count authority and
+delivery semantics remain here. This document freezes the
 correction model for the V3 home regression where project cards can show a
 valid cover but do not show the project's formal image count, while other
 projects show a stale or unsynchronized count.
@@ -34,7 +36,9 @@ This repair does not change Brain, Provider, Review, Retry, generation,
 output retention, project ownership, media authorization, V2 behavior,
 professional asset semantics, or the meaning of formal final delivery.
 It does not make the home preview a full gallery and does not use review-only
-or process-only images in the count.
+or process-only images in the formal count. Doc313 may expose a separately
+labeled display-only review count and cover without changing that formal
+count.
 
 ## 2. Observed mismatch and root cause
 
@@ -69,7 +73,8 @@ index/read cannot be evaluated does not receive a count entry.
 The count is a read-only projection. It does not reconcile or mutate the
 project, Job, output, review, or selection stores. The response remains
 `complete=false` for gallery/history purposes even when a per-project count is
-known. The existing one-cover preview behavior remains unchanged.
+known. The formal one-cover preview behavior remains unchanged; Doc313 adds a
+separate review-only cover slot.
 
 ### 3.2 Explicit count completeness
 

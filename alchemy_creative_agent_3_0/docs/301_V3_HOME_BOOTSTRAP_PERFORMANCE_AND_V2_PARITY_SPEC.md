@@ -86,7 +86,11 @@ additive global read surface. It returns at most the requested number of
 formal delivery preview items, respects authenticated project visibility,
 returns no `review_items`, performs no reconciliation, and uses the existing
 delivery predicates after using the output store's project index as a
-candidate locator. Its `complete=false` marker is authoritative for the
+candidate locator. Doc313 additionally permits a bounded
+`project_review_counts` map and one explicitly marked, display-only
+`project_review_preview_items` cover per evaluated project. Those fields do
+not enter `items`, formal counts, complete-history semantics, selection, or
+continuation. Its `complete=false` marker remains authoritative for the
 browser: a cover is never counted or labeled as the project's complete
 history. Opening a project history view must request the project-scoped full
 output surface, even when a home cover is already present. The ordinary
