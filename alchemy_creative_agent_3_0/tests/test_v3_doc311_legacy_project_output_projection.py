@@ -218,7 +218,7 @@ def test_ownerless_legacy_job_and_output_can_use_exact_owned_project_scope(tmp_p
     product_service = SimpleNamespace(
         get_job=lambda job_id: SimpleNamespace(metadata={}, status="generated"),
         get_job_record=lambda job_id: SimpleNamespace(
-            request=SimpleNamespace(metadata={"project_id": project_id}),
+            request=SimpleNamespace(metadata={}),
         ),
         output_store=output_store,
     )

@@ -46,9 +46,12 @@ ownerless legacy Job when all of the following are true:
 - the output has a non-empty exact `metadata.project_id` link;
 - that project exists and its owner exactly matches the authenticated user.
 
-When a Job-level check is required, the Job owner field must likewise be
-absent, null, or empty and its request metadata must carry the same exact
-project link. An explicit Job owner remains authoritative.
+When a Job-level check is required, an explicit Job owner remains
+authoritative. For an ownerless legacy Job, either its request metadata must
+carry the same exact project link, or the Job must be a persisted member of the
+visible project's `job_ids` and the output being read must be ownerless with
+the same exact project link. This second proof is evaluated only after the
+Job's outputs are loaded and only for the project-scoped output read.
 
 An explicit output owner remains authoritative. A foreign explicit owner,
 malformed non-empty owner value, missing project link, missing project, or
@@ -68,7 +71,7 @@ legacy output owner absent
 project-scoped compatibility visibility
 
 legacy Job owner absent
-        │ exact project_id + visible project owner
+        │ exact project_id, or declared project Job + exact ownerless output link
         ▼
 project-scoped Job visibility for that output read
 ```

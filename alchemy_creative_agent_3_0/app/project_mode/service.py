@@ -11730,7 +11730,17 @@ class V3ProjectModeService:
                         output_records_by_job[clean_job_id] = list(records)
             except Exception:
                 continue
-            if not self._project_job_record_visible_to_owner(project, job_record, owner_user_id):
+            job_visible = self._project_job_record_visible_to_owner(
+                project,
+                job_record,
+                owner_user_id,
+            )
+            if not job_visible and not self._project_job_owner_gap_can_use_project_output_scope(
+                project,
+                job_record,
+                records,
+                owner_user_id,
+            ):
                 continue
             delivery = self._delivery_annotations_for_records(
                 records,
@@ -12602,6 +12612,41 @@ class V3ProjectModeService:
             return False
         project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
         return project_owner_id == owner_user_id
+
+    def _project_job_owner_gap_can_use_project_output_scope(
+        self,
+        project: ProjectRecord,
+        record: Any,
+        output_records: list[Any],
+        owner_user_id: int | None,
+    ) -> bool:
+        """Recover a legacy Job owner gap only for linked project outputs.
+
+        A legacy Job may have neither an owner nor a project field even though
+        it is persisted in the visible project's ``job_ids`` and its output
+        record carries the exact project link.  The project membership plus
+        output link is sufficient for this already project-scoped read, but
+        never becomes a generic Job authorization fallback.
+        """
+
+        if owner_user_id is None or record is None:
+            return True
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", None) or {})
+        raw_job_owner = metadata.get("veyra_user_id")
+        if raw_job_owner is not None and str(raw_job_owner).strip():
+            return False
+        project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
+        if project_owner_id != owner_user_id:
+            return False
+        project_id = str(project.project_id or "").strip()
+        for output_record in output_records:
+            output_metadata = dict(getattr(output_record, "metadata", None) or {})
+            raw_output_owner = output_metadata.get("veyra_user_id")
+            if raw_output_owner is not None and str(raw_output_owner).strip():
+                continue
+            if str(output_metadata.get("project_id") or "").strip() == project_id:
+                return True
+        return False
 
     def _uploaded_reference_visible_to_owner(
         self,
