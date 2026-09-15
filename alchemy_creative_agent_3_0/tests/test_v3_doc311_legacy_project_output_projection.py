@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from playwright.sync_api import sync_playwright
 
@@ -160,6 +161,97 @@ def test_legacy_history_respects_project_and_output_owner_boundary(tmp_path: Pat
 
     assert response["items"] == []
     assert response["history_items"] == []
+
+
+def test_ownerless_legacy_output_inherits_exact_owned_project_visibility(tmp_path: Path) -> None:
+    service, project, record = _service_with_legacy_output(
+        tmp_path,
+        output_owner_user_id=None,
+    )
+
+    owned = service.list_project_outputs(
+        project_id=project.project_id,
+        owner_user_id=7,
+        compact=True,
+    )
+    foreign = service.list_project_outputs(
+        project_id=project.project_id,
+        owner_user_id=99,
+        compact=True,
+    )
+
+    assert [item["output_id"] for item in owned["history_items"]] == [record.output_id]
+    assert foreign["items"] == []
+    assert foreign["history_items"] == []
+
+
+def test_ownerless_closed_legacy_output_can_reuse_formal_gate_for_owned_project(tmp_path: Path) -> None:
+    service, project, record = _service_with_legacy_output(
+        tmp_path,
+        output_owner_user_id=None,
+        closed=True,
+    )
+
+    response = service.list_project_outputs(
+        project_id=project.project_id,
+        owner_user_id=7,
+        compact=True,
+    )
+
+    assert [item["output_id"] for item in response["items"]] == [record.output_id]
+    assert response["history_items"] == []
+
+
+def test_ownerless_legacy_job_and_output_can_use_exact_owned_project_scope(tmp_path: Path) -> None:
+    project_id = "project_ownerless_legacy_scope"
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = output_store.save_base64_output(
+        job_id="job_ownerless_legacy_scope",
+        candidate_id="candidate_ownerless_legacy_scope",
+        asset_id="asset_ownerless_legacy_scope",
+        provider="fixture_provider",
+        model="fixture_model",
+        encoded_image=_ONE_PIXEL_PNG,
+        output_id="v3_output_00000000000000000004",
+        metadata={"project_id": project_id},
+    )
+    product_service = SimpleNamespace(
+        get_job=lambda job_id: SimpleNamespace(metadata={}, status="generated"),
+        get_job_record=lambda job_id: SimpleNamespace(
+            request=SimpleNamespace(metadata={"project_id": project_id}),
+        ),
+        output_store=output_store,
+    )
+    project_store = InMemoryProjectStore()
+    service = V3ProjectModeService(product_service=product_service, project_store=project_store)
+    project = ProjectRecord(
+        project_id=project_id,
+        title="Ownerless legacy scope",
+        user_goal="Keep the owned legacy image visible.",
+        short_summary="Keep the owned legacy image visible.",
+        job_ids=[record.job_id],
+        created_at="2026-09-01T00:00:00+00:00",
+        updated_at="2026-09-14T00:00:00+00:00",
+        metadata={"veyra_user_id": 7},
+    )
+    project_store.save_project(project)
+    service._selected_output_state_map = lambda value: {}
+    service._job_delivery_is_settled = lambda value: True
+    service._public_output_review_projection = lambda *args: {}
+    service._review_projection_allows_project_delivery = lambda value: True
+    service._canonical_final_delivery_output_ids = lambda value: set()
+    service._delivery_annotations_for_records = lambda records, **_kwargs: {
+        item.output_id: {"delivery_state": "final_delivery"}
+        for item in records
+    }
+    service._output_item_from_record = lambda project, item, state, **kwargs: {
+        "output_id": item.output_id,
+        "project_id": project.project_id,
+    }
+
+    items = service._project_output_items(project, owner_user_id=7)
+
+    assert items == [{"output_id": record.output_id, "project_id": project.project_id}]
 
 
 def test_explicit_project_job_recovery_remains_review_only(tmp_path: Path) -> None:

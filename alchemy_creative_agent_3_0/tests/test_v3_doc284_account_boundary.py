@@ -8,7 +8,7 @@ import app.main as main_module
 from app.config import settings
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue, V3JobHistoryItem
-from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputRecord
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputRecord, V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.schemas.models import CommercialAssetPack, PackagedAsset, PlanningResult
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
@@ -65,6 +65,85 @@ def test_authenticated_upload_visibility_rejects_foreign_and_ownerless_records(m
         with pytest.raises(HTTPException) as exc_info:
             main_module._require_v3_uploaded_asset_visible(_request(), "asset_foreign")
         assert exc_info.value.status_code == 404
+
+
+def test_authenticated_v3_output_route_reads_ownerless_legacy_files_through_owned_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "veyra_auth_enabled", True)
+    monkeypatch.setattr(main_module, "_veyra_user_id_from_request", lambda request, authorization: 101)
+    output_store = V3GeneratedOutputStore(tmp_path / "v3_outputs")
+    owned_project = ProjectRecord(
+        project_id="project_legacy_owned",
+        title="Owned legacy project",
+        user_goal="Read legacy pixels",
+        short_summary="Read legacy pixels",
+        created_at="2026-08-30T00:00:00+00:00",
+        updated_at="2026-08-30T00:00:00+00:00",
+        metadata={"veyra_user_id": 101},
+    )
+    legacy_record = output_store.save_base64_output(
+        job_id="job_legacy_owned",
+        candidate_id="candidate_legacy_owned",
+        asset_id="asset_legacy_owned",
+        provider="test",
+        model="test",
+        encoded_image=(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ),
+        output_id="v3_output_aaaaaaaaaaaaaaaaaaaa",
+        metadata={"project_id": owned_project.project_id},
+    )
+    foreign_record = output_store.save_base64_output(
+        job_id="job_legacy_foreign",
+        candidate_id="candidate_legacy_foreign",
+        asset_id="asset_legacy_foreign",
+        provider="test",
+        model="test",
+        encoded_image=(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ),
+        output_id="v3_output_bbbbbbbbbbbbbbbbbbbb",
+        metadata={"project_id": owned_project.project_id, "veyra_user_id": 202},
+    )
+    ownerless_unlinked = output_store.save_base64_output(
+        job_id="job_legacy_unlinked",
+        candidate_id="candidate_legacy_unlinked",
+        asset_id="asset_legacy_unlinked",
+        provider="test",
+        model="test",
+        encoded_image=(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ),
+        output_id="v3_output_cccccccccccccccccccc",
+        metadata={},
+    )
+    old_output_store = main_module.v3_output_store
+    project_service = main_module.v3_route_handlers.project_service
+    old_project_store = project_service.project_store
+    main_module.v3_output_store = output_store
+    project_service.project_store = SimpleNamespace(
+        get_project=lambda project_id: owned_project if project_id == owned_project.project_id else None,
+    )
+    client = TestClient(main_module.app)
+    try:
+        for url in (legacy_record.thumbnail_url, legacy_record.preview_url, legacy_record.download_url):
+            response = client.get(url, headers={"Authorization": "Bearer legacy-owner"})
+            assert response.status_code == 200
+            assert response.content.startswith(b"\x89PNG")
+
+        foreign_response = client.get(
+            foreign_record.thumbnail_url,
+            headers={"Authorization": "Bearer legacy-owner"},
+        )
+        unlinked_response = client.get(
+            ownerless_unlinked.thumbnail_url,
+            headers={"Authorization": "Bearer legacy-owner"},
+        )
+    finally:
+        main_module.v3_output_store = old_output_store
+        project_service.project_store = old_project_store
+
+    assert foreign_response.status_code == 404
+    assert unlinked_response.status_code == 404
 
 
 def test_http_upload_creation_passes_only_server_owner_to_storage(monkeypatch):

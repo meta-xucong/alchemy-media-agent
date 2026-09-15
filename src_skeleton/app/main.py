@@ -2366,13 +2366,46 @@ def _v3_output_owner_id(output_id: str) -> int | None:
     return _positive_int_or_none(metadata.get("veyra_user_id"))
 
 
+def _v3_output_project_owner_id(output_id: str) -> int | None:
+    """Resolve ownership for an ownerless legacy output through its project.
+
+    Older V3 output records can predate output-level ownership metadata while
+    their project record still has an authenticated owner.  This compatibility
+    path is deliberately narrow: an explicit output owner always wins, and a
+    project fallback requires an exact, non-empty project link.
+    """
+
+    record = v3_output_store.get_output(output_id)
+    if record is None:
+        return None
+    metadata = dict(record.metadata or {})
+    raw_output_owner = metadata.get("veyra_user_id")
+    if raw_output_owner is not None and str(raw_output_owner).strip():
+        return None
+    project_id = str(metadata.get("project_id") or "").strip()
+    if not project_id:
+        return None
+    return _v3_project_owner_id(project_id)
+
+
 def _require_v3_output_visible(request: Request, output_id: str, authorization: str = "") -> dict:
     if not settings.veyra_auth_enabled:
-        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v3_output_owner_id(output_id)}
+        return {
+            "authenticated": False,
+            "user_id": None,
+            "is_admin": False,
+            "owner_id": _v3_output_owner_id(output_id) or _v3_output_project_owner_id(output_id),
+        }
     user_id = _veyra_user_id_from_request(request, authorization)
-    owner_id = _v3_output_owner_id(output_id)
-    if owner_id == user_id:
-        return {"authenticated": True, "user_id": user_id, "is_admin": False, "owner_id": owner_id}
+    output_owner_id = _v3_output_owner_id(output_id)
+    project_owner_id = _v3_output_project_owner_id(output_id) if output_owner_id is None else None
+    if output_owner_id == user_id or (output_owner_id is None and project_owner_id == user_id):
+        return {
+            "authenticated": True,
+            "user_id": user_id,
+            "is_admin": False,
+            "owner_id": output_owner_id or project_owner_id,
+        }
     raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
 
 

@@ -11613,7 +11613,7 @@ class V3ProjectModeService:
         ):
             if not self._output_record_has_usable_image(record):
                 continue
-            if not self._output_record_visible_to_owner(record, owner_user_id):
+            if not self._project_output_record_visible_to_owner(project, record, owner_user_id):
                 continue
             job_id = str(getattr(record, "job_id", "") or "").strip()
             if declared_job_ids and job_id in declared_job_ids:
@@ -11730,14 +11730,14 @@ class V3ProjectModeService:
                         output_records_by_job[clean_job_id] = list(records)
             except Exception:
                 continue
-            if not self._job_record_visible_to_owner(job_record, owner_user_id):
+            if not self._project_job_record_visible_to_owner(project, job_record, owner_user_id):
                 continue
             delivery = self._delivery_annotations_for_records(
                 records,
                 final_output_ids=self._canonical_final_delivery_output_ids(job_status),
             )
             for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
-                if not self._output_record_visible_to_owner(record, owner_user_id):
+                if not self._project_output_record_visible_to_owner(project, record, owner_user_id):
                     continue
                 identity = self._output_record_identity(record)
                 if not identity or identity in seen:
@@ -11821,7 +11821,7 @@ class V3ProjectModeService:
                     continue
                 if str(getattr(record, "job_id", "") or "").strip() != clean_job_id:
                     continue
-                if owner_user_id is not None and not self._output_record_visible_to_owner(record, owner_user_id):
+                if owner_user_id is not None and not self._project_output_record_visible_to_owner(project, record, owner_user_id):
                     continue
                 metadata = dict(getattr(record, "metadata", {}) or {})
                 binding = metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
@@ -12537,12 +12537,71 @@ class V3ProjectModeService:
         record_owner_id = self._positive_owner_id(metadata.get("veyra_user_id"))
         return record_owner_id == owner_user_id
 
+    def _project_output_record_visible_to_owner(
+        self,
+        project: ProjectRecord,
+        record: Any,
+        owner_user_id: int | None,
+    ) -> bool:
+        """Apply project-scoped legacy ownership without widening references.
+
+        New records keep the strict output-owner predicate.  Only an output
+        with an absent/empty owner can inherit the owner of the exact project
+        named in its metadata; malformed owner values, missing project links,
+        and ownerless projects remain fail-closed.  This helper is used only
+        while a project is already in a caller-visible scope.
+        """
+
+        if owner_user_id is None:
+            return True
+        metadata = dict(getattr(record, "metadata", None) or {})
+        raw_output_owner = metadata.get("veyra_user_id")
+        record_owner_id = self._positive_owner_id(raw_output_owner)
+        if record_owner_id is not None:
+            return record_owner_id == owner_user_id
+        if raw_output_owner is not None and str(raw_output_owner).strip():
+            return False
+        record_project_id = str(metadata.get("project_id") or "").strip()
+        if not record_project_id or record_project_id != str(project.project_id or "").strip():
+            return False
+        project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
+        return project_owner_id == owner_user_id
+
     def _job_record_visible_to_owner(self, record: Any, owner_user_id: int | None) -> bool:
         if owner_user_id is None or record is None:
             return True
         metadata = dict(getattr(getattr(record, "request", None), "metadata", None) or {})
         record_owner_id = self._positive_owner_id(metadata.get("veyra_user_id"))
         return record_owner_id == owner_user_id
+
+    def _project_job_record_visible_to_owner(
+        self,
+        project: ProjectRecord,
+        record: Any,
+        owner_user_id: int | None,
+    ) -> bool:
+        """Apply the same narrow project fallback to legacy Job metadata.
+
+        Some old project Jobs carry the project link but predate the
+        output/job-level Veyra owner field.  Only a project-scoped output read
+        may use that link, and only after the project itself has a matching
+        owner.  Generic Job reads keep the strict owner predicate above.
+        """
+
+        if owner_user_id is None or record is None:
+            return True
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", None) or {})
+        raw_job_owner = metadata.get("veyra_user_id")
+        record_owner_id = self._positive_owner_id(raw_job_owner)
+        if record_owner_id is not None:
+            return record_owner_id == owner_user_id
+        if raw_job_owner is not None and str(raw_job_owner).strip():
+            return False
+        record_project_id = str(metadata.get("project_id") or "").strip()
+        if not record_project_id or record_project_id != str(project.project_id or "").strip():
+            return False
+        project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
+        return project_owner_id == owner_user_id
 
     def _uploaded_reference_visible_to_owner(
         self,
