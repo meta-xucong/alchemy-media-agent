@@ -1,6 +1,6 @@
 # V3 Legacy Output Media Authorization Repair
 
-Status: implementation in progress; performance follow-up under audit
+Status: implementation in progress; cold scoped-index follow-up under audit
 Contract revision: `DOC312_V3_LEGACY_OUTPUT_MEDIA_AUTHORIZATION`
 Upstream read-path authority: `DOC311_V1_LEGACY_PROJECT_OUTPUT_PROJECTION`
 
@@ -116,6 +116,23 @@ the strict dimension/integrity checks. Only hashless legacy records may pass
 when the canonical original and requested variant are real, in-root, valid
 images; no path fallback or hash mismatch is accepted.
 
+### 3.3 Cold scoped-output index correction model
+
+The VPS end-to-end check then isolated a remaining cold-start defect. The first
+project detail request still called the output store's full-history index. That
+index deserialized every historical `output.json`, including large prompt and
+review metadata, before it could answer a project- or Job-scoped lookup. The
+same process was fast after the cache warmed, which made the UI failure appear
+intermittent even though the media files were valid.
+
+The output record and its exact `project_id`/`job_id` fields remain the
+authority. A scoped lookup may first scan only the raw JSON bytes for candidate
+file paths, then fully deserialize and exact-match each candidate before it is
+returned. Candidate hits are therefore a locator optimization, not a new
+authorization source. Full-history listing keeps its existing complete index;
+normal writes advance the existing storage revision so the scoped locator is
+rebuilt when records change.
+
 ## 4. Bounded implementation
 
 1. Add a read-only project-owner resolver for an ownerless V3 output in the
@@ -131,7 +148,10 @@ images; no path fallback or hash mismatch is accepted.
    records strict.
 5. Keep output metadata and project JSON append-only during reads; no VPS data
    migration is required for this repair.
-6. Add regression coverage for the positive legacy case and for foreign,
+6. Use a revision-aware lightweight locator for project/Job-scoped output
+   reads; retain full record parsing and exact field filters after candidate
+   selection.
+7. Add regression coverage for the positive legacy case and for foreign,
    malformed/unlinked, and ownerless-project negative cases.
 
 ## 5. Acceptance matrix
@@ -161,6 +181,8 @@ Required before reporting completion:
   snapshot and skip declared Jobs with no output candidates;
 - a regression proves stale dimensions on a hashless legacy record do not
   hide valid canonical image files, while hash-bound mismatches remain denied;
+- a regression proves scoped output lookups do not invoke the full-history
+  deserializer on a cold store and still exact-match the returned records;
 - the deployed VPS container reports healthy;
 - a real VPS output with project owner 1 and missing output owner is read via
   the same container code path and returns image bytes for thumbnail/preview/

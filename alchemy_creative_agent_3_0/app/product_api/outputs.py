@@ -27,6 +27,9 @@ _FORMAT_SUFFIXES = {"png": ".png", "jpeg": ".jpg", "jpg": ".jpg", "webp": ".webp
 _MIME_FORMATS = {"image/png": "png", "image/jpeg": "jpeg", "image/jpg": "jpeg", "image/webp": "webp"}
 _IMMUTABLE_OUTPUT_METADATA_KEYS = frozenset({"content_sha256", "source_integrity_id"})
 _CLOSURE_BOUND_OUTPUT_METADATA_KEYS = frozenset({"capability_execution_envelope", "output_index"})
+_SCOPED_INDEX_FIELD_PATTERN = re.compile(
+    rb'"(?P<field>job_id|project_id)"\s*:\s*"(?P<value>(?:[^"\\]|\\.)*)"'
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,11 @@ class V3GeneratedOutputStore:
         self._records_by_job_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
         self._records_by_project_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
         self._records_by_id_cache: dict[str, V3GeneratedOutputRecord] | None = None
+        self._scoped_index_revision: tuple[int, int] | None = None
+        self._scoped_paths_by_job: dict[str, tuple[Path, ...]] | None = None
+        self._scoped_paths_by_project: dict[str, tuple[Path, ...]] | None = None
+        self._scoped_record_cache_revision: tuple[int, int] | None = None
+        self._scoped_records_by_id_cache: dict[str, V3GeneratedOutputRecord] = {}
         self._integrity_validation_cache: dict[str, tuple[tuple[int, int, int], str | None, bool]] = {}
         self._image_validation_cache: dict[str, tuple[tuple[int, int, int], bool]] = {}
 
@@ -193,14 +201,24 @@ class V3GeneratedOutputStore:
                 and self._records_by_id_cache is not None
             ):
                 return self._records_by_id_cache.get(output_id)
+            if revision == self._scoped_record_cache_revision:
+                scoped_record = self._scoped_records_by_id_cache.get(output_id)
+                if scoped_record is not None:
+                    return scoped_record
         path = self._record_path(output_id)
         if not path.exists():
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return V3GeneratedOutputRecord(**data)
+            record = V3GeneratedOutputRecord(**data)
         except Exception:
             return None
+        with self._cache_lock:
+            if revision != self._scoped_record_cache_revision:
+                self._scoped_record_cache_revision = revision
+                self._scoped_records_by_id_cache = {}
+            self._scoped_records_by_id_cache[output_id] = record
+        return record
 
     def claim_doc73_auto_identity_anchor(self, binding: dict) -> bool:
         """Atomically keep the first valid source binding for one Job."""
@@ -263,19 +281,24 @@ class V3GeneratedOutputStore:
         target = str(job_id or "").strip()
         if not target:
             return []
-        self._read_records_cached()
+        revision = self._storage_revision()
         with self._cache_lock:
-            by_job = self._records_by_job_cache or {}
-            return list(by_job.get(target, []))
+            if revision == self._records_cache_revision and self._records_by_job_cache is not None:
+                return list(self._records_by_job_cache.get(target, []))
+        by_job, _by_project = self._scoped_output_paths()
+        return self._read_scoped_records(by_job.get(target, ()), job_id=target)
 
     def list_by_project(self, project_id: str, limit: int = 256) -> list[V3GeneratedOutputRecord]:
         target = str(project_id or "").strip()
         if not target:
             return []
-        self._read_records_cached()
+        revision = self._storage_revision()
         with self._cache_lock:
-            by_project = self._records_by_project_cache or {}
-            return list(by_project.get(target, []))[: max(1, int(limit or 256))]
+            if revision == self._records_cache_revision and self._records_by_project_cache is not None:
+                return list(self._records_by_project_cache.get(target, []))[: max(1, int(limit or 256))]
+        _by_job, by_project = self._scoped_output_paths()
+        records = self._read_scoped_records(by_project.get(target, ()), project_id=target)
+        return records[: max(1, int(limit or 256))]
 
     def file_for_variant(self, output_id: str, variant: str) -> tuple[Path, str, str] | None:
         record = self.get_output(output_id)
@@ -437,6 +460,11 @@ class V3GeneratedOutputStore:
             self._records_by_job_cache = None
             self._records_by_project_cache = None
             self._records_by_id_cache = None
+            self._scoped_index_revision = None
+            self._scoped_paths_by_job = None
+            self._scoped_paths_by_project = None
+            self._scoped_record_cache_revision = None
+            self._scoped_records_by_id_cache.clear()
             self._integrity_validation_cache.clear()
             self._image_validation_cache.clear()
 
@@ -511,6 +539,81 @@ class V3GeneratedOutputStore:
             signature_items.append((str(path), int(stat.st_mtime_ns), int(stat.st_size)))
         return tuple(paths), tuple(signature_items)
 
+    def _scoped_output_paths(self) -> tuple[dict[str, tuple[Path, ...]], dict[str, tuple[Path, ...]]]:
+        """Locate scoped records without deserializing the full output history.
+
+        Project pages normally need only a small subset of output records. The
+        complete history index is intentionally retained for list/history
+        callers, but using it for every scoped lookup makes a cold process parse
+        every large legacy ``output.json`` before it can answer one project.
+        The byte scan below only builds candidate paths. Callers still load each
+        candidate through ``get_output`` and exact-match its authoritative
+        fields before returning it.
+        """
+
+        revision = self._storage_revision()
+        with self._cache_lock:
+            if (
+                revision == self._scoped_index_revision
+                and self._scoped_paths_by_job is not None
+                and self._scoped_paths_by_project is not None
+            ):
+                return dict(self._scoped_paths_by_job), dict(self._scoped_paths_by_project)
+
+        paths, _signature = self._record_paths_signature()
+        by_job: dict[str, list[Path]] = {}
+        by_project: dict[str, list[Path]] = {}
+        for path in paths:
+            output_id = path.parent.name
+            if not _valid_output_id(output_id):
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            seen_job_ids: set[str] = set()
+            seen_project_ids: set[str] = set()
+            for match in _SCOPED_INDEX_FIELD_PATTERN.finditer(raw):
+                value = _decode_scoped_index_value(match.group("value"))
+                if not value:
+                    continue
+                if match.group("field") == b"job_id":
+                    seen_job_ids.add(value)
+                else:
+                    seen_project_ids.add(value)
+            for job_id in seen_job_ids:
+                by_job.setdefault(job_id, []).append(path)
+            for project_id in seen_project_ids:
+                by_project.setdefault(project_id, []).append(path)
+
+        frozen_by_job = {key: tuple(value) for key, value in by_job.items()}
+        frozen_by_project = {key: tuple(value) for key, value in by_project.items()}
+        with self._cache_lock:
+            self._scoped_index_revision = revision
+            self._scoped_paths_by_job = frozen_by_job
+            self._scoped_paths_by_project = frozen_by_project
+        return dict(frozen_by_job), dict(frozen_by_project)
+
+    def _read_scoped_records(
+        self,
+        paths: tuple[Path, ...],
+        *,
+        job_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[V3GeneratedOutputRecord]:
+        records: list[V3GeneratedOutputRecord] = []
+        for path in paths:
+            record = self.get_output(path.parent.name)
+            if record is None:
+                continue
+            if job_id is not None and str(record.job_id or "").strip() != job_id:
+                continue
+            actual_project_id = str((record.metadata or {}).get("project_id") or "").strip()
+            if project_id is not None and actual_project_id != project_id:
+                continue
+            records.append(record)
+        return sorted(records, key=lambda record: record.created_at or "", reverse=True)
+
     def _read_records_cached(self) -> list[V3GeneratedOutputRecord]:
         revision = self._storage_revision()
         with self._cache_lock:
@@ -571,6 +674,14 @@ def _now_iso() -> str:
 
 def _valid_output_id(output_id: str) -> bool:
     return bool(_OUTPUT_ID_PATTERN.match(str(output_id or "")))
+
+
+def _decode_scoped_index_value(raw_value: bytes) -> str:
+    try:
+        value = json.loads(b'"' + raw_value + b'"')
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return ""
+    return str(value).strip() if isinstance(value, str) else ""
 
 
 def _is_doc73_source_binding(value: Any) -> bool:

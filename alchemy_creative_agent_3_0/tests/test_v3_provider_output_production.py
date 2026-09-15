@@ -1834,6 +1834,37 @@ def test_v3_output_store_rejects_canonical_fallback_when_original_sha_mismatches
     assert migrated_reader.file_for_variant(record.output_id, "preview") is None
 
 
+def test_v3_output_store_scoped_lookup_avoids_cold_full_history_deserialization(tmp_path, monkeypatch) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    first = store.save_base64_output(
+        job_id="job_scoped_lookup_a",
+        candidate_id="candidate_scoped_lookup_a",
+        asset_id="asset_scoped_lookup_a",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(96, 64),
+        metadata={"project_id": "project_scoped_a"},
+    )
+    second = store.save_base64_output(
+        job_id="job_scoped_lookup_b",
+        candidate_id="candidate_scoped_lookup_b",
+        asset_id="asset_scoped_lookup_b",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(96, 64),
+        metadata={"project_id": "project_scoped_b", "related": {"project_id": "project_scoped_a"}},
+    )
+
+    def fail_full_history_deserialization():
+        raise AssertionError("scoped lookup must not build the full output history index")
+
+    monkeypatch.setattr(store, "_read_records_cached", fail_full_history_deserialization)
+
+    assert [record.output_id for record in store.list_by_job(first.job_id)] == [first.output_id]
+    assert [record.output_id for record in store.list_by_project("project_scoped_a")] == [first.output_id]
+    assert [record.output_id for record in store.list_by_project("project_scoped_b")] == [second.output_id]
+
+
 def test_v3_output_store_reuses_cached_index_until_the_storage_revision_changes(tmp_path, monkeypatch) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     first = store.save_base64_output(
