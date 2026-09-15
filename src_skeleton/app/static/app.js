@@ -396,6 +396,7 @@ const v3State = {
   projectOutputsRequestOwner: null,
   projectOutputsRequestKey: "",
   activeHistoryProjectId: "",
+  historyModalEpoch: 0,
   uploadFingerprints: {},
   progressStartedAt: null,
   progressStageKey: "queued",
@@ -3226,6 +3227,7 @@ async function loadV3ProjectOutputs({
     v3State.projectOutputsRequestKey = requestKey;
     const payload = await requestPromise;
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
+    if (!v3HistoryModalRequestIsCurrent(requestOwner, scopedProjectId)) return [];
     const items = Array.isArray(payload.items) ? payload.items : [];
     const reviewItems = Array.isArray(payload.review_items) ? payload.review_items : [];
     const historyItems = Array.isArray(payload.history_items) ? payload.history_items : [];
@@ -3260,6 +3262,7 @@ async function loadV3ProjectOutputs({
     return items;
   } catch (error) {
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
+    if (!v3HistoryModalRequestIsCurrent(requestOwner, scopedProjectId)) return [];
     v3State.imageHistoryLoaded = false;
     if (!scopedProjectId) v3State.imageHistorySurface = "none";
     v3State.imageHistoryError = friendlyError(error);
@@ -4106,6 +4109,8 @@ function v3ProjectHistoryModalCountLabel(group) {
 function openV3ProjectHistoryModal(projectId) {
   const group = v3ProjectImageGroup(projectId);
   if (!group || !els.v3ProjectHistoryModal) return;
+  const historyModalEpoch = Number(v3State.historyModalEpoch || 0) + 1;
+  v3State.historyModalEpoch = historyModalEpoch;
   const scopedItems = Array.isArray(v3State.projectOutputs)
     ? v3State.projectOutputs.filter((item) => String(item?.project_id || item?.metadata?.project_id || "") === group.projectId)
     : [];
@@ -4128,10 +4133,22 @@ function openV3ProjectHistoryModal(projectId) {
   document.body.classList.add("modal-open");
   els.v3ProjectHistoryCloseBtn?.focus();
   if ((!group.items.length || previewOnly) && group.projectId) {
-    loadV3ProjectOutputs({ silent: true, force: true, limit: 120, projectId: group.projectId })
+    const historyModalRequest = {
+      kind: "project_history_modal",
+      projectId: group.projectId,
+      epoch: historyModalEpoch,
+    };
+    loadV3ProjectOutputs({
+      silent: true,
+      force: true,
+      limit: 120,
+      projectId: group.projectId,
+      sessionReceipt: historyModalRequest,
+    })
       .then(() => {
+        if (!v3HistoryModalRequestIsCurrent(historyModalRequest, group.projectId)) return;
         const refreshed = v3ProjectImageGroup(group.projectId);
-        if (refreshed && !els.v3ProjectHistoryModal.hidden) {
+        if (refreshed) {
           if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = v3ProjectHistoryModalCountLabel(refreshed);
           renderV3ProjectHistoryGrid(refreshed);
         }
@@ -4144,6 +4161,7 @@ function closeV3ProjectHistoryModal({ keepBodyState = false } = {}) {
   if (!els.v3ProjectHistoryModal) return;
   els.v3ProjectHistoryModal.hidden = true;
   v3State.activeHistoryProjectId = "";
+  v3State.historyModalEpoch = Number(v3State.historyModalEpoch || 0) + 1;
   if (!keepBodyState) releaseV3ScrollLockIfNoModal();
 }
 
@@ -9012,6 +9030,16 @@ function v3ProjectDetailRequestIsCurrent(projectId, detailEpoch, shouldContinue 
     ? true
     : v3ProjectDetailIsCurrent(projectId, detailEpoch);
   return detailIsCurrent && v3GenerationSessionOwns(shouldContinue);
+}
+
+function v3HistoryModalRequestIsCurrent(requestOwner, projectId) {
+  if (requestOwner?.kind !== "project_history_modal") return true;
+  return Boolean(
+    els.v3ProjectHistoryModal
+      && !els.v3ProjectHistoryModal.hidden
+      && v3State.historyModalEpoch === requestOwner.epoch
+      && v3State.activeHistoryProjectId === projectId,
+  );
 }
 
 function v3RequestWithTimeout(path, timeoutMs = 6000) {
