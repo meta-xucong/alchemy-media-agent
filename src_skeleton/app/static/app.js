@@ -3228,24 +3228,27 @@ async function loadV3ProjectOutputs({
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     const items = Array.isArray(payload.items) ? payload.items : [];
     const reviewItems = Array.isArray(payload.review_items) ? payload.review_items : [];
+    const historyItems = Array.isArray(payload.history_items) ? payload.history_items : [];
+    const displayItems = [...items, ...historyItems];
     if (!scopedProjectId) {
       const appendPreviewItems = normalizedSurface === "home_preview"
         && appendHomePreview
         && v3State.imageHistorySurface === "home_preview";
       v3State.imageHistory = appendPreviewItems
-        ? mergeV3HomePreviewItems(v3State.imageHistory, items)
-        : items;
+        ? mergeV3HomePreviewItems(v3State.imageHistory, displayItems)
+        : displayItems;
       v3State.projectReviewOutputs = reviewItems;
       v3State.imageHistorySurface = normalizedSurface || "full";
       v3State.imageHistoryLoaded = normalizedSurface !== "home_preview";
       if (normalizedSurface === "home_preview") {
         syncV3HomeProjectCounts(payload.project_output_counts);
-        syncV3HomeProjectCovers(items);
+        syncV3HomeProjectHistoryCounts(payload.project_history_counts);
+        syncV3HomeProjectCovers(displayItems);
       }
     }
     v3State.imageHistoryError = "";
     if (scopedProjectId) {
-      syncV3ProjectOutputsFromList(items, scopedProjectId, reviewItems);
+      syncV3ProjectOutputsFromList(items, scopedProjectId, reviewItems, historyItems);
     }
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     renderV3History();
@@ -3376,9 +3379,13 @@ function syncV3ProjectOutputsFromPayload(payload) {
   syncV3ProjectResponseMetadata(payload);
 }
 
-function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?.project_id, reviewItems = null) {
+function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?.project_id, reviewItems = null, historyItems = null) {
   if (!projectId || !Array.isArray(items)) return;
-  v3State.projectOutputs = items.filter((item) => item?.project_id === projectId);
+  const displayItems = [
+    ...items,
+    ...(Array.isArray(historyItems) ? historyItems : []),
+  ];
+  v3State.projectOutputs = displayItems.filter((item) => item?.project_id === projectId);
   if (Array.isArray(reviewItems)) {
     v3State.projectReviewOutputs = reviewItems.filter((item) => item?.project_id === projectId);
   }
@@ -3422,6 +3429,24 @@ function syncV3HomeProjectCounts(counts) {
   if (changed) writeV3LocalProjects(v3State.projects);
 }
 
+function syncV3HomeProjectHistoryCounts(counts) {
+  if (!counts || typeof counts !== "object" || !Array.isArray(v3State.projects)) return;
+  let changed = false;
+  v3State.projects = v3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    if (!projectId || !Object.prototype.hasOwnProperty.call(counts, projectId)) return project;
+    const value = Number(counts[projectId]);
+    if (!Number.isFinite(value) || value < 0) return project;
+    changed = true;
+    return {
+      ...project,
+      history_output_count: Math.floor(value),
+      history_output_count_known: true,
+    };
+  });
+  if (changed) writeV3LocalProjects(v3State.projects);
+}
+
 function mergeV3HomePreviewItems(existingItems, incomingItems) {
   const byProject = new Map();
   [...(Array.isArray(existingItems) ? existingItems : []), ...(Array.isArray(incomingItems) ? incomingItems : [])]
@@ -3452,6 +3477,10 @@ function mergeV3ProjectItems(primaryItems, fallbackItems) {
     if (existing.visible_output_count_known === true && item.visible_output_count_known !== true) {
       merged.visible_output_count = existing.visible_output_count;
       merged.visible_output_count_known = true;
+    }
+    if (existing.history_output_count_known === true && item.history_output_count_known !== true) {
+      merged.history_output_count = existing.history_output_count;
+      merged.history_output_count_known = true;
     }
     byId.set(item.project_id, merged);
   });
@@ -3541,6 +3570,9 @@ function v3ProjectSummaryFromProject(project) {
 }
 
 function v3ProjectEmptyImageLabel(project) {
+  if (v3ProjectHistoryOutputCountKnown(project) && v3ProjectHistoryOutputCount(project) > 0) {
+    return "历史图片已找到";
+  }
   const status = String(project?.latest_job_status || "").trim().toLowerCase();
   if (["blocked", "failed"].includes(status)) return "本次未生成图片";
   if (["generating", "finalizing", "planned"].includes(status)) return "图片准备中";
@@ -3550,11 +3582,27 @@ function v3ProjectEmptyImageLabel(project) {
 
 function v3ProjectImageCountLabel(group) {
   if (v3State.imageHistoryError) return "图片暂时无法读取";
+  const formalKnown = v3ProjectVisibleOutputCountKnown(group?.project);
+  const formalCount = v3ProjectVisibleOutputCount(group?.project);
+  const historyCount = v3ProjectHistoryOutputCount(group?.project);
+  const observedFormalCount = Math.max(Number(group?.formalCount || 0), formalCount);
+  const observedHistoryCount = Math.max(Number(group?.historyCount || 0), historyCount);
   if (v3State.imageHistorySurface === "full" && v3State.imageHistoryLoaded) {
+    if (observedFormalCount === 0 && observedHistoryCount > 0) return `${observedHistoryCount} 张历史图片`;
+    if (observedFormalCount > 0 && observedHistoryCount > 0) return `${observedFormalCount} 张图片 · ${observedHistoryCount} 张历史`;
+    if (formalKnown) {
+      return `${formalCount} 张图片`;
+    }
+    if (observedFormalCount > 0) return `${observedFormalCount} 张图片`;
     return `${Number(group?.count || 0)} 张图片`;
   }
-  if (v3ProjectVisibleOutputCountKnown(group?.project)) {
-    return `${v3ProjectVisibleOutputCount(group.project)} 张图片`;
+  if (formalKnown) {
+    if (observedHistoryCount > 0 && observedFormalCount === 0) return `${observedHistoryCount} 张历史图片`;
+    if (observedHistoryCount > 0 && observedFormalCount > 0) return `${observedFormalCount} 张图片 · ${observedHistoryCount} 张历史`;
+    return `${formalCount} 张图片`;
+  }
+  if (observedHistoryCount > 0) {
+    return `${observedHistoryCount} 张历史图片`;
   }
   if (v3State.imageHistorySurface === "home_preview" && group?.items?.length) {
     return "封面预览 · 数量同步中";
@@ -3573,9 +3621,27 @@ function v3ProjectVisibleOutputCountKnown(project) {
     || project?.memory_summary?.visible_output_count_known === true;
 }
 
+function v3ProjectHistoryOutputCount(project) {
+  const raw = project?.history_output_count ?? project?.memory_summary?.history_output_count;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function v3ProjectHistoryOutputCountKnown(project) {
+  return project?.history_output_count_known === true
+    || project?.memory_summary?.history_output_count_known === true;
+}
+
 function v3ProjectImageCountText(project) {
   if (v3ProjectVisibleOutputCountKnown(project)) {
-    return `${v3ProjectVisibleOutputCount(project)} 张图片`;
+    const formalCount = v3ProjectVisibleOutputCount(project);
+    const historyCount = v3ProjectHistoryOutputCount(project);
+    if (historyCount > 0 && formalCount === 0) return `${historyCount} 张历史图片`;
+    if (historyCount > 0) return `${formalCount} 张图片 · ${historyCount} 张历史`;
+    return `${formalCount} 张图片`;
+  }
+  if (v3ProjectHistoryOutputCountKnown(project) && v3ProjectHistoryOutputCount(project) > 0) {
+    return `${v3ProjectHistoryOutputCount(project)} 张历史图片`;
   }
   return Number(project?.job_count || 0) > 0 ? "图片数量未同步" : "尚未出图";
 }
@@ -3843,8 +3909,7 @@ function v3OutputProjectGroupMap(items = v3State.imageHistory) {
     .filter((project) => project?.project_id)
     .map((project) => [String(project.project_id), project]));
   const groups = new Map();
-  v3DeliveryDisplayItems(Array.isArray(items) ? items : []).forEach((item) => {
-    if (!v3HistoryOutputVisible(item)) return;
+  v3HistoryDisplayItems(Array.isArray(items) ? items : []).forEach((item) => {
     const projectId = String(item?.project_id || item?.metadata?.project_id || item?.job_id || "v3-unknown-project");
     if (!groups.has(projectId)) {
       const project = projectLookup.get(projectId) || {};
@@ -3858,11 +3923,15 @@ function v3OutputProjectGroupMap(items = v3State.imageHistory) {
         latestItem: null,
         latestAt: "",
         count: 0,
+        formalCount: 0,
+        historyCount: 0,
       });
     }
     const group = groups.get(projectId);
     group.items.push(item);
     group.count += 1;
+    if (v3HistoryOnlyOutputVisible(item)) group.historyCount += 1;
+    else group.formalCount += 1;
     if (!group.latestItem || v3OutputItemTime(item) >= v3OutputItemTime(group.latestItem)) {
       group.latestItem = item;
       group.latestAt = item?.created_at || item?.updated_at || "";
@@ -3904,7 +3973,8 @@ function v3ProjectThumbnailItem(project) {
 
 function v3ProjectGroupFromProject(project, outputGroup = null) {
   const latestItem = outputGroup?.latestItem || null;
-  const visibleOutputCount = Number(project?.visible_output_count || project?.memory_summary?.visible_output_count || 0);
+  const visibleOutputCount = v3ProjectVisibleOutputCount(project);
+  const historyOutputCount = v3ProjectHistoryOutputCount(project);
   return {
     projectId: String(project.project_id),
     title: v3ProjectDisplayTitle(project, outputGroup?.title || "V3 项目图片"),
@@ -3914,7 +3984,9 @@ function v3ProjectGroupFromProject(project, outputGroup = null) {
     items: outputGroup?.items || [],
     latestItem,
     latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
-    count: Math.max(outputGroup?.count || 0, visibleOutputCount),
+    formalCount: Math.max(outputGroup?.formalCount || 0, visibleOutputCount),
+    historyCount: Math.max(outputGroup?.historyCount || 0, historyOutputCount),
+    count: Math.max(outputGroup?.count || 0, visibleOutputCount, historyOutputCount),
   };
 }
 
@@ -3964,6 +4036,18 @@ function v3HistoryOutputVisible(item) {
   return v3CanonicalFinalDelivery(item);
 }
 
+function v3HistoryOnlyOutputVisible(item) {
+  if (v3FailureArtifactExpired(item)) return false;
+  if (!item?.history_only && !item?.metadata?.history_only && !item?.metadata?.legacy_history_only) return false;
+  return v3OutputImageCandidates(item).length > 0;
+}
+
+function v3HistoryDisplayItems(items = []) {
+  return v3DedupeOutputItems(items).filter(
+    (item) => v3HistoryOutputVisible(item) || v3HistoryOnlyOutputVisible(item),
+  );
+}
+
 function v3ProjectImageGroup(projectId) {
   const cleanProjectId = String(projectId || "");
   const scopedItems = Array.isArray(v3State.projectOutputs)
@@ -3989,11 +4073,7 @@ function openV3ProjectHistoryModal(projectId) {
     els.v3ProjectHistorySummary.textContent = group.goal ? v3ShortText(group.goal, 88) : "这个项目生成过的图片都在这里。";
   }
   if (els.v3ProjectHistoryCount) {
-    els.v3ProjectHistoryCount.textContent = v3ProjectVisibleOutputCountKnown(group.project)
-      ? `${v3ProjectVisibleOutputCount(group.project)} 张图片`
-      : previewOnly
-        ? "封面预览 · 数量同步中"
-        : `${group.count} 张图片`;
+    els.v3ProjectHistoryCount.textContent = v3ProjectImageCountLabel(group);
   }
   if (els.v3ProjectHistoryOpenProjectBtn) {
     els.v3ProjectHistoryOpenProjectBtn.dataset.v3HistoryProject = group.projectId;
@@ -4008,7 +4088,7 @@ function openV3ProjectHistoryModal(projectId) {
       .then(() => {
         const refreshed = v3ProjectImageGroup(group.projectId);
         if (refreshed && !els.v3ProjectHistoryModal.hidden) {
-          if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = `${refreshed.count || refreshed.items.length} 张图片`;
+          if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = v3ProjectImageCountLabel(refreshed);
           renderV3ProjectHistoryGrid(refreshed);
         }
       })

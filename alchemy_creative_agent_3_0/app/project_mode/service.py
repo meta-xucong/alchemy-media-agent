@@ -2463,6 +2463,7 @@ class V3ProjectModeService:
         if project_id:
             project = self._require_project(project_id)
             review_items: list[dict[str, Any]] = []
+            history_items: list[dict[str, Any]] = []
             if project.status != ProjectStatus.ARCHIVED and self._project_visible_to_owner(project, owner_user_id):
                 if str(surface or "").strip().lower() == "delivery_preview":
                     items = self._project_delivery_preview_items(
@@ -2479,6 +2480,8 @@ class V3ProjectModeService:
                         "limit": min(bounded_limit, 1),
                         "items": items,
                         "review_items": [],
+                        "history_items": [],
+                        "history_total": 0,
                         "metadata": {
                             **self._metadata(),
                             "compact": bool(compact),
@@ -2488,8 +2491,9 @@ class V3ProjectModeService:
                         },
                     }
                 self._reconcile_project_outputs(project)
+                output_projection_project = self._project_with_indexed_output_jobs(project)
                 items = self._project_output_items(
-                    project,
+                    output_projection_project,
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
                     compact=compact,
@@ -2500,8 +2504,19 @@ class V3ProjectModeService:
                     owner_user_id=owner_user_id,
                     compact=compact,
                 )
+                history_items = self._project_legacy_history_items(
+                    project,
+                    limit=bounded_limit,
+                    owner_user_id=owner_user_id,
+                    compact=compact,
+                )
             items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
             review_items = sorted(review_items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
+            history_items = sorted(
+                history_items,
+                key=lambda item: str(item.get("created_at") or ""),
+                reverse=True,
+            )[:bounded_limit]
             return {
                 "api_namespace": API_NAMESPACE,
                 "route": f"{API_NAMESPACE}/project-outputs",
@@ -2510,6 +2525,8 @@ class V3ProjectModeService:
                 "limit": bounded_limit,
                 "items": items,
                 "review_items": review_items,
+                "history_items": history_items,
+                "history_total": len(history_items),
                 "metadata": {**self._metadata(), "compact": bool(compact), "project_scoped": True},
             }
         if requested_surface == "home_preview":
@@ -2557,6 +2574,8 @@ class V3ProjectModeService:
                 prefetch_job_state=False,
             )
             project_output_counts: dict[str, int] = {}
+            project_history_counts: dict[str, int] = {}
+            history_items: list[dict[str, Any]] = []
             project_index_complete = snapshot.get("project_index_complete", {})
             for project in preview_projects:
                 index_complete = project_index_complete.get(project.project_id, True)
@@ -2591,9 +2610,29 @@ class V3ProjectModeService:
                     )
                 if preview_items:
                     items.extend(preview_items[:1])
-                if len(items) >= bounded_limit and requested_project_ids is None:
+                legacy_history_items: list[dict[str, Any]] = []
+                if index_complete:
+                    legacy_history_items = self._project_legacy_history_items(
+                        project,
+                        limit=max(1, len(project_records or [])),
+                        owner_user_id=owner_user_id,
+                        compact=compact,
+                        project_records=project_records,
+                        output_records_by_job=snapshot["records_by_job"],
+                        job_status_by_id=snapshot["job_status_by_id"],
+                        job_record_by_id=snapshot["job_record_by_id"],
+                    )
+                    project_history_counts[project.project_id] = len(legacy_history_items)
+                if not preview_items and legacy_history_items:
+                    history_items.extend(legacy_history_items[:1])
+                if len(items) + len(history_items) >= bounded_limit and requested_project_ids is None:
                     break
             items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
+            history_items = sorted(
+                history_items,
+                key=lambda item: str(item.get("created_at") or ""),
+                reverse=True,
+            )[:bounded_limit]
             return {
                 "api_namespace": API_NAMESPACE,
                 "route": f"{API_NAMESPACE}/project-outputs",
@@ -2601,6 +2640,8 @@ class V3ProjectModeService:
                 "limit": bounded_limit,
                 "items": items,
                 "review_items": [],
+                "history_items": history_items,
+                "history_total": len(history_items),
                 "metadata": {
                     **self._metadata(),
                     "compact": bool(compact),
@@ -2609,9 +2650,11 @@ class V3ProjectModeService:
                     "project_scope": "requested" if requested_project_ids is not None else "global",
                 },
                 "project_output_counts": project_output_counts,
+                "project_history_counts": project_history_counts,
             }
         project_scan_limit = max(12, min(100, bounded_limit * 2))
         review_items = []
+        history_items: list[dict[str, Any]] = []
         output_projects = [
             project
             for project in self.project_store.list_projects(limit=project_scan_limit)
@@ -2620,9 +2663,10 @@ class V3ProjectModeService:
         ]
         snapshot = self._project_output_read_snapshot(output_projects)
         for project in output_projects:
+            output_projection_project = self._project_with_indexed_output_jobs(project)
             items.extend(
                 self._project_output_items(
-                    project,
+                    output_projection_project,
                     limit=bounded_limit,
                     owner_user_id=owner_user_id,
                     compact=compact,
@@ -2642,8 +2686,24 @@ class V3ProjectModeService:
                     job_record_by_id=snapshot["job_record_by_id"],
                 )
             )
+            history_items.extend(
+                self._project_legacy_history_items(
+                    project,
+                    limit=bounded_limit,
+                    owner_user_id=owner_user_id,
+                    compact=compact,
+                    output_records_by_job=snapshot["records_by_job"],
+                    job_status_by_id=snapshot["job_status_by_id"],
+                    job_record_by_id=snapshot["job_record_by_id"],
+                )
+            )
         items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
         review_items = sorted(review_items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
+        history_items = sorted(
+            history_items,
+            key=lambda item: str(item.get("created_at") or ""),
+            reverse=True,
+        )[:bounded_limit]
         return {
             "api_namespace": API_NAMESPACE,
             "route": f"{API_NAMESPACE}/project-outputs",
@@ -2651,6 +2711,8 @@ class V3ProjectModeService:
             "limit": bounded_limit,
             "items": items,
             "review_items": review_items,
+            "history_items": history_items,
+            "history_total": len(history_items),
             "metadata": {**self._metadata(), "compact": bool(compact)},
         }
 
@@ -10785,6 +10847,12 @@ class V3ProjectModeService:
         without letting them leak into home previews or continuation references.
         """
 
+        # A project with no declared Job membership can only be located via
+        # the legacy output index.  Those records use the separate
+        # history-only adapter; do not duplicate them in review_items.
+        if not getattr(project, "job_ids", None):
+            return []
+
         all_items = self._project_output_items(
             project,
             limit=max(1, int(limit or 60)),
@@ -11399,6 +11467,187 @@ class V3ProjectModeService:
             for field in ("download_url", "preview_url", "thumbnail_url")
         )
 
+    def _project_indexed_output_records(
+        self,
+        project: ProjectRecord,
+        project_records: list[Any] | None = None,
+    ) -> list[Any]:
+        """Read the bounded output-index view for one project.
+
+        ``ProjectRecord.job_ids`` remains the mutation and continuation
+        authority.  This adapter is only for legacy records whose durable
+        project lost that list while the output record retained its explicit
+        ``metadata.project_id`` association.
+        """
+
+        project_id = str(getattr(project, "project_id", "") or "").strip()
+        if not project_id:
+            return []
+        if project_records is None:
+            product_service = getattr(self, "product_service", None)
+            output_store = getattr(product_service, "output_store", None)
+            list_by_project = getattr(output_store, "list_by_project", None)
+            if not callable(list_by_project):
+                return []
+            try:
+                project_records = list(list_by_project(project_id, limit=4096))
+            except Exception:
+                return []
+        indexed: list[Any] = []
+        seen: set[str] = set()
+        for record in list(project_records or []):
+            metadata = dict(getattr(record, "metadata", None) or {})
+            if str(metadata.get("project_id") or "").strip() != project_id:
+                continue
+            identity = self._output_record_identity(record)
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            indexed.append(record)
+        return indexed
+
+    def _project_indexed_job_ids(
+        self,
+        project: ProjectRecord,
+        project_records: list[Any] | None = None,
+    ) -> list[str]:
+        """Return declared Job ids, or an ephemeral legacy index projection."""
+
+        declared_job_ids = list(
+            dict.fromkeys(
+                str(job_id or "").strip()
+                for job_id in (getattr(project, "job_ids", []) or [])
+                if str(job_id or "").strip()
+            )
+        )
+        if declared_job_ids:
+            return declared_job_ids
+        newest_by_job: dict[str, str] = {}
+        for record in self._project_indexed_output_records(project, project_records):
+            if not self._output_record_has_usable_image(record):
+                continue
+            job_id = str(getattr(record, "job_id", "") or "").strip()
+            if not job_id:
+                continue
+            created_at = str(getattr(record, "created_at", "") or "")
+            if created_at > newest_by_job.get(job_id, ""):
+                newest_by_job[job_id] = created_at
+        return [
+            job_id
+            for job_id, _created_at in sorted(
+                newest_by_job.items(),
+                key=lambda entry: (entry[1], entry[0]),
+            )
+        ]
+
+    def _project_with_indexed_output_jobs(
+        self,
+        project: ProjectRecord,
+        project_records: list[Any] | None = None,
+    ) -> ProjectRecord:
+        """Create a read-only shallow Project copy for legacy output lookup."""
+
+        if getattr(project, "job_ids", None):
+            return project
+        job_ids = self._project_indexed_job_ids(project, project_records)
+        if not job_ids:
+            return project
+        model_copy = getattr(project, "model_copy", None)
+        if not callable(model_copy):
+            return project
+        return model_copy(update={"job_ids": job_ids}, deep=False)
+
+    def _project_legacy_history_items(
+        self,
+        project: ProjectRecord,
+        *,
+        limit: int = 60,
+        owner_user_id: int | None = None,
+        compact: bool = False,
+        project_records: list[Any] | None = None,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Expose readable output-only legacy pixels as non-delivery history.
+
+        The adapter covers records whose project index membership is missing
+        or partial.  Explicit Job membership keeps its existing formal and
+        review-only semantics; only indexed records whose Job id is not
+        declared by the project can enter this history projection.  Formal
+        output identities are removed so one record cannot appear in both
+        projections.
+        """
+
+        records = self._project_indexed_output_records(project, project_records)
+        if not records:
+            return []
+        declared_job_ids = {
+            str(job_id or "").strip()
+            for job_id in (getattr(project, "job_ids", []) or [])
+            if str(job_id or "").strip()
+        }
+        effective_project = self._project_with_indexed_output_jobs(project, records)
+        formal_items = []
+        if declared_job_ids or effective_project is not project:
+            formal_items = self._project_output_items(
+                effective_project,
+                limit=max(1, len(records)),
+                owner_user_id=owner_user_id,
+                compact=compact,
+                output_records_by_job=output_records_by_job,
+                job_status_by_id=job_status_by_id,
+                job_record_by_id=job_record_by_id,
+            )
+        formal_ids = {
+            self._public_project_output_identity(item)
+            for item in formal_items
+            if self._public_project_output_identity(item)
+        }
+        history_items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for record in sorted(
+            records,
+            key=lambda item: str(getattr(item, "created_at", "") or ""),
+            reverse=True,
+        ):
+            if not self._output_record_has_usable_image(record):
+                continue
+            if not self._output_record_visible_to_owner(record, owner_user_id):
+                continue
+            job_id = str(getattr(record, "job_id", "") or "").strip()
+            if declared_job_ids and job_id in declared_job_ids:
+                # Declared Jobs retain their existing formal/review authority;
+                # an incomplete declared Job is not silently relabeled as
+                # history merely because its pixels are readable.
+                continue
+            identity = self._output_record_identity(record)
+            if not identity or identity in formal_ids or identity in seen:
+                continue
+            seen.add(identity)
+            item = self._output_item_from_record(
+                project,
+                record,
+                None,
+                compact=compact,
+                delivery={
+                    "delivery_state": "history_only",
+                    "history_only": True,
+                    "legacy_history_only": True,
+                },
+                review_projection={},
+            )
+            item["history_only"] = True
+            item["metadata"] = {
+                **dict(item.get("metadata") or {}),
+                "history_only": True,
+                "legacy_history_only": True,
+            }
+            history_items.append(item)
+            if len(history_items) >= max(1, int(limit or 60)):
+                break
+        return history_items
+
     def _delivery_retry_reason_codes(self, records: list[Any]) -> list[str]:
         codes: list[str] = []
         for record in records:
@@ -11844,11 +12093,16 @@ class V3ProjectModeService:
             for record in records
             if str(getattr(record, "job_id", "") or "").strip()
         }
-        candidate_job_ids = [
+        declared_job_ids = [
             str(job_id or "").strip()
-            for job_id in project.job_ids
-            if str(job_id or "").strip() in indexed_job_ids
+            for job_id in (project.job_ids or [])
+            if str(job_id or "").strip()
         ]
+        candidate_job_ids = (
+            [job_id for job_id in declared_job_ids if job_id in indexed_job_ids]
+            if declared_job_ids
+            else self._project_indexed_job_ids(project, records)
+        )
         if not candidate_job_ids:
             return 0
         count_project = project
@@ -11897,11 +12151,7 @@ class V3ProjectModeService:
                 return []
         else:
             records = list(project_records)
-        allowed_job_ids = {
-            str(job_id or "").strip()
-            for job_id in project.job_ids
-            if str(job_id or "").strip()
-        }
+        allowed_job_ids = set(self._project_indexed_job_ids(project, records))
         newest_by_job: dict[str, str] = {}
         for record in records:
             job_id = str(getattr(record, "job_id", "") or "").strip()

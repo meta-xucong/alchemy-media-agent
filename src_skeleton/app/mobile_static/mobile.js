@@ -3528,6 +3528,10 @@ function mergeMobileV3ProjectItems(primaryItems, fallbackItems) {
         merged.visible_output_count = cached.visible_output_count;
         merged.visible_output_count_known = true;
       }
+      if (cached.history_output_count_known === true && item.history_output_count_known !== true) {
+        merged.history_output_count = cached.history_output_count;
+        merged.history_output_count_known = true;
+      }
       return merged;
     });
 }
@@ -3563,14 +3567,17 @@ async function loadMobileV3HomePreviews(projectIds, { append = false } = {}) {
     mobileV3HomePreviewRequestTimeoutMs,
   );
   const incoming = Array.isArray(payload?.items) ? payload.items : [];
+  const historyItems = Array.isArray(payload?.history_items) ? payload.history_items : [];
+  const displayItems = [...incoming, ...historyItems];
   const appendItems = append && mobileV3State.outputsSurface === "home_preview";
   mobileV3State.outputError = "";
   mobileV3State.outputsLoaded = true;
   mobileV3State.outputsSurface = "home_preview";
   mobileV3State.outputs = appendItems
-    ? mergeMobileV3HomePreviewItems(mobileV3State.outputs, incoming)
-    : incoming;
+    ? mergeMobileV3HomePreviewItems(mobileV3State.outputs, displayItems)
+    : displayItems;
   syncMobileV3HomeProjectCounts(payload?.project_output_counts);
+  syncMobileV3HomeProjectHistoryCounts(payload?.project_history_counts);
   mobileV3State.reviewOutputs = [];
   mobileV3State.previewProjectIds = new Set(
     mobileV3State.outputs
@@ -3595,6 +3602,24 @@ function syncMobileV3HomeProjectCounts(counts) {
       ...project,
       visible_output_count: Math.floor(value),
       visible_output_count_known: true,
+    };
+  });
+  if (changed) persistMobileV3Caches();
+}
+
+function syncMobileV3HomeProjectHistoryCounts(counts) {
+  if (!counts || typeof counts !== "object" || !Array.isArray(mobileV3State.projects)) return;
+  let changed = false;
+  mobileV3State.projects = mobileV3State.projects.map((project) => {
+    const projectId = String(project?.project_id || "").trim();
+    if (!projectId || !Object.prototype.hasOwnProperty.call(counts, projectId)) return project;
+    const value = Number(counts[projectId]);
+    if (!Number.isFinite(value) || value < 0) return project;
+    changed = true;
+    return {
+      ...project,
+      history_output_count: Math.floor(value),
+      history_output_count_known: true,
     };
   });
   if (changed) persistMobileV3Caches();
@@ -4039,6 +4064,16 @@ function mobileV3ExpiredFailureOnlyProject(project) {
   return mobileV3FailureArtifactExpired(project) && !thumbnails.some(Boolean);
 }
 
+function mobileV3HistoryOnlyOutputVisible(item) {
+  if (mobileV3FailureArtifactExpired(item)) return false;
+  if (!item?.history_only && !item?.metadata?.history_only && !item?.metadata?.legacy_history_only) return false;
+  return Boolean(mobileV3ThumbUrl(item) || mobileV3PreviewUrl(item) || mobileV3FullUrl(item));
+}
+
+function mobileV3HistoryOutputVisible(item) {
+  return mobileV3HistoryOnlyOutputVisible(item) || mobileV3CanonicalFinalDelivery(item);
+}
+
 function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
   const existing = (mobileV3State.projects || []).find((project) => project?.project_id === projectId);
   if (existing) return existing;
@@ -4058,8 +4093,7 @@ function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
 function mobileV3RecentProjectGroups() {
   const grouped = new Map();
   (mobileV3State.outputs || []).forEach((item) => {
-    if (mobileV3FailureArtifactExpired(item)) return;
-    if (!mobileV3CanonicalFinalDelivery(item)) return;
+    if (!mobileV3HistoryOutputVisible(item)) return;
     const projectId = item?.project_id || item?.metadata?.project_id;
     if (!projectId) return;
     const group = grouped.get(projectId) || { projectId, items: [], latestItem: null, latestAt: "" };
@@ -4076,6 +4110,8 @@ function mobileV3RecentProjectGroups() {
       items: group.items.sort((a, b) => mobileV3OutputTime(b) - mobileV3OutputTime(a)),
       project: mobileV3ProjectFromOutputGroup(group.projectId, group.latestItem),
       count: group.items.length,
+      formalCount: group.items.filter((item) => !mobileV3HistoryOnlyOutputVisible(item)).length,
+      historyCount: group.items.filter((item) => mobileV3HistoryOnlyOutputVisible(item)).length,
     }))
     .filter((group) => group.project?.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(group.project))
     .filter((group) => mobileV3ProjectUsesProfessionalWorkspace(group.project) === (mobileV3State.workspaceMode === "professional"))
@@ -4086,9 +4122,22 @@ function mobileV3RecentProjectGroupMap() {
   return new Map(mobileV3RecentProjectGroups().map((group) => [String(group.projectId), group]));
 }
 
+function mobileV3HistoryOutputsForProject(projectId) {
+  return mobileV3DedupeOutputItems(mobileV3OutputsForProject(projectId)).filter(
+    (item) => mobileV3HistoryOutputVisible(item),
+  );
+}
+
+function mobileV3HistoryOnlyOutputsForProject(projectId) {
+  return mobileV3HistoryOutputsForProject(projectId).filter(
+    (item) => mobileV3HistoryOnlyOutputVisible(item),
+  );
+}
+
 function mobileV3GroupFromProject(project, outputGroup = null) {
   const latestItem = outputGroup?.latestItem || null;
-  const visibleOutputCount = Number(project?.visible_output_count || project?.memory_summary?.visible_output_count || 0);
+  const visibleOutputCount = mobileV3ProjectVisibleOutputCount(project);
+  const historyOutputCount = mobileV3ProjectHistoryOutputCount(project);
   const previewOnly = mobileV3State.previewProjectIds.has(String(project?.project_id || ""))
     && Boolean(outputGroup?.items?.length);
   return {
@@ -4097,18 +4146,36 @@ function mobileV3GroupFromProject(project, outputGroup = null) {
     items: outputGroup?.items || [],
     latestItem,
     latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
-    count: previewOnly ? visibleOutputCount : Math.max(outputGroup?.count || 0, visibleOutputCount),
+    formalCount: Math.max(outputGroup?.formalCount || 0, visibleOutputCount),
+    historyCount: Math.max(outputGroup?.historyCount || 0, historyOutputCount),
+    count: Math.max(outputGroup?.count || 0, visibleOutputCount, historyOutputCount),
     previewOnly,
   };
 }
 
 function mobileV3ProjectImageCountLabel(group) {
   if (mobileV3State.outputError) return "图片暂时无法读取";
+  const formalKnown = mobileV3ProjectVisibleOutputCountKnown(group?.project);
+  const formalCount = mobileV3ProjectVisibleOutputCount(group?.project);
+  const historyCount = mobileV3ProjectHistoryOutputCount(group?.project);
+  const observedFormalCount = Math.max(Number(group?.formalCount || 0), formalCount);
+  const observedHistoryCount = Math.max(Number(group?.historyCount || 0), historyCount);
   if (mobileV3State.outputsSurface === "full" && mobileV3State.outputsLoaded) {
+    if (observedFormalCount === 0 && observedHistoryCount > 0) return `${observedHistoryCount} 张历史图片`;
+    if (observedFormalCount > 0 && observedHistoryCount > 0) return `${observedFormalCount} 张图片 · ${observedHistoryCount} 张历史`;
+    if (formalKnown) {
+      return `${formalCount} 张图片`;
+    }
+    if (observedFormalCount > 0) return `${observedFormalCount} 张图片`;
     return `${Number(group?.count || 0)} 张图片`;
   }
-  if (mobileV3ProjectVisibleOutputCountKnown(group?.project)) {
-    return `${mobileV3ProjectVisibleOutputCount(group.project)} 张图片`;
+  if (formalKnown) {
+    if (observedHistoryCount > 0 && observedFormalCount === 0) return `${observedHistoryCount} 张历史图片`;
+    if (observedHistoryCount > 0 && observedFormalCount > 0) return `${observedFormalCount} 张图片 · ${observedHistoryCount} 张历史`;
+    return `${formalCount} 张图片`;
+  }
+  if (observedHistoryCount > 0) {
+    return `${observedHistoryCount} 张历史图片`;
   }
   if (group?.previewOnly && group?.items?.length) {
     return "已有封面 · 数量同步中";
@@ -4125,6 +4192,17 @@ function mobileV3ProjectVisibleOutputCount(project) {
 function mobileV3ProjectVisibleOutputCountKnown(project) {
   return project?.visible_output_count_known === true
     || project?.memory_summary?.visible_output_count_known === true;
+}
+
+function mobileV3ProjectHistoryOutputCount(project) {
+  const raw = project?.history_output_count ?? project?.memory_summary?.history_output_count;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function mobileV3ProjectHistoryOutputCountKnown(project) {
+  return project?.history_output_count_known === true
+    || project?.memory_summary?.history_output_count_known === true;
 }
 
 function mobileV3ProjectGroupsFromProjects() {
@@ -4172,15 +4250,13 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     const finalOutputs = group.items;
     const latest = group.latestItem || finalOutputs[0] || mobileV3SummaryThumbOutputs(project)[0] || null;
     const thumb = deferImages ? "" : mobileV3HomeThumbUrl(latest) || "";
-    const countKnown = mobileV3ProjectVisibleOutputCountKnown(project);
-    const visualCount = countKnown
-      ? mobileV3ProjectVisibleOutputCount(project)
-      : group.previewOnly
-        ? group.count
-        : group.count || finalOutputs.length || 0;
-    const visualCountLabel = countKnown
-      ? `${visualCount} 张图片`
-      : mobileV3ProjectImageCountLabel(group);
+    const visualCount = Math.max(
+      Number(group.formalCount || 0),
+      Number(group.historyCount || 0),
+      Number(group.count || 0),
+      finalOutputs.length,
+    );
+    const visualCountLabel = mobileV3ProjectImageCountLabel(group);
     const stackCount = Math.min(Math.max(Number(visualCount || 0), 1), 5);
     const card = document.createElement("article");
     card.className = "v3-mobile-project-card v3-mobile-project-stack-card";
@@ -5633,22 +5709,29 @@ function openMobileV3ProjectGallery(project) {
 function renderMobileV3ProjectGallery(project) {
   const grid = document.querySelector("#mobileV3GalleryGrid");
   if (!grid) return;
-  const outputs = mobileV3DisplayOutputsForProject(project);
+  const outputs = mobileV3HistoryOutputsForProject(project?.project_id);
+  const group = mobileV3ProjectGroupsFromProjects().find(
+    (candidate) => candidate.projectId === String(project?.project_id || ""),
+  );
   setText("#mobileV3GalleryTitle", mobileV3ProjectTitle(project));
   setText("#mobileV3GalleryGoal", mobileV3ProjectGoal(project));
-  setText("#mobileV3GalleryCount", `${outputs.length} 张`);
+  setText(
+    "#mobileV3GalleryCount",
+    group ? mobileV3ProjectImageCountLabel(group) : `${outputs.length} 张图片`,
+  );
   grid.innerHTML = "";
   grid.classList.toggle("empty-v2-list", outputs.length === 0);
   if (!outputs.length) {
-    grid.textContent = "这个项目还没有图片，进入项目主页后可以生成第一组。";
+    grid.textContent = "这个项目还没有可查看的图片，进入项目主页后可以生成第一组。";
   } else {
     outputs.forEach((item, index) => {
       const thumb = mobileV3ThumbUrl(item);
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "v3-mobile-gallery-image";
+      button.className = `v3-mobile-gallery-image${mobileV3HistoryOnlyOutputVisible(item) ? " history-only" : ""}`;
       button.dataset.mobileV3GalleryPreview = mobileV3OutputId(item);
-      button.innerHTML = thumb ? `<img src="${escapeHtml(thumb)}" alt="项目图片 ${index + 1}" loading="lazy" decoding="async" />` : `<span>图片 ${index + 1}</span>`;
+      const label = mobileV3HistoryOnlyOutputVisible(item) ? "历史图片" : "项目图片";
+      button.innerHTML = thumb ? `<img src="${escapeHtml(thumb)}" alt="${label} ${index + 1}" loading="lazy" decoding="async" />` : `<span>${label} ${index + 1}</span>`;
       grid.appendChild(button);
     });
   }
@@ -5852,7 +5935,8 @@ async function refreshMobileV3ProjectDetail(projectId, options = {}) {
   mobileV3State.selectedTemplate = templateId;
   const previewPayload = previewResult.status === "fulfilled" ? previewResult.value : null;
   const previewItems = Array.isArray(previewPayload?.items) ? previewPayload.items : [];
-  mobileV3MergeProjectOutputs(requestedProjectId, previewItems, []);
+  const previewHistoryItems = Array.isArray(previewPayload?.history_items) ? previewPayload.history_items : [];
+  mobileV3MergeProjectOutputs(requestedProjectId, previewItems, [], previewHistoryItems);
   mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== requestedProjectId)];
   persistMobileV3Caches();
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
@@ -5915,8 +5999,9 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
       ? timelinePayload.metadata.project_outputs
       : [];
   const scopedReviewOutputs = Array.isArray(outputsPayload.review_items) ? outputsPayload.review_items : [];
+  const scopedHistoryOutputs = Array.isArray(outputsPayload.history_items) ? outputsPayload.history_items : [];
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
-  mobileV3MergeProjectOutputs(project.project_id, scopedOutputs, scopedReviewOutputs);
+  mobileV3MergeProjectOutputs(project.project_id, scopedOutputs, scopedReviewOutputs, scopedHistoryOutputs);
   mobileV3State.previewProjectIds.delete(String(project.project_id));
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
   mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
@@ -5980,6 +6065,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     return;
   }
   const outputs = mobileV3DisplayOutputsForProject(project);
+  const historyItems = mobileV3HistoryOnlyOutputsForProject(project.project_id);
   const reviewById = new Map();
   [...mobileV3ReviewOutputsForProject(project.project_id), ...mobileV3ReviewOnlyJobImageItems()]
     .forEach((item) => {
@@ -5989,7 +6075,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   const reviewItems = Array.from(reviewById.values());
   setText("#mobileV3OutputCount", `${outputs.length} 张`);
   grid.innerHTML = "";
-  grid.classList.toggle("empty-v2-list", outputs.length === 0 && reviewItems.length === 0);
+  grid.classList.toggle("empty-v2-list", outputs.length === 0 && reviewItems.length === 0 && historyItems.length === 0);
   if (mobileV3JobDeliveryWithheld()) {
     const notice = document.createElement("article");
     const lines = mobileV3JobReviewLines();
@@ -6001,7 +6087,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     `;
     grid.appendChild(notice);
   }
-  if (!outputs.length && !reviewItems.length) {
+  if (!outputs.length && !reviewItems.length && !historyItems.length) {
     if (!mobileV3JobDeliveryWithheld()) grid.textContent = "还没有图片，点“继续项目”生成第一组。";
     return;
   }
@@ -6026,6 +6112,30 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       <div class="v3-mobile-output-copy">
         <strong>复核图 ${index + 1}</strong>
         <span>${escapeHtml(reason)}</span>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+  if (historyItems.length) {
+    const historyNotice = document.createElement("article");
+    historyNotice.className = "v3-mobile-review-hold history-only";
+    historyNotice.innerHTML = `
+      <strong>历史图片 ${historyItems.length} 张</strong>
+      <span>这些旧项目图片已找回，可查看，但未进入正式交付或后续参考。</span>
+    `;
+    grid.appendChild(historyNotice);
+  }
+  historyItems.forEach((item, index) => {
+    const thumb = mobileV3ThumbUrl(item);
+    const card = document.createElement("article");
+    card.className = "v3-mobile-output-card history-only";
+    card.innerHTML = `
+      <button class="v3-mobile-output-preview" type="button" data-mobile-v3-gallery-preview="${escapeHtml(mobileV3OutputId(item))}">
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="历史图片 ${index + 1}" loading="lazy" decoding="async" />` : `<span>历史图片</span>`}
+      </button>
+      <div class="v3-mobile-output-copy">
+        <strong>历史图片 ${index + 1}</strong>
+        <span>仅供查看，不可设为后续参考。</span>
       </div>
     `;
     grid.appendChild(card);
@@ -7083,8 +7193,9 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
     const outputs = Array.isArray(payload.items) ? payload.items : [];
     const reviewOutputs = Array.isArray(payload.review_items) ? payload.review_items : [];
+    const historyOutputs = Array.isArray(payload.history_items) ? payload.history_items : [];
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
-    mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs);
+    mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs, historyOutputs);
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
     mobileV3State.outputError = "";
     mobileV3State.previewProjectIds.delete(String(projectId));
@@ -7106,9 +7217,12 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
   }
 }
 
-function mobileV3MergeProjectOutputs(projectId, outputs = [], reviewOutputs = null) {
+function mobileV3MergeProjectOutputs(projectId, outputs = [], reviewOutputs = null, historyOutputs = null) {
   if (!projectId || !Array.isArray(outputs)) return;
-  const nextOutputs = outputs.filter(Boolean);
+  const nextOutputs = [
+    ...outputs,
+    ...(Array.isArray(historyOutputs) ? historyOutputs : []),
+  ].filter(Boolean);
   const rest = (mobileV3State.outputs || []).filter((item) => {
     const itemProjectId = item.project_id || item.metadata?.project_id;
     return itemProjectId !== projectId;
