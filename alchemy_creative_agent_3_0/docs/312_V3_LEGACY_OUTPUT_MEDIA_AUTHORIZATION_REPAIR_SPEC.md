@@ -233,7 +233,8 @@ Required before reporting completion:
 
 ## 7. Implementation receipt
 
-Completed on commit `5a4d2a79023a6e60a3a189a95bfd49506b371bc8`.
+Completed on the implementation commit `5a4d2a79023a6e60a3a189a95bfd49506b371bc8`
+and the final audit/coverage commit `ea0483832404adf75ba5aa94c7f545f935b50c33`.
 
 - Code audit: independent read-only audit passed; the stale success and stale
   failure paths are both gated by modal epoch, active project, and request
