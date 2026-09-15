@@ -1,6 +1,6 @@
 # V3 Legacy Output Media Authorization Repair
 
-Status: implementation in progress; explicit history-surface follow-up under audit
+Status: accepted after code audit, local regression, and VPS runtime verification
 Contract revision: `DOC312_V3_LEGACY_OUTPUT_MEDIA_AUTHORIZATION`
 Upstream read-path authority: `DOC311_V1_LEGACY_PROJECT_OUTPUT_PROJECTION`
 
@@ -151,6 +151,20 @@ read, label them as review-only, and keep them outside formal counts,
 selection, continuation, and home-preview projections. This makes the
 existing image inspectable without silently promoting a withheld result.
 
+### 3.5 Stale project-history request failure correction model
+
+Real browser verification exposed one remaining cross-project race: opening
+project A, closing it, and immediately opening project B allowed a late A
+response to overwrite B. The same risk existed when A failed, because its
+error handler could clear the shared output state after B had become active.
+The authoritative modal session is therefore the tuple of active project ID
+and monotonically increasing modal epoch. Every scoped success, failure, and
+modal continuation callback must verify that tuple before mutating shared
+output state, error state, or the visible gallery; request bookkeeping is also
+cleared only by the matching request owner/key. Closing the modal advances the
+epoch, invalidating all outstanding callbacks. This repairs the shared state
+authority once and does not change output authorization or delivery status.
+
 ## 4. Bounded implementation
 
 1. Add a read-only project-owner resolver for an ownerless V3 output in the
@@ -172,7 +186,10 @@ existing image inspectable without silently promoting a withheld result.
 7. Merge review-only output pointers into the explicit desktop project history
    modal only after the scoped full read; preserve the formal/history/home
    separation and review-only labeling.
-8. Add regression coverage for the positive legacy case and for foreign,
+8. Guard both stale success and stale failure callbacks from a previous
+   project-history modal session; add deterministic regression coverage for
+   both orderings.
+9. Add regression coverage for the positive legacy case and for foreign,
    malformed/unlinked, and ownerless-project negative cases.
 
 ## 5. Acceptance matrix
@@ -207,6 +224,8 @@ Required before reporting completion:
 - a browser regression proves a review-only image returned by a project-scoped
   full read is visible in the explicit project history modal while remaining
   absent from the home formal-preview collection;
+- a browser race regression proves a failed old project request cannot clear or
+  replace the currently open project's review gallery;
 - the deployed VPS container reports healthy;
 - a real VPS output with project owner 1 and missing output owner is read via
   the same container code path and returns image bytes for thumbnail/preview/
@@ -214,5 +233,29 @@ Required before reporting completion:
 
 ## 7. Implementation receipt
 
-Pending completion after code audit, local tests, GitHub push, VPS deployment,
-and remote runtime verification.
+Completed on commit `5a4d2a79023a6e60a3a189a95bfd49506b371bc8`.
+
+- Code audit: independent read-only audit passed; the stale success and stale
+  failure paths are both gated by modal epoch, active project, and request
+  owner/key checks. Formal delivery, review, selection, and continuation
+  semantics remain isolated.
+- Local verification: focused Doc311/Doc312 browser and projection suite
+  passed (`17 passed`); the relevant V3 regression suite passed (`109 passed`)
+  after the stale-failure regression was added; JavaScript syntax and diff
+  checks passed.
+- VPS deployment: `origin/main` commit `5a4d2a79023a6e60a3a189a95bfd49506b371bc8`
+  is deployed in the running `alchemy-media-agent` container and `/healthz`
+  returns the healthy service response.
+- VPS read audit: 13 known project scopes returned HTTP 200; 140 output
+  records were checked across 420 thumbnail/preview/download requests with
+  zero media failures; a foreign output request remained HTTP 404.
+- Real browser verification with Cookie-only authentication: standard V3
+  loaded 12 projects after “加载更多”; review-only project history galleries
+  loaded their actual images; the professional workspace loaded its project
+  after paging. The forced stale-failure race aborted the old request and
+  still rendered project B's 9/9 images with no page errors.
+- Product meaning: a home card showing `0 张图片` for a review-only legacy
+  project means zero formal delivery images in the home contract, not that the
+  stored review pixels are inaccessible. The explicit “查看图片” modal now
+  exposes those pixels with a `待复核` label and never promotes them to formal
+  delivery.
