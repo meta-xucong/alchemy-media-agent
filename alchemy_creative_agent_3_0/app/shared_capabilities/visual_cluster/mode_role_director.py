@@ -137,6 +137,14 @@ _GENERAL_VARIATION_EXTENSION_AXES = (
     "subject scale",
 )
 
+# A delivery suite needs at least one semantic lane that can change the shot
+# itself.  Detail/framing/scale alone can still produce the same camera setup
+# with a tighter crop, which is the regression captured by Doc318.  These are
+# neutral General axes; they do not authorize local prompt wording.
+_DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES: frozenset[VariationAxis] = frozenset(
+    {"viewpoint", "pose", "gesture", "context"}
+)
+
 
 class ModeAwareRoleDirector:
     """Build executable per-image role contracts for the four General modes."""
@@ -271,6 +279,12 @@ class ModeAwareRoleDirector:
                     avoid_drift=avoid_drift,
                 )
             )
+        outputs = _ensure_delivery_suite_minimum_diversity(
+            mode=role_plan.mode,
+            outputs=outputs,
+        )
+        if outputs is None:
+            return None
         try:
             contract = VariationExecutionContract(
                 contract_version="v3_general_variation_execution_v1",
@@ -668,6 +682,43 @@ def _variation_signature(recipe: dict[str, Any]) -> tuple[VariationPurpose, tupl
     ), tuple(axes)
 
 
+def _ensure_delivery_suite_minimum_diversity(
+    *,
+    mode: str,
+    outputs: list[VariationExecutionOutput],
+) -> list[VariationExecutionOutput] | None:
+    """Keep the old suite minimum while preserving the Brain-owned prompt path.
+
+    This is intentionally a contract normalization, not a renderer patch.  A
+    role catalog may describe a close/detail duty first, but a delivery suite
+    with multiple outputs still needs one non-primary shot lane that can change
+    viewpoint, pose, gesture, or context.  Historical records are unaffected
+    because this only runs while building a new frozen contract.
+    """
+
+    if mode != "delivery_suite" or len(outputs) < 2:
+        return outputs
+    if any(
+        _DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES.intersection(output.variation_axes)
+        for output in outputs[1:]
+    ):
+        return outputs
+
+    target_index = 1
+    target = outputs[target_index]
+    axes = list(target.variation_axes)
+    for axis in ("viewpoint", "pose"):
+        if axis not in axes and len(axes) < 6:
+            axes.append(axis)
+    if not _DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES.intersection(axes):
+        # Do not silently produce a weak suite if a future role catalog fills
+        # all six slots with detail/layout semantics.
+        return None
+    normalized = list(outputs)
+    normalized[target_index] = target.model_copy(update={"variation_axes": tuple(axes)})
+    return normalized
+
+
 def _expanded_recipe_dicts(
     recipes: list[dict[str, Any]],
     requested_count: int,
@@ -812,7 +863,7 @@ def _human_delivery_recipes() -> list[dict[str, Any]]:
             "natural angle",
             "face and upper body focus",
             "same shoot",
-            ["expression", "crop", "hair or styling detail"],
+            ["expression", "crop", "hair or styling detail", "head angle", "body turn"],
             keep,
             "Create a closer identity/detail frame: softer expression or slight off-camera gaze, shallow depth, hair texture, real skin light, balanced face scale, natural neck/shoulder line, and upper-body detail without copying the cover still.",
             metadata=_portrait_role_lanes(
@@ -897,7 +948,7 @@ def _product_delivery_recipes() -> list[dict[str, Any]]:
     keep = _base_keep("product")
     return [
         _recipe("hero_object", "Hero object", "Main object image", "object hero", "medium", "front or three-quarter", "balanced main crop", "clean primary setup", ["scale", "placement"], keep, "Create a product/object-first hero image with clear silhouette and premium finish."),
-        _recipe("context_scene", "Context scene", "Object in use or in scene", "context image", "medium-wide", "natural scene angle", "more environment", "realistic contextual setup", ["scene", "surface", "props"], keep, "Create a realistic context image that shows the object naturally in its scene."),
+        _recipe("context_scene", "Context scene", "Object in use or in scene", "context image", "medium-wide", "natural scene angle", "more environment", "realistic contextual setup", ["scene", "surface", "props", "angle"], keep, "Create a realistic context image that shows the object naturally in its scene."),
         _recipe("detail_or_material_closeup", "Detail closeup", "Material/detail proof", "detail closeup", "close", "detail angle", "tight crop", "same product setup", ["texture", "material", "detail"], keep, "Create a closer detail or material image that proves finish and texture."),
         _recipe("layout_safe_cover", "Layout cover", "Cover-safe version", "layout cover", "medium", "clean angle", "broader contextual crop", "clean layout-safe setup", ["negative space", "crop"], keep, "Create a cover version with a broader, naturally balanced contextual composition."),
     ]
@@ -907,7 +958,7 @@ def _generic_delivery_recipes() -> list[dict[str, Any]]:
     keep = _base_keep("generic")
     return [
         _recipe("hero_subject", "Hero image", "Main visual", "hero image", "medium", "front or natural angle", "balanced crop", "primary scene", ["subject scale"], keep, "Create the strongest main image under the approved direction."),
-        _recipe("detail_focus", "Detail focus", "Closer subject detail", "detail image", "close", "natural detail angle", "closer crop", "same visual world", ["detail", "crop"], keep, "Create a closer detail or subject-focus image."),
+        _recipe("detail_focus", "Detail focus", "Closer subject detail", "detail image", "close", "natural detail angle", "closer crop", "same visual world", ["detail", "crop", "angle", "pose"], keep, "Create a closer detail or subject-focus image."),
         _recipe("alternate_angle", "Alternate angle", "Different angle", "alternate shot", "medium", "different angle", "different framing", "same visual world", ["angle", "pose"], keep, "Create an alternate angle that feels like part of the same set."),
         _recipe("wide_context", "Context image", "Wider context", "wide image", "wide", "context angle", "wider crop", "expanded same-world scene", ["scene", "camera distance"], keep, "Create a wider context image that expands the visual story."),
     ]

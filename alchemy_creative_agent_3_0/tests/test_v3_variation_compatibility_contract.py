@@ -130,6 +130,91 @@ def test_general_variation_contract_semantic_signatures_are_unique(
     assert len(signatures) == len(set(signatures))
 
 
+@pytest.mark.parametrize("subject_type", ["generic", "character", "product"])
+def test_delivery_suite_contract_restores_a_non_primary_shot_lane(subject_type: str) -> None:
+    director = ModeAwareRoleDirector()
+    role_plan = director.build(
+        project_id="project_doc318",
+        job_id="job_doc318",
+        user_input="same subject image set",
+        mode="delivery_suite",
+        requested_image_count=2,
+        subject_type=subject_type,
+        scenario_id="general_creative",
+        template_id="general_template",
+        has_identity_anchor=True,
+    )
+    contract = director.build_variation_execution_contract(
+        role_plan=role_plan,
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+
+    assert contract is not None
+    non_primary_axes = {
+        axis
+        for output in contract.outputs[1:]
+        for axis in output.variation_axes
+    }
+    assert non_primary_axes & {"viewpoint", "pose", "gesture", "context"}
+    assert non_primary_axes - {"detail", "framing", "scale", "layout"}
+
+
+def test_delivery_suite_minimum_does_not_leak_into_close_candidates_or_format_layout() -> None:
+    director = ModeAwareRoleDirector()
+    for mode in ("selection_candidates", "format_layout_adaptation"):
+        role_plan = director.build(
+            project_id="project_doc318_isolation",
+            job_id=f"job_doc318_{mode}",
+            user_input="same subject alternatives",
+            mode=mode,
+            requested_image_count=2,
+            subject_type="generic",
+            scenario_id="general_creative",
+            template_id="general_template",
+        )
+        contract = director.build_variation_execution_contract(
+            role_plan=role_plan,
+            scenario_id="general_creative",
+            template_id="general_template",
+        )
+
+        assert contract is not None
+        assert contract.mode == mode
+        assert all(
+            not ({"viewpoint", "pose", "gesture", "context"} & set(output.variation_axes))
+            for output in contract.outputs
+        )
+
+
+def test_delivery_suite_contract_normalizes_a_legacy_detail_only_role_catalog() -> None:
+    director = ModeAwareRoleDirector()
+    role_plan = director.build(
+        project_id="project_doc318_legacy",
+        job_id="job_doc318_legacy",
+        user_input="same subject image set",
+        mode="delivery_suite",
+        requested_image_count=2,
+        subject_type="generic",
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+    legacy_recipes = [
+        recipe.model_copy(update={"variation_axes": ["detail", "crop"]})
+        for recipe in role_plan.role_recipes
+    ]
+    legacy_plan = role_plan.model_copy(update={"role_recipes": legacy_recipes})
+
+    contract = director.build_variation_execution_contract(
+        role_plan=legacy_plan,
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+
+    assert contract is not None
+    assert set(contract.outputs[1].variation_axes) & {"viewpoint", "pose"}
+
+
 @pytest.mark.parametrize("count", [5, 16])
 def test_general_variation_contract_preserves_native_multi_image_range(count: int) -> None:
     contract = _general_contract(count=count)
