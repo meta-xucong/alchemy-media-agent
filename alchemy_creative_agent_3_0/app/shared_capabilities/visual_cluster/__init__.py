@@ -133,6 +133,16 @@ from .review_repair import (
     shared_review_repair_prompt_delta,
 )
 from .quality_review import OutputQualityReviewMerger
+from .review_scope import (
+    UNIVERSAL_REVIEW_AUTHORITY,
+    UNIVERSAL_REVIEW_DIMENSIONS,
+    UNIVERSAL_REVIEW_ISSUE_CODES,
+    UNIVERSAL_REVIEW_MODES,
+    UNIVERSAL_REVIEW_SCHEMA_VERSION,
+    aggregate_review_outcomes,
+    classify_review_outcome,
+    universal_review_scope,
+)
 from .strong_reference_loop import StrongReferenceLoopPlanner
 from .subject_asset_memory import SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID, SubjectContinuityAssetPackBuilder
 from .vision_inspector import VisionOutputInspector
@@ -192,6 +202,14 @@ __all__ = [
     "ModeExecutionPolicy",
     "ModeRoleRecipe",
     "OutputQualityReviewMerger",
+    "UNIVERSAL_REVIEW_AUTHORITY",
+    "UNIVERSAL_REVIEW_DIMENSIONS",
+    "UNIVERSAL_REVIEW_ISSUE_CODES",
+    "UNIVERSAL_REVIEW_MODES",
+    "UNIVERSAL_REVIEW_SCHEMA_VERSION",
+    "aggregate_review_outcomes",
+    "classify_review_outcome",
+    "universal_review_scope",
     "OpenAIVisionInspectionProvider",
     "PostGenerationReviewPackage",
     "PortraitBoneStructureIdentityLayer",

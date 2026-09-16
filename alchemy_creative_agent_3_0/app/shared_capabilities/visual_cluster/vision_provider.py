@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from ..apparel_construction import apparel_construction_review_contract
 from .absolute_portrait_realism import REQUIRED_REALISM_DIMENSIONS
 from .contracts import GeneratedOutputResolution
+from .review_scope import UNIVERSAL_REVIEW_ISSUE_CODES, universal_review_scope
 from .expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     EXPRESSION_FRAMING_DELTA_MAX,
@@ -375,7 +376,12 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
                 else "Image 1 is the generated result; no readable reference image was supplied to this inspection."
             ),
             "Return strict JSON. Do not include markdown.",
-            "Judge visible text artifacts, watermarks, collage/split panels, identity or style drift, long-term identity-card continuity, facial-feature aesthetic integrity, eyebrow/eye/nose-mouth/jaw drift, beautiful-realism balance, realism that makes the subject less attractive, product label/logo readability, requested delivery-intent fidelity, unrelated objects, anatomy/face artifacts, over-smoothed AI-face realism, reference/prompt complexion direction, age fidelity, human proportion, repeated expression/pose/head angle across a set, weak lifestyle context, lighting/composition mismatch, subject readability, composition balance, exposure stability, color-grade stability, depth/material separation, generic stock-photo finish, overprocessed HDR or synthetic detail, and direct-use visual polish. When reference images are present, independently score identity truth and prompt-owned channel obedience; makeup, hairstyle, wardrobe, expression, pose, camera, light, scene, and mood changes are allowed unless the resolved policy assigns them to the reference. Report source-style leakage even if the image is attractive.",
+            "Apply the same universal visual-quality contract in every V3 generation mode. Judge rendered pixels and the user's core intent, not literal word-for-word similarity to the starting prompt.",
+            "Pose, expression, gaze, head angle, crop, framing, background detail, camera interpretation, or concept distance may be intentionally different when the selected mode allows that variation. Do not report an allowed variation as a universal quality defect.",
+            "Mode-specific role, suite coverage, exploration distance, or format/layout compliance is a separate ModeAwareRoleDirector review. Keep those semantic findings separate from universal pixel quality.",
+            f"Universal review scope: {json.dumps(review_contract.get('universal_review_scope') or universal_review_scope(), ensure_ascii=False)}",
+            "Judge universal visual quality: visible text artifacts, watermarks, collage/split panels, core subject or style drift, facial-feature aesthetic integrity, beautiful-realism balance, core user-intent fidelity, unrelated objects, anatomy/face artifacts, over-smoothed AI-face realism, reference/prompt complexion direction, age fidelity, human proportion, lighting/composition coherence, subject readability, composition balance, exposure stability, color-grade stability, depth/material separation, generic stock-photo finish, overprocessed HDR or synthetic detail, and direct-use visual polish. When reference images are present, independently score identity truth and prompt-owned channel obedience; makeup, hairstyle, wardrobe, expression, pose, camera, light, scene, and mood changes are allowed unless the resolved policy assigns them to the reference. Report source-style leakage even if the image is attractive.",
+            "Do not turn mode-semantic differences into universal defects. Set-level repetition, role collapse, weak lifestyle context, suite-role coverage, concept distance, canvas/crop/layout compliance, and other role/format findings belong to the separate ModeAwareRoleDirector review unless the frozen active contract explicitly lists a capability-specific code.",
             "Use beginner-safe wording in summaries. For general_creative, say subject/object/visual direction instead of product/ecommerce language.",
             f"Template: {template_id}",
             f"User goal: {user_goal}",
@@ -507,6 +513,7 @@ def _enforced_inspection_prompt(
     """
 
     frozen_contract = {
+        "universal_review_scope": review_contract.get("universal_review_scope") or universal_review_scope(),
         "issue_codes": review_contract["issue_codes"],
         "score_dimensions": review_contract["score_dimensions"],
         "review_capability_sources": review_contract["review_capability_sources"],
@@ -524,6 +531,7 @@ def _enforced_inspection_prompt(
             else "Image 1 is the generated result; no readable reference image was supplied to this inspection."
         ),
         "Judge only the frozen review contract below. Do not invent issue codes, static roles, prompt language, or a new creative direction.",
+        "The universal visual-quality scope is mode-agnostic across selection_candidates, delivery_suite, creative_exploration, and format_layout_adaptation. Do not treat a variation authorized by the selected mode as a universal quality defect; role/format semantics are reviewed separately by ModeAwareRoleDirector.",
         f"Template: {template_id}",
         f"User goal: {user_goal}",
         f"Resolved reference policy: {json.dumps(reference_policy, ensure_ascii=False)[:2200]}",
@@ -916,22 +924,7 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         )
         if str(item).strip()
     ]
-    universal_issues = [
-        "visible_text_artifact",
-        "watermark_or_signature",
-        "faint_corner_watermark",
-        "ai_generated_badge_trace",
-        "signature_like_artifact",
-        "lower_right_mark_artifact",
-        "collage_or_split_panel",
-        "lighting_mismatch",
-        "composition_mismatch",
-        "weak_aesthetic_finish",
-        "overexposed_washout",
-        "underexposed_muddy_frame",
-        "low_resolution_output",
-        "low_confidence_review",
-    ]
+    universal_issues = list(UNIVERSAL_REVIEW_ISSUE_CODES)
     feedback_contract = review_feedback_contract(metadata)
     if feedback_contract["applies"]:
         universal_issues.extend(
@@ -979,6 +972,9 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         "issue_codes": list(dict.fromkeys(issue_codes)),
         "score_dimensions": list(dict.fromkeys(score_dimensions)),
         "review_capability_sources": list(dict.fromkeys(item for item in sources if item)),
+        "universal_review_scope": universal_review_scope(),
+        "mode_semantics_separate": True,
+        "mode_semantics_owner": "ModeAwareRoleDirector",
         "enforced": str(plan.get("activation_mode") or "").lower() == "enforced",
         "legacy_fallback_rejected": legacy_enforced,
         "hard_semantic_contract": hard_semantic_contract,

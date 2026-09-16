@@ -14,6 +14,11 @@ from .contracts import (
     VisualInspectionReport,
     VisualQualityReviewReport,
 )
+from .review_scope import (
+    aggregate_review_outcomes,
+    classify_review_outcome,
+    universal_review_scope,
+)
 
 
 class OutputQualityReviewMerger:
@@ -46,6 +51,12 @@ class OutputQualityReviewMerger:
         if receipt_status == "closed" and not receipt_errors and ready_output_ids.difference(plans):
             receipt_errors = ("review_evidence_plan_missing",)
         reports = [self._review_report(inspection) for inspection in inspections]
+        output_review_outcomes = {
+            str(inspection.output_id).strip(): classify_review_outcome(inspection)
+            for inspection in inspections
+            if str(inspection.output_id or "").strip()
+        }
+        universal_quality = aggregate_review_outcomes(output_review_outcomes.values())
         certified_output_ids = self._certified_provider_pixel_output_ids(inspections)
         manual_review_only = (
             receipt_status != "complete"
@@ -57,9 +68,14 @@ class OutputQualityReviewMerger:
             real_review_signal_package = None
             recommended_output_ids = []
             hidden_output_ids = []
-            summary = [
-                "Generated pixels are retained for manual review; automatic refinement and delivery are unavailable."
-            ]
+            if universal_quality["quality_failure"]:
+                summary = [
+                    "Generated pixels are retained because a visual quality issue needs review; automatic refinement and delivery are unavailable."
+                ]
+            else:
+                summary = [
+                    "Generated pixels are retained; no visual quality failure was established, but review evidence is incomplete, so automatic delivery is unavailable."
+                ]
         else:
             decisions = self._auto_retry_decisions(job_id, project_id, inspections, max_attempts=max_attempts)
             real_review_signal_package = self._real_review_signal_package(
@@ -101,6 +117,22 @@ class OutputQualityReviewMerger:
                 "inspection_count": len(inspections),
                 "retry_decision_count": len(decisions),
                 "review_disposition": "manual_review_only" if manual_review_only else "certified_review",
+                "universal_review_scope": universal_review_scope(),
+                "universal_quality_assessment": universal_quality["quality_assessment"],
+                "universal_quality_failure": bool(universal_quality["quality_failure"]),
+                "review_evidence_state": universal_quality["evidence_state"],
+                "review_reason": universal_quality["review_reason"],
+                "review_output_outcomes": output_review_outcomes,
+                "review_candidate_output_ids": list(dict.fromkeys(
+                    report.output_id
+                    for report in reports
+                    if report.output_id and report.status != "fail_final"
+                )),
+                "review_candidate_asset_ids": list(dict.fromkeys(
+                    inspection.asset_id
+                    for inspection in inspections
+                    if inspection.asset_id and inspection.status != "fail_final"
+                )),
                 "real_review_signal_package_id": (
                     real_review_signal_package.package_id if real_review_signal_package is not None else None
                 ),
@@ -122,6 +154,7 @@ class OutputQualityReviewMerger:
         passed_checks = ["resolved generated output", "checked output after generation"]
         if inspection.status in {"pass", "warning"}:
             passed_checks.append("no automatic retry needed")
+        outcome = classify_review_outcome(inspection)
         return VisualQualityReviewReport(
             review_id=stable_id(
                 "visual_quality_review_report",
@@ -148,6 +181,11 @@ class OutputQualityReviewMerger:
                 "pre_generation": False,
                 "inspection_id": inspection.inspection_id,
                 "confidence": inspection.confidence,
+                "universal_review_scope": universal_review_scope(),
+                "universal_quality_assessment": outcome["quality_assessment"],
+                "universal_quality_failure": bool(outcome["quality_failure"]),
+                "review_evidence_state": outcome["evidence_state"],
+                "review_reason": outcome["review_reason"],
             },
         )
 

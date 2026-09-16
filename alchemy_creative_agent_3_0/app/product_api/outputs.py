@@ -73,6 +73,7 @@ class V3GeneratedOutputStore:
         self._scoped_paths_by_project: dict[str, tuple[Path, ...]] | None = None
         self._scoped_record_cache_revision: tuple[int, int] | None = None
         self._scoped_records_by_id_cache: dict[str, V3GeneratedOutputRecord] = {}
+        self._record_file_revisions: dict[str, tuple[int, int, int]] = {}
         self._integrity_validation_cache: dict[str, tuple[tuple[int, int, int], str | None, bool]] = {}
         self._image_validation_cache: dict[str, tuple[tuple[int, int, int], bool]] = {}
 
@@ -194,30 +195,41 @@ class V3GeneratedOutputStore:
         if not _valid_output_id(output_id):
             return None
         revision = self._storage_revision()
+        path = self._record_path(output_id)
+        file_revision = self._record_file_revision(path)
         with self._cache_lock:
+            cache_matches_file = (
+                file_revision is not None
+                and self._record_file_revisions.get(output_id) == file_revision
+            )
             if (
-                self._records_cache is not None
+                cache_matches_file
+                and self._records_cache is not None
                 and revision == self._records_cache_revision
                 and self._records_by_id_cache is not None
             ):
                 return self._records_by_id_cache.get(output_id)
-            if revision == self._scoped_record_cache_revision:
+            if cache_matches_file and revision == self._scoped_record_cache_revision:
                 scoped_record = self._scoped_records_by_id_cache.get(output_id)
                 if scoped_record is not None:
                     return scoped_record
-        path = self._record_path(output_id)
         if not path.exists():
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             record = V3GeneratedOutputRecord(**data)
         except Exception:
+            with self._cache_lock:
+                self._scoped_records_by_id_cache.pop(output_id, None)
+                self._record_file_revisions.pop(output_id, None)
             return None
         with self._cache_lock:
             if revision != self._scoped_record_cache_revision:
                 self._scoped_record_cache_revision = revision
                 self._scoped_records_by_id_cache = {}
             self._scoped_records_by_id_cache[output_id] = record
+            if file_revision is not None:
+                self._record_file_revisions[output_id] = file_revision
         return record
 
     def claim_doc73_auto_identity_anchor(self, binding: dict) -> bool:
@@ -465,6 +477,7 @@ class V3GeneratedOutputStore:
             self._scoped_paths_by_project = None
             self._scoped_record_cache_revision = None
             self._scoped_records_by_id_cache.clear()
+            self._record_file_revisions.clear()
             self._integrity_validation_cache.clear()
             self._image_validation_cache.clear()
 
@@ -527,6 +540,23 @@ class V3GeneratedOutputStore:
         except OSError:
             return None
         return int(stat.st_mtime_ns), int(stat.st_ctime_ns)
+
+    @staticmethod
+    def _record_file_revision(path: Path) -> tuple[int, int, int] | None:
+        """Return a cheap per-record revision for out-of-band edits.
+
+        The output root revision only changes for writes performed through this
+        store. A reviewer may read a record written by another process, or a
+        repair tool may update one ``output.json`` in place. Checking this
+        single file's metadata keeps the fast scoped cache while preventing a
+        stale record from being used as review evidence.
+        """
+
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size)
 
     def _record_paths_signature(self) -> tuple[tuple[Path, ...], tuple[tuple[str, int, int], ...]]:
         paths = sorted(self.storage_root.glob("v3_output_*/output.json"))

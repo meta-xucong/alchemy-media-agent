@@ -5070,8 +5070,46 @@ function v3JobFinalDeliveryReviewLines(job = v3State.currentJob) {
   ]).slice(0, 5);
 }
 
+function v3UniversalReviewHoldKind(job = v3State.currentJob) {
+  const review = v3PostGenerationReview(job);
+  if (review?.quality_failure === true) return "quality_failure";
+  if (
+    review?.review_reason === "evidence_incomplete"
+    || review?.evidence_state === "incomplete"
+  ) return "evidence_incomplete";
+  if (
+    review?.quality_assessment === "needs_manual_review"
+    || review?.review_reason === "review_uncertain"
+  ) return "review_uncertain";
+  return "";
+}
+
+function v3JobFinalDeliveryHoldLabel(job = v3State.currentJob) {
+  const kind = v3UniversalReviewHoldKind(job);
+  if (kind === "evidence_incomplete") return "审核证据需确认";
+  if (kind === "review_uncertain") return "自动审核需确认";
+  if (kind === "quality_failure") return "视觉问题需处理";
+  return "自动审查未通过";
+}
+
 function v3JobFinalDeliveryNotice(job = v3State.currentJob) {
   const lines = v3JobFinalDeliveryReviewLines(job);
+  const kind = v3UniversalReviewHoldKind(job);
+  if (kind === "evidence_incomplete") {
+    return lines.length
+      ? `图片已经生成，但自动交付所需的审核证据不完整，尚未证明图片质量不合格。${lines[0]} 项目记录已保留，可以查看复核图并人工确认。`
+      : "图片已经生成，但自动交付所需的审核证据不完整，尚未证明图片质量不合格。项目记录已保留，可以查看复核图并人工确认。";
+  }
+  if (kind === "review_uncertain") {
+    return lines.length
+      ? `图片已经生成，但自动审核暂时无法可靠判定。${lines[0]} 项目记录已保留，可以查看复核图并人工确认。`
+      : "图片已经生成，但自动审核暂时无法可靠判定。项目记录已保留，可以查看复核图并人工确认。";
+  }
+  if (kind === "quality_failure") {
+    return lines.length
+      ? `图片已经生成，但自动审核发现需要处理的视觉问题。${lines[0]} 项目记录已保留，可以查看复核图或修改需求后重新生成。`
+      : "图片已经生成，但自动审核发现需要处理的视觉问题。项目记录已保留，可以查看复核图或修改需求后重新生成。";
+  }
   return lines.length
     ? `图片已经生成，但自动质量审查未通过。${lines[0]} 项目记录已保留，可以查看复核图、修改需求后重新生成。`
     : "图片已经生成，但自动质量审查未通过。项目记录已保留，可以查看复核图、修改需求后重新生成。";
@@ -5088,7 +5126,14 @@ function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
   if (!job || v3FailureArtifactExpired(job) || !v3JobDeliveryWithheld(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
-  const source = candidates.length ? candidates : assets;
+  const reviewOutputIds = v3ReviewOutputIdSet("review_output_ids", job);
+  const projectReviewItems = v3StoredProjectReviewOutputItems()
+    .filter((item) => {
+      const itemJobId = String(item?.job_id || item?.metadata?.job_id || item?.related_job_id || "").trim();
+      return itemJobId === String(job.job_id || "").trim()
+        || (!itemJobId && reviewOutputIds.has(v3OutputItemIdentity(item)));
+    });
+  const source = candidates.length ? candidates : assets.length ? assets : projectReviewItems;
   const hiddenIds = v3ReviewOutputIdSet("hidden_output_ids", job);
   return source
     .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "review_only" }))
@@ -11325,7 +11370,7 @@ function renderV3OutcomeItems(entries) {
   }
   if (els.v3SummaryFootnote) {
     els.v3SummaryFootnote.textContent = deliveryWithheld
-      ? "图片已生成，但未通过自动质量审查；项目已保留，可以查看复核图或修改需求后重新生成。"
+      ? v3JobFinalDeliveryNotice(v3State.currentJob)
       : failed
       ? "本次没有交付图片，项目记录已保留；不会自动重复提交。"
       : percent >= 100
@@ -11538,7 +11583,7 @@ function renderV3ResultBoard(job) {
       const reviewLines = v3JobFinalDeliveryReviewLines(job);
       notice.innerHTML = `
         <div class="v3-card-head">
-          <strong>${escapeHtml(reviewCertification ? v3ReviewCertificationLabel(reviewCertification) : "自动审查未通过")}</strong>
+          <strong>${escapeHtml(reviewCertification ? v3ReviewCertificationLabel(reviewCertification) : v3JobFinalDeliveryHoldLabel(job))}</strong>
           <span class="mini-pill">已结束 · 需要确认</span>
         </div>
         <p>${escapeHtml(reviewCertification ? v3ReviewCertificationNotice(reviewCertification) : v3JobFinalDeliveryNotice(job))}</p>

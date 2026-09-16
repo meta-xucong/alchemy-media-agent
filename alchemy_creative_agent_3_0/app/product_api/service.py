@@ -115,6 +115,11 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
     normalize_human_realism_issue_code,
 )
 from ..shared_capabilities.visual_cluster.review_evidence import ExactReviewEvidenceResolver, review_plan_digest
+from ..shared_capabilities.visual_cluster.review_scope import (
+    aggregate_review_outcomes,
+    classify_review_outcome,
+    universal_review_scope,
+)
 from ..shared_capabilities.visual_cluster.vision_provider import (
     VisionInspectionProviderError,
     VisionInspectionProviderUnavailable,
@@ -11938,6 +11943,7 @@ class V3ProductApiService:
         }
         certified_output_ids: set[str] = set()
         inspections = []
+        review_outcomes: list[dict[str, Any]] = []
         for item in package.get("inspections", []):
             if not isinstance(item, dict):
                 continue
@@ -11960,6 +11966,15 @@ class V3ProductApiService:
                 for issue in item.get("detected_issues", [])
                 if isinstance(issue, dict)
             ]
+            outcome = classify_review_outcome(
+                item,
+                provider_pixel_certified=(
+                    bool(evidence.get("provider_pixel_result_certified"))
+                    if evidence
+                    else None
+                ),
+            )
+            review_outcomes.append(outcome)
             inspections.append(
                 {
                     "output_id": output_id,
@@ -11967,6 +11982,10 @@ class V3ProductApiService:
                     "status": str(item.get("status") or "unverified"),
                     "verification_state": str(item.get("verification_state") or "unverified"),
                     "detected_issues": issues,
+                    "quality_assessment": outcome["quality_assessment"],
+                    "quality_failure": bool(outcome["quality_failure"]),
+                    "evidence_state": outcome["evidence_state"],
+                    "review_reason": outcome["review_reason"],
                 }
             )
         if not ready_output_ids:
@@ -11981,6 +12000,38 @@ class V3ProductApiService:
             and bool(ready_output_ids)
             and ready_output_ids.issubset(certified_output_ids)
         )
+        universal_quality = aggregate_review_outcomes(review_outcomes)
+        review_output_ids = [
+            str(item.get("output_id") or "").strip()
+            for item in inspections
+            if str(item.get("output_id") or "").strip()
+            and str(item.get("status") or "").strip().lower() != "fail_final"
+        ]
+        raw_mode_review = (
+            package.get("metadata", {}).get("mode_differentiation_review")
+            if isinstance(package.get("metadata"), dict)
+            else None
+        )
+        mode_semantics = (
+            {
+                "mode": str(raw_mode_review.get("mode") or "").strip(),
+                "status": str(raw_mode_review.get("status") or "planned").strip(),
+                "role_coverage_status": str(raw_mode_review.get("role_coverage_status") or "planned").strip(),
+                "issue_codes": [
+                    str(code)[:120]
+                    for code in raw_mode_review.get("issue_codes", [])
+                    if str(code).strip()
+                ][:24],
+                "user_visible_summary": [
+                    str(line)[:300]
+                    for line in raw_mode_review.get("user_visible_summary", [])
+                    if isinstance(line, str) and line.strip()
+                ][:4],
+                "separate_from_universal_quality": True,
+            }
+            if isinstance(raw_mode_review, dict)
+            else {}
+        )
         return {
             "user_visible_summary": [
                 str(line)[:300]
@@ -11990,6 +12041,13 @@ class V3ProductApiService:
             "inspections": inspections,
             "recommended_output_ids": [str(value) for value in package.get("recommended_output_ids", []) if str(value)],
             "hidden_output_ids": [str(value) for value in package.get("hidden_output_ids", []) if str(value)],
+            "review_output_ids": list(dict.fromkeys(review_output_ids)),
+            "universal_review_scope": universal_review_scope(),
+            "quality_assessment": universal_quality["quality_assessment"],
+            "quality_failure": bool(universal_quality["quality_failure"]),
+            "evidence_state": universal_quality["evidence_state"],
+            "review_reason": universal_quality["review_reason"],
+            "mode_semantics": mode_semantics,
             "real_pixel_review_attempted": real_pixel_review_attempted,
             "real_pixel_review_certified": real_pixel_review_certified,
             "review_evidence_receipt_status": receipt_status,
