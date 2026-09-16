@@ -3515,6 +3515,7 @@ class ScenarioRuntime:
             "active_semantic_capability_contracts": semantic_contracts,
             "variation_execution_contract_required": variation_execution_contract_required,
             "variation_execution_semantic_evidence_required": bool(variation_execution_contract),
+            "variation_execution_suite_direction_authoritative": variation_execution_contract_required,
             "final_prompt_semantic_preflight": {
                 "required": bool(semantic_contracts),
                 "scope": "whole_image_human_photographic_plausibility",

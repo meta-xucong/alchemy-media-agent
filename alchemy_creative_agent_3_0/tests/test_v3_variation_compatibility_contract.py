@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.contracts import VariationExecutionReceipt
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
-from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import SYSTEM_PROMPT, build_remote_payload
 from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainPromptContractInvalid
 from alchemy_creative_agent_3_0.app.product_api.contracts import CreateCreativeJobRequest
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
@@ -468,6 +468,56 @@ def test_compact_real_brain_payload_gates_contract_to_general_multi_image() -> N
     assert "variation_execution_contract" not in photography_payload
 
 
+def test_brain_payload_defines_shot_axis_materialization_without_local_recipe_leakage() -> None:
+    contract = _general_contract(count=2).model_dump(mode="json")
+    binding = {
+        "contract_version": contract["contract_version"],
+        "contract_digest": contract["contract_digest"],
+    }
+    request = BrainRunRequest(
+        user_input="Create a real photographic set for the same subject.",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=2,
+        metadata={
+            "require_real_images": True,
+            "variation_execution_contract_enforced": True,
+            "variation_execution_contract_binding": binding,
+        },
+        shared_capabilities={
+            "visual_cluster": {
+                "variation_execution_contract": contract,
+            }
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+    guidance = payload["variation_execution_contract_instructions"]
+    for phrase in (
+        "non-primary row's frozen shot-changing axes",
+        "override only directly conflicting baseline camera",
+        "camera/subject view",
+        "visible at a glance",
+        "clear three-quarter or side relationship",
+        "body arrangement, weight, torso/head relationship",
+        "visibly different silhouette",
+        "tiny weight shift or detail emphasis alone does not satisfy pose",
+        "presentation changes only and cannot stand in for a shot-changing axis",
+        "materially different shot family",
+        "controlled action-compatible variation",
+    ):
+        assert phrase in guidance
+    assert "local recipe wording" in guidance
+    assert "camera/subject view" in SYSTEM_PROMPT
+
+    finalizer_payload = json.loads(build_remote_payload(_finalizer_request(_general_contract(count=2))))
+    finalizer_contract = finalizer_payload["remote_response_contract"]
+    assert "variation_execution_suite_direction_authoritative is true" in finalizer_contract
+    assert "non-primary row's frozen shot-changing axes" in finalizer_contract
+    assert "camera/subject view" in finalizer_contract
+    assert "materially different shot family" in finalizer_contract
+
+
 def test_finalizer_context_keeps_frozen_contract_and_old_cluster_records_stay_readable() -> None:
     contract = _general_contract(count=3)
     projection = {
@@ -483,7 +533,17 @@ def test_finalizer_context_keeps_frozen_contract_and_old_cluster_records_stay_re
         },
     }
     context = ScenarioRuntime._canonical_prompt_context(
-        SimpleNamespace(metadata={}, uploaded_assets=[]),
+        SimpleNamespace(
+            metadata={
+                "variation_execution_contract_enforced": True,
+                "variation_execution_contract": contract.model_dump(mode="json"),
+                "variation_execution_contract_binding": {
+                    "contract_version": contract.contract_version,
+                    "contract_digest": contract.contract_digest,
+                },
+            },
+            uploaded_assets=[],
+        ),
         SimpleNamespace(dependency_order=[]),
         SimpleNamespace(envelope_id="envelope", execution_fingerprint="fingerprint"),
         SimpleNamespace(ledger_id="ledger", provider_projection=projection),
@@ -491,6 +551,7 @@ def test_finalizer_context_keeps_frozen_contract_and_old_cluster_records_stay_re
     )
 
     assert context["variation_execution_contract"] == contract.model_dump(mode="json")
+    assert context["variation_execution_suite_direction_authoritative"] is True
     assert context["frozen_binding"]["variation_execution_contract"] == {
         "contract_version": contract.contract_version,
         "contract_digest": contract.contract_digest,

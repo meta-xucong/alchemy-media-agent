@@ -29,6 +29,32 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
 from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
 
 
+GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS = (
+    "General multi-output variation is an execution obligation, not metadata. "
+    "When frozen_render_context.variation_execution_suite_direction_authoritative is true, output 1 is the "
+    "baseline and each non-primary row's frozen shot-changing axes are an explicit suite request. Those axes "
+    "override only directly conflicting baseline camera, framing, or pose wording from the protected source for "
+    "that row; preserve all non-conflicting subject, identity, scene, wardrobe, lighting, style, and core-action "
+    "meaning, and do not repeat a source negative that directly forbids the authorized axis. "
+    "When a frozen output row contains viewpoint, materialize a different camera/subject view or visible "
+    "face/body plane. The change must be visible at a glance when outputs are compared: a clear three-quarter "
+    "or side relationship, or another decisive camera/subject orientation that changes the visible face/torso "
+    "plane; a slight right/left wording, a crop, or camera-distance change alone does not satisfy it. "
+    "When a row contains pose, materialize a different body arrangement, weight, torso/head relationship, or "
+    "scene interaction with a visibly different silhouette, shoulder line, limb relationship, or contact geometry "
+    "while preserving the same subject and the core user intent. A tiny weight shift or detail emphasis alone does "
+    "not satisfy pose. "
+    "When a row contains gesture, change the meaningful hand/arm/action relationship; when it contains context, "
+    "change the subject/environment relationship or scene duty while preserving the requested visual world. "
+    "Framing, scale, detail, and depth are presentation changes only and cannot stand in for a shot-changing axis. "
+    "For a multi-output delivery suite, every non-primary row carrying a shot-changing axis must be reflected as a "
+    "materially different shot family in both image_set_plan.shot_plan and its complete canonical prompt; state the "
+    "decisive shot change first instead of describing the row as the same pose with a closer crop. "
+    "Use a controlled action-compatible variation when the user fixes a core action; do not erase protected user "
+    "meaning. Do not copy axis names, role metadata, or local recipe wording into renderer text."
+)
+
+
 SYSTEM_PROMPT = """You are the V3 Creative OS planning brain. Return JSON only.
 Do not reveal hidden reasoning. Summarize decisions as user-friendly studio notes.
 Use the same language as the user's request; use Simplified Chinese for Chinese requests.
@@ -80,7 +106,8 @@ SYSTEM_PROMPT = (
     f"{HUMAN_COMPLEXION_COMMERCIAL_AESTHETIC_INSTRUCTIONS}\n"
     f"{HUMAN_SURFACE_MATERIALITY_INSTRUCTIONS}\n"
     f"{HUMAN_REALISM_BEAUTY_PRESERVATION_INSTRUCTIONS}\n"
-    f"{PROTECTED_USER_INTENT_INTEGRITY_INSTRUCTIONS}"
+    f"{PROTECTED_USER_INTENT_INTEGRITY_INSTRUCTIONS}\n"
+    f"{GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS}"
 )
 
 # The canonical-prompt stage already receives a frozen envelope, ownership
@@ -93,7 +120,7 @@ CANONICAL_FINALIZER_SYSTEM_PROMPT = """You are the V3 Creative OS final prompt-s
 Author the exact complete natural-language renderer prompt requested by the schema. The frozen render context is authoritative for protected user intent, reference-channel ownership, template/cardinality, capability obligations, and normalized review evidence. Reconcile all of it as one whole image; do not emit IDs, diagnostics, prompt fragments, checklists, local recipes, or markdown.
 The Remote Brain is the sole final prompt author. Do not replace an explicit current-request choice with an inherited reference style, age, camera, hair, wardrobe, expression, complexion, or scene unless the frozen ownership context explicitly assigns it to the reference.
 When frozen_render_context.variation_execution_contract is present, use its neutral output purposes, variation axes, must-keep meaning, and anti-drift meaning to make the outputs materially distinct. For the exact format axes format_vertical, format_square, format_horizontal, and format_tight, preserve the corresponding per-output canvas/layout meaning: tall portrait 2:3, balanced square 1:1, wide horizontal 3:2, or tight/detail framing on the frozen canvas. Translate that contract into complete prompts without copying its fields, axis identifiers, local role language, or any recipe wording into renderer text.
-Treat every explicit current-request choice of atmosphere, palette, time of day, lighting color or direction, lens, film finish, environment, composition, and mood as protected user-owned intent. Human Realism may improve the camera-observed rendering of people and materials inside that direction, but it must not replace, brighten, cool, warm, modernize, soften, or otherwise redesign those channels. When a channel is not defined by the request, resolve it conservatively from the complete meaning; do not invent a new location, palette, lighting setup, or cinematic mood merely to demonstrate realism.
+Treat every explicit current-request choice of atmosphere, palette, time of day, lighting color or direction, lens, film finish, environment, composition, and mood as protected user-owned intent. Human Realism may improve the camera-observed rendering of people and materials inside that direction, but it must not replace, brighten, cool, warm, modernize, soften, or otherwise redesign those channels. When frozen_render_context.variation_execution_suite_direction_authoritative is true, a non-primary delivery-suite row may adapt only the baseline camera, framing, or pose channel named by its frozen shot-changing axes; this is an explicit user-selected suite variation, not an unrequested redesign. When a channel is not defined by the request, resolve it conservatively from the complete meaning; do not invent a new location, palette, lighting setup, or cinematic mood merely to demonstrate realism.
 For a visible real person, resolve identity, current developmental stage, expression, photographic material, and scene together. Keep the person age-appropriate and non-sexual. Do not turn age, expression, complexion, skin, anatomy, or beauty into a feature formula or word stack. Preserve an explicitly user-owned commercial aesthetic while keeping the person materially camera-observed and individual; a pleasant or commercial frame alone does not justify a generic presenter expression.
 When multiple visible people share the frame, preserve the user's desired beauty, appeal, facial harmony, styling, and mood as the first visual priority while authoring them as distinct individuals observed in one real moment. Let their attention, timing, posture, expression, facial character, and light-dependent surface response differ naturally with the situation, without making faces interchangeable, retouching uniform, or skin artificially plastic. Keep the beauty direction flattering and coherent across the group; realism should add camera-observed material detail and presence, not make the people less attractive. Do not equate realism with dullness, harshness, fatigue, roughness, or deliberately imperfect facial features: preserve balanced attractive features, healthy complexion, and expressive eyes. If realism and texture compete with beauty, reduce the texture intervention before reducing facial appeal. Resolve skin as natural human material with restrained local highlights and soft highlight rolloff, preserving fine nonuniform texture without oily sheen or waxy gloss. Keep each face readable through scene-consistent reflected or ambient fill from the existing light, without replacing directional light with flat frontal studio fill. Preserve the prompt's light direction, color, mood, and contrast; keep facial shadow detail open without lifting the whole scene, and keep highlight rolloff physically coherent with the background and hair rim light. If warm backlight, retro color, soft focus, diffusion, or halation is requested, balance those effects against neutral skin color, gentle highlight transitions, and open shadow detail rather than intensifying amber saturation or contrast. When soft focus, diffusion, or halation is requested, keep it an optical property of the scene and highlights while retaining local face and material contrast at the focal plane.
 When improving human rendering inside an already specified scene, do not add new environmental facts, props, background landmarks, weather, time-of-day changes, palette changes, or alternate lighting setups. Make the smallest semantic improvement needed to the people and their interaction while leaving the complete scene direction intact.
@@ -105,7 +132,8 @@ Return every required audit receipt in the response schema. A receipt is proof o
 # Brain without duplicating the entire planning constitution above.
 CANONICAL_FINALIZER_SYSTEM_PROMPT = (
     f"{CANONICAL_FINALIZER_SYSTEM_PROMPT}\n"
-    f"{HUMAN_REALISM_BEAUTY_PRESERVATION_INSTRUCTIONS}"
+    f"{HUMAN_REALISM_BEAUTY_PRESERVATION_INSTRUCTIONS}\n"
+    f"{GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS}"
 )
 
 _CANONICAL_FINALIZER_STAGES = frozenset(
@@ -860,6 +888,7 @@ def _compact_remote_creative_payload(
     if variation_contract:
         payload["variation_execution_contract"] = variation_contract
         payload["variation_execution_contract_instructions"] = (
+            f"{GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} "
             "Use this typed contract as neutral per-output semantic guidance. Preserve its subject/style and "
             "anti-drift meaning, make each output serve its own purpose and variation axes, and author the "
             "complete Brain-owned direction for each output. If a row contains format_vertical, format_square, "
@@ -953,12 +982,12 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         )
         if "variation_execution_contract" in payload:
             payload["remote_response_contract"] += (
-                " When variation_execution_contract is present, use its neutral per-output purpose and variation "
-                "axes to make image_set_plan.shot_plan materially distinct while preserving its must-keep and "
-                "anti-drift meaning. For format_vertical, format_square, format_horizontal, and format_tight, "
-                "preserve the matching tall portrait 2:3, balanced square 1:1, wide horizontal 3:2, or "
-                "tight/detail-on-the-frozen-canvas layout meaning. Do not return the contract itself as prompt "
-                "text or add local recipe wording."
+                f" {GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} When variation_execution_contract is present, "
+                "use its neutral per-output purpose and variation axes to make image_set_plan.shot_plan materially "
+                "distinct while preserving its must-keep and anti-drift meaning. For format_vertical, "
+                "format_square, format_horizontal, and format_tight, preserve the matching tall portrait 2:3, "
+                "balanced square 1:1, wide horizontal 3:2, or tight/detail-on-the-frozen-canvas layout meaning. "
+                "Do not return the contract itself as prompt text or add local recipe wording."
             )
         if professional_ecommerce_pose_contract:
             payload["professional_ecommerce_pose_contract_instructions"] = (
@@ -1644,16 +1673,20 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "Use all of its prompt_guidance, image_set_plan, capability_guidance, and "
             "protected_constraint_projection fields when authoring each complete natural-language prompt. "
             "The protected_constraint_projection is an authoritative, salient subset of the user and frozen "
-            "rendering contract: every non-empty hard_constraints and composition_rules item must remain "
-            "semantically represented in the final prompt, including numeric framing, crop/body completeness, "
-            "camera/depth, landmark/text, and explicit negative requirements. Do not collapse those facts into "
-            "generic words such as 'well-composed', 'full scene', or 'clear background', and do not silently "
-            "drop them to make the prompt shorter. Integrate them naturally into one coherent renderer "
-            "instruction rather than emitting a checklist. Translate positive and negative capability directions "
-            "into that same direction while preserving the user's protected intent; do not reconstruct, discard, "
-            "or replace those facts with a local recipe, and never emit capability IDs or internal field names as "
-            "renderer wording. Only after this constraint-coverage check may the Brain mark semantic_coverage "
-            "complete. For every output, "
+            "rendering contract: for ordinary or single-output requests, every non-empty hard_constraints and "
+            "composition_rules item must remain semantically represented in the final prompt, including numeric "
+            "framing, crop/body completeness, camera/depth, landmark/text, and explicit negative requirements. "
+            "For a General delivery_suite with variation_execution_suite_direction_authoritative=true, output 1 "
+            "keeps that baseline intact; on a non-primary output, preserve every non-conflicting item, while the "
+            "row's frozen viewpoint/pose/gesture/context axis is authoritative over a directly conflicting baseline "
+            "camera, framing, or pose item. Do not repeat a negative that directly forbids that authorized axis. "
+            "Do not collapse protected facts into generic words such as 'well-composed', 'full scene', or 'clear "
+            "background', and do not silently drop non-conflicting facts to make the prompt shorter. Integrate "
+            "them naturally into one coherent renderer instruction rather than emitting a checklist. Translate "
+            "positive and negative capability directions into that same direction while preserving the user's "
+            "protected intent; do not reconstruct, discard, or replace those facts with a local recipe, and never "
+            "emit capability IDs or internal field names as renderer wording. Only after this constraint-coverage "
+            "check may the Brain mark semantic_coverage complete. For every output, "
             "return source_projection_receipt with contract_version "
             f"{V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV}, the exact source_digest from that projection, the matching "
             "output_index, requested_image_count, semantic_coverage complete, owner remote_v3_llm_brain, and the "
@@ -1663,7 +1696,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         )
     if variation_execution_contract is not None:
         response_contract += (
-            " For every output, use the frozen variation_execution_contract to author a materially distinct output "
+            f" {GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} For every output, use the frozen "
+            "variation_execution_contract to author a materially distinct output "
             "purpose and variation direction while preserving its must_keep and avoid_drift meaning. Return the "
             "exact schema-only variation_execution_receipt with contract_version "
             f"{variation_execution_contract.contract_version}, contract_digest "
