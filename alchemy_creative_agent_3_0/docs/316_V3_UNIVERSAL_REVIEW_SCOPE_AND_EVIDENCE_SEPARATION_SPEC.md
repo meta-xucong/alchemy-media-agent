@@ -161,5 +161,6 @@ Validation:
 
 Release receipt:
 
-- Commit and GitHub push are recorded in the final handoff after this document is committed.
+- Implementation commit: `044a4a407609c49aa73014bef3ebc2f47f83afcb`.
+- GitHub: pushed successfully to `origin/main`.
 - VPS deployment is intentionally not part of this document-only/logic repair handoff; it requires a separate release instruction.
