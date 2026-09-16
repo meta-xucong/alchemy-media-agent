@@ -737,6 +737,62 @@ def test_semantic_idle_watchdog_stops_after_first_content_inside_shared_deadline
     assert _SemanticStallHttpClient.response.finished.wait(0.5)
 
 
+def test_first_semantic_watchdog_stops_stream_without_any_semantic_delta(monkeypatch) -> None:
+    _install_blocking_httpx(monkeypatch)
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.setattr(providers_module, "_stream_first_semantic_timeout_seconds", lambda: 0.08)
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    trace_token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    started = time.perf_counter()
+    try:
+        with pytest.raises(BrainTransportTimeoutError) as failure:
+            _call_with_timeout(
+                lambda: _collect_openai_chat_completion_stream(
+                    url="https://brain.example/v1/chat/completions",
+                    api_key="redacted",
+                    payload={"stream": True},
+                    timeout_seconds=0.5,
+                ),
+                timeout_seconds=0.5,
+                trace=trace,
+            )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(trace_token)
+
+    elapsed = time.perf_counter() - started
+    assert 0.05 <= elapsed < 0.25
+    assert trace["response_started"] is True
+    assert trace["semantic_progress_event_count"] == 0
+    assert trace["first_content_observed"] is False
+    assert trace["first_semantic_timeout_triggered"] is True
+    assert trace["transport_cancel_requested"] is True
+    assert trace["transport_worker_stopped"] is True
+    assert failure.value.timeout_phase == "read_timeout"
+    assert _BlockingHttpClient.response is not None
+    assert _BlockingHttpClient.response.closed.is_set()
+    assert _BlockingHttpClient.response.finished.wait(0.5)
+
+
+def test_first_semantic_watchdog_is_stream_only(monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.setattr(providers_module, "_stream_first_semantic_timeout_seconds", lambda: 0.05)
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    trace["response_kind"] = "complete"
+    trace["response_started"] = True
+    trace["response_started_at"] = time.perf_counter()
+
+    result = _call_with_timeout(
+        lambda: {"ok": True},
+        timeout_seconds=0.2,
+        trace=trace,
+    )
+
+    assert result == {"ok": True}
+    assert trace["first_semantic_timeout_triggered"] is False
+
+
 def test_semantic_idle_watchdog_does_not_kill_continuous_semantic_chunks(monkeypatch) -> None:
     _install_fast_progressing_httpx(monkeypatch)
     import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
@@ -807,6 +863,19 @@ def test_semantic_idle_setting_defaults_to_grace_and_stays_bounded(monkeypatch) 
     assert providers_module._stream_semantic_idle_timeout_seconds() == 45.0  # noqa: SLF001
     monkeypatch.setenv("V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS", "nan")
     assert providers_module._stream_semantic_idle_timeout_seconds() == 30.0  # noqa: SLF001
+
+
+def test_first_semantic_setting_defaults_and_stays_bounded(monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.delenv("V3_LLM_BRAIN_STREAM_FIRST_SEMANTIC_TIMEOUT_SECONDS", raising=False)
+    assert providers_module._stream_first_semantic_timeout_seconds() == 60.0  # noqa: SLF001
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_FIRST_SEMANTIC_TIMEOUT_SECONDS", "5")
+    assert providers_module._stream_first_semantic_timeout_seconds() == 5.0  # noqa: SLF001
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_FIRST_SEMANTIC_TIMEOUT_SECONDS", "999")
+    assert providers_module._stream_first_semantic_timeout_seconds() == 120.0  # noqa: SLF001
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_FIRST_SEMANTIC_TIMEOUT_SECONDS", "nan")
+    assert providers_module._stream_first_semantic_timeout_seconds() == 60.0  # noqa: SLF001
 
 
 def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:

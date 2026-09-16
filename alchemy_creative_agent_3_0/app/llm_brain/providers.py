@@ -357,6 +357,9 @@ _ACTIVE_TRANSPORT_CANCELLATION: ContextVar[_TransportCancellation | None] = Cont
     default=None,
 )
 _STREAM_PROGRESS_GRACE_SECONDS = 30.0
+_STREAM_FIRST_SEMANTIC_TIMEOUT_DEFAULT_SECONDS = 60.0
+_STREAM_FIRST_SEMANTIC_TIMEOUT_MIN_SECONDS = 5.0
+_STREAM_FIRST_SEMANTIC_TIMEOUT_MAX_SECONDS = 120.0
 _STREAM_SEMANTIC_IDLE_TIMEOUT_DEFAULT_SECONDS = _STREAM_PROGRESS_GRACE_SECONDS
 _STREAM_SEMANTIC_IDLE_TIMEOUT_MIN_SECONDS = 0.1
 _STREAM_SEMANTIC_IDLE_TIMEOUT_MAX_SECONDS = 45.0
@@ -1116,6 +1119,45 @@ def _required_finalizer_reserve_seconds(request: BrainRunRequest) -> float:
     return float(BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS) if requires_remote_brain else 0.0
 
 
+def _stream_first_semantic_timeout_seconds() -> float:
+    """Return one finite, bounded window for the first semantic stream delta."""
+
+    configured = _float_env(
+        "V3_LLM_BRAIN_STREAM_FIRST_SEMANTIC_TIMEOUT_SECONDS",
+        _STREAM_FIRST_SEMANTIC_TIMEOUT_DEFAULT_SECONDS,
+    )
+    if not math.isfinite(configured):
+        configured = _STREAM_FIRST_SEMANTIC_TIMEOUT_DEFAULT_SECONDS
+    return max(
+        _STREAM_FIRST_SEMANTIC_TIMEOUT_MIN_SECONDS,
+        min(_STREAM_FIRST_SEMANTIC_TIMEOUT_MAX_SECONDS, configured),
+    )
+
+
+def _stream_first_semantic_deadline(
+    trace: dict[str, Any] | None,
+    *,
+    timeout_seconds: float,
+) -> float | None:
+    """Calculate a first-token deadline only for an active stream."""
+
+    if not isinstance(trace, dict) or str(trace.get("response_kind") or "").strip().lower() != "stream":
+        return None
+    try:
+        semantic_count = int(trace.get("semantic_progress_event_count") or 0)
+    except (TypeError, ValueError):
+        return None
+    if semantic_count > 0 or not bool(trace.get("response_started")):
+        return None
+    response_started_at = trace.get("response_started_at")
+    if isinstance(response_started_at, bool) or not isinstance(response_started_at, (int, float)):
+        return None
+    response_started_at = float(response_started_at)
+    if not math.isfinite(response_started_at):
+        return None
+    return response_started_at + float(timeout_seconds)
+
+
 def _stream_semantic_idle_timeout_seconds() -> float:
     """Return one finite, bounded idle window for semantic stream progress."""
 
@@ -1178,6 +1220,7 @@ def _call_with_timeout(
     cancellation = _TransportCancellation()
     hard_deadline = started + timeout_seconds
     progress_grace_seconds = min(_STREAM_PROGRESS_GRACE_SECONDS, timeout_seconds)
+    first_semantic_timeout_seconds = _stream_first_semantic_timeout_seconds()
     semantic_idle_timeout_seconds = _stream_semantic_idle_timeout_seconds()
     progress_grace_deadline = hard_deadline + progress_grace_seconds
     execution_budget = _ACTIVE_EXECUTION_BUDGET.get()
@@ -1210,10 +1253,19 @@ def _call_with_timeout(
     deadline = min(hard_deadline, maximum_deadline)
     while thread.is_alive():
         now = time.perf_counter()
+        first_semantic_deadline = _stream_first_semantic_deadline(
+            trace,
+            timeout_seconds=first_semantic_timeout_seconds,
+        )
         semantic_idle_deadline = _semantic_idle_deadline(
             trace,
             idle_timeout_seconds=semantic_idle_timeout_seconds,
         )
+        if first_semantic_deadline is not None:
+            # A streaming response that has started but has not produced one
+            # semantic delta must not consume the whole read window. This is
+            # independent from the post-content idle deadline below.
+            deadline = min(deadline, first_semantic_deadline)
         if semantic_idle_deadline is not None:
             # Semantic idle is a shorter stream bound. It may reduce the
             # existing hard/grace deadline, but never extend it or escape the
@@ -1242,6 +1294,14 @@ def _call_with_timeout(
                 # failure schema continues to use the established
                 # ``read_timeout`` phase and closed response flags.
                 trace["semantic_idle_timeout_triggered"] = True
+            elif (
+                trace is not None
+                and first_semantic_deadline is not None
+                and now >= first_semantic_deadline
+            ):
+                # Keep this internal distinction out of the public receipt;
+                # both cases remain the established bounded read timeout.
+                trace["first_semantic_timeout_triggered"] = True
             cancellation.cancel()
             # A transport that owns a closeable response should terminate
             # promptly. Keep the grace join short for an uncooperative SDK so
@@ -1298,6 +1358,7 @@ def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
         "request_acceptance": "not_started",
         "request_dispatched": False,
         "response_started": False,
+        "response_started_at": None,
         "first_content_observed": False,
         "reasoning_content_observed": False,
         "reasoning_chunk_count": 0,
@@ -1308,6 +1369,7 @@ def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
         "progress_event_count": 0,
         "semantic_progress_event_count": 0,
         "last_semantic_progress_at": None,
+        "first_semantic_timeout_triggered": False,
         "semantic_idle_timeout_triggered": False,
         "protocol_fallback_attempted": False,
     }
@@ -1321,9 +1383,13 @@ def _mark_transport_event(event: str) -> None:
     trace["last_event"] = normalized
     if normalized in {"json_parse_started", "json_parse_completed"}:
         trace["response_started"] = True
+        if trace.get("response_started_at") is None:
+            trace["response_started_at"] = time.perf_counter()
         _set_transport_acceptance(trace, "dispatched")
     if normalized == "response_started":
         trace["response_started"] = True
+        if trace.get("response_started_at") is None:
+            trace["response_started_at"] = time.perf_counter()
         _set_transport_acceptance(trace, "dispatched")
     if normalized == "request_dispatched":
         trace["request_call_entered"] = True
@@ -1341,6 +1407,8 @@ def _mark_transport_event(event: str) -> None:
         trace["complete_response_started"] = True
     if normalized == "first_content_observed":
         trace["response_started"] = True
+        if trace.get("response_started_at") is None:
+            trace["response_started_at"] = time.perf_counter()
         _set_transport_acceptance(trace, "dispatched")
         trace["first_content_observed"] = True
     if normalized == "reasoning_content_observed":
@@ -1350,6 +1418,8 @@ def _mark_transport_event(event: str) -> None:
         trace["reasoning_chunk_count"] = int(trace.get("reasoning_chunk_count") or 0) + 1
     if normalized == "complete_response_observed":
         trace["response_started"] = True
+        if trace.get("response_started_at") is None:
+            trace["response_started_at"] = time.perf_counter()
         _set_transport_acceptance(trace, "dispatched")
         trace["complete_response_observed"] = True
     if normalized == "protocol_fallback":
@@ -1826,9 +1896,13 @@ def _collect_openai_chat_completion_stream(
     import httpx
 
     headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
+    stream_read_timeout = min(
+        max(0.1, float(timeout_seconds)),
+        max(0.1, _stream_first_semantic_timeout_seconds() + 1.0),
+    )
     timeout = httpx.Timeout(
         connect=min(20.0, max(0.1, float(timeout_seconds))),
-        read=max(0.1, float(timeout_seconds)),
+        read=stream_read_timeout,
         write=min(30.0, max(0.1, float(timeout_seconds))),
         pool=min(20.0, max(0.1, float(timeout_seconds))),
     )
