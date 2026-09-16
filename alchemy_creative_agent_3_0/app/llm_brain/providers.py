@@ -1896,9 +1896,13 @@ def _collect_openai_chat_completion_stream(
     import httpx
 
     headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
+    stream_progress_timeout = max(
+        _stream_first_semantic_timeout_seconds(),
+        _stream_semantic_idle_timeout_seconds(),
+    )
     stream_read_timeout = min(
         max(0.1, float(timeout_seconds)),
-        max(0.1, _stream_first_semantic_timeout_seconds() + 1.0),
+        max(0.1, stream_progress_timeout + 1.0),
     )
     timeout = httpx.Timeout(
         connect=min(20.0, max(0.1, float(timeout_seconds))),

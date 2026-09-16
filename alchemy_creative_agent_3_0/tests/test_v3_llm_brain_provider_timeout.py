@@ -878,6 +878,24 @@ def test_first_semantic_setting_defaults_and_stays_bounded(monkeypatch) -> None:
     assert providers_module._stream_first_semantic_timeout_seconds() == 60.0  # noqa: SLF001
 
 
+def test_stream_read_timeout_does_not_underbid_post_semantic_idle_window(monkeypatch) -> None:
+    fake_client = _install_fake_httpx(monkeypatch, [
+        'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}',
+        "data: [DONE]",
+    ])
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_FIRST_SEMANTIC_TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS", "30")
+
+    _collect_openai_chat_completion_stream(
+        url="https://brain.example/v1/chat/completions",
+        api_key="redacted",
+        payload={"stream": True},
+        timeout_seconds=120,
+    )
+
+    assert fake_client.calls[0]["timeout"].kwargs["read"] == 31.0
+
+
 def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:
     provider = object.__new__(V3LLMBrainProvider)
     provider.provider = "openai"

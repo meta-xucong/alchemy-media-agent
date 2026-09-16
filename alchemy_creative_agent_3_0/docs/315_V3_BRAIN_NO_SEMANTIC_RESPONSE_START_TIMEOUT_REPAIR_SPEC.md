@@ -53,8 +53,9 @@ The first-semantic window is transport-only and bounded by code. Its default is
 60 seconds, configurable only through the internal
 `V3_LLM_BRAIN_STREAM_FIRST_SEMANTIC_TIMEOUT_SECONDS` setting, with a finite
 5-to-120-second clamp. The underlying streaming read timeout is kept just
-above this window so the outer guard can close the stream and record the same
-terminal evidence.
+above the larger of the first-semantic and post-first-semantic idle windows so
+an intentionally shorter first window cannot kill a stream that has already
+begun making semantic progress.
 
 On timeout, the transport closes its registered response/client resources and
 admits the existing single transient retry only after the first worker is
