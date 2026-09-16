@@ -68,16 +68,18 @@ Add one foundation transport setting:
 
 `V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS`
 
-- default: `45.0` seconds;
+- default: `30.0` seconds (the existing `_STREAM_PROGRESS_GRACE_SECONDS`
+  boundary);
 - accepted operational range: finite `0.1` through `45.0` seconds;
 - invalid, missing, NaN, infinite, or out-of-range values resolve to the safe
   bounded default/clamp behavior defined by the implementation;
 - the setting is read by the transport watchdog, not exposed in a public
   receipt and not copied into prompt or provider payload metadata.
 
-The existing `_STREAM_PROGRESS_GRACE_SECONDS` remains the compatibility grace
-boundary. The new setting is an independent **idle** boundary, not another
-retry or another stage budget.
+The existing `_STREAM_PROGRESS_GRACE_SECONDS` remains the shared/stage grace
+boundary and becomes the default semantic stream-idle lease after the first
+semantic block. The new setting is an independent configurable **idle**
+boundary (capped at 45 seconds), not another retry or another stage budget.
 
 ### 3.2 Semantic progress authority
 
@@ -117,10 +119,11 @@ effective deadline is:
 `min(D_call/grace, D_stage, D_shared, t_last + T_idle)`
 
 where “call/grace” means the current implementation’s hard deadline and its
-existing progress-grace extension. A new semantic block refreshes `t_last`;
-continuous semantic progress can therefore continue to the existing
-hard/stage/shared ceiling. The idle deadline can shorten a deadline but can
-never extend or borrow time from any budget or reserve.
+existing progress-grace extension. After the first semantic block, that grace
+is an idle lease measured from the latest semantic block; a new semantic block
+refreshes `t_last`. Continuous semantic progress can therefore continue to the
+existing hard/stage/shared ceiling. The idle deadline can shorten a deadline
+but can never extend or borrow time from any budget or reserve.
 
 When `t_last + T_idle` is reached without a new semantic block, the transport
 must:
@@ -133,8 +136,11 @@ must:
    `read_timeout` compatibility phase and accurate response/first-content
    flags;
 4. allow only the existing single bounded transient retry path, if the shared
-   budget still permits it. A retry cannot reset or escape the shared/stage
-   budget and no additional retry is introduced.
+   budget still permits it **and the timed-out transport worker has stopped**.
+   If the remaining budget cannot form a legal retry window, re-raise the
+   original `BrainTransportTimeoutError` rather than masking it with a budget
+   exception. A retry cannot reset or escape the shared/stage budget and no
+   additional retry is introduced.
 
 The watchdog applies to a stream after semantic progress. A stream that never
 produces semantic content remains governed by the existing connect/TTFB/read
@@ -208,8 +214,10 @@ The implementation is acceptable only if all of these remain true:
    cannot consume the finalizer reserve or create a new stage.
 4. Cancellation closes the active response/client and the worker stops; no
    detached transport thread is left as a successful continuation.
-5. One existing transient retry remains the maximum; its total elapsed time is
-   bounded by the same execution scope.
+5. One existing transient retry remains the maximum; it starts only after the
+   previous transport worker stopped and its total elapsed time is bounded by
+   the same execution scope. An insufficient retry window preserves the
+   original timeout class.
 6. A Brain timeout or incomplete response yields no complete Brain plan and
    therefore zero image Provider calls.
 7. Existing timeout/auth/contract/error receipts continue to validate under
@@ -275,4 +283,3 @@ phase’s test and freeze status.
 5. **Ready-to-audit:** stop all writes and provide the main controller with
    commit SHA, changed files, every test command/result, known limitations,
    push status (`not pushed`), and the remaining real-acceptance dependency.
-
