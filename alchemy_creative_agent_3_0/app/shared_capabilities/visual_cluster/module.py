@@ -4506,7 +4506,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         prompt_additions = [
             "Doc78 beautiful realism repair: keep the person beautiful first, and make realism come from photographed skin texture, light, hair, fabric, camera depth, and natural expression.",
             "Preserve flattering facial feature design: attractive eyebrow shape/arc, awake eye shape and spacing, natural eyelids, harmonious nose-mouth relationship, jaw/chin direction, cheek volume, and face ratio.",
-            "Use soft flattering real-camera light and healthy clean complexion; do not make the subject darker, tired, harsh, or less attractive just to look realistic.",
+            "Preserve the user's or reference's complexion, mood, and lighting direction; use flattering scene-consistent light and restrained texture, and if realism conflicts with beauty reduce the realism intervention first.",
         ]
         negative_additions = [
             "ugly realism",
@@ -4521,12 +4521,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "flattened facial attractiveness",
             "pretty but poreless AI filter",
             "over-smoothed beauty face",
-            "dull complexion",
-            "muddy skin tone",
         ]
         identity_reinforcement: list[str] = []
         artifact_repair = [
-            "repair the face toward a flattering real photograph: natural skin texture and tiny asymmetry, but keep beautiful proportions and clean facial-feature design",
+            "repair the face toward a flattering real photograph: restrained camera-observed surface texture and material response, while keeping beautiful proportions and clean facial-feature design",
         ]
         if subject_identity_card and subject_identity_card.applies:
             identity_reinforcement.extend(subject_identity_card.identity_keep_rules[:5])
@@ -4561,15 +4559,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             )
         if any(code in {"real_but_unflattering", "realism_made_subject_less_attractive", "unflattering_feature_degradation"} for code in issue_codes):
             prompt_additions.append(
-                "recover flattering beauty with soft directional light, a clean luminous complexion, relaxed facial muscles, graceful eyebrow design, and a camera angle that keeps the face harmonious"
+                "recover flattering beauty with soft scene-consistent directional light, the user's or reference's complexion, relaxed facial presence, and a camera angle that keeps the face harmonious without changing the requested mood or style"
             )
             negative_additions.extend(
                 [
-                    "real but ugly face",
-                    "harsh documentary ugliness",
+                    "unflattering realism intervention",
                     "unflattering face angle",
-                    "tired facial muscles",
-                    "bad eyebrow design",
                 ]
             )
         return {

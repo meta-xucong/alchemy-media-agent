@@ -23,6 +23,9 @@ from ..shared_capabilities.visual_cluster.contracts import (
     GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS,
     VariationExecutionContract,
 )
+from ..shared_capabilities.visual_cluster.human_photorealism import (
+    HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_VERSION,
+)
 from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
 
 
@@ -50,17 +53,33 @@ HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS = """Expression authenticity is a sha
 HUMAN_COMPLEXION_COMMERCIAL_AESTHETIC_INSTRUCTIONS = """Commercial complexion is a shared semantic judgement, not a local prompt recipe. When a consumer-facing brief visibly includes a person or model and its commercial presentation, explicit user direction, or declared target-market context makes a brighter and fairer complexion part of the intended aesthetic, honour that preference as user-owned visual direction even when the supplied reference is warmer or darker. The user's explicit complexion hue and undertone are authoritative: when the request owns a cool or cool-neutral fair presentation, preserve that reading without adding compensatory peach, amber, golden, or generic warm-beauty bias; when it owns a warmer, darker, tanned, documentary, historical, or mood-specific complexion, preserve that instead. When hue or undertone is not assigned, remain scene-balanced and neutral rather than inventing either warmth or coolness. Let any requested brightness come from clean scene light and color management, not lifted exposure, bleaching, or recolouring. Preserve facial identity and age, natural camera-observed skin material, age-appropriate tonal variation, and restrained matte highlights that follow the face's planes instead of diffusing across the whole face. Reconcile the owned complexion with scene-appropriate white balance and clean exposure, avoiding an unintended muddy yellow, green, gray, or orange cast without making the skin look bleached. Keep the person's complexion as its own material judgement rather than allowing a blue, yellow, green, or otherwise colored set light to overwrite it; preserve the scene's color while keeping the requested complexion stable. The complete direction should keep natural tonal separation and skin material legible at the visible scale, rather than describing or producing a uniformly airbrushed surface. Before returning the final provider prompt, do not approve it until this active commercial complexion decision is expressed as a complete natural-language visual direction—including its user-owned hue and undertone, separation from scene color cast, camera-resolved microvariation, and face-plane highlight behavior—rather than being reduced to a generic word such as natural or fair. If there is no visible person, or the work is not a commercial presentation and the user has not asked for this complexion direction, do not invent a hidden bright-complexion treatment. A user-assigned complexion or skin-finish reference may guide only complexion, white balance, and skin material; never inherit that reference's identity, age, face, hair, wardrobe, scene, or mood. Do not infer a preferred complexion from ethnicity alone, and do not treat any historical demographic sample as a universal visual template. Do not bleach, flatten, recolour the person, airbrush or wax the skin, apply beauty-filter glow, or use a local skin patch; resolve the complete scene, not an isolated skin correction, in the final direction you author."""
 PROTECTED_USER_INTENT_INTEGRITY_INSTRUCTIONS = """During every canonical prompt finalization or complete-prompt rewrite, protected user intent is the immutable semantic source for each explicit non-conflicting current-request choice and exclusion. The returned renderer direction must remain semantically equivalent to that protected meaning. Compatible creative and rendering detail may clarify the request, but it must not omit, contradict, or replace an explicit choice with a different scene, light, subject, camera, mood, expression, complexion, wardrobe, or format. If a candidate drifted, rewrite the complete prompt to restore the protected meaning. A static studio capture is already a complete situation when the user asks for one; do not invent a window, lifestyle action, or narrative setting merely to make the person feel individual. Do not use keyword matching, phrase-counting, a structured visual recipe, or a local repair suffix to enforce this boundary. Compare the complete meanings semantically, and let the Remote Brain remain the sole final prompt author."""
 HUMAN_SURFACE_MATERIALITY_INSTRUCTIONS = """When a requested human image also uses diffusion, soft focus, halation, flattering light, or polished editorial beauty, treat those as optical and lighting properties around the person rather than as permission to smooth the person. In the complete direction, keep local surface texture, natural tonal variation, face-plane transitions, small asymmetry, and material response camera-observed and legible at the requested finish. Preserve attractiveness and the user's aesthetic while preventing the person from reading as airbrushed, waxy, or cosmetically uniform. Resolve this semantically across the whole person and scene; do not emit a face or skin checklist, a keyword-triggered patch, or a local repair suffix."""
+HUMAN_REALISM_BEAUTY_PRESERVATION_INSTRUCTIONS = (
+    "When the Human Realism contract contains beauty_preservation_policy "
+    f"({HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_VERSION}), treat user- or "
+    "reference-owned aesthetic appeal, style, mood, complexion, and facial "
+    "harmony as hard protected channels. Realism is subordinate rendering "
+    "evidence. If realism and beauty conflict, preserve beauty and reduce the "
+    "intensity or coverage of the realism intervention first. Limit realism "
+    "to camera-observed texture, scene-consistent light and shadow, material "
+    "response, depth, contact, and physical coherence; never redesign facial "
+    "geometry, make the person less attractive, impose unrequested dullness or "
+    "harshness, or override the requested style or complexion. This is a "
+    "semantic ordering rule for the complete prompt, not a keyword list, "
+    "checklist, or local repair phrase."
+)
 HUMAN_REALISM_PLANNING_CONTEXT_INSTRUCTIONS = (
     "When human_realism_execution_contract.applies is true, use its semantic_contract and "
     "universal_rendering_profile as one holistic human-material and real-camera constraint. "
     "Keep user_input authoritative for the requested subject, scene, style, mood, light, "
-    "composition, and expression; do not emit the contract, a checklist, or a changed scene/style."
+    "composition, and expression; do not emit the contract, a checklist, or a changed scene/style. "
+    + HUMAN_REALISM_BEAUTY_PRESERVATION_INSTRUCTIONS
 )
 SYSTEM_PROMPT = (
     f"{SYSTEM_PROMPT}\n"
     f"{HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS}\n"
     f"{HUMAN_COMPLEXION_COMMERCIAL_AESTHETIC_INSTRUCTIONS}\n"
     f"{HUMAN_SURFACE_MATERIALITY_INSTRUCTIONS}\n"
+    f"{HUMAN_REALISM_BEAUTY_PRESERVATION_INSTRUCTIONS}\n"
     f"{PROTECTED_USER_INTENT_INTEGRITY_INSTRUCTIONS}"
 )
 
@@ -81,6 +100,13 @@ When improving human rendering inside an already specified scene, do not add new
 For an age-sensitive or otherwise safety-sensitive person reference, keep the renderer direction concise, plainly age-appropriate, fully clothed, and ordinary. Preserve the requested identity, developmental stage, clothing, scene, and factual capture requirements, but express realism as a positive whole-image camera observation such as natural matte skin and an ordinary expression. Do not repeat contrastive safety wording, microscopic skin or anatomy language, body-development descriptions, or lists of forbidden adult traits in the renderer prompt. This is a provider-admission safeguard, not a refusal and not permission to omit a protected user fact.
 Apply canonical_prompt_policy exactly once. Do not compress or rewrite a final prompt at or below the threshold of 6000 Unicode characters. If the complete prompt would exceed that threshold, perform one semantic rewrite in this same finalizer, keep the final prompt at or below 3500 characters, set compression_decision to brain_semantic_once, and return the complete compression_receipt bound to the exact final prompt. Never return an overlong prompt, a partial receipt, a summary, or a local repair fragment. prompt_status and semantic_coverage must both be complete for every fresh canonical record; these are semantic decisions, not keyword or regex checks.
 Return every required audit receipt in the response schema. A receipt is proof of your semantic decision, never extra renderer wording. On retry, use normalized review evidence to rewrite the whole direction yourself rather than appending a local repair phrase."""
+
+# Keep the finalizer's shorter system constitution aligned with the planning
+# Brain without duplicating the entire planning constitution above.
+CANONICAL_FINALIZER_SYSTEM_PROMPT = (
+    f"{CANONICAL_FINALIZER_SYSTEM_PROMPT}\n"
+    f"{HUMAN_REALISM_BEAUTY_PRESERVATION_INSTRUCTIONS}"
+)
 
 _CANONICAL_FINALIZER_STAGES = frozenset(
     {
@@ -494,6 +520,8 @@ def _compact_human_realism_execution_contract(shared_capabilities: dict[str, obj
                 "final_direction_requirement",
                 "physical_coherence",
                 "natural_presence_priority",
+                "aesthetic_boundary",
+                "beauty_preservation_policy",
                 "complexion_rendering_requirement",
                 "photographic_material_requirement",
                 "expression_ownership_requirement",
@@ -1707,7 +1735,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             " When frozen_render_context.human_realism_execution_contract is present and applies, use its typed "
             "semantic contract and universal rendering profile as a binding whole-image quality decision: keep the "
             "faces readable in the requested scene light, preserve facial shadow detail, and keep surface response "
-            "natural and restrained, with natural person-to-person variation rather than uniform retouching, while preserving the user's mood and beauty direction. Resolve that decision in "
+            "natural and restrained, with natural person-to-person variation rather than uniform retouching, while preserving the user's mood and beauty direction. Treat the beauty-preservation policy as a hard ordering rule: if realism and beauty conflict, preserve beauty and reduce the realism intervention first. Resolve that decision in "
             "the complete prompt you author; do not copy the profile keys or turn it into a checklist."
         )
         response_contract += (

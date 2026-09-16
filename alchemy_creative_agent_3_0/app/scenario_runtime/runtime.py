@@ -85,7 +85,9 @@ from ..shared_capabilities.activation import (
 )
 from ..shared_capabilities.visual_cluster.plugins import VisualCapabilityPlugin, VisualClusterPluginRegistry
 from ..shared_capabilities.visual_cluster.human_photorealism import (
+    HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_KEYS,
     HUMAN_REALISM_REVIEW_DIMENSIONS,
+    build_human_realism_beauty_preservation_policy,
     normalize_human_realism_issue_code,
 )
 from ..shared_capabilities.visual_cluster.expression_review import (
@@ -3234,6 +3236,7 @@ class ScenarioRuntime:
             "ordinary_age_appropriate_context",
             "natural_presence_priority",
             "aesthetic_boundary",
+            "beauty_preservation_policy",
             "expression_ownership_requirement",
             "expression_resolution_requirement",
             "personhood_requirement",
@@ -3273,6 +3276,11 @@ class ScenarioRuntime:
             or not isinstance(contract.get("ordinary_age_appropriate_context"), bool)
             or contract.get("natural_presence_priority") != "individual_human_presence"
             or contract.get("aesthetic_boundary") != "preserve_user_style_without_generic_beauty_substitution"
+            or not isinstance(contract.get("beauty_preservation_policy"), dict)
+            or set(contract.get("beauty_preservation_policy") or {})
+            != HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_KEYS
+            or contract.get("beauty_preservation_policy")
+            != build_human_realism_beauty_preservation_policy()
             or contract.get("expression_ownership_requirement")
             not in {"situation_owned_unless_explicit_user_direction", "not_applicable"}
             or contract.get("expression_resolution_requirement")
@@ -3882,6 +3890,8 @@ class ScenarioRuntime:
             "final_direction_requirement",
             "physical_coherence",
             "natural_presence_priority",
+            "aesthetic_boundary",
+            "beauty_preservation_policy",
             "complexion_rendering_requirement",
             "photographic_material_requirement",
             "expression_ownership_requirement",

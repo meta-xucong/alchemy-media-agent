@@ -12,6 +12,54 @@ from .contracts import AntiAIFaceReviewResult, HumanPhotorealismGuidance
 HUMAN_PHOTOREALISM_MODULE_ID = "human_photorealism_layer"
 ANTI_AI_FACE_REVIEW_MODULE_ID = "anti_ai_face_review"
 HUMAN_REALISM_PLUGIN_METADATA_KEY = "human_realism_plugin"
+HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_VERSION = (
+    "v3_human_realism_beauty_preservation_v1"
+)
+HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_KEYS = frozenset(
+    {
+        "contract_version",
+        "priority",
+        "conflict_resolution",
+        "style_authority",
+        "protected_channels",
+        "realism_channels",
+        "forbidden_interventions",
+    }
+)
+
+
+def build_human_realism_beauty_preservation_policy() -> dict[str, Any]:
+    """Return the closed, scene-neutral beauty-preservation policy.
+
+    This is semantic execution context for the Brain, not Provider prose.  A
+    fresh value is returned on every call so downstream projections cannot
+    mutate the shared policy or leak state between jobs.
+    """
+
+    return {
+        "contract_version": HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_VERSION,
+        "priority": "hard_user_or_reference_aesthetic",
+        "conflict_resolution": "preserve_beauty_reduce_realism_intervention",
+        "style_authority": "prompt_and_resolved_reference_channels",
+        "protected_channels": [
+            "user_owned_style_and_mood",
+            "reference_or_user_owned_appearance",
+            "facial_feature_harmony_and_identity",
+            "flattering_presentation",
+        ],
+        "realism_channels": [
+            "skin_hair_fabric_and_surface_texture",
+            "scene_consistent_light_and_shadow",
+            "camera_depth_highlight_and_contact",
+            "physical_anatomy_coherence",
+        ],
+        "forbidden_interventions": [
+            "facial_geometry_redesign",
+            "beauty_reduction_for_realism",
+            "unrequested_dulling_or_harshness",
+            "style_override",
+        ],
+    }
 
 # Doc128 deliberately keeps these dimensions broad.  They are shared review
 # semantics, not a prompt vocabulary, a demographic classifier, or template
@@ -921,6 +969,10 @@ class HumanPhotorealismLayer:
             # not to an age, apparel, region or template-specific branch.
             "natural_presence_priority": "individual_human_presence",
             "aesthetic_boundary": "preserve_user_style_without_generic_beauty_substitution",
+            # Beauty remains a protected user/reference channel.  Realism is
+            # allowed to improve photographed material only; it yields first
+            # whenever its intervention would reduce appeal or alter style.
+            "beauty_preservation_policy": build_human_realism_beauty_preservation_policy(),
             # Expression is a whole-image, situation-owned semantic decision
             # made by the remote Brain.  This is deliberately not a local
             # expression classifier or renderer phrase catalogue.
