@@ -333,6 +333,162 @@ class _NoiseBlockingHttpClient:
         return self.response
 
 
+class _SemanticStallStreamResponse:
+    def __init__(self):
+        self.closed = threading.Event()
+        self.finished = threading.Event()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        self.closed.set()
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}'
+        yield ""
+        self.closed.wait(5.0)
+        self.finished.set()
+
+
+class _SemanticStallHttpClient:
+    response = None
+
+    def __init__(self, *, timeout):
+        self.timeout = timeout
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        if self.response is not None:
+            self.response.close()
+
+    def stream(self, method, url, *, headers, json):
+        type(self).response = _SemanticStallStreamResponse()
+        self.response = type(self).response
+        return self.response
+
+
+class _SemanticThenRoleNoiseStreamResponse:
+    def __init__(self):
+        self.closed = threading.Event()
+        self.finished = threading.Event()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        self.closed.set()
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}'
+        yield ""
+        for _ in range(20):
+            if self.closed.is_set():
+                self.finished.set()
+                return
+            yield 'data: {"choices":[{"delta":{"role":"assistant"}}]}'
+            yield ""
+            time.sleep(0.02)
+        self.closed.wait(5.0)
+        self.finished.set()
+
+
+class _SemanticThenRoleNoiseHttpClient:
+    response = None
+
+    def __init__(self, *, timeout):
+        self.timeout = timeout
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        if self.response is not None:
+            self.response.close()
+
+    def stream(self, method, url, *, headers, json):
+        type(self).response = _SemanticThenRoleNoiseStreamResponse()
+        self.response = type(self).response
+        return self.response
+
+
+class _FastProgressingStreamResponse:
+    def __init__(self):
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        self.closed = True
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        lines = [
+            'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}',
+            'data: {"choices":[{"delta":{"content":"true"}}]}',
+            'data: {"choices":[{"delta":{"content":"}"}}]}',
+            "data: [DONE]",
+        ]
+        for index, line in enumerate(lines):
+            yield line
+            if index < len(lines) - 1:
+                time.sleep(0.04)
+
+
+class _FastProgressingHttpClient:
+    response = None
+
+    def __init__(self, *, timeout):
+        self.timeout = timeout
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        if self.response is not None:
+            self.response.close()
+
+    def stream(self, method, url, *, headers, json):
+        type(self).response = _FastProgressingStreamResponse()
+        self.response = type(self).response
+        return self.response
+
+
 class _FakeHttpxReadTimeout(RuntimeError):
     __module__ = "httpx"
 
@@ -406,6 +562,24 @@ def _install_noise_blocking_httpx(monkeypatch) -> type[_NoiseBlockingHttpClient]
     fake_httpx = types.SimpleNamespace(Timeout=_FakeTimeout, Client=_NoiseBlockingHttpClient)
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
     return _NoiseBlockingHttpClient
+
+
+def _install_semantic_stall_httpx(monkeypatch) -> type[_SemanticStallHttpClient]:
+    fake_httpx = types.SimpleNamespace(Timeout=_FakeTimeout, Client=_SemanticStallHttpClient)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+    return _SemanticStallHttpClient
+
+
+def _install_semantic_role_noise_httpx(monkeypatch) -> type[_SemanticThenRoleNoiseHttpClient]:
+    fake_httpx = types.SimpleNamespace(Timeout=_FakeTimeout, Client=_SemanticThenRoleNoiseHttpClient)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+    return _SemanticThenRoleNoiseHttpClient
+
+
+def _install_fast_progressing_httpx(monkeypatch) -> type[_FastProgressingHttpClient]:
+    fake_httpx = types.SimpleNamespace(Timeout=_FakeTimeout, Client=_FastProgressingHttpClient)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+    return _FastProgressingHttpClient
 
 
 def _install_timeout_httpx(monkeypatch) -> type[_TimeoutHttpClient]:
@@ -523,6 +697,209 @@ def test_transport_noise_does_not_extend_semantic_progress_grace(monkeypatch) ->
     assert _NoiseBlockingHttpClient.response.finished.wait(0.5)
 
 
+def test_semantic_idle_watchdog_stops_after_first_content_inside_shared_deadline(monkeypatch) -> None:
+    _install_semantic_stall_httpx(monkeypatch)
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.setattr(providers_module, "_stream_semantic_idle_timeout_seconds", lambda: 0.08)
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    trace_token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    budget = _BrainExecutionBudget(total_seconds=0.35, started_at=time.perf_counter())
+    budget_token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    started = time.perf_counter()
+    try:
+        with pytest.raises(BrainTransportTimeoutError) as failure:
+            _call_with_timeout(
+                lambda: _collect_openai_chat_completion_stream(
+                    url="https://brain.example/v1/chat/completions",
+                    api_key="redacted",
+                    payload={"stream": True},
+                    timeout_seconds=0.3,
+                ),
+                timeout_seconds=0.3,
+                trace=trace,
+            )
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(budget_token)
+        _ACTIVE_TRANSPORT_TRACE.reset(trace_token)
+
+    elapsed = time.perf_counter() - started
+    assert 0.05 <= elapsed < 0.25
+    assert trace["semantic_progress_event_count"] == 1
+    assert trace["first_content_observed"] is True
+    assert trace["semantic_idle_timeout_triggered"] is True
+    assert trace["transport_cancel_requested"] is True
+    assert trace["transport_worker_stopped"] is True
+    assert failure.value.timeout_phase == "read_timeout"
+    assert "semantic_idle_timeout_triggered" not in failure.value.safe_metadata()
+    assert _SemanticStallHttpClient.response is not None
+    assert _SemanticStallHttpClient.response.closed.is_set()
+    assert _SemanticStallHttpClient.response.finished.wait(0.5)
+
+
+def test_semantic_idle_watchdog_does_not_kill_continuous_semantic_chunks(monkeypatch) -> None:
+    _install_fast_progressing_httpx(monkeypatch)
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.setattr(providers_module, "_stream_semantic_idle_timeout_seconds", lambda: 0.08)
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    trace_token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    try:
+        result = _call_with_timeout(
+            lambda: {"text": _collect_openai_chat_completion_stream(
+                url="https://brain.example/v1/chat/completions",
+                api_key="redacted",
+                payload={"stream": True},
+                timeout_seconds=0.1,
+            )},
+            timeout_seconds=0.1,
+            trace=trace,
+        )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(trace_token)
+
+    assert json.loads(result["text"]) == {"ok": True}
+    assert trace["semantic_progress_event_count"] == 3
+    assert trace["semantic_idle_timeout_triggered"] is False
+    assert trace["transport_worker_stopped"] is True
+
+
+def test_role_noise_after_content_does_not_reset_semantic_idle(monkeypatch) -> None:
+    _install_semantic_role_noise_httpx(monkeypatch)
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.setattr(providers_module, "_stream_semantic_idle_timeout_seconds", lambda: 0.08)
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    trace_token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    started = time.perf_counter()
+    try:
+        with pytest.raises(BrainTransportTimeoutError):
+            _call_with_timeout(
+                lambda: _collect_openai_chat_completion_stream(
+                    url="https://brain.example/v1/chat/completions",
+                    api_key="redacted",
+                    payload={"stream": True},
+                    timeout_seconds=0.5,
+                ),
+                timeout_seconds=0.5,
+                trace=trace,
+            )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(trace_token)
+
+    assert time.perf_counter() - started < 0.25
+    assert trace["progress_event_count"] > trace["semantic_progress_event_count"]
+    assert trace["semantic_progress_event_count"] == 1
+    assert trace["semantic_idle_timeout_triggered"] is True
+    assert trace["transport_worker_stopped"] is True
+    assert _SemanticThenRoleNoiseHttpClient.response is not None
+    assert _SemanticThenRoleNoiseHttpClient.response.finished.wait(0.5)
+
+
+def test_semantic_idle_setting_defaults_to_grace_and_stays_bounded(monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.delenv("V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS", raising=False)
+    assert providers_module._stream_semantic_idle_timeout_seconds() == 30.0  # noqa: SLF001
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS", "45")
+    assert providers_module._stream_semantic_idle_timeout_seconds() == 45.0  # noqa: SLF001
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS", "999")
+    assert providers_module._stream_semantic_idle_timeout_seconds() == 45.0  # noqa: SLF001
+    monkeypatch.setenv("V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS", "nan")
+    assert providers_module._stream_semantic_idle_timeout_seconds() == 30.0  # noqa: SLF001
+
+
+def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.provider = "openai"
+    provider.timeout = 0.1
+    provider.max_tokens = 8_000
+    release = threading.Event()
+    finished = threading.Event()
+    started = threading.Event()
+    calls = 0
+
+    def uncooperative_call(request: BrainRunRequest, *, json_recovery: bool = False):
+        nonlocal calls
+        calls += 1
+        started.set()
+        try:
+            release.wait(0.5)
+        finally:
+            finished.set()
+        raise BrainTransportTimeoutError(
+            stage=request.stage,
+            timeout_seconds=0.1,
+            elapsed_ms=100,
+            timeout_phase="read_timeout",
+            response_started=True,
+            first_content_observed=True,
+        )
+
+    provider._run_openai_compatible = uncooperative_call
+    request = BrainRunRequest(
+        user_input="Prepare one bounded Brain request.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}},
+    )
+    budget = _BrainExecutionBudget(total_seconds=2.0, started_at=time.perf_counter())
+    budget_token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    worker_finished = False
+    try:
+        with pytest.raises(BrainTransportTimeoutError):
+            provider.run(request)
+        assert started.is_set()
+        assert calls == 1
+    finally:
+        release.set()
+        worker_finished = finished.wait(0.5)
+        _ACTIVE_EXECUTION_BUDGET.reset(budget_token)
+    assert worker_finished is True
+
+
+def test_stopped_timeout_gets_only_one_bounded_retry() -> None:
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.provider = "openai"
+    provider.timeout = 0.1
+    provider.max_tokens = 8_000
+    calls = 0
+
+    def one_transient_timeout(request: BrainRunRequest, *, json_recovery: bool = False):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BrainTransportTimeoutError(
+                stage=request.stage,
+                timeout_seconds=0.1,
+                elapsed_ms=100,
+                timeout_phase="read_timeout",
+            )
+        return {"ok": True}
+
+    provider._run_openai_compatible = one_transient_timeout
+    request = BrainRunRequest(
+        user_input="Prepare one bounded Brain request.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}},
+    )
+    budget = _BrainExecutionBudget(total_seconds=2.0, started_at=time.perf_counter())
+    budget_token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        result = provider.run(request)
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(budget_token)
+
+    assert result["ok"] is True
+    assert calls == 2
+    assert result["_alchemy_brain_transport"]["transient_recovery_attempted"] is True
+
+
 def test_brain_progress_grace_cannot_cross_logical_execution_budget() -> None:
     trace = _new_transport_trace(stage="plan", json_recovery=False)
     stop = threading.Event()
@@ -532,6 +909,7 @@ def test_brain_progress_grace_cannot_cross_logical_execution_budget() -> None:
         try:
             while not stop.is_set():
                 trace["semantic_progress_event_count"] += 1
+                trace["last_semantic_progress_at"] = time.perf_counter()
                 time.sleep(0.02)
         finally:
             finished.set()
@@ -591,7 +969,7 @@ def test_real_image_plan_retry_preserves_canonical_finalizer_handoff_window() ->
         _ACTIVE_EXECUTION_BUDGET.reset(token)
 
 
-def test_real_image_provider_run_does_not_retry_after_plan_budget_reaches_handoff_window() -> None:
+def test_real_image_provider_run_preserves_timeout_when_retry_hits_handoff_window() -> None:
     provider = object.__new__(V3LLMBrainProvider)
     provider.provider = "openai"
     provider.timeout = 300.0
@@ -612,6 +990,8 @@ def test_real_image_provider_run_does_not_retry_after_plan_budget_reaches_handof
                 timeout_seconds=20.0,
                 elapsed_ms=20_000,
                 timeout_phase="read_timeout",
+                response_started=True,
+                first_content_observed=True,
             )
         return {"image_set_plan": {"image_count": 1, "shot_plan": ["complete"]}}
 
@@ -627,11 +1007,56 @@ def test_real_image_provider_run_does_not_retry_after_plan_budget_reaches_handof
     budget = _BrainExecutionBudget(total_seconds=520.0, started_at=time.perf_counter())
     token = _ACTIVE_EXECUTION_BUDGET.set(budget)
     try:
-        with pytest.raises(BrainExecutionBudgetExceeded, match="handoff window"):
+        with pytest.raises(BrainTransportTimeoutError) as failure:
             provider.run(request)
     finally:
         _ACTIVE_EXECUTION_BUDGET.reset(token)
     assert provider.calls == 1
+    assert failure.value.response_started is True
+    assert failure.value.first_content_observed is True
+    assert isinstance(failure.value.__cause__, BrainExecutionBudgetExceeded)
+
+
+def test_real_image_provider_run_keeps_budget_when_shared_deadline_is_exhausted() -> None:
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.provider = "openai"
+    provider.timeout = 0.1
+    provider.max_tokens = 8_000
+    provider.calls = 0
+
+    def expires_shared_budget(request: BrainRunRequest, *, json_recovery: bool = False):
+        provider.calls += 1
+        budget = _ACTIVE_EXECUTION_BUDGET.get()
+        assert budget is not None
+        object.__setattr__(budget, "started_at", time.perf_counter() - 3.0)
+        raise BrainTransportTimeoutError(
+            stage=request.stage,
+            timeout_seconds=0.1,
+            elapsed_ms=100,
+            timeout_phase="read_timeout",
+            response_started=True,
+            first_content_observed=True,
+        )
+
+    provider._run_openai_compatible = expires_shared_budget
+    request = BrainRunRequest(
+        user_input="Prepare one bounded Brain request.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}},
+    )
+    budget = _BrainExecutionBudget(total_seconds=2.0, started_at=time.perf_counter())
+    token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        with pytest.raises(BrainExecutionBudgetExceeded) as failure:
+            provider.run(request)
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(token)
+
+    assert provider.calls == 1
+    assert isinstance(failure.value.__cause__, BrainTransportTimeoutError)
 
 
 @pytest.mark.parametrize("stage", ["plan", "generate"])

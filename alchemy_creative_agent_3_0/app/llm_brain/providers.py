@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import json
+import math
 import os
 import re
 import threading
@@ -356,7 +357,11 @@ _ACTIVE_TRANSPORT_CANCELLATION: ContextVar[_TransportCancellation | None] = Cont
     default=None,
 )
 _STREAM_PROGRESS_GRACE_SECONDS = 30.0
+_STREAM_SEMANTIC_IDLE_TIMEOUT_DEFAULT_SECONDS = _STREAM_PROGRESS_GRACE_SECONDS
+_STREAM_SEMANTIC_IDLE_TIMEOUT_MIN_SECONDS = 0.1
+_STREAM_SEMANTIC_IDLE_TIMEOUT_MAX_SECONDS = 45.0
 _TRANSPORT_TRACE_ATTR = "_v3_brain_transport_trace"
+_TRANSPORT_WORKER_STOPPED_ATTR = "_v3_brain_transport_worker_stopped"
 _TRANSPORT_FAILURE_RECEIPT_ATTR = "_v3_brain_transport_failure_receipt"
 _TRANSPORT_ATTEMPT_RECEIPT_KEY = "_alchemy_brain_transport_attempt"
 _BRAIN_OUTPUT_TOKEN_DEFAULT = 20_000
@@ -575,6 +580,26 @@ class V3LLMBrainProvider:
             try:
                 self._ensure_budget_available()
             except BrainExecutionBudgetExceeded as budget_error:
+                budget = _ACTIVE_EXECUTION_BUDGET.get()
+                if (
+                    isinstance(first_error, BrainTransportTimeoutError)
+                    and budget is not None
+                    and budget.remaining_seconds() > 0.0
+                ):
+                    # The shared clock still has time, but the next legal
+                    # stage/retry window may not fit (the finalizer handoff
+                    # reserve is the usual case). Preserve the observed
+                    # transport failure instead of masking it as exhaustion.
+                    _annotate_transport_failure(
+                        first_error,
+                        attempts=1,
+                        json_recovery_attempted=False,
+                        transient_recovery_attempted=False,
+                    )
+                    raise first_error from budget_error
+                # A genuinely exhausted shared clock remains a budget
+                # failure. Keep the first timeout as its private cause so the
+                # safe aggregate receipt still retains dispatch evidence.
                 _annotate_transport_failure(
                     budget_error,
                     attempts=1,
@@ -582,8 +607,43 @@ class V3LLMBrainProvider:
                     transient_recovery_attempted=False,
                 )
                 raise budget_error from first_error
+            if not _transport_worker_stopped(first_error):
+                # Never overlap a second upstream attempt with an uncooperative
+                # first worker. The timeout remains terminal for this call;
+                # the existing single retry is admitted only after stop.
+                _annotate_transport_failure(
+                    first_error,
+                    attempts=1,
+                    json_recovery_attempted=False,
+                    transient_recovery_attempted=False,
+                )
+                raise
             try:
                 recovered = self._run_remote_attempt(runner, request, json_recovery=False)
+            except BrainExecutionBudgetExceeded as budget_error:
+                budget = _ACTIVE_EXECUTION_BUDGET.get()
+                if (
+                    isinstance(first_error, BrainTransportTimeoutError)
+                    and budget is not None
+                    and budget.remaining_seconds() > 0.0
+                ):
+                    # The retry reached a stage/handoff guard while the
+                    # shared deadline is still alive. The original timeout is
+                    # the authoritative terminal class for this attempt.
+                    _annotate_transport_failure(
+                        first_error,
+                        attempts=1,
+                        json_recovery_attempted=False,
+                        transient_recovery_attempted=False,
+                    )
+                    raise first_error from budget_error
+                _annotate_transport_failure(
+                    budget_error,
+                    attempts=1,
+                    json_recovery_attempted=False,
+                    transient_recovery_attempted=False,
+                )
+                raise budget_error from first_error
             except BrainProviderError as recovery_error:
                 _annotate_transport_failure(
                     recovery_error,
@@ -638,6 +698,7 @@ class V3LLMBrainProvider:
             # prompt, URL, headers, body, and provider response text remain
             # outside durable metadata.
             setattr(exc, _TRANSPORT_TRACE_ATTR, _safe_transport_trace_receipt(trace))
+            setattr(exc, _TRANSPORT_WORKER_STOPPED_ATTR, bool(trace.get("transport_worker_stopped")))
             raise
         finally:
             _ACTIVE_TRANSPORT_TRACE.reset(token)
@@ -1055,6 +1116,55 @@ def _required_finalizer_reserve_seconds(request: BrainRunRequest) -> float:
     return float(BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS) if requires_remote_brain else 0.0
 
 
+def _stream_semantic_idle_timeout_seconds() -> float:
+    """Return one finite, bounded idle window for semantic stream progress."""
+
+    configured = _float_env(
+        "V3_LLM_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS",
+        _STREAM_SEMANTIC_IDLE_TIMEOUT_DEFAULT_SECONDS,
+    )
+    if not math.isfinite(configured):
+        configured = _STREAM_SEMANTIC_IDLE_TIMEOUT_DEFAULT_SECONDS
+    return max(
+        _STREAM_SEMANTIC_IDLE_TIMEOUT_MIN_SECONDS,
+        min(_STREAM_SEMANTIC_IDLE_TIMEOUT_MAX_SECONDS, configured),
+    )
+
+
+def _semantic_idle_deadline(
+    trace: dict[str, Any] | None,
+    *,
+    idle_timeout_seconds: float,
+) -> float | None:
+    """Calculate an idle deadline only after real semantic progress exists."""
+
+    if not isinstance(trace, dict):
+        return None
+    try:
+        semantic_count = int(trace.get("semantic_progress_event_count") or 0)
+    except (TypeError, ValueError):
+        return None
+    if semantic_count <= 0:
+        return None
+    last_progress = trace.get("last_semantic_progress_at")
+    if isinstance(last_progress, bool) or not isinstance(last_progress, (int, float)):
+        return None
+    last_progress = float(last_progress)
+    if not math.isfinite(last_progress):
+        return None
+    return last_progress + float(idle_timeout_seconds)
+
+
+def _transport_worker_stopped(error: BaseException) -> bool:
+    """Read private worker-stop evidence before admitting a retry."""
+
+    marker = getattr(error, _TRANSPORT_WORKER_STOPPED_ATTR, None)
+    if isinstance(marker, bool):
+        return marker
+    trace = getattr(error, _TRANSPORT_TRACE_ATTR, None)
+    return isinstance(trace, dict) and trace.get("transport_worker_stopped") is True
+
+
 def _call_with_timeout(
     callable_obj: Any,
     *,
@@ -1068,6 +1178,7 @@ def _call_with_timeout(
     cancellation = _TransportCancellation()
     hard_deadline = started + timeout_seconds
     progress_grace_seconds = min(_STREAM_PROGRESS_GRACE_SECONDS, timeout_seconds)
+    semantic_idle_timeout_seconds = _stream_semantic_idle_timeout_seconds()
     progress_grace_deadline = hard_deadline + progress_grace_seconds
     execution_budget = _ACTIVE_EXECUTION_BUDGET.get()
     if maximum_deadline is None:
@@ -1099,13 +1210,38 @@ def _call_with_timeout(
     deadline = min(hard_deadline, maximum_deadline)
     while thread.is_alive():
         now = time.perf_counter()
+        semantic_idle_deadline = _semantic_idle_deadline(
+            trace,
+            idle_timeout_seconds=semantic_idle_timeout_seconds,
+        )
+        if semantic_idle_deadline is not None:
+            # Semantic idle is a shorter stream bound. It may reduce the
+            # existing hard/grace deadline, but never extend it or escape the
+            # caller's stage/shared ceiling.
+            deadline = min(deadline, semantic_idle_deadline)
         remaining = deadline - now
         if remaining <= 0.0:
             current_progress = int((trace or {}).get("semantic_progress_event_count") or 0)
             if current_progress > observed_progress and current_progress and now < maximum_deadline:
                 observed_progress = current_progress
                 deadline = min(maximum_deadline, now + progress_grace_seconds)
+                refreshed_idle_deadline = _semantic_idle_deadline(
+                    trace,
+                    idle_timeout_seconds=semantic_idle_timeout_seconds,
+                )
+                if refreshed_idle_deadline is not None:
+                    deadline = min(deadline, refreshed_idle_deadline)
                 continue
+            if (
+                trace is not None
+                and current_progress
+                and semantic_idle_deadline is not None
+                and now >= semantic_idle_deadline
+            ):
+                # This is deliberately an internal trace fact. The public
+                # failure schema continues to use the established
+                # ``read_timeout`` phase and closed response flags.
+                trace["semantic_idle_timeout_triggered"] = True
             cancellation.cancel()
             # A transport that owns a closeable response should terminate
             # promptly. Keep the grace join short for an uncooperative SDK so
@@ -1124,13 +1260,24 @@ def _call_with_timeout(
         if current_progress > observed_progress:
             observed_progress = current_progress
             deadline = min(maximum_deadline, max(deadline, time.perf_counter() + progress_grace_seconds))
+        semantic_idle_deadline = _semantic_idle_deadline(
+            trace,
+            idle_timeout_seconds=semantic_idle_timeout_seconds,
+        )
+        if semantic_idle_deadline is not None:
+            deadline = min(deadline, semantic_idle_deadline)
     if thread.is_alive():  # pragma: no cover - defensive loop invariant
         cancellation.cancel()
+        if trace is not None:
+            trace["transport_cancel_requested"] = True
+            trace["transport_worker_stopped"] = False
         raise _transport_timeout_from_trace(
             trace or {},
             timeout_seconds=timeout_seconds,
             elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
         )
+    if trace is not None:
+        trace["transport_worker_stopped"] = True
     if "error" in result:
         raise result["error"]
     value = result.get("value")
@@ -1160,6 +1307,8 @@ def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
         "json_parse_completed": False,
         "progress_event_count": 0,
         "semantic_progress_event_count": 0,
+        "last_semantic_progress_at": None,
+        "semantic_idle_timeout_triggered": False,
         "protocol_fallback_attempted": False,
     }
 
