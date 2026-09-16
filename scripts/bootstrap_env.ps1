@@ -80,7 +80,6 @@ $lines = @(
     "LLM_PROMPT_PLANNING_ENABLED=true",
     "IMAGE_WORK_INTENSITY=atelier",
     "",
-    "DEFAULT_VIDEO_PROVIDER=seedance",
     "",
     "OPENAI_API_KEY=$openaiKey",
     "OPENAI_BASE_URL=https://aiself.vip/v1",

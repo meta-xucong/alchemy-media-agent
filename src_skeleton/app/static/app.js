@@ -20,7 +20,6 @@ const heroCopyByTab = {
   v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
   lab: "探索各种创意玩法",
   v3: "场景特调、共享能力与中枢大脑协同，把简单需求变成可用的商业图片。",
-  video: "coming soon",
   account: "账户资金、生成历史与消耗记录集中查看。",
 };
 const coffeeSamplePrompt = "生成 4 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
@@ -454,7 +453,6 @@ const els = {
   v3WorkspaceMenuDropdown: document.querySelector("#v3WorkspaceMenuDropdown"),
   heroLine: document.querySelector(".hero-line"),
   providerList: document.querySelector("#providerList"),
-  videoProviderList: document.querySelector("#videoProviderList"),
   v2HealthState: document.querySelector("#v2HealthState"),
   v2ProviderState: document.querySelector("#v2ProviderState"),
   v2ProviderMeta: document.querySelector("#v2ProviderMeta"),
@@ -1736,7 +1734,7 @@ function normalizeModuleRouteToken(value) {
   if (["rare-style-explorer", "rare_style_explorer"].includes(token)) return "rare-style-explorer";
   if (["lab", "alchemy-lab", "alchemy_lab"].includes(token)) return "lab";
   if (["v3", "3.0", "creative-agent-v3", "creative_agent_v3"].includes(token)) return "v3";
-  if (["image", "v1", "v2", "video", "account"].includes(token)) return token === "v1" ? "image" : token;
+  if (["image", "v1", "v2", "account"].includes(token)) return token === "v1" ? "image" : token;
   return "";
 }
 
@@ -13824,10 +13822,6 @@ function renderProviderLists(providers, runtime) {
     els.providerList.appendChild(providerRow(provider, runtime.provider_notes?.[provider.provider]));
   });
 
-  els.videoProviderList.innerHTML = "";
-  providers.video.forEach((provider) => {
-    els.videoProviderList.appendChild(providerRow(provider, runtime.provider_notes?.[provider.provider]));
-  });
 }
 
 function providerRow(provider, note) {
@@ -13867,7 +13861,6 @@ function providerLabel(provider) {
     doubao_image: "豆包 Seedream",
     gemini_image: "Gemini Image",
     mock_image: "Mock Image",
-    seedance: "Seedance Video",
   };
   return labels[provider] || provider;
 }

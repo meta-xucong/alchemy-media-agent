@@ -1,4 +1,4 @@
-# 定制化图片和视频生成 Agent 平台 文档包
+# 定制化图片生成 Agent 平台文档包
 
 生成日期：2026-06-02
 
@@ -13,7 +13,7 @@
 - `docs/05_Agent编排设计.md`：中枢调度 agent、专业 agent、handoff/tools/guardrails。
 - `docs/06_多模态素材处理方案.md`：图片、短视频、PDF、PPT、DOC、表格的解析与资产化。
 - `docs/07_生图工作流与炼金闭环.md`：首次生成、批量生成、继续调整、评价与版本管理。
-- `docs/08_视频生成预留接口.md`：Seedance/Veo 风格的异步任务接口与状态机。
+- `docs/08_视频生成预留接口.md`：早期视频接口规划（历史文档，不代表 Alchemy 当前实现）。
 - `docs/09_模型供应商适配层.md`：LLM、图片、视频 provider 抽象与 API Key 接入。
 - `docs/10_数据模型与状态机.md`：核心表、对象存储、任务状态机。
 - `docs/11_API接口规范说明.md`：REST/SSE/WebSocket 接口说明。
@@ -53,8 +53,8 @@
 
 ## 重要假设
 
-1. 你写的“生成实盘 agent”结合上下文按“生成视频 agent”理解；文档中统一叫“视频生成 Agent”。如果后续“实盘”另有所指，只需要替换该模块命名和接口字段。
-2. 产品第一阶段只做生图闭环；视频模块只保留统一接口、异步任务、供应商适配和状态机。
+1. Alchemy 当前产品边界是图片生成闭环；视频生成已由 aiself 首页的独立平台承载。
+2. 早期视频接口、provider 和状态机文档保留作历史设计记录，已不再属于 Alchemy 的运行时或前端入口。
 3. “Claude Code 为中枢调度 agent”采用双层编排：Claude Code/Claude Agent SDK 作为控制面与复杂任务中枢；OpenAI Agents SDK 作为运行时底层框架，承载高频用户请求和专业 agents。
 4. “免费/开源 agents”主要指 agent 框架、agent 定义、工具与子系统开源免费；实际 LLM/图片/视频 API 调用通常仍会产生模型费用。
 
@@ -84,7 +84,7 @@
 另外要注意：
 
 - `gemini_image` 已接入 Gemini `generateContent` 生图通道；生产环境需配置 `GEMINI_IMAGE_API_KEY`、`GEMINI_IMAGE_BASE_URL` 和模型 ID。
-- `seedance` 目前仍是占位视频 provider，不是 live 视频入口。
+- Alchemy 不再发布旧视频 Demo、Seedance provider 或 `/v1/video/jobs`；视频生成请使用 aiself 首页的独立平台。
 - `docker-compose.yml` 已挂载 `./src_skeleton/.env:/app/.env`，因此运行时页面里改过的 provider/base URL 可以持久化到宿主机并在重建容器后保留。
 
 建议直接按 `docs/21_密钥与部署配置.md` 里的“一次到位部署模板”和“冒烟验证”执行。

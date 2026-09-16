@@ -49,7 +49,6 @@ from app.schemas import (
     CreateAssetUploadRequest,
     CreateImageJobRequest,
     CreateSessionRequest,
-    CreateVideoJobRequest,
     FavoriteImageRequest,
     ImageHistoryItem,
     ImageHistoryResponse,
@@ -96,7 +95,6 @@ from app.services.veyra_auth import (
     verify_session_token,
 )
 from app.services.veyra_usage import list_veyra_usage
-from app.services.video_service import create_video_job
 from app.storage import media_store
 from app.runtime_paths import (
     LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
@@ -2778,30 +2776,6 @@ async def revise_image_job_endpoint(
     return prepared.job
 
 
-@app.post("/v1/video/jobs")
-async def create_video_job_endpoint(body: CreateVideoJobRequest, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
-    return await create_video_job(
-        session_id=body.session_id,
-        task_type=body.task_type,
-        prompt=body.prompt,
-        asset_ids=body.asset_ids,
-        duration_seconds=body.duration_seconds,
-        aspect_ratio=body.aspect_ratio,
-        resolution=body.resolution,
-        provider_preference=body.provider_preference,
-    )
-
-
-@app.get("/v1/video/jobs/{job_id}")
-def get_video_job(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
-    job = repository.get_job(job_id)
-    if not job or job.job_type != "video":
-        raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Video job not found."})
-    return job
-
-
 @app.get("/v1/providers")
 async def list_providers(request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
@@ -2809,7 +2783,6 @@ async def list_providers(request: Request, authorization: str = Header(default="
     return {
         "providers": [item.model_dump() for group in capabilities.values() for item in group],
         "image": [item.model_dump() for item in capabilities["image"]],
-        "video": [item.model_dump() for item in capabilities["video"]],
     }
 
 
@@ -3549,10 +3522,9 @@ def _runtime_provider_settings_response(runtime_persistence_warning: str | None 
         lab_doubao_vision_api_key_configured=bool(settings.lab_doubao_vision_api_key),
         runtime_persistence_warning=runtime_persistence_warning,
         provider_notes={
-        "openai_gpt_image": "OpenAI-compatible GPT Image provider is wired for live image generation.",
-        "doubao_image": "Doubao Seedream image provider uses OpenAI-compatible /images/generations and does not support image edits.",
-        "gemini_image": "Gemini image provider is wired for live generateContent image generation.",
-            "seedance": "Seedance video provider is a documented async placeholder; live task API is not implemented yet.",
+            "openai_gpt_image": "OpenAI-compatible GPT Image provider is wired for live image generation.",
+            "doubao_image": "Doubao Seedream image provider uses OpenAI-compatible /images/generations and does not support image edits.",
+            "gemini_image": "Gemini image provider is wired for live generateContent image generation.",
             "thinking_models": "Prompt planning uses the selected thinking model first and automatically tries the configured fallback when the selected one fails.",
             "alchemy_lab_brain": "Alchemy Lab uses its own LLM/Vision gateway for intent planning and does not call the V2 Claude orchestrator.",
         },

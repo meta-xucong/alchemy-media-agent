@@ -10,14 +10,10 @@ flowchart TD
     MANAGER --> PROMPT[PromptArchitectAgent]
     PROMPT --> SELECT[ProviderSelectorAgent]
     SELECT --> IMG[ImageGenerationAgent]
-    SELECT --> VID[VideoPlannerAgent]
     IMG --> GENSVC[Generation Service]
-    VID --> GENSVC
     GENSVC --> REG[Provider Registry]
     REG --> OPENAI[OpenAI GPT Image 2]
     REG --> GEMINI[Gemini Image]
-    REG --> SEEDANCE[Seedance / Video]
-    REG --> VEO[Veo / Video]
     API --> ASSET[Asset Service]
     ASSET --> OBJ[(Object Storage)]
     GENSVC --> OBJ

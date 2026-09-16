@@ -290,7 +290,7 @@ class GenerationOutput(BaseModel):
 class GenerationJob(BaseModel):
     id: str
     session_id: str | None = None
-    job_type: Literal["image", "video"]
+    job_type: Literal["image"]
     status: JobStatus
     provider: str | None = None
     model: str | None = None
@@ -299,7 +299,6 @@ class GenerationJob(BaseModel):
     postprocess_steps: list[dict[str, Any]] = Field(default_factory=list)
     provenance: dict[str, Any] = Field(default_factory=dict)
     prompt_plan: ImagePromptPlan | None = None
-    video_request: "VideoGenerationRequest | None" = None
     outputs: list[GenerationOutput] = Field(default_factory=list)
     error: ProviderError | None = None
     cost_estimate: CostEstimate | None = None
@@ -417,22 +416,6 @@ class ReviseImageRequest(BaseModel):
     feedback: str
     preserve: list[str] = Field(default_factory=list)
     provider_preference: str | None = None
-
-
-class VideoGenerationRequest(BaseModel):
-    task_type: Literal["text_to_video", "image_to_video", "reference_to_video", "extend_video", "first_last_frame_video"]
-    prompt: str
-    asset_ids: list[str] = Field(default_factory=list)
-    duration_seconds: int = 6
-    aspect_ratio: str = "9:16"
-    resolution: str = "1080p"
-    provider_preference: str | None = None
-    session_id: str | None = None
-    experimental: bool = True
-
-
-class CreateVideoJobRequest(VideoGenerationRequest):
-    session_id: str
 
 
 class ProviderCapabilitiesResponse(BaseModel):

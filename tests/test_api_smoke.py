@@ -116,7 +116,7 @@ def _completed_image_job(client: TestClient, response, *, headers: dict[str, str
     raise AssertionError(f"Image job did not reach a terminal state: {body['id']}")
 
 
-def test_http_smoke_image_revision_video_and_providers():
+def test_http_smoke_image_revision_and_providers():
     client = TestClient(app)
 
     health = client.get("/healthz")
@@ -208,17 +208,6 @@ def test_http_smoke_image_revision_video_and_providers():
     assert client.get(deleted_url).status_code == 404
     assert client.get(deleted_thumbnail_url).status_code == 404
     assert client.get(deleted_preview_url).status_code == 404
-
-    video_job = client.post(
-        "/v1/video/jobs",
-        json={
-            "session_id": session_id,
-            "task_type": "text_to_video",
-            "prompt": "让咖啡海报变成 6 秒镜头。",
-        },
-    )
-    assert video_job.status_code == 200
-    assert video_job.json()["status"] == "provider_not_configured"
 
     events = client.get(f"/v1/sessions/{session_id}/events")
     assert events.status_code == 200
@@ -1890,7 +1879,7 @@ def test_frontend_static_app_is_served():
     assert lab_detail_pos != -1
     assert lab_history_pos != -1
     assert lab_home_pos < lab_detail_pos < lab_history_pos
-    lab_section = index.text[index.text.find('id="labTab"') : index.text.find('id="videoTab"')]
+    lab_section = index.text[index.text.find('id="labTab"') : index.text.find('id="sampleGuideModal"')]
     assert "批次" not in lab_section
     assert "Provider" not in lab_section
     assert "data-lab-module-open=\"rare-style-explorer\"" in index.text
@@ -1925,8 +1914,10 @@ def test_frontend_static_app_is_served():
     assert 'id="labStyleLibraryPanel" class="lab-library-panel" hidden' not in index.text
     assert "搜索 620 个风格名" in index.text
     assert "每种风格最多" in index.text
-    assert "生视频（DEMO）" in index.text
-    assert "<p class=\"video-state\">coming soon</p>" in index.text
+    assert 'data-tab="video"' not in index.text
+    assert 'id="videoTab"' not in index.text
+    assert "生视频（DEMO）" not in index.text
+    assert "videoProviderList" not in index.text
     assert "手机 H5" in index.text
     assert "window.location.replace(`/h5${window.location.search}${window.location.hash}`)" in index.text
     assert 'params.get("desktop") === "1"' in index.text
@@ -2006,6 +1997,7 @@ def test_frontend_static_app_is_served():
     styles = client.get("/static/styles.css")
     assert styles.status_code == 200
     assert "backdrop-filter" in styles.text
+    assert ".video-" not in styles.text
     assert "sample-modal" in styles.text
     assert "global-toast" in styles.text
     assert "caseFade" in styles.text
@@ -2230,7 +2222,8 @@ def test_frontend_static_app_is_served():
     assert "setV2CaseSearchThinking" in script.text
     assert "后台仍在运行，页面会持续刷新" in script.text
     assert 'v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。"' in script.text
-    assert 'video: "coming soon"' in script.text
+    assert 'video: "coming soon"' not in script.text
+    assert "videoProviderList" not in script.text
     assert "document.body.dataset.activeModule" in script.text
     assert "encodeV2CaseAssetPath" in script.text
     assert "fallbackV2CaseImageToPreview" in script.text
@@ -2341,12 +2334,13 @@ def test_mobile_h5_app_is_served_independently():
     assert 'id="labStyleLibraryPanel" class="lab-library-panel" hidden' not in h5.text
     assert "搜索 620 个风格名" in h5.text
     assert "每种风格最多" in h5.text
-    lab_section = h5.text[h5.text.find('id="labTab"') : h5.text.find('id="videoTab"')]
+    lab_section = h5.text[h5.text.find('id="labTab"') : h5.text.find('id="sampleGuideModal"')]
     assert "批次" not in lab_section
     assert "Provider" not in lab_section
-    assert "生视频（DEMO）" in h5.text
-    assert "<p class=\"video-state\">coming soon</p>" in h5.text
-    assert "coming soon" in h5.text
+    assert 'data-tab="video"' not in h5.text
+    assert 'id="videoTab"' not in h5.text
+    assert "生视频（DEMO）" not in h5.text
+    assert "videoProviderList" not in h5.text
     assert 'href="/?desktop=1"' in h5.text
     assert "桌面版" in h5.text
     assert "mobileHeaderAccountBtn" in h5.text
@@ -2369,6 +2363,7 @@ def test_mobile_h5_app_is_served_independently():
 
     mobile_styles = client.get("/mobile-static/mobile.css")
     assert mobile_styles.status_code == 200
+    assert ".video-" not in mobile_styles.text
     assert "safe-area-inset-bottom" in mobile_styles.text
     assert "background-size: contain" in mobile_styles.text
     assert "--sage-deep" in mobile_styles.text
@@ -2515,7 +2510,8 @@ def test_mobile_h5_app_is_served_independently():
     assert 'const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;' in mobile_script.text
     assert "v2LocalApiBase" not in mobile_script.text
     assert 'v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。"' in mobile_script.text
-    assert 'video: "coming soon"' in mobile_script.text
+    assert 'video: "coming soon"' not in mobile_script.text
+    assert "videoProviderList" not in mobile_script.text
     assert "document.body.dataset.activeModule" in mobile_script.text
     assert "encodeV2CaseAssetPath" in mobile_script.text
     assert "fallbackV2CaseImageToPreview" in mobile_script.text
@@ -3769,21 +3765,6 @@ def test_unknown_provider_returns_controlled_error_instead_of_500():
     assert image_body["status"] == "failed"
     assert image_body["error"]["code"] == "provider_capability_mismatch"
 
-    video_response = client.post(
-        "/v1/video/jobs",
-        json={
-            "session_id": session_id,
-            "task_type": "text_to_video",
-            "prompt": "生成视频",
-            "provider_preference": "missing_video_provider",
-        },
-    )
-    assert video_response.status_code == 200
-    video_body = video_response.json()
-    assert video_body["status"] == "provider_not_configured"
-    assert video_body["error"]["code"] == "provider_capability_mismatch"
-
-
 def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
     client = TestClient(app)
     original_persist = settings.persist_runtime_settings
@@ -3884,7 +3865,8 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         openai_caps = next(provider for provider in providers["image"] if provider["provider"] == "openai_gpt_image")
         doubao_caps = next(provider for provider in providers["image"] if provider["provider"] == "doubao_image")
         gemini_caps = next(provider for provider in providers["image"] if provider["provider"] == "gemini_image")
-        seedance_caps = next(provider for provider in providers["video"] if provider["provider"] == "seedance")
+        assert "video" not in providers
+        assert all(provider["provider"] != "seedance" for provider in providers["providers"])
         assert openai_caps["models"] == ["gpt-image-2-test"]
         assert doubao_caps["models"] == ["doubao-seedream-test"]
         assert doubao_caps["configured"] is True
@@ -3892,7 +3874,6 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         assert gemini_caps["models"] == ["gemini-image-test"]
         assert gemini_caps["configured"] is False
         assert gemini_caps["limits"]["temporarily_disabled"] is True
-        assert seedance_caps["configured"] is False
     finally:
         settings.persist_runtime_settings = original_persist
         settings.runtime_env_path = original_runtime_env_path

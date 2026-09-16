@@ -13,7 +13,6 @@ class MemoryRepository:
     jobs: dict[str, GenerationJob] = field(default_factory=dict)
     outputs: dict[str, GenerationOutput] = field(default_factory=dict)
     idempotency_index: dict[str, str] = field(default_factory=dict)
-    video_requests: dict[str, dict[str, Any]] = field(default_factory=dict)
     events_by_session: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     def save_session(self, session: Session) -> Session:
@@ -81,7 +80,6 @@ class MemoryRepository:
         self.jobs.clear()
         self.outputs.clear()
         self.idempotency_index.clear()
-        self.video_requests.clear()
         self.events_by_session.clear()
 
 

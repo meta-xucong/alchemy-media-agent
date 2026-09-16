@@ -1,5 +1,7 @@
 # 11. API 接口规范说明
 
+> 历史规划说明（2026-09-16）：本文中的视频接口章节属于早期设计。Alchemy 当前 OpenAPI 不提供 `/v1/video/jobs`；视频生成请使用 aiself 首页独立平台。
+
 完整 OpenAPI 草案见 `specs/openapi.yaml`。
 
 ## 1. 认证

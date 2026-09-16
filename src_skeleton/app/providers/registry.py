@@ -5,7 +5,6 @@ from app.providers.doubao_image import DoubaoImageProvider
 from app.providers.openai_image import OpenAIGPTImageProvider
 from app.providers.gemini_image import GeminiImageProvider
 from app.providers.mock_image import MockImageProvider
-from app.providers.seedance_video import SeedanceVideoProvider
 from app.providers.base import ProviderCapabilityMismatchError, ProviderNotConfiguredError
 
 
@@ -18,9 +17,6 @@ class ProviderRegistry:
         }
         if settings.mock_image_provider_enabled:
             self.image_providers["mock_image"] = MockImageProvider()
-        self.video_providers = {
-            "seedance": SeedanceVideoProvider(),
-        }
 
     def image(self, preferred: str | None = None):
         if preferred:
@@ -45,16 +41,9 @@ class ProviderRegistry:
             return self.image_providers["mock_image"]
         raise ProviderNotConfiguredError(caps.reason or "Default image provider is not configured.", provider=provider.name)
 
-    def video(self, preferred: str | None = None):
-        provider_name = preferred or settings.default_video_provider
-        if provider_name not in self.video_providers:
-            raise ProviderCapabilityMismatchError(f"Unknown video provider: {provider_name}", provider=provider_name)
-        return self.video_providers[provider_name]
-
     async def list_capabilities(self):
         image_caps = [await provider.capabilities() for provider in self.image_providers.values()]
-        video_caps = [await provider.capabilities() for provider in self.video_providers.values()]
-        return {"image": image_caps, "video": video_caps}
+        return {"image": image_caps}
 
     def _require_image(self, provider_name: str):
         if provider_name not in self.image_providers:

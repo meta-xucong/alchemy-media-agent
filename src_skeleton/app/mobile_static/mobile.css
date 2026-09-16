@@ -130,7 +130,6 @@ img {
 .state-pill,
 .session-code,
 .provider-models,
-.video-state,
 .case-source,
 .output-id,
 .output-provider,
@@ -414,8 +413,7 @@ body.h5-simplified .hero-gallery-lane .case-slide div strong {
 .composer-actions,
 .history-actions,
 .v2-status-actions,
-.sample-actions,
-.video-footer {
+.sample-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -497,8 +495,7 @@ body.h5-simplified .hero-gallery-lane .case-slide div strong {
 .hero-card,
 .panel,
 .studio-panel,
-.gallery-wrap,
-.video-frame {
+.gallery-wrap {
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -1355,8 +1352,7 @@ button.mobile-v2-asset-thumb {
   margin-bottom: 14px;
 }
 
-.section-title h3,
-.video-frame h3 {
+.section-title h3 {
   font-size: 24px;
   line-height: 1.16;
   font-weight: 500;
@@ -1464,7 +1460,6 @@ select:focus {
 .status-strip,
 .compact-params,
 .v2-status-grid,
-.video-params,
 .sample-grid {
   display: grid;
   gap: 10px;
@@ -2238,16 +2233,6 @@ body.h5-simplified .mobile-v2-home-results {
   background: rgba(162, 78, 84, 0.08);
 }
 
-.video-frame {
-  padding: 18px;
-}
-
-.video-grid {
-  display: grid;
-  gap: 12px;
-  margin-top: 16px;
-}
-
 .sample-modal,
 .image-lightbox {
   position: fixed;
@@ -2635,7 +2620,6 @@ body.h5-simplified .mobile-v2-home-results {
 .state-pill,
 .session-code,
 .provider-models,
-.video-state,
 .case-source,
 .output-id,
 .output-provider,
@@ -2693,8 +2677,7 @@ body.h5-simplified .hero-copy h2 {
 .composer-actions,
 .history-actions,
 .v2-status-actions,
-.sample-actions,
-.video-footer {
+.sample-actions {
   gap: 8px;
 }
 
@@ -2792,8 +2775,7 @@ body.h5-simplified .hero-copy h2 {
   margin-bottom: 12px;
 }
 
-.section-title h3,
-.video-frame h3 {
+.section-title h3 {
   font-size: 19px;
   line-height: 1.18;
   font-weight: 560;
@@ -2848,7 +2830,6 @@ select:focus {
 .status-strip,
 .compact-params,
 .v2-status-grid,
-.video-params,
 .sample-grid,
 .tuning-grid,
 .model-workbench-grid,
@@ -3934,15 +3915,6 @@ select:focus {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.video-frame {
-  padding: 14px;
-}
-
-.video-grid {
-  gap: 10px;
-  margin-top: 13px;
 }
 
 .global-toast {

@@ -182,7 +182,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "Truth:" not in index.text
     assert "Selling point:" not in index.text
 
-    v3_section = index.text[index.text.find('id="v3Tab"') : index.text.find('id="videoTab"')]
+    v3_section = index.text[index.text.find('id="v3Tab"') : index.text.find('id="sampleGuideModal"')]
     assert "Provider" not in v3_section
     assert "Seed" not in v3_section
     assert "ControlNet" not in v3_section

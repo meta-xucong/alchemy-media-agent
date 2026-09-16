@@ -302,7 +302,6 @@ class Settings(BaseModel):
         "GEMINI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", 900.0
     )
     image_work_intensity: str = os.getenv("IMAGE_WORK_INTENSITY", "balanced")
-    default_video_provider: str = os.getenv("DEFAULT_VIDEO_PROVIDER", "seedance")
     orchestration_mode: str = os.getenv("ORCHESTRATION_MODE", "runtime_first")
     persist_runtime_settings: bool = os.getenv("MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS", "true").lower() in {"1", "true", "yes", "on"}
     runtime_env_path: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_AGENT_RUNTIME_ENV_FILE", ".env")))

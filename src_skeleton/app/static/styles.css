@@ -112,8 +112,7 @@ button {
 .panel-head,
 .output-meta,
 .check-row,
-.provider-title,
-.video-footer {
+.provider-title {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -782,8 +781,7 @@ h3 {
 
 .studio-panel,
 .panel,
-.gallery-wrap,
-.video-frame {
+.gallery-wrap {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
@@ -793,8 +791,7 @@ h3 {
 
 .studio-panel,
 .panel,
-.gallery-wrap,
-.video-frame {
+.gallery-wrap {
   padding: 18px;
 }
 
@@ -1907,33 +1904,6 @@ input[type="range"] {
 .event-list {
   max-height: 210px;
   overflow: auto;
-}
-
-.video-frame {
-  min-height: 420px;
-  display: grid;
-  gap: 24px;
-}
-
-.video-state {
-  margin-top: 8px;
-  color: var(--muted);
-}
-
-.video-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
-  gap: 16px;
-}
-
-.video-params {
-  display: grid;
-  gap: 12px;
-}
-
-.video-footer {
-  justify-content: space-between;
-  align-items: end;
 }
 
 .v2-workbench {
@@ -3568,7 +3538,6 @@ button.v2-live-preview:focus-visible {
   .model-api-grid,
   .advanced-api-grid,
   .lower-grid,
-  .video-grid,
   .v2-status-grid,
   .v2-model-control-grid,
   .v2-run-grid,
@@ -3722,7 +3691,6 @@ button.v2-live-preview:focus-visible {
   .hero-actions,
   .composer-actions,
   .panel-head,
-  .video-footer,
   .sample-actions,
   .revision-grid,
   .v2-status-actions,
@@ -5265,7 +5233,6 @@ h2,
 .studio-panel,
 .panel,
 .gallery-wrap,
-.video-frame,
 .sample-dialog,
 .lightbox-panel {
   border: 1px solid var(--line);
@@ -5277,8 +5244,7 @@ h2,
 
 .studio-panel,
 .panel,
-.gallery-wrap,
-.video-frame {
+.gallery-wrap {
   padding: 16px;
 }
 

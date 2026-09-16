@@ -19,7 +19,6 @@ const heroCopyByTab = {
   image: "AI 自动优化创作表达，快速生成高质感视觉内容。",
   v2: "智能中枢统筹创意策略，案例体系赋能品牌视觉升级。",
   lab: "探索各种创意玩法",
-  video: "coming soon",
   account: "账户资金、生成历史与消耗记录集中查看。",
 };
 const coffeeSamplePrompt = "生成 1 张日系清爽风格的咖啡产品海报，适配手机竖屏的";
@@ -315,7 +314,6 @@ const els = {
   panels: document.querySelectorAll("[data-panel]"),
   heroLine: document.querySelector(".hero-line"),
   providerList: document.querySelector("#providerList"),
-  videoProviderList: document.querySelector("#videoProviderList"),
   v2HealthState: document.querySelector("#v2HealthState"),
   v2ProviderState: document.querySelector("#v2ProviderState"),
   v2ProviderMeta: document.querySelector("#v2ProviderMeta"),
@@ -1241,7 +1239,7 @@ function normalizeModuleRouteToken(value) {
     .toLowerCase();
   if (["rare-style-explorer", "rare_style_explorer"].includes(token)) return "rare-style-explorer";
   if (["lab", "alchemy-lab", "alchemy_lab"].includes(token)) return "lab";
-  if (["image", "v1", "v2", "video"].includes(token)) return token === "v1" ? "image" : token;
+  if (["image", "v1", "v2"].includes(token)) return token === "v1" ? "image" : token;
   return "";
 }
 
@@ -2146,7 +2144,6 @@ function setupH5AdvancedPanels() {
   const v2Stack = document.querySelector("#v2Tab .module-stack");
   createMobileV2Architecture(v2Stack);
   createMobileLabArchitecture();
-  createMobileVideoArchitecture();
   createMobileAccountArchitecture();
   bindMobileEntryButtons(document);
   updateMobileSummaries();
@@ -2563,15 +2560,6 @@ function shortSizeLabel(value) {
     "1536x1024": "横",
   };
   return labels[value || ""] || "自定";
-}
-
-function createMobileVideoArchitecture() {
-  const video = document.querySelector("#videoTab .video-frame");
-  if (!video || document.querySelector(".mobile-video-summary")) return;
-  const summary = document.createElement("div");
-  summary.className = "mobile-video-summary notice-bar";
-  summary.textContent = "视频模块仍为 Demo，占位参数和 Provider 状态保留在本页。";
-  video.prepend(summary);
 }
 
 function mobileEntryMarkup(viewId, title, summary, summaryId) {
@@ -9178,10 +9166,6 @@ function renderProviderLists(providers, runtime) {
     els.providerList.appendChild(providerRow(provider, runtime.provider_notes?.[provider.provider]));
   });
 
-  els.videoProviderList.innerHTML = "";
-  providers.video.forEach((provider) => {
-    els.videoProviderList.appendChild(providerRow(provider, runtime.provider_notes?.[provider.provider]));
-  });
 }
 
 function providerRow(provider, note) {
@@ -9221,7 +9205,6 @@ function providerLabel(provider) {
     doubao_image: "豆包 Seedream",
     gemini_image: "Gemini Image",
     mock_image: "Mock Image",
-    seedance: "Seedance Video",
   };
   return labels[provider] || provider;
 }
