@@ -467,6 +467,9 @@ class CreateProjectJobRequest(ProjectModeBase):
     # Historical payload-read field. New E-Commerce requests reject it.
     suite_slot_request: list[str] = Field(default_factory=list)
     advanced_reference_controls: dict[str, bool] = Field(default_factory=dict)
+    # One-shot browser control: skip this project's automatic person identity
+    # anchor for this job only. It never changes the stored anchor binding.
+    skip_auto_identity_anchor: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("user_input", "template_id")

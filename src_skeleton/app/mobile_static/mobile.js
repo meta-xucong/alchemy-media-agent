@@ -2692,6 +2692,9 @@ const mobileV3State = {
   selectedTemplate: "general_template",
   currentProject: null,
   currentJob: null,
+  // One-shot: when true the next generated job skips the project's automatic
+  // person identity anchor. Reset right after a job is created.
+  skipAutoIdentityAnchorOnce: false,
   ecommerceSubmissionReceipt: null,
   ecommerceRecoveryEpoch: 0,
   ecommerceGenerationEpoch: 0,
@@ -4592,6 +4595,9 @@ function handleMobileV3Click(event) {
       void bindMobileV3AutoIdentityAnchor({
         output_id: referenceActionButton.dataset.mobileV3OutputId || "",
       });
+    } else if (referenceActionButton.dataset.mobileV3ReferenceAction === "toggle_skip_once") {
+      mobileV3State.skipAutoIdentityAnchorOnce = !mobileV3State.skipAutoIdentityAnchorOnce;
+      renderMobileV3ReferenceBoard(mobileV3State.currentProject);
     } else if (referenceActionButton.dataset.mobileV3ReferenceAction === "remove") {
       void removeMobileV3ProjectReference(
         referenceActionButton.dataset.mobileV3ReferenceId || "",
@@ -5493,6 +5499,7 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
     photographer_profile_selection_source: namedProfileConfirmed ? "user_explicit_ui" : undefined,
     uploaded_asset_ids: uploadedAssets.map((asset) => asset.asset_id).filter(Boolean),
     use_project_context: true,
+    skip_auto_identity_anchor: Boolean(mobileV3State.skipAutoIdentityAnchorOnce),
     advanced_reference_controls: advancedReferenceControls,
     metadata: {
       frontend_surface: "mobile_v3_project_mode",
@@ -5651,6 +5658,9 @@ async function generateMobileV3Job() {
     setMobileV3Progress("planning", "V3 正在理解需求并整理画面方向");
     const payload = buildMobileV3JobPayload(uploadedAssets);
     let created = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/jobs`, { method: "POST", body: payload });
+    // The skip-anchor choice is one-shot: the request that carried it is now
+    // accepted, so drop it before any retry or next generation.
+    mobileV3State.skipAutoIdentityAnchorOnce = false;
     if (ecommerceSession && !mobileV3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     if (uploadedAssets.length) clearMobileV3PendingUploads({ render: true });
     mobileV3State.currentJob = created;
@@ -5883,6 +5893,8 @@ function openMobileV3ProjectGallery(project) {
     mobileV3State.selectedResult = null;
   }
   mobileV3State.currentProject = project;
+  // The skip-anchor choice belongs to one project's next job only.
+  mobileV3State.skipAutoIdentityAnchorOnce = false;
   setMobileV3WorkspaceMode(
     mobileV3ProjectUsesProfessionalWorkspace(project) ? "professional" : "standard",
   );
@@ -5951,6 +5963,8 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
     mobileV3State.selectedResult = null;
   }
   mobileV3State.currentProject = project;
+  // The skip-anchor choice belongs to one project's next job only.
+  mobileV3State.skipAutoIdentityAnchorOnce = false;
   setMobileV3WorkspaceMode(
     mobileV3ProjectUsesProfessionalWorkspace(project) ? "professional" : "standard",
   );
@@ -6916,6 +6930,15 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
   renderMobileV3ProjectSourceLibraryGroup(board, sourceLibrary);
   if (autoAnchor) {
     const bound = String(autoAnchor.state || "bound").trim().toLowerCase() === "bound";
+    const skipOnce = Boolean(mobileV3State.skipAutoIdentityAnchorOnce);
+    const anchorCreatedAt = (() => {
+      const raw = String(autoAnchor.created_at || "").trim();
+      if (!raw) return "";
+      const stamp = new Date(raw);
+      if (Number.isNaN(stamp.getTime())) return "";
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} ${pad(stamp.getHours())}:${pad(stamp.getMinutes())}`;
+    })();
     const group = document.createElement("section");
     group.className = "v3-mobile-reference-group auto_identity_anchor";
     group.innerHTML = `
@@ -6924,7 +6947,7 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
           <strong>人物身份锚点</strong>
           <small>${bound ? "本项目首张真实成片，用于保持后续人物一致性。" : "已识别本项目的人物锚点，当前暂不用于后续生成。"}</small>
         </div>
-        <span>${bound ? "已绑定" : "未绑定"}</span>
+        <span>${bound ? (skipOnce ? "本次跳过" : "已绑定") : "未绑定"}</span>
       </div>
       <div class="v3-mobile-reference-group-grid"></div>
     `;
@@ -6935,10 +6958,13 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
     tile.innerHTML = `
       <div class="v3-mobile-reference-thumb">${thumb ? `<img src="${escapeHtml(thumb)}" alt="人物身份锚点" loading="lazy" decoding="async" />` : "<span>锚点图</span>"}</div>
       <div class="v3-mobile-reference-copy">
-        <span class="v3-mobile-reference-origin">自动连续性</span>
+        <span class="v3-mobile-reference-origin">自动连续性${anchorCreatedAt ? ` · 生成于 ${escapeHtml(anchorCreatedAt)}` : ""}</span>
         <strong>人物身份锚点</strong>
-        <small>${bound ? "后续生图会优先保持人物一致性。" : "解绑后，后续生图不会再使用这张图。"}</small>
+        <small>${bound
+          ? (skipOnce ? "本次生成不使用这张锚点图；项目绑定保持不变。" : "本次生成会把它作为人物一致性依据。")
+          : "解绑后，后续生图不会再使用这张图。"}</small>
         <div class="v3-mobile-reference-actions">
+          ${bound ? `<button type="button" data-mobile-v3-reference-action="toggle_skip_once">${skipOnce ? "本次仍使用" : "本次不使用"}</button>` : ""}
           <button type="button" data-mobile-v3-reference-action="${bound ? "remove" : "bind_auto_identity_anchor"}" data-mobile-v3-reference-id="" data-mobile-v3-output-id="${escapeHtml(autoAnchor.output_id)}" data-mobile-v3-reference-source="auto_identity_anchor">${bound ? "解除人物锚点" : "绑定人物锚点"}</button>
         </div>
       </div>

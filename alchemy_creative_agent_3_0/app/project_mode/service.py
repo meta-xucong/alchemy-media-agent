@@ -4668,7 +4668,14 @@ class V3ProjectModeService:
             commerce_profile=commerce_profile,
             generation_overrides=context_generation_overrides,
         )
-        doc73_auto_identity_anchor_transport = self._doc73_auto_identity_anchor_transport(project)
+        # Doc73 auto identity anchor is a project-level binding.  A browser may
+        # skip it for one job without changing that binding, so the one-shot
+        # request flag is honoured here, at the single transport call site.
+        doc73_auto_identity_anchor_transport = (
+            None
+            if bool(getattr(job_request, "skip_auto_identity_anchor", False))
+            else self._doc73_auto_identity_anchor_transport(project)
+        )
         context_snapshot = context.model_dump(mode="json")
         scenario_selection = self._scenario_selection_for_template(
             template_manifest,
