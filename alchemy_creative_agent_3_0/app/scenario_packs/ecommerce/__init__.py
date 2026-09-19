@@ -3,6 +3,8 @@
 from .contracts import (
     CommerceCriticReport,
     EcommerceCreativeContext,
+    ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE,
+    ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES,
     ECOMMERCE_CREATIVE_RISK_ALLOWED_VALUES,
     EcommerceCreativeRiskItem,
     EcommerceCreativeRiskPreflight,
@@ -24,12 +26,16 @@ from .contracts import (
     professional_identity_view_kinds_from_selectors,
     validate_professional_ecommerce_pose_contract_payload,
     validate_ecommerce_creative_risk_preflight_payload,
+    ecommerce_product_truth_context_issues,
+    ecommerce_product_truth_selection_contract_issues,
 )
 from .pack import EcommerceScenarioPack, EcommerceScenarioPackPlanner
 
 __all__ = [
     "CommerceCriticReport",
     "EcommerceCreativeContext",
+    "ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE",
+    "ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES",
     "ECOMMERCE_CREATIVE_RISK_ALLOWED_VALUES",
     "EcommerceCreativeRiskItem",
     "EcommerceCreativeRiskPreflight",
@@ -53,4 +59,6 @@ __all__ = [
     "professional_identity_view_kinds_from_selectors",
     "validate_professional_ecommerce_pose_contract_payload",
     "validate_ecommerce_creative_risk_preflight_payload",
+    "ecommerce_product_truth_context_issues",
+    "ecommerce_product_truth_selection_contract_issues",
 ]

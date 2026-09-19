@@ -1006,10 +1006,14 @@ def build_remote_payload(request: BrainRunRequest) -> str:
                 "rejected_sections": rejected_sections,
                 "same_frozen_request": True,
             }
+            diagnostics = recovery.get("validation_diagnostics")
+            if isinstance(diagnostics, dict):
+                payload["semantic_contract_recovery"]["validation_diagnostics"] = diagnostics
             payload["remote_response_contract"] += (
                 " This is the single bounded schema re-answer for the same frozen request. "
                 "Re-author the complete compact contract; do not return a patch, diff, commentary, "
-                "fallback direction, or additional section."
+                "fallback direction, or additional section. Treat validation_diagnostics as field-level "
+                "correction guidance only; preserve the frozen request, product-truth pool, and reference budget."
             )
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
     payload = {

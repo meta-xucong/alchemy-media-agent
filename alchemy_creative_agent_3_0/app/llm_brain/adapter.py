@@ -69,6 +69,8 @@ from .providers import (
 from .stage_trace import record_stage_event
 from ..scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
+    ecommerce_product_truth_context_issues,
+    ecommerce_product_truth_selection_contract_issues,
     professional_identity_view_kinds_from_selectors,
     validate_ecommerce_creative_risk_preflight_payload,
     validate_professional_ecommerce_pose_contract_payload,
@@ -303,6 +305,9 @@ class V3LLMBrainAdapter:
                 data,
                 requires_complete_image_set=strict_remote_contract,
                 requires_product_truth_selection=_requires_product_truth_selection(request),
+                product_truth_asset_ids=_product_truth_asset_ids_for_contract(request),
+                max_product_truth_source_refs=_max_product_truth_source_refs_for_contract(request),
+                product_truth_context_issues=_product_truth_context_issues_for_contract(request),
             )
             initial_rejected_sections = _remote_contract_rejected_sections(result)
             image_set_cardinality_audit = _remote_image_set_cardinality_audit(result)
@@ -343,6 +348,7 @@ class V3LLMBrainAdapter:
                 recovery_request = _semantic_contract_recovery_request(
                     request,
                     rejected_sections=initial_rejected_sections,
+                    validation_audit=initial_contract_validation_audit,
                 )
                 recovery_started = time.perf_counter()
                 recovery_data = self.provider.run(recovery_request)
@@ -361,6 +367,9 @@ class V3LLMBrainAdapter:
                     recovery_data,
                     requires_complete_image_set=True,
                     requires_product_truth_selection=_requires_product_truth_selection(request),
+                    product_truth_asset_ids=_product_truth_asset_ids_for_contract(request),
+                    max_product_truth_source_refs=_max_product_truth_source_refs_for_contract(request),
+                    product_truth_context_issues=_product_truth_context_issues_for_contract(request),
                 )
                 final_contract_validation_audit = _remote_contract_validation_audit(result)
             result.llm_used = True
@@ -1498,6 +1507,9 @@ class V3LLMBrainAdapter:
         *,
         requires_complete_image_set: bool = False,
         requires_product_truth_selection: bool = False,
+        product_truth_asset_ids: set[str] | None = None,
+        max_product_truth_source_refs: int | None = None,
+        product_truth_context_issues: list[str] | None = None,
     ) -> BrainRunResult:
         payload = fallback.model_dump(mode="json")
         rejected_sections: list[str] = []
@@ -1527,12 +1539,19 @@ class V3LLMBrainAdapter:
                 if not cardinality_audit["cardinality_valid"]:
                     rejected_sections.append(key)
                     continue
-                if requires_product_truth_selection and not _product_truth_selection_contract_valid(
-                    remote_section,
-                    expected_count=fallback.image_set_plan.image_count,
-                ):
-                    rejected_sections.append(key)
-                    continue
+                if requires_product_truth_selection:
+                    product_truth_validation_audit = _product_truth_selection_contract_audit(
+                        remote_section,
+                        expected_count=fallback.image_set_plan.image_count,
+                        allowed_asset_ids=product_truth_asset_ids,
+                        max_source_refs=max_product_truth_source_refs,
+                        context_issues=product_truth_context_issues,
+                    )
+                    if product_truth_validation_audit:
+                        image_set_validation_audit = product_truth_validation_audit
+                        contract_validation_sections[key] = product_truth_validation_audit
+                        rejected_sections.append(key)
+                        continue
             if key == "visual_task_profile" and requires_complete_image_set:
                 # A real image may not inherit a locally guessed semantic
                 # profile merely because a remote response supplied the small
@@ -1811,16 +1830,21 @@ def _semantic_contract_recovery_request(
     request: BrainRunRequest,
     *,
     rejected_sections: list[str],
+    validation_audit: dict[str, Any] | None = None,
 ) -> BrainRunRequest:
     """Add a server-owned schema marker without changing frozen task facts."""
 
     metadata = dict(request.metadata)
-    metadata["remote_semantic_contract_recovery"] = {
+    recovery: dict[str, Any] = {
         "contract_version": "v3_remote_semantic_contract_recovery_v1",
         "attempt": 1,
         "rejected_sections": list(rejected_sections),
         "same_frozen_request": True,
     }
+    safe_diagnostics = _safe_semantic_contract_recovery_diagnostics(validation_audit)
+    if safe_diagnostics:
+        recovery["validation_diagnostics"] = safe_diagnostics
+    metadata["remote_semantic_contract_recovery"] = recovery
     return request.model_copy(update={"metadata": metadata}, deep=True)
 
 
@@ -2778,37 +2802,117 @@ def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
     )
 
 
-def _product_truth_selection_contract_valid(candidate: Any, *, expected_count: int) -> bool:
-    """Require the Brain to return one typed product-truth decision per output.
+def _product_truth_asset_ids_for_contract(request: BrainRunRequest) -> set[str] | None:
+    """Use the same frozen uploaded-asset truth set consumed by Runtime."""
 
-    This checks only contract presence and cardinality. Asset identity, role
-    values, and renderer capacity remain validated by the professional runtime
-    that owns the frozen product-truth pool.
-    """
+    uploaded_assets = request.uploaded_assets if isinstance(request.uploaded_assets, list) else []
+    ids: set[str] = set()
+    for item in uploaded_assets:
+        if not isinstance(item, dict):
+            continue
+        asset_metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        channel = str(asset_metadata.get("codex_native_reference_channel") or "").strip()
+        role = str(item.get("role") or "").strip()
+        effective_channel = channel or ("product_truth" if role == "product_reference" else role)
+        if effective_channel != "product_truth":
+            continue
+        asset_id = str(item.get("asset_id") or "").strip()
+        if asset_id:
+            ids.add(asset_id)
+    return ids
 
-    if not isinstance(candidate, dict):
-        return False
-    entries = candidate.get("evidence_dimensions_by_output")
-    if not isinstance(entries, list) or len(entries) != expected_count:
-        return False
-    indexes: list[int] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            return False
-        try:
-            index = int(entry.get("output_index"))
-        except (TypeError, ValueError):
-            return False
-        role = str(entry.get("product_truth_selection_role") or "").strip()
-        selected = entry.get("selected_product_truth_asset_ids")
-        if index < 1 or index > expected_count or not role:
-            return False
-        if not isinstance(selected, list) or not selected or any(
-            not isinstance(item, str) or not item.strip() for item in selected
-        ):
-            return False
-        indexes.append(index)
-    return indexes == list(range(1, expected_count + 1))
+
+def _product_truth_context_issues_for_contract(request: BrainRunRequest) -> list[str]:
+    """Ensure the Brain envelope and Runtime consume one product snapshot."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("ecommerce_creative_context")
+    context = context if isinstance(context, dict) else {}
+    return ecommerce_product_truth_context_issues(
+        uploaded_asset_ids=_product_truth_asset_ids_for_contract(request) or set(),
+        reference_pool=context.get("product_truth_reference_pool"),
+        provider_budget=context.get("provider_reference_budget"),
+    )
+
+
+def _max_product_truth_source_refs_for_contract(request: BrainRunRequest) -> int | None:
+    """Read the frozen renderer admission budget without inventing a value."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("ecommerce_creative_context")
+    budget = context.get("provider_reference_budget") if isinstance(context, dict) else None
+    raw_value = budget.get("max_product_truth_source_refs_per_output") if isinstance(budget, dict) else None
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return 0
+    return value if 1 <= value <= 2 else 0
+
+
+def _product_truth_selection_contract_audit(
+    candidate: Any,
+    *,
+    expected_count: int,
+    allowed_asset_ids: set[str] | None,
+    max_source_refs: int | None,
+    context_issues: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return safe diagnostics when the Brain selection is semantically invalid."""
+
+    entries = candidate.get("evidence_dimensions_by_output") if isinstance(candidate, dict) else None
+    issues = ecommerce_product_truth_selection_contract_issues(
+        entries,
+        expected_count=expected_count,
+        allowed_asset_ids=allowed_asset_ids,
+        max_source_refs=max_source_refs,
+        context_issues=context_issues,
+    )
+    if not issues:
+        return {}
+    path_by_issue = {
+        "selection_missing_or_incomplete": "image_set_plan.evidence_dimensions_by_output",
+        "selection_invalid": "image_set_plan.evidence_dimensions_by_output.item",
+        "selection_duplicate": (
+            "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids"
+        ),
+        "selection_unknown_asset": (
+            "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids"
+        ),
+        "selection_capacity_contract_missing": (
+            "ecommerce_creative_context.provider_reference_budget"
+        ),
+        "selection_contract_context_invalid": (
+            "ecommerce_creative_context.product_truth_reference_pool"
+        ),
+        "selection_capacity_exceeded": (
+            "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids"
+        ),
+    }
+    paths = [path_by_issue[issue] for issue in issues if issue in path_by_issue]
+    return {
+        "validation_error_count": len(paths),
+        "validation_error_paths": list(dict.fromkeys(paths))[:8],
+        "validation_error_types": list(dict.fromkeys(issues))[:8],
+    }
+
+
+def _safe_semantic_contract_recovery_diagnostics(audit: dict[str, Any] | None) -> dict[str, Any]:
+    """Project contract diagnostics into the bounded Brain recovery envelope."""
+
+    if not isinstance(audit, dict) or audit.get("schema_version") != "v3_remote_contract_validation_audit_v1":
+        return {}
+    sections = audit.get("sections")
+    if not isinstance(sections, dict):
+        return {}
+    image_set_audit = sections.get("image_set_plan")
+    if not isinstance(image_set_audit, dict):
+        return {}
+    error_types = image_set_audit.get("validation_error_types")
+    if not isinstance(error_types, list) or not any(
+        str(item).strip().startswith("selection_") for item in error_types
+    ):
+        return {}
+    return _remote_contract_validation_audit_payload({"image_set_plan": image_set_audit})
 
 
 def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_count: int) -> bool:

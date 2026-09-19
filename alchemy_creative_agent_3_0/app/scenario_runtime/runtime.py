@@ -39,11 +39,15 @@ from ..llm_brain.providers import (
 )
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..scenario_packs.ecommerce import (
+    ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE,
+    ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES,
     EcommerceCreativeContext,
     EcommerceCreativeRiskPreflight,
     ecommerce_human_realism_review_context_from_preflight_payload,
+    ecommerce_product_truth_context_issues,
     professional_identity_view_kinds_from_selectors,
     validate_professional_ecommerce_pose_contract_payload,
+    ecommerce_product_truth_selection_contract_issues,
 )
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
@@ -146,14 +150,6 @@ from .specialized_planning import (
     SpecializedScenarioPlanningError,
 )
 
-ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES = {
-    "lifestyle_primary_product_view",
-    "playful_environment_interaction_view",
-    "walking_or_lookback_view",
-    "back_or_structure_view",
-    "product_detail_or_print_view",
-}
-
 _BRAIN_IMAGE_SIZE_ALIASES = {
     "1024x1024": "1024x1024",
     "1024×1024": "1024x1024",
@@ -191,9 +187,6 @@ _BRAIN_ASPECT_RATIO_ALIASES = {
     "2.39:1": "1536x1024",
     "2.40:1": "1536x1024",
 }
-ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
-
-
 def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
     """Whitelist remote Brain transport diagnostics for blocked status metadata."""
 
@@ -5441,10 +5434,37 @@ class ScenarioRuntime:
             raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_contract_missing") from None
         if max_product_truth_refs < 1 or max_product_truth_refs > 2:
             raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_contract_missing")
+        product_truth_id_set = set(product_truth_ids)
+        context_issues = ecommerce_product_truth_context_issues(
+            uploaded_asset_ids=product_truth_id_set,
+            reference_pool=ecommerce_context.get("product_truth_reference_pool"),
+            provider_budget=provider_budget,
+        )
+        if context_issues:
+            raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
         raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
         if len(raw_entries) != expected_count:
             raise CapabilityActivationError("ecommerce_product_truth_selection_missing_or_incomplete")
-        product_truth_id_set = set(product_truth_ids)
+        shared_selection_issues = ecommerce_product_truth_selection_contract_issues(
+            [entry.model_dump(mode="json") for entry in raw_entries],
+            expected_count=expected_count,
+            allowed_asset_ids=product_truth_id_set,
+            max_source_refs=max_product_truth_refs,
+            context_issues=context_issues,
+        )
+        if shared_selection_issues:
+            issue_to_runtime_code = {
+                "selection_duplicate": "ecommerce_product_truth_selection_duplicate",
+                "selection_unknown_asset": "ecommerce_product_truth_selection_unknown_asset",
+                "selection_capacity_exceeded": "ecommerce_product_truth_selection_capacity_exceeded",
+                "selection_invalid": "ecommerce_product_truth_selection_invalid",
+                "selection_missing_or_incomplete": "ecommerce_product_truth_selection_missing_or_incomplete",
+            }
+            for issue in shared_selection_issues:
+                runtime_code = issue_to_runtime_code.get(issue)
+                if runtime_code:
+                    raise CapabilityActivationError(runtime_code)
+            raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
         resolved: dict[int, dict[str, Any]] = {}
         for entry in raw_entries:
             index = int(entry.output_index)

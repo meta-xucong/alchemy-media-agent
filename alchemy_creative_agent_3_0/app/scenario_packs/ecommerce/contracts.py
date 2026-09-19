@@ -10,6 +10,117 @@ from ...schemas.models import V3BaseModel
 from ...shared_capabilities.apparel_construction import ApparelConstructionFacts
 
 
+ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES = frozenset(
+    {
+        "lifestyle_primary_product_view",
+        "playful_environment_interaction_view",
+        "walking_or_lookback_view",
+        "back_or_structure_view",
+        "product_detail_or_print_view",
+    }
+)
+ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
+
+
+def ecommerce_product_truth_context_issues(
+    *,
+    uploaded_asset_ids: set[str],
+    reference_pool: Any,
+    provider_budget: Any,
+) -> list[str]:
+    """Validate that Brain context and Runtime's frozen product pool agree."""
+
+    issues: list[str] = []
+    if not uploaded_asset_ids:
+        issues.append("selection_contract_context_invalid")
+    if not isinstance(reference_pool, list):
+        issues.append("selection_contract_context_invalid")
+    else:
+        pool_ids = {
+            str(item.get("asset_id") or "").strip()
+            for item in reference_pool
+            if isinstance(item, dict)
+            and str(item.get("asset_id") or "").strip()
+            and str(item.get("reference_channel") or "").strip() == "product_truth"
+        }
+        if pool_ids != uploaded_asset_ids:
+            issues.append("selection_contract_context_invalid")
+    raw_budget = (
+        provider_budget.get("max_product_truth_source_refs_per_output")
+        if isinstance(provider_budget, dict)
+        else None
+    )
+    try:
+        budget = int(raw_budget)
+    except (TypeError, ValueError):
+        budget = 0
+    if not 1 <= budget <= 2:
+        issues.append("selection_capacity_contract_missing")
+    return list(dict.fromkeys(issues))
+
+
+def ecommerce_product_truth_selection_contract_issues(
+    entries: Any,
+    *,
+    expected_count: int,
+    allowed_asset_ids: set[str] | None = None,
+    max_source_refs: int | None = None,
+    context_issues: list[str] | None = None,
+) -> list[str]:
+    """Return safe semantic issue codes for one Brain product-truth contract.
+
+    This is deliberately creative-neutral. It validates only the server-owned
+    selection contract that both the Brain adapter and ScenarioRuntime must
+    enforce; it never chooses or repairs an asset locally.
+    """
+
+    if not isinstance(entries, list) or len(entries) != expected_count:
+        return ["selection_missing_or_incomplete"]
+    issues: list[str] = list(dict.fromkeys(str(item) for item in (context_issues or []) if str(item).strip()))
+    if max_source_refs is not None and not 1 <= max_source_refs <= 2:
+        issues.append("selection_capacity_contract_missing")
+    indexes: list[int] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            raw_index = entry.get("output_index")
+            role = str(entry.get("product_truth_selection_role") or "").strip()
+            selected = entry.get("selected_product_truth_asset_ids")
+        else:
+            raw_index = getattr(entry, "output_index", None)
+            role = str(getattr(entry, "product_truth_selection_role", "") or "").strip()
+            selected = getattr(entry, "selected_product_truth_asset_ids", None)
+        if (
+            type(raw_index) is not int
+            or raw_index < 1
+            or raw_index > expected_count
+            or raw_index in indexes
+        ):
+            issues.append("selection_invalid")
+        else:
+            indexes.append(raw_index)
+        if role not in ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES:
+            issues.append("selection_invalid")
+        if not isinstance(selected, list) or not selected or any(
+            not isinstance(item, str) or not item.strip() for item in selected
+        ):
+            issues.append("selection_invalid")
+            continue
+        selected_ids = [item.strip() for item in selected]
+        if len(selected_ids) != len(set(selected_ids)):
+            issues.append("selection_duplicate")
+        if allowed_asset_ids is not None and not set(selected_ids).issubset(allowed_asset_ids):
+            issues.append("selection_unknown_asset")
+        if len(selected_ids) > 2:
+            issues.append("selection_invalid")
+        if len(selected_ids) == 2 and role != ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE:
+            issues.append("selection_invalid")
+        if max_source_refs is not None and 1 <= max_source_refs <= 2 and len(selected_ids) > max_source_refs:
+            issues.append("selection_capacity_exceeded")
+    if sorted(indexes) != list(range(1, expected_count + 1)):
+        issues.append("selection_invalid")
+    return list(dict.fromkeys(issues))
+
+
 CreativeRiskFamily = Literal[
     "composition_reference_identity_contamination",
     "unselected_reference_role_leak",
