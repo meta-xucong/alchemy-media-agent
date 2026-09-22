@@ -317,6 +317,7 @@ def _inspect_with_timeout(
     timeout_seconds: float,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
+    timeout_seconds = max(0.05, float(timeout_seconds))
 
     def runner() -> None:
         try:
@@ -326,45 +327,54 @@ def _inspect_with_timeout(
             inner_timeout = min(60.0, timeout_seconds * 0.67)
             result["payload"] = provider.inspect(
                 resolution,
-                metadata={**metadata, "_inner_timeout_seconds": inner_timeout}
+                metadata={**metadata, "_inner_timeout_seconds": inner_timeout},
             )
         except BaseException as exc:  # pragma: no cover - re-raised in caller thread
             result["error"] = exc
+        finally:
+            # Keep the slot occupied until the provider call has actually
+            # returned. Releasing from the caller's timeout path would allow a
+            # retry to overlap a still-running upstream request.
+            _vision_inspection_semaphore.release()
 
     # Acquire semaphore to limit concurrent vision inspections
-    acquired = _vision_inspection_semaphore.acquire(blocking=True, timeout=5.0)
+    queue_timeout = min(5.0, max(0.1, timeout_seconds))
+    acquired = _vision_inspection_semaphore.acquire(blocking=True, timeout=queue_timeout)
     if not acquired:
         raise VisionInspectionTimeoutError(
             "Vision inspection queue is full. Concurrent request limit reached.",
             worker_stopped=False,
         )
 
+    thread = threading.Thread(target=runner, name="v3-vision-inspection", daemon=True)
     try:
-        thread = threading.Thread(target=runner, name="v3-vision-inspection", daemon=True)
         thread.start()
-        timeout_seconds = max(0.05, float(timeout_seconds))
-        thread.join(timeout=timeout_seconds)
-        if thread.is_alive():
-            # Inner timeout ensures thread exits before this point in normal cases.
-            # Give a short settle window for edge cases.
-            settle_seconds = min(5.0, max(0.1, timeout_seconds * 0.1))
-            thread.join(timeout=settle_seconds)
-            raise VisionInspectionTimeoutError(
-                f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
-                worker_stopped=not thread.is_alive(),
-            )
-        if "error" in result:
-            error = result["error"]
-            if isinstance(error, TimeoutError):
-                raise VisionInspectionTimeoutError(
-                    str(error) or f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
-                    worker_stopped=True,
-                ) from error
-            raise error
-        payload = result.get("payload")
-        return payload if isinstance(payload, dict) else {}
-    finally:
+    except BaseException:
+        # runner never got a chance to execute its release path.
         _vision_inspection_semaphore.release()
+        raise
+
+    thread.join(timeout=timeout_seconds)
+    if thread.is_alive():
+        # Inner timeout ensures the thread exits before this point in normal
+        # cases. Give a short settle window for edge cases, but leave the
+        # semaphore owned by the worker if it is still running.
+        settle_seconds = min(5.0, max(0.1, timeout_seconds * 0.1))
+        thread.join(timeout=settle_seconds)
+        raise VisionInspectionTimeoutError(
+            f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
+            worker_stopped=not thread.is_alive(),
+        )
+    if "error" in result:
+        error = result["error"]
+        if isinstance(error, TimeoutError):
+            raise VisionInspectionTimeoutError(
+                str(error) or f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
+                worker_stopped=True,
+            ) from error
+        raise error
+    payload = result.get("payload")
+    return payload if isinstance(payload, dict) else {}
 
 
 class VisionOutputInspector:
@@ -487,6 +497,7 @@ class VisionOutputInspector:
         payload: dict[str, Any] | None = None
         provider_error: VisionInspectionProviderError | None = None
         provider_timeout_recovery_attempted = False
+        provider_timeout_recovery_succeeded = False
         for attempt in range(1, max_attempts + 1):
             try:
                 timeout_seconds = _vision_provider_timeout_seconds(metadata)
@@ -496,6 +507,7 @@ class VisionOutputInspector:
                     metadata=metadata,
                     timeout_seconds=timeout_seconds,
                 )
+                provider_timeout_recovery_succeeded = provider_timeout_recovery_attempted
                 break
             except TimeoutError as exc:
                 worker_stopped = getattr(exc, "worker_stopped", False) is True
@@ -545,7 +557,7 @@ class VisionOutputInspector:
             metadata=metadata,
             provider_review_attempts=attempt,
             provider_timeout_recovery_attempted=provider_timeout_recovery_attempted,
-            provider_timeout_recovery_succeeded=(attempt > 1),
+            provider_timeout_recovery_succeeded=provider_timeout_recovery_succeeded,
         )
 
     def _from_provider_payload(

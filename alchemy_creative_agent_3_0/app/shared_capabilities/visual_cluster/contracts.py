@@ -757,7 +757,14 @@ class VisualInspectionReport(V3BaseModel):
     output_id: str | None = None
     mode: str = "metadata_only"
     status: str = "manual_review"
-    verification_state: Literal["verified", "locally_checked", "unverified", "unavailable"] = "unverified"
+    verification_state: Literal[
+        "verified",
+        "locally_checked",
+        "unverified",
+        "unavailable",
+        "verification_failed",
+        "verification_skipped",
+    ] = "unverified"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     score_card: dict[str, float] = Field(default_factory=dict)
     detected_issues: list[dict[str, Any]] = Field(default_factory=list)
