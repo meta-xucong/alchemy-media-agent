@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any
 
-# Concurrency control for vision inspection to prevent overlapping upstream calls
+# Bound global provider concurrency; retry safety also requires worker exit.
 _VISION_INSPECTION_CONCURRENCY_LIMIT = 2
 _vision_inspection_semaphore = threading.Semaphore(_VISION_INSPECTION_CONCURRENCY_LIMIT)
 
@@ -321,9 +321,8 @@ def _inspect_with_timeout(
 
     def runner() -> None:
         try:
-            # Inner timeout set to 60s (wall-clock) to ensure thread exits before
-            # outer join reaches 90s, making worker_stopped reliably True.
-            # Provider timeout is controlled by SDK/httpx layer below.
+            # Give supporting providers a shorter SDK request timeout. This is
+            # not cancellation or a guaranteed wall-clock worker deadline.
             inner_timeout = min(60.0, timeout_seconds * 0.67)
             result["payload"] = provider.inspect(
                 resolution,
@@ -356,9 +355,8 @@ def _inspect_with_timeout(
 
     thread.join(timeout=timeout_seconds)
     if thread.is_alive():
-        # Inner timeout ensures the thread exits before this point in normal
-        # cases. Give a short settle window for edge cases, but leave the
-        # semaphore owned by the worker if it is still running.
+        # Allow a short settle window, but leave the semaphore owned by the
+        # worker if it is still running, regardless of SDK timeout support.
         settle_seconds = min(5.0, max(0.1, timeout_seconds * 0.1))
         thread.join(timeout=settle_seconds)
         raise VisionInspectionTimeoutError(
@@ -511,10 +509,9 @@ class VisionOutputInspector:
                 break
             except TimeoutError as exc:
                 worker_stopped = getattr(exc, "worker_stopped", False) is True
-                # Retry on timeout regardless of worker_stopped flag.
-                # Concurrency control is now handled by semaphore, so overlapping
-                # upstream calls are prevented without relying on thread lifecycle.
-                if attempt < max_attempts:
+                # A free global slot does not mean this inspection's previous
+                # request stopped. Retry only after its worker has exited.
+                if attempt < max_attempts and worker_stopped:
                     provider_timeout_recovery_attempted = True
                     time.sleep(float(attempt * 2))
                     continue

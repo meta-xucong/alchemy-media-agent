@@ -286,7 +286,11 @@ class OpenAIVisionInspectionProvider:
 
     def _timeout(self, metadata: dict[str, Any] | None = None) -> float:
         metadata = metadata or {}
-        raw_timeout = metadata.get("vision_inspection_timeout_seconds")
+        # Honor the inspector's shorter SDK request budget. The inspector still
+        # owns the outer deadline and checks worker exit before retrying.
+        raw_timeout = metadata.get("_inner_timeout_seconds")
+        if raw_timeout is None:
+            raw_timeout = metadata.get("vision_inspection_timeout_seconds")
         if raw_timeout is None:
             raw_timeout = self.timeout_seconds
         if raw_timeout is None:
