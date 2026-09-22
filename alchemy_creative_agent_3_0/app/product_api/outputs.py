@@ -68,7 +68,10 @@ class V3GeneratedOutputStore:
         self._records_by_job_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
         self._records_by_project_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
         self._records_by_id_cache: dict[str, V3GeneratedOutputRecord] | None = None
-        self._scoped_index_revision: tuple[int, int] | None = None
+        # Includes the per-file signature so out-of-band output.json edits
+        # invalidate the byte-scan locator even when the root directory mtime
+        # is unchanged.
+        self._scoped_index_revision: tuple[Any, Any] | None = None
         self._scoped_paths_by_job: dict[str, tuple[Path, ...]] | None = None
         self._scoped_paths_by_project: dict[str, tuple[Path, ...]] | None = None
         self._scoped_record_cache_revision: tuple[int, int] | None = None
@@ -289,16 +292,18 @@ class V3GeneratedOutputStore:
         records = self._read_records_cached()
         return records[: max(1, int(limit or 100))]
 
-    def list_by_job(self, job_id: str) -> list[V3GeneratedOutputRecord]:
+    def list_by_job(self, job_id: str, limit: int | None = None) -> list[V3GeneratedOutputRecord]:
         target = str(job_id or "").strip()
         if not target:
             return []
         revision = self._storage_revision()
         with self._cache_lock:
             if revision == self._records_cache_revision and self._records_by_job_cache is not None:
-                return list(self._records_by_job_cache.get(target, []))
+                records = list(self._records_by_job_cache.get(target, []))
+                return records if limit is None else records[: max(1, int(limit or 1))]
         by_job, _by_project = self._scoped_output_paths()
-        return self._read_scoped_records(by_job.get(target, ()), job_id=target)
+        records = self._read_scoped_records(by_job.get(target, ()), job_id=target)
+        return records if limit is None else records[: max(1, int(limit or 1))]
 
     def list_by_project(self, project_id: str, limit: int = 256) -> list[V3GeneratedOutputRecord]:
         target = str(project_id or "").strip()
@@ -581,7 +586,8 @@ class V3GeneratedOutputStore:
         fields before returning it.
         """
 
-        revision = self._storage_revision()
+        paths, signature = self._record_paths_signature()
+        revision = (self._storage_revision(), signature)
         with self._cache_lock:
             if (
                 revision == self._scoped_index_revision
@@ -590,7 +596,6 @@ class V3GeneratedOutputStore:
             ):
                 return dict(self._scoped_paths_by_job), dict(self._scoped_paths_by_project)
 
-        paths, _signature = self._record_paths_signature()
         by_job: dict[str, list[Path]] = {}
         by_project: dict[str, list[Path]] = {}
         for path in paths:
