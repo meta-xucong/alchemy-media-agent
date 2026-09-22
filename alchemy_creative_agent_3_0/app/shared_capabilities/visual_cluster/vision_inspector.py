@@ -8,6 +8,10 @@ import threading
 import time
 from typing import Any
 
+# Concurrency control for vision inspection to prevent overlapping upstream calls
+_VISION_INSPECTION_CONCURRENCY_LIMIT = 2
+_vision_inspection_semaphore = threading.Semaphore(_VISION_INSPECTION_CONCURRENCY_LIMIT)
+
 from ...creative_core.rules import stable_id
 from ..apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from .contracts import GeneratedOutputResolution, ReviewEvidencePlan, VisualInspectionReport
@@ -316,36 +320,51 @@ def _inspect_with_timeout(
 
     def runner() -> None:
         try:
-            result["payload"] = provider.inspect(resolution, metadata=metadata)
+            # Inner timeout set to 60s (wall-clock) to ensure thread exits before
+            # outer join reaches 90s, making worker_stopped reliably True.
+            # Provider timeout is controlled by SDK/httpx layer below.
+            inner_timeout = min(60.0, timeout_seconds * 0.67)
+            result["payload"] = provider.inspect(
+                resolution,
+                metadata={**metadata, "_inner_timeout_seconds": inner_timeout}
+            )
         except BaseException as exc:  # pragma: no cover - re-raised in caller thread
             result["error"] = exc
 
-    thread = threading.Thread(target=runner, name="v3-vision-inspection", daemon=True)
-    thread.start()
-    timeout_seconds = max(0.05, float(timeout_seconds))
-    thread.join(timeout=timeout_seconds)
-    if thread.is_alive():
-        # A provider call runs in a daemon worker so a broken SDK cannot hold
-        # the Product API forever.  Give a timed-out provider a short,
-        # bounded settle window before deciding whether another inspection
-        # may start; retrying while the first request is still alive would
-        # create overlapping upstream review calls.
-        settle_seconds = min(5.0, max(0.1, timeout_seconds * 0.1))
-        thread.join(timeout=settle_seconds)
+    # Acquire semaphore to limit concurrent vision inspections
+    acquired = _vision_inspection_semaphore.acquire(blocking=True, timeout=5.0)
+    if not acquired:
         raise VisionInspectionTimeoutError(
-            f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
-            worker_stopped=not thread.is_alive(),
+            "Vision inspection queue is full. Concurrent request limit reached.",
+            worker_stopped=False,
         )
-    if "error" in result:
-        error = result["error"]
-        if isinstance(error, TimeoutError):
+
+    try:
+        thread = threading.Thread(target=runner, name="v3-vision-inspection", daemon=True)
+        thread.start()
+        timeout_seconds = max(0.05, float(timeout_seconds))
+        thread.join(timeout=timeout_seconds)
+        if thread.is_alive():
+            # Inner timeout ensures thread exits before this point in normal cases.
+            # Give a short settle window for edge cases.
+            settle_seconds = min(5.0, max(0.1, timeout_seconds * 0.1))
+            thread.join(timeout=settle_seconds)
             raise VisionInspectionTimeoutError(
-                str(error) or f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
-                worker_stopped=True,
-            ) from error
-        raise error
-    payload = result.get("payload")
-    return payload if isinstance(payload, dict) else {}
+                f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
+                worker_stopped=not thread.is_alive(),
+            )
+        if "error" in result:
+            error = result["error"]
+            if isinstance(error, TimeoutError):
+                raise VisionInspectionTimeoutError(
+                    str(error) or f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
+                    worker_stopped=True,
+                ) from error
+            raise error
+        payload = result.get("payload")
+        return payload if isinstance(payload, dict) else {}
+    finally:
+        _vision_inspection_semaphore.release()
 
 
 class VisionOutputInspector:
@@ -480,7 +499,10 @@ class VisionOutputInspector:
                 break
             except TimeoutError as exc:
                 worker_stopped = getattr(exc, "worker_stopped", False) is True
-                if attempt < max_attempts and worker_stopped:
+                # Retry on timeout regardless of worker_stopped flag.
+                # Concurrency control is now handled by semaphore, so overlapping
+                # upstream calls are prevented without relying on thread lifecycle.
+                if attempt < max_attempts:
                     provider_timeout_recovery_attempted = True
                     time.sleep(float(attempt * 2))
                     continue
@@ -523,7 +545,7 @@ class VisionOutputInspector:
             metadata=metadata,
             provider_review_attempts=attempt,
             provider_timeout_recovery_attempted=provider_timeout_recovery_attempted,
-            provider_timeout_recovery_succeeded=provider_timeout_recovery_attempted,
+            provider_timeout_recovery_succeeded=(attempt > 1),
         )
 
     def _from_provider_payload(
@@ -1029,11 +1051,19 @@ class VisionOutputInspector:
             else "file_missing"
         )
         issue_codes = [issue_code]
-        verification_state = (
-            "unavailable"
-            if issue_code in {"vision_provider_unavailable", "provider_error", "file_missing", "file_unreadable"}
-            else "unverified"
-        )
+        # D13: Distinguish verification_state semantics
+        # - verification_failed: attempted but failed (timeout, provider error)
+        # - verification_skipped: not attempted (skipped, mock generation)
+        # - unavailable: provider not available or file issues
+        # - unverified: fallback for uncategorized cases
+        if issue_code in {"provider_timeout", "provider_error"}:
+            verification_state = "verification_failed"
+        elif issue_code in {"hard_semantic_contract_unverified", "metadata_only_non_certifying"}:
+            verification_state = "verification_skipped"
+        elif issue_code in {"vision_provider_unavailable", "file_missing", "file_unreadable"}:
+            verification_state = "unavailable"
+        else:
+            verification_state = "unverified"
         score_card = _score_card("manual_review")
         identity_metric, identity_fusion = self._identity_metric_fusion(
             resolution,
@@ -1050,7 +1080,14 @@ class VisionOutputInspector:
                 issue_codes.append("identity_metric_low")
             elif fused_score < 0.82:
                 issue_codes.append("identity_metric_below_commercial_target")
-        detected_issues = [_issue_payload(code, 0.4, retryable=False) for code in _dedupe(issue_codes)]
+        detected_issues = [
+            _issue_payload(
+                code,
+                0.4,
+                retryable=(code in {"provider_timeout", "provider_error"})
+            )
+            for code in _dedupe(issue_codes)
+        ]
         return VisualInspectionReport(
             inspection_id=stable_id("visual_inspection", resolution.job_id, resolution.candidate_id, resolution.output_id, reason_code),
             project_id=resolution.project_id,
@@ -1064,7 +1101,10 @@ class VisionOutputInspector:
             confidence=0.35,
             score_card=score_card,
             detected_issues=detected_issues,
-            retryable=False,
+            retryable=any(
+                code in {"provider_timeout", "provider_error"}
+                for code in issue_codes
+            ),
             evidence={
                 "resolution_status": resolution.status,
                 "warnings": list(resolution.warnings),
