@@ -27,6 +27,7 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
     HUMAN_REALISM_BEAUTY_PRESERVATION_POLICY_VERSION,
 )
 from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
+from ..scenario_packs.ecommerce import ecommerce_product_truth_reference_budget
 
 
 GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS = (
@@ -372,13 +373,7 @@ def _product_truth_reference_budget(ecommerce_context: dict[str, object] | None)
     if not isinstance(provider_budget, dict):
         return None
     raw_budget = provider_budget.get("max_product_truth_source_refs_per_output")
-    try:
-        budget = int(raw_budget)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    if budget <= 0:
-        return None
-    return min(2, budget)
+    return ecommerce_product_truth_reference_budget(raw_budget)
 
 
 def _image_set_evidence_dimensions_schema(

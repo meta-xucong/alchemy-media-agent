@@ -198,3 +198,73 @@ def test_doc281_context_snapshot_drift_and_missing_budget_are_rejected_before_ru
     assert "selection_capacity_contract_missing" in budget_result.audit["remote_image_set_validation_audit"][
         "validation_error_types"
     ]
+
+
+def test_doc281_context_digest_is_order_and_count_sensitive() -> None:
+    from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
+        ecommerce_product_truth_context_digest,
+    )
+
+    assets = [
+        {"asset_id": "product_a", "role": "product_reference", "metadata": {"codex_native_reference_channel": "product_truth", "content_sha256": "a"}},
+        {"asset_id": "product_b", "role": "product_reference", "metadata": {"codex_native_reference_channel": "product_truth", "content_sha256": "b"}},
+    ]
+    pool = [
+        {"asset_id": "product_a", "reference_channel": "product_truth", "source_type": "uploaded", "content_sha256": "a"},
+        {"asset_id": "product_b", "reference_channel": "product_truth", "source_type": "uploaded", "content_sha256": "b"},
+    ]
+    first = ecommerce_product_truth_context_digest(
+        uploaded_assets=assets,
+        reference_pool=pool,
+        provider_budget={"max_product_truth_source_refs_per_output": 1},
+        expected_count=1,
+    )
+    reordered = ecommerce_product_truth_context_digest(
+        uploaded_assets=list(reversed(assets)),
+        reference_pool=pool,
+        provider_budget={"max_product_truth_source_refs_per_output": 1},
+        expected_count=1,
+    )
+    changed_count = ecommerce_product_truth_context_digest(
+        uploaded_assets=assets,
+        reference_pool=pool,
+        provider_budget={"max_product_truth_source_refs_per_output": 1},
+        expected_count=2,
+    )
+    assert first and reordered and changed_count
+    assert first != reordered
+    assert first != changed_count
+
+
+def test_doc281_budget_rejects_bool_float_and_string_coercion() -> None:
+    from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
+        ecommerce_product_truth_context_issues,
+        ecommerce_product_truth_reference_budget,
+    )
+
+    assert ecommerce_product_truth_reference_budget(True) is None
+    assert ecommerce_product_truth_reference_budget(1.0) is None
+    assert ecommerce_product_truth_reference_budget("1") is None
+    pool = [{"asset_id": "product_a", "reference_channel": "product_truth", "source_type": "uploaded"}]
+    for invalid_budget in (True, 1.0, "1", 0, None):
+        assert "selection_capacity_contract_missing" in ecommerce_product_truth_context_issues(
+            uploaded_asset_ids={"product_a"},
+            reference_pool=pool,
+            provider_budget={"max_product_truth_source_refs_per_output": invalid_budget},
+        )
+
+
+def test_doc281_product_pool_rejects_duplicate_and_conflicting_entries() -> None:
+    from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
+        ecommerce_product_truth_context_issues,
+    )
+
+    issues = ecommerce_product_truth_context_issues(
+        uploaded_asset_ids={"product_a"},
+        reference_pool=[
+            {"asset_id": "product_a", "reference_channel": "product_truth", "source_type": "uploaded"},
+            {"asset_id": "product_a", "reference_channel": "portrait_identity", "source_type": "uploaded"},
+        ],
+        provider_budget={"max_product_truth_source_refs_per_output": 1},
+    )
+    assert issues == ["selection_contract_context_invalid"]

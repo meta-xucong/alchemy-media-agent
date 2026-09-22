@@ -71,8 +71,11 @@ commerce-specific deliverables.
     once reviewer-approved. It closes the semantic validation gap between the
     remote Brain adapter and the final E-Commerce product-truth activation
     gate without adding local creative fallback.
-24. This E-Commerce module family.
-25. Implementation notes and examples.
+24. E36 Product-Truth Shared Validation Closure, once reviewer-approved. It
+    closes the remaining validator, context-snapshot, type-safety and Provider
+    admission split while preserving Doc263/Doc269 authority.
+25. This E-Commerce module family.
+26. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.

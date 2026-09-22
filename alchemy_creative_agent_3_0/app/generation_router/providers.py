@@ -73,6 +73,10 @@ from ..scenario_packs.ecommerce.reference_projection import (
     PhysicalProductReferenceProjection,
     ProductTruthAdmission,
 )
+from ..scenario_packs.ecommerce.contracts import (
+    ecommerce_product_truth_reference_budget,
+    ecommerce_product_truth_selection_contract_issues,
+)
 from ..scenario_packs.ecommerce.physical_renderer_reference_plan import (
     DOC269_MAX_REFERENCE_IMAGES,
     NativeEcommerceBodyReferenceBinding,
@@ -3136,12 +3140,40 @@ class ProductionImageGenerationProvider(GenerationProvider):
         selection_role = str(
             deliverable_metadata.get("product_truth_selection_role") or ""
         ).strip()
-        try:
-            max_product_refs = int(
-                deliverable_metadata.get("max_product_truth_source_refs_per_output")
+        raw_max_product_refs = deliverable_metadata.get(
+            "max_product_truth_source_refs_per_output"
+        )
+        max_product_refs = ecommerce_product_truth_reference_budget(raw_max_product_refs)
+        semantic_issues = ecommerce_product_truth_selection_contract_issues(
+            [
+                {
+                    "output_index": 1,
+                    "product_truth_selection_role": selection_role,
+                    "selected_product_truth_asset_ids": selected_from_plan,
+                }
+            ],
+            expected_count=1,
+            allowed_asset_ids=set(pool_ids),
+            max_source_refs=raw_max_product_refs,
+        )
+        if semantic_issues:
+            issue_to_provider_code = {
+                "selection_duplicate": "ecommerce_product_truth_selection_duplicate",
+                "selection_unknown_asset": "ecommerce_product_truth_selection_unknown_asset",
+                "selection_capacity_exceeded": "ecommerce_product_truth_selection_capacity_exceeded",
+                "selection_capacity_contract_missing": "ecommerce_product_truth_selection_capacity_contract_missing",
+                "selection_invalid": "ecommerce_product_truth_selection_invalid",
+                "selection_missing_or_incomplete": "ecommerce_product_truth_selection_missing_or_incomplete",
+            }
+            failure_code = next(
+                (issue_to_provider_code.get(issue) for issue in semantic_issues if issue in issue_to_provider_code),
+                "ecommerce_product_truth_selection_invalid",
             )
-        except (TypeError, ValueError):
-            max_product_refs = 0
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth selection is invalid.",
+                provider=self.provider_name,
+                detail={"reference_input_failure_code": failure_code, "fallback": "blocked"},
+            )
         if (
             declared_pool != pool_ids
             or not selected_from_plan
@@ -3149,11 +3181,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             or admitted != selected_from_plan
             or selection_source
             != "remote_brain_image_set_plan.evidence_dimensions_by_output"
-            or max_product_refs not in {1, 2}
-            or len(selected_from_plan) > max_product_refs
-            or len(selected_from_plan) > 2
-            or not set(selected_from_plan).issubset(set(pool_ids))
-            or (len(selected_from_plan) == 2 and selection_role != "product_detail_or_print_view")
+            or max_product_refs is None
         ):
             raise ReferenceInputAdmissionError(
                 "Professional E-Commerce product truth selection is invalid.",

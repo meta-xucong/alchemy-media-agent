@@ -39,12 +39,12 @@ from ..llm_brain.providers import (
 )
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..scenario_packs.ecommerce import (
-    ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE,
-    ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES,
     EcommerceCreativeContext,
     EcommerceCreativeRiskPreflight,
+    ecommerce_product_truth_context_digest,
     ecommerce_human_realism_review_context_from_preflight_payload,
     ecommerce_product_truth_context_issues,
+    ecommerce_product_truth_reference_budget,
     professional_identity_view_kinds_from_selectors,
     validate_professional_ecommerce_pose_contract_payload,
     ecommerce_product_truth_selection_contract_issues,
@@ -5428,20 +5428,44 @@ class ScenarioRuntime:
         provider_budget = ecommerce_context.get("provider_reference_budget")
         provider_budget = provider_budget if isinstance(provider_budget, dict) else {}
         raw_max_product_refs = provider_budget.get("max_product_truth_source_refs_per_output")
-        try:
-            max_product_truth_refs = int(raw_max_product_refs)
-        except (TypeError, ValueError):
+        max_product_truth_refs = ecommerce_product_truth_reference_budget(raw_max_product_refs)
+        if max_product_truth_refs is None:
             raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_contract_missing") from None
-        if max_product_truth_refs < 1 or max_product_truth_refs > 2:
-            raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_contract_missing")
         product_truth_id_set = set(product_truth_ids)
         context_issues = ecommerce_product_truth_context_issues(
             uploaded_asset_ids=product_truth_id_set,
             reference_pool=ecommerce_context.get("product_truth_reference_pool"),
             provider_budget=provider_budget,
         )
+        expected_context_digest = str(
+            metadata.get("ecommerce_product_truth_context_digest") or ""
+        ).strip()
+        if expected_context_digest:
+            actual_context_digest = ecommerce_product_truth_context_digest(
+                uploaded_assets=[
+                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                    for item in self._uploaded_assets(request)
+                ],
+                reference_pool=ecommerce_context.get("product_truth_reference_pool"),
+                provider_budget=provider_budget,
+                expected_count=expected_count,
+                admission_digest=metadata.get("ecommerce_product_truth_admission_digest"),
+                projection_digest=metadata.get("ecommerce_product_truth_projection_digest"),
+            )
+            if actual_context_digest != expected_context_digest:
+                context_issues.append("selection_context_digest_mismatch")
         if context_issues:
-            raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+            context_code = {
+                "selection_contract_context_invalid": "ecommerce_product_truth_selection_context_invalid",
+                "selection_capacity_contract_missing": "ecommerce_product_truth_selection_capacity_contract_missing",
+                "selection_context_digest_mismatch": "ecommerce_product_truth_selection_context_digest_mismatch",
+            }
+            raise CapabilityActivationError(
+                next(
+                    (context_code.get(issue) for issue in context_issues if issue in context_code),
+                    "ecommerce_product_truth_selection_invalid",
+                )
+            )
         raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
         if len(raw_entries) != expected_count:
             raise CapabilityActivationError("ecommerce_product_truth_selection_missing_or_incomplete")
@@ -5459,6 +5483,9 @@ class ScenarioRuntime:
                 "selection_capacity_exceeded": "ecommerce_product_truth_selection_capacity_exceeded",
                 "selection_invalid": "ecommerce_product_truth_selection_invalid",
                 "selection_missing_or_incomplete": "ecommerce_product_truth_selection_missing_or_incomplete",
+                "selection_contract_context_invalid": "ecommerce_product_truth_selection_context_invalid",
+                "selection_capacity_contract_missing": "ecommerce_product_truth_selection_capacity_contract_missing",
+                "selection_context_digest_mismatch": "ecommerce_product_truth_selection_context_digest_mismatch",
             }
             for issue in shared_selection_issues:
                 runtime_code = issue_to_runtime_code.get(issue)
@@ -5470,24 +5497,6 @@ class ScenarioRuntime:
             index = int(entry.output_index)
             role = str(getattr(entry, "product_truth_selection_role", "") or "").strip()
             selected = [str(item).strip() for item in entry.selected_product_truth_asset_ids if str(item).strip()]
-            if (
-                index in resolved
-                or index < 1
-                or index > expected_count
-                or role not in ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES
-                or not selected
-            ):
-                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
-            if len(selected) != len(set(selected)):
-                raise CapabilityActivationError("ecommerce_product_truth_selection_duplicate")
-            if not set(selected).issubset(product_truth_id_set):
-                raise CapabilityActivationError("ecommerce_product_truth_selection_unknown_asset")
-            if len(selected) > 2:
-                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
-            if len(selected) == 2 and role != ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE:
-                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
-            if len(selected) > max_product_truth_refs:
-                raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_exceeded")
             resolved[index] = {
                 "product_truth_selection_role": role,
                 "selected_product_truth_asset_ids": selected,
@@ -7747,6 +7756,35 @@ class ScenarioRuntime:
         if slot_delta_timeout is not None:
             base_metadata["_brain_transport_timeout_seconds"] = slot_delta_timeout
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
+        if (
+            base_metadata.get("professional_product_truth_required") is True
+            and base_metadata.get("doc270_ecommerce_view_activation_authoritative") is not True
+        ):
+            ecommerce_context = base_metadata.get("ecommerce_creative_context")
+            if isinstance(ecommerce_context, dict):
+                admission = base_metadata.get("professional_ecommerce_product_truth_admission")
+                admission_digest = (
+                    admission.get("source_binding_digest")
+                    if isinstance(admission, dict)
+                    else None
+                )
+                projection_digest = base_metadata.get(
+                    "professional_ecommerce_product_truth_projection_digest"
+                )
+                context_digest = ecommerce_product_truth_context_digest(
+                    uploaded_assets=uploaded_assets,
+                    reference_pool=ecommerce_context.get("product_truth_reference_pool"),
+                    provider_budget=ecommerce_context.get("provider_reference_budget"),
+                    admission_digest=admission_digest,
+                    projection_digest=projection_digest,
+                    expected_count=self._requested_image_count_for_brain(request),
+                )
+                base_metadata["ecommerce_product_truth_context_digest"] = context_digest
+                base_metadata["ecommerce_product_truth_admission_digest"] = admission_digest
+                base_metadata["ecommerce_product_truth_projection_digest"] = projection_digest
+                request.metadata["ecommerce_product_truth_context_digest"] = context_digest
+                request.metadata["ecommerce_product_truth_admission_digest"] = admission_digest
+                request.metadata["ecommerce_product_truth_projection_digest"] = projection_digest
         shared_capability_metadata = self._capability_metadata(capability_run)
         raw_variation_contract = request.metadata.get("variation_execution_contract")
         general_variation_scope = bool(

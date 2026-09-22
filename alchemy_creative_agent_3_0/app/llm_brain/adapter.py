@@ -69,7 +69,9 @@ from .providers import (
 from .stage_trace import record_stage_event
 from ..scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
+    ecommerce_product_truth_context_digest,
     ecommerce_product_truth_context_issues,
+    ecommerce_product_truth_reference_budget,
     ecommerce_product_truth_selection_contract_issues,
     professional_identity_view_kinds_from_selectors,
     validate_ecommerce_creative_risk_preflight_payload,
@@ -1392,6 +1394,31 @@ class V3LLMBrainAdapter:
         if ecommerce_creative_context:
             # Deliberately absent from General and Photography requests.
             request_metadata["ecommerce_creative_context"] = ecommerce_creative_context
+            if (
+                metadata.get("professional_product_truth_required") is True
+                and metadata.get("doc270_ecommerce_view_activation_authoritative") is not True
+            ):
+                admission = metadata.get("professional_ecommerce_product_truth_admission")
+                admission_digest = (
+                    admission.get("source_binding_digest")
+                    if isinstance(admission, dict)
+                    else None
+                )
+                projection_digest = metadata.get(
+                    "professional_ecommerce_product_truth_projection_digest"
+                )
+                request_metadata["ecommerce_product_truth_admission_digest"] = admission_digest
+                request_metadata["ecommerce_product_truth_projection_digest"] = projection_digest
+                request_metadata["ecommerce_product_truth_context_digest"] = (
+                    ecommerce_product_truth_context_digest(
+                        uploaded_assets=list(uploaded_assets or []),
+                        reference_pool=ecommerce_creative_context.get("product_truth_reference_pool"),
+                        provider_budget=ecommerce_creative_context.get("provider_reference_budget"),
+                        admission_digest=admission_digest,
+                        projection_digest=projection_digest,
+                        expected_count=requested_count,
+                    )
+                )
         if photography_creative_context:
             # Deliberately absent from General and E-Commerce requests.  This
             # is a non-creative contract: it lets the remote Brain bind one
@@ -2828,11 +2855,24 @@ def _product_truth_context_issues_for_contract(request: BrainRunRequest) -> list
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     context = metadata.get("ecommerce_creative_context")
     context = context if isinstance(context, dict) else {}
-    return ecommerce_product_truth_context_issues(
+    issues = ecommerce_product_truth_context_issues(
         uploaded_asset_ids=_product_truth_asset_ids_for_contract(request) or set(),
         reference_pool=context.get("product_truth_reference_pool"),
         provider_budget=context.get("provider_reference_budget"),
     )
+    expected_digest = str(metadata.get("ecommerce_product_truth_context_digest") or "").strip()
+    if expected_digest:
+        actual_digest = ecommerce_product_truth_context_digest(
+            uploaded_assets=request.uploaded_assets,
+            reference_pool=context.get("product_truth_reference_pool"),
+            provider_budget=context.get("provider_reference_budget"),
+            admission_digest=metadata.get("ecommerce_product_truth_admission_digest"),
+            projection_digest=metadata.get("ecommerce_product_truth_projection_digest"),
+            expected_count=request.requested_image_count,
+        )
+        if actual_digest != expected_digest:
+            issues.append("selection_context_digest_mismatch")
+    return list(dict.fromkeys(issues))
 
 
 def _max_product_truth_source_refs_for_contract(request: BrainRunRequest) -> int | None:
@@ -2842,11 +2882,7 @@ def _max_product_truth_source_refs_for_contract(request: BrainRunRequest) -> int
     context = metadata.get("ecommerce_creative_context")
     budget = context.get("provider_reference_budget") if isinstance(context, dict) else None
     raw_value = budget.get("max_product_truth_source_refs_per_output") if isinstance(budget, dict) else None
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        return 0
-    return value if 1 <= value <= 2 else 0
+    return ecommerce_product_truth_reference_budget(raw_value) or 0
 
 
 def _product_truth_selection_contract_audit(
@@ -2884,6 +2920,7 @@ def _product_truth_selection_contract_audit(
         "selection_contract_context_invalid": (
             "ecommerce_creative_context.product_truth_reference_pool"
         ),
+        "selection_context_digest_mismatch": "ecommerce_product_truth_context_digest",
         "selection_capacity_exceeded": (
             "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids"
         ),
