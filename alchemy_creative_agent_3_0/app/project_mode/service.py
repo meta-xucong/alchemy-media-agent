@@ -154,6 +154,7 @@ _GENERAL_VARIATION_MODE_ALIASES = GENERAL_VARIATION_MODE_ALIASES
 # whole page or silently undercounting it.
 _HOME_PREVIEW_MAX_JOB_STATES = 64
 _HOME_PREVIEW_MAX_INDEX_RECORDS = 4096
+_HOME_PREVIEW_MAX_OUTPUTS_PER_JOB = 128
 
 
 def _project_listing_key(project: ProjectRecord) -> tuple[str, str, str]:
@@ -2918,6 +2919,23 @@ class V3ProjectModeService:
         list_by_project = getattr(output_store, "list_by_project", None)
         get_job = getattr(product_service, "get_job", None)
         get_job_record = getattr(product_service, "get_job_record", None)
+
+        def read_job_outputs(job_id: str, *, bounded: bool) -> list[Any]:
+            """Read a bounded compatibility window without breaking old adapters."""
+
+            if not callable(list_by_job):
+                return []
+            if not bounded:
+                return list(list_by_job(job_id))
+            limit = _HOME_PREVIEW_MAX_OUTPUTS_PER_JOB
+            try:
+                return list(list_by_job(job_id, limit=limit))
+            except TypeError:
+                # Test/legacy adapters may still expose the old one-argument
+                # callable. Keep compatibility, while the production store
+                # uses the bounded API above.
+                return list(list_by_job(job_id))[:limit]
+
         if not callable(get_job) or not callable(get_job_record):
             if use_project_index:
                 for project in projects:
@@ -2996,7 +3014,7 @@ class V3ProjectModeService:
                         if not callable(list_by_job):
                             break
                         try:
-                            fallback_records = list(list_by_job(fallback_job_id))
+                            fallback_records = read_job_outputs(fallback_job_id, bounded=True)
                         except Exception:
                             declared_job_scan_complete = False
                             continue
@@ -3048,7 +3066,7 @@ class V3ProjectModeService:
                 if candidate_job_outputs_only and job_id not in snapshot["records_by_job"]:
                     if callable(list_by_job):
                         try:
-                            snapshot["records_by_job"][job_id] = list(list_by_job(job_id))
+                            snapshot["records_by_job"][job_id] = read_job_outputs(job_id, bounded=True)
                         except Exception:
                             snapshot["records_by_job"][job_id] = []
                     else:
