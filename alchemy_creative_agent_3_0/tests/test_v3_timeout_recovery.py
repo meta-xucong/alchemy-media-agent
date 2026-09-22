@@ -15,6 +15,97 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.quality_review import (
     OutputQualityReviewMerger,
 )
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    OpenAIVisionInspectionProvider,
+)
+
+
+def test_provider_consumes_inner_timeout_budget():
+    provider = OpenAIVisionInspectionProvider()
+    assert provider._timeout({
+        "_inner_timeout_seconds": 0.5,
+        "vision_inspection_timeout_seconds": 90,
+    }) == 0.5
+    assert provider._timeout({"vision_inspection_timeout_seconds": 12}) == 12
+
+
+def test_live_worker_blocks_retry_even_with_a_free_global_slot(monkeypatch):
+    release = threading.Event()
+    slots = threading.BoundedSemaphore(2)
+    calls = []
+
+    class BlockingProvider:
+        def available(self, *, force=False):
+            return True
+
+        def inspect(self, resolution, *, metadata):
+            calls.append(resolution)
+            release.wait(timeout=5)
+            return {"status": "pass"}
+
+    monkeypatch.setattr(vision_inspector, "_vision_inspection_semaphore", slots)
+    monkeypatch.setattr(vision_inspector.time, "sleep", lambda _seconds: None)
+    inspector = vision_inspector.VisionOutputInspector(vision_provider=BlockingProvider())
+    monkeypatch.setattr(inspector, "_manual_report", lambda *args, **kw: kw["evidence_extra"])
+    try:
+        evidence = inspector._vision_model_report(
+            SimpleNamespace(), mode="vision_model", metadata={
+                "vision_inspection_timeout_seconds": 0.05,
+                "vision_inspection_max_attempts": 2,
+            },
+        )
+        assert len(calls) == 1
+        assert evidence["provider_worker_stopped"] is False
+        assert evidence["provider_review_attempts"] == 1
+        assert evidence["provider_timeout_recovery_attempted"] is False
+        assert evidence["provider_timeout_recovery_succeeded"] is False
+    finally:
+        release.set()
+        # Wait for actual worker cleanup, not just the timed-out caller.
+        for _ in range(2):
+            assert slots.acquire(timeout=2)
+        for _ in range(2):
+            slots.release()
+
+
+def test_repeated_timeout_never_reports_recovery_success(monkeypatch):
+    calls = []
+
+    class FailingProvider:
+        def available(self, *, force=False):
+            return True
+
+        def inspect(self, resolution, *, metadata):
+            calls.append(resolution)
+            raise TimeoutError("provider deadline")
+
+    monkeypatch.setattr(vision_inspector.time, "sleep", lambda _seconds: None)
+    inspector = vision_inspector.VisionOutputInspector(vision_provider=FailingProvider())
+    monkeypatch.setattr(inspector, "_manual_report", lambda *args, **kw: kw["evidence_extra"])
+    evidence = inspector._vision_model_report(
+        SimpleNamespace(), mode="vision_model", metadata={"vision_inspection_max_attempts": 2},
+    )
+    assert len(calls) == 2
+    assert evidence["provider_review_attempts"] == 2
+    assert evidence["provider_timeout_recovery_attempted"] is True
+    assert evidence["provider_timeout_recovery_succeeded"] is False
+
+
+def test_thread_start_failure_returns_semaphore_slot(monkeypatch):
+    slots = threading.BoundedSemaphore(2)
+    monkeypatch.setattr(vision_inspector, "_vision_inspection_semaphore", slots)
+
+    def fail_start(self):
+        raise RuntimeError("cannot start thread")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    with pytest.raises(RuntimeError, match="cannot start thread"):
+        vision_inspector._inspect_with_timeout(
+            SimpleNamespace(), SimpleNamespace(), metadata={}, timeout_seconds=0.05,
+        )
+    assert slots.acquire(blocking=False)
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
 
 
 def test_concurrency_limit_and_failure_states_are_contract_values():
