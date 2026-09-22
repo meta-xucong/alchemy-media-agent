@@ -67,8 +67,15 @@ commerce-specific deliverables.
     review disposition and exact browser session ownership needed to keep
     internal quality diagnostics and superseded terminal state out of a new
     explicit generation.
-23. This E-Commerce module family.
-24. Implementation notes and examples.
+23. E35 / Doc281 E-Commerce Brain Product-Truth Selection Recovery Contract,
+    once reviewer-approved. It closes the semantic validation gap between the
+    remote Brain adapter and the final E-Commerce product-truth activation
+    gate without adding local creative fallback.
+24. E36 Product-Truth Shared Validation Closure, once reviewer-approved. It
+    closes the remaining validator, context-snapshot, type-safety and Provider
+    admission split while preserving Doc263/Doc269 authority.
+25. This E-Commerce module family.
+26. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -264,3 +271,6 @@ Before implementation starts, the team must have accepted:
     contract, after reviewer acceptance, before Product API warnings, the
     E-Commerce current review disposition, or browser recovery ownership may
     change for retained review-only output or a newly explicit command.
+26. E35 / Doc281 E-Commerce Brain product-truth selection recovery contract,
+    after reviewer acceptance, before a Professional E-Commerce Brain plan
+    may enter capability activation or an image-provider request.
