@@ -137,6 +137,17 @@ def test_non_dict_review_package_fails_closed():
     assert outputs == set()
 
 
+@pytest.mark.parametrize("bad_value", [None, "not-a-list", {"output": "good"}, 17])
+def test_malformed_face_receipt_collection_fails_closed_without_projection_crash(bad_value):
+    state, outputs, _ = delivery(
+        [inspection("good")],
+        doc276_face_integrity_required_output_ids=bad_value,
+    )
+    assert state["final_delivery_status"] == "withheld_review_failure"
+    assert state["delivery_gate_applies"] is True
+    assert outputs == set()
+
+
 def test_malformed_inspections_are_projected_without_crashing():
     public = V3ProductApiService._public_post_generation_review({
         "review_evidence_receipt_status": "complete",
@@ -311,3 +322,28 @@ def test_project_job_mixed_pixel_results_keep_delivery_and_review_counts_separat
     assert home["project_review_counts"][project["project_id"]] == 1
     record = service.get_job_record(created["job_id"])
     assert len(record.generation_result.metadata["post_generation_review_package"]["inspections"]) == 2
+
+
+@pytest.mark.parametrize("receipt", ["missing", "closed", "pending"])
+@pytest.mark.parametrize("rows", [None, 17, {"bad": "row"}])
+def test_malformed_inspections_do_not_crash_incomplete_receipt_projection(receipt, rows):
+    package = {"inspections": rows}
+    if receipt != "missing":
+        package["review_evidence_receipt_status"] = receipt
+    result = SimpleNamespace(metadata={"post_generation_review_package": package})
+    state, outputs, _ = V3ProductApiService.__new__(V3ProductApiService)._public_final_delivery_projection(result)
+    assert state["delivery_gate_applies"] is True
+    assert state["automatic_delivery_available"] is False
+    assert outputs == set()
+
+
+@pytest.mark.parametrize("certificate", ["false", "true", 1, None])
+def test_non_boolean_pixel_certificate_never_certifies_public_review(certificate):
+    row = inspection("bad_certificate")
+    row["evidence"]["provider_pixel_result_certified"] = certificate
+    public = V3ProductApiService._public_post_generation_review({
+        "review_evidence_receipt_status": "complete", "inspections": [row],
+    })
+    assert public["real_pixel_review_certified"] is False
+    assert public["quality_assessment"] == "not_assessed"
+    assert delivery([row])[1] == set()
