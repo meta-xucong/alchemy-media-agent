@@ -66,3 +66,16 @@ Local regression is complete for this scope. Mainline integration must be tested
 again before publication. VPS verification and the five historical V2 original
 images are not proven by these tests; a read-only SSH attempt was blocked by the
 platform safety check, and no replacement transport or CI deployment was used.
+
+## Integrated acceptance
+Combined executable revision: 09b7d21bf979e69799bac3fbbcb762df3e1fca19.
+Fresh combined-worktree runs: V2 complete 345 passed; V3 affected/adjacent 53-file
+suite 1176 passed. No failures, skipped cases or deselections in either run.
+Evidence: integrated-v2.log/xml, integrated-v3.log/xml, integrated-acceptance.json.
+V2 and V3 app trees exactly match their separately validated feature revisions.
+All earlier V3 commits 4d76d6f7, 82c70c1a and 6f2f059d remain ancestors.
+Compared with 6f2f059d, only eight production files change, with net 59 fewer lines;
+no Provider, billing, authentication, frontend, dependency or workflow changes.
+This documentation-only acceptance record does not change the tested executable
+sources. Deployment and historical-image restoration remain unverified because
+of the recorded platform SSH execution block, not a hidden regression exclusion.
