@@ -3119,21 +3119,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback": "blocked",
                 },
             )
-        declared_pool = [
-            str(item).strip()
-            for item in deliverable_metadata.get("product_truth_pool_asset_ids", [])
-            if str(item).strip()
-        ]
-        selected_from_plan = [
-            str(item).strip()
-            for item in deliverable_metadata.get("selected_product_truth_asset_ids", [])
-            if str(item).strip()
-        ]
-        admitted = [
-            str(item).strip()
-            for item in deliverable_metadata.get("admitted_product_truth_asset_ids", [])
-            if str(item).strip()
-        ]
+        id_fields = ("product_truth_pool_asset_ids", "selected_product_truth_asset_ids", "admitted_product_truth_asset_ids")
+        if any(not isinstance(deliverable_metadata.get(key), list) or not deliverable_metadata[key] or any(not isinstance(item, str) or not item.strip() for item in deliverable_metadata[key]) for key in id_fields):
+            raise ReferenceInputAdmissionError("Professional E-Commerce product truth selection is invalid.", provider=self.provider_name, detail={"reference_input_failure_code": "ecommerce_product_truth_selection_invalid", "fallback": "blocked"})
+        declared_pool, selected_from_plan, admitted = ([item.strip() for item in deliverable_metadata[key]] for key in id_fields)
         selection_source = str(
             deliverable_metadata.get("product_truth_selection_source") or ""
         ).strip()

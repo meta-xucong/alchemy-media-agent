@@ -51,7 +51,7 @@ from ..photography_profiles import (
     PhotographerProfileSelectionError,
     default_photographer_profile_catalog,
 )
-from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
+from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner, ecommerce_product_truth_reference_budget
 from ..scenario_packs.ecommerce.reference_projection import (
     PhysicalProductReferenceProjection,
     ProductTruthAdmission,
@@ -17139,23 +17139,19 @@ class V3ProductApiService:
             deliverable_metadata = deliverable.get("metadata")
             if not isinstance(deliverable_metadata, dict):
                 raise ValueError("ecommerce_product_truth_selection_missing")
-            selected = [
-                str(item).strip()
-                for item in deliverable_metadata.get("selected_product_truth_asset_ids", [])
-                if str(item).strip()
-            ]
+            raw_selected = deliverable_metadata.get("selected_product_truth_asset_ids")
+            if not isinstance(raw_selected, list) or not raw_selected or any(not isinstance(item, str) or not item.strip() for item in raw_selected):
+                raise ValueError("ecommerce_product_truth_selection_invalid")
+            selected = [item.strip() for item in raw_selected]
+            cap_reservation = ecommerce_product_truth_reference_budget(deliverable_metadata.get("max_product_truth_source_refs_per_output"))
+            if cap_reservation is None:
+                raise ValueError("ecommerce_product_truth_selection_capacity_contract_missing")
             selection_source = str(
                 deliverable_metadata.get("product_truth_selection_source") or ""
             ).strip()
             selection_role = str(
                 deliverable_metadata.get("product_truth_selection_role") or ""
             ).strip()
-            try:
-                cap_reservation = int(
-                    deliverable_metadata.get("max_product_truth_source_refs_per_output")
-                )
-            except (TypeError, ValueError):
-                cap_reservation = 0
             try:
                 projection = build_physical_product_projection(
                     job_id=admission.job_id,

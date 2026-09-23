@@ -69,6 +69,8 @@ from .providers import (
 from .stage_trace import record_stage_event
 from ..scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
+    ecommerce_product_truth_asset_ids,
+    ecommerce_product_truth_validation_audit,
     ecommerce_product_truth_context_digest,
     ecommerce_product_truth_context_issues,
     ecommerce_product_truth_reference_budget,
@@ -265,6 +267,16 @@ class V3LLMBrainAdapter:
             if strict_remote_contract
             else build_fallback_result(request)
         )
+        product_truth_required = _requires_product_truth_selection(request)
+        if product_truth_required:
+            request = request.model_copy(deep=True)
+            context_issues = _product_truth_context_issues_for_contract(request)
+            if context_issues:
+                diagnostic = ecommerce_product_truth_validation_audit(context_issues)
+                fallback.audit = {**fallback.audit, "remote_contract_partial_fallback": True, "remote_contract_rejected_sections": ["image_set_plan"], "remote_image_set_validation_audit": diagnostic, "remote_contract_validation_audit": _remote_contract_validation_audit_payload({"image_set_plan": diagnostic}), "remote_brain_call_count": 0, "remote_brain_request_started": False, "remote_brain_request_acceptance": "not_started", "remote_semantic_contract_recovery_attempted": False, "remote_semantic_contract_recovery_succeeded": False}
+                return fallback
+            context = request.metadata["ecommerce_creative_context"]
+            request.metadata["ecommerce_product_truth_context_digest"] = ecommerce_product_truth_context_digest(uploaded_assets=request.uploaded_assets, reference_pool=context.get("product_truth_reference_pool"), provider_budget=context.get("provider_reference_budget"), admission_digest=request.metadata.get("ecommerce_product_truth_admission_digest"), projection_digest=request.metadata.get("ecommerce_product_truth_projection_digest"), expected_count=request.requested_image_count)
         remote_for_request = _remote_allowed_for_request(request)
         availability = _safe_provider_availability(self.provider, force=remote_for_request)
         if not availability.get("available"):
@@ -293,7 +305,7 @@ class V3LLMBrainAdapter:
                 stage=request.stage,
                 extra={"requested_image_count": request.requested_image_count},
             )
-            data = self.provider.run(request)
+            data = self.provider.run(request.model_copy(deep=True) if product_truth_required else request)
             remote_brain_call_count += 1
             record_stage_event("brain_adapter", "semantic_plan_provider_returned", stage=request.stage)
             transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
@@ -419,6 +431,8 @@ class V3LLMBrainAdapter:
                     else {}
                 ),
             }
+            if product_truth_required and not final_rejected_sections:
+                result.audit["ecommerce_product_truth_context_digest"] = request.metadata["ecommerce_product_truth_context_digest"]
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
             failure_audit = self.provider_failure_audit(exc, stage=request.stage)
@@ -1564,6 +1578,9 @@ class V3LLMBrainAdapter:
                     expected_count=fallback.image_set_plan.image_count,
                 )
                 if not cardinality_audit["cardinality_valid"]:
+                    if requires_product_truth_selection:
+                        image_set_validation_audit = ecommerce_product_truth_validation_audit(["selection_output_count_mismatch"])
+                        contract_validation_sections[key] = image_set_validation_audit
                     rejected_sections.append(key)
                     continue
                 if requires_product_truth_selection:
@@ -2832,21 +2849,7 @@ def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
 def _product_truth_asset_ids_for_contract(request: BrainRunRequest) -> set[str] | None:
     """Use the same frozen uploaded-asset truth set consumed by Runtime."""
 
-    uploaded_assets = request.uploaded_assets if isinstance(request.uploaded_assets, list) else []
-    ids: set[str] = set()
-    for item in uploaded_assets:
-        if not isinstance(item, dict):
-            continue
-        asset_metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        channel = str(asset_metadata.get("codex_native_reference_channel") or "").strip()
-        role = str(item.get("role") or "").strip()
-        effective_channel = channel or ("product_truth" if role == "product_reference" else role)
-        if effective_channel != "product_truth":
-            continue
-        asset_id = str(item.get("asset_id") or "").strip()
-        if asset_id:
-            ids.add(asset_id)
-    return ids
+    return set(ecommerce_product_truth_asset_ids(request.uploaded_assets))
 
 
 def _product_truth_context_issues_for_contract(request: BrainRunRequest) -> list[str]:
@@ -2857,6 +2860,7 @@ def _product_truth_context_issues_for_contract(request: BrainRunRequest) -> list
     context = context if isinstance(context, dict) else {}
     issues = ecommerce_product_truth_context_issues(
         uploaded_asset_ids=_product_truth_asset_ids_for_contract(request) or set(),
+        uploaded_assets=request.uploaded_assets,
         reference_pool=context.get("product_truth_reference_pool"),
         provider_budget=context.get("provider_reference_budget"),
     )
@@ -2905,32 +2909,7 @@ def _product_truth_selection_contract_audit(
     )
     if not issues:
         return {}
-    path_by_issue = {
-        "selection_missing_or_incomplete": "image_set_plan.evidence_dimensions_by_output",
-        "selection_invalid": "image_set_plan.evidence_dimensions_by_output.item",
-        "selection_duplicate": (
-            "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids"
-        ),
-        "selection_unknown_asset": (
-            "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids"
-        ),
-        "selection_capacity_contract_missing": (
-            "ecommerce_creative_context.provider_reference_budget"
-        ),
-        "selection_contract_context_invalid": (
-            "ecommerce_creative_context.product_truth_reference_pool"
-        ),
-        "selection_context_digest_mismatch": "ecommerce_product_truth_context_digest",
-        "selection_capacity_exceeded": (
-            "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids"
-        ),
-    }
-    paths = [path_by_issue[issue] for issue in issues if issue in path_by_issue]
-    return {
-        "validation_error_count": len(paths),
-        "validation_error_paths": list(dict.fromkeys(paths))[:8],
-        "validation_error_types": list(dict.fromkeys(issues))[:8],
-    }
+    return ecommerce_product_truth_validation_audit(issues)
 
 
 def _safe_semantic_contract_recovery_diagnostics(audit: dict[str, Any] | None) -> dict[str, Any]:
@@ -2945,11 +2924,12 @@ def _safe_semantic_contract_recovery_diagnostics(audit: dict[str, Any] | None) -
     if not isinstance(image_set_audit, dict):
         return {}
     error_types = image_set_audit.get("validation_error_types")
-    if not isinstance(error_types, list) or not any(
-        str(item).strip().startswith("selection_") for item in error_types
-    ):
+    if not isinstance(error_types, list):
         return {}
-    return _remote_contract_validation_audit_payload({"image_set_plan": image_set_audit})
+    safe_audit = ecommerce_product_truth_validation_audit(error_types)
+    if not safe_audit:
+        return {}
+    return _remote_contract_validation_audit_payload({"image_set_plan": safe_audit})
 
 
 def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_count: int) -> bool:

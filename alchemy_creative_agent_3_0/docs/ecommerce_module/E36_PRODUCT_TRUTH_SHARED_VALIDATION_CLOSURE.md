@@ -85,3 +85,8 @@ The VPS acceptance remains a separate production gate: submit a new job with
 the previously failing request/assets, confirm actual dispatch, persisted pixels,
 project status and count. Simulated success must never be reported as VPS pixel
 acceptance. Record actual commands/counts/commits below once validated.
+
+
+## 2026-09-23 code audit correction model
+
+The merged implementation did not fully implement the authority/order described above. This audit closes five concrete boundaries: malformed budgets are rejected before numeric comparisons; invalid local pools are blocked before Brain dispatch and consume zero recovery attempts; channel resolution is shared and duplicate product identities remain visible for validation; the context digest is carried on accepted Brain results and checked on frozen Runtime activation; and recovery diagnostics use an explicit allowlist including output-count mismatch. Product API and Provider inputs reject non-list/non-string asset ID fields instead of coercing them.
