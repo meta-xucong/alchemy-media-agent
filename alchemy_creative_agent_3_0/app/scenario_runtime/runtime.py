@@ -41,6 +41,8 @@ from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, Scena
 from ..scenario_packs.ecommerce import (
     EcommerceCreativeContext,
     EcommerceCreativeRiskPreflight,
+    ecommerce_product_truth_asset_ids,
+    ecommerce_uploaded_asset_reference_channel,
     ecommerce_product_truth_context_digest,
     ecommerce_human_realism_review_context_from_preflight_payload,
     ecommerce_product_truth_context_issues,
@@ -5150,17 +5152,7 @@ class ScenarioRuntime:
 
     @staticmethod
     def _uploaded_asset_reference_channel(asset: Any) -> str:
-        metadata = getattr(asset, "metadata", None)
-        metadata = metadata if isinstance(metadata, dict) else {}
-        channel = str(metadata.get("codex_native_reference_channel") or "").strip()
-        if channel:
-            return channel
-        role = str(getattr(asset, "role", "") or "").strip()
-        if role == "product_reference":
-            return "product_truth"
-        if role == "face_reference":
-            return "portrait_identity"
-        return role
+        return ecommerce_uploaded_asset_reference_channel(asset)
 
     @staticmethod
     def _validated_professional_ecommerce_pose_contract_by_output(
@@ -5374,11 +5366,7 @@ class ScenarioRuntime:
         metadata = dict(request.metadata or {})
         if not metadata.get("professional_product_truth_required"):
             return {}
-        product_truth_ids = [
-            asset.asset_id
-            for asset in request.uploaded_assets
-            if self._uploaded_asset_reference_channel(asset) == "product_truth"
-        ]
+        product_truth_ids = ecommerce_product_truth_asset_ids(self._uploaded_assets(request))
         if not product_truth_ids:
             raise CapabilityActivationError("ecommerce_product_truth_selection_pool_missing")
         # Doc270/E31 may already have issued a server-owned, per-output
@@ -5434,25 +5422,16 @@ class ScenarioRuntime:
         product_truth_id_set = set(product_truth_ids)
         context_issues = ecommerce_product_truth_context_issues(
             uploaded_asset_ids=product_truth_id_set,
+            uploaded_assets=self._uploaded_assets(request),
             reference_pool=ecommerce_context.get("product_truth_reference_pool"),
             provider_budget=provider_budget,
         )
-        expected_context_digest = str(
-            metadata.get("ecommerce_product_truth_context_digest") or ""
-        ).strip()
-        if expected_context_digest:
-            actual_context_digest = ecommerce_product_truth_context_digest(
-                uploaded_assets=[
-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
-                    for item in self._uploaded_assets(request)
-                ],
-                reference_pool=ecommerce_context.get("product_truth_reference_pool"),
-                provider_budget=provider_budget,
-                expected_count=expected_count,
-                admission_digest=metadata.get("ecommerce_product_truth_admission_digest"),
-                projection_digest=metadata.get("ecommerce_product_truth_projection_digest"),
-            )
-            if actual_context_digest != expected_context_digest:
+        expected_context_digests = [source["ecommerce_product_truth_context_digest"] for source in (metadata, brain_result.audit) if "ecommerce_product_truth_context_digest" in source]
+        if expected_context_digests:
+            admission = metadata.get("professional_ecommerce_product_truth_admission")
+            admission_digest = admission.get("source_binding_digest") if isinstance(admission, dict) else metadata.get("ecommerce_product_truth_admission_digest")
+            actual_context_digest = ecommerce_product_truth_context_digest(uploaded_assets=self._uploaded_assets(request), reference_pool=ecommerce_context.get("product_truth_reference_pool"), provider_budget=provider_budget, expected_count=expected_count, admission_digest=admission_digest, projection_digest=metadata.get("professional_ecommerce_product_truth_projection_digest", metadata.get("ecommerce_product_truth_projection_digest")))
+            if any(not digest or digest != actual_context_digest for digest in expected_context_digests):
                 context_issues.append("selection_context_digest_mismatch")
         if context_issues:
             context_code = {
@@ -7771,14 +7750,9 @@ class ScenarioRuntime:
                 projection_digest = base_metadata.get(
                     "professional_ecommerce_product_truth_projection_digest"
                 )
-                context_digest = ecommerce_product_truth_context_digest(
-                    uploaded_assets=uploaded_assets,
-                    reference_pool=ecommerce_context.get("product_truth_reference_pool"),
-                    provider_budget=ecommerce_context.get("provider_reference_budget"),
-                    admission_digest=admission_digest,
-                    projection_digest=projection_digest,
-                    expected_count=self._requested_image_count_for_brain(request),
-                )
+                computed_context_digest = ecommerce_product_truth_context_digest(uploaded_assets=uploaded_assets, reference_pool=ecommerce_context.get("product_truth_reference_pool"), provider_budget=ecommerce_context.get("provider_reference_budget"), admission_digest=admission_digest, projection_digest=projection_digest, expected_count=self._requested_image_count_for_brain(request))
+                supplied_context_digest = request.metadata.get("ecommerce_product_truth_context_digest")
+                context_digest = supplied_context_digest.strip() if isinstance(supplied_context_digest, str) and supplied_context_digest.strip() else computed_context_digest
                 base_metadata["ecommerce_product_truth_context_digest"] = context_digest
                 base_metadata["ecommerce_product_truth_admission_digest"] = admission_digest
                 base_metadata["ecommerce_product_truth_projection_digest"] = projection_digest

@@ -268,3 +268,35 @@ def test_doc281_product_pool_rejects_duplicate_and_conflicting_entries() -> None
         provider_budget={"max_product_truth_source_refs_per_output": 1},
     )
     assert issues == ["selection_contract_context_invalid"]
+
+
+@pytest.mark.parametrize("budget", ["1", {}, [], True, 1.0, 0, -1, 3, None])
+def test_doc281_malformed_budget_returns_diagnostic_without_raising(budget):
+    entries = [{"output_index": 1, "product_truth_selection_role": "lifestyle_primary_product_view", "selected_product_truth_asset_ids": ["product_a"]}]
+    assert "selection_capacity_contract_missing" in ecommerce_product_truth_selection_contract_issues(entries, expected_count=1, allowed_asset_ids={"product_a"}, max_source_refs=budget)
+
+
+def test_doc281_local_context_is_blocked_without_brain_dispatch():
+    provider = _SequencedProductTruthProvider(fault="role", recover=True)
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = _request(adapter).model_copy(deep=True)
+    request.metadata["ecommerce_creative_context"].pop("provider_reference_budget")
+    result = adapter.run(request)
+    assert provider.requests == []
+    assert result.audit["remote_brain_call_count"] == 0
+    assert result.audit["remote_semantic_contract_recovery_attempted"] is False
+
+
+def test_doc281_recovery_preserves_snapshot_when_provider_mutates_its_request():
+    class MutatingProvider(_SequencedProductTruthProvider):
+        def run(self, request):
+            payload = super().run(request)
+            request.uploaded_assets.reverse(); request.user_input = "mutated by provider"
+            return payload
+    provider = MutatingProvider(fault="role", recover=True)
+    request = _request(V3LLMBrainAdapter())
+    before = request.model_dump(mode="json")
+    result = V3LLMBrainAdapter(provider=provider).run(request)
+    assert result.audit["remote_semantic_contract_recovery_succeeded"] is True
+    assert request.model_dump(mode="json") == before
+    assert provider.requests[0]["uploaded_assets"] == provider.requests[1]["uploaded_assets"]

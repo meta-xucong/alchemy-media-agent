@@ -25,6 +25,41 @@ ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
 ECOMMERCE_PRODUCT_TRUTH_CONTEXT_SCHEMA = "ecommerce_product_truth_context_v1"
 
 
+ECOMMERCE_PRODUCT_TRUTH_ISSUE_PATHS = {
+    "selection_missing_or_incomplete": "image_set_plan.evidence_dimensions_by_output",
+    "selection_output_count_mismatch": "image_set_plan.image_count",
+    "selection_invalid": "image_set_plan.evidence_dimensions_by_output.item",
+    "selection_duplicate": "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
+    "selection_unknown_asset": "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
+    "selection_capacity_exceeded": "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
+    "selection_capacity_contract_missing": "ecommerce_creative_context.provider_reference_budget",
+    "selection_contract_context_invalid": "ecommerce_product_truth_reference_pool",
+    "selection_context_digest_mismatch": "ecommerce_product_truth_context_digest",
+}
+
+def _asset_record(asset: Any) -> Mapping[str, Any]:
+    if isinstance(asset, Mapping): return asset
+    if isinstance(asset, V3BaseModel): return asset.model_dump(mode="json")
+    return {}
+
+def ecommerce_uploaded_asset_reference_channel(asset: Any) -> str:
+    record = _asset_record(asset); metadata = record.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    channel = str(metadata.get("codex_native_reference_channel") or "").strip()
+    role = str(record.get("role") or "").strip()
+    return channel or {"product_reference": "product_truth", "face_reference": "portrait_identity"}.get(role, role)
+
+def ecommerce_product_truth_assets(uploaded_assets: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(uploaded_assets, list): return []
+    return [_asset_record(item) for item in uploaded_assets if ecommerce_uploaded_asset_reference_channel(item) == "product_truth"]
+
+def ecommerce_product_truth_asset_ids(uploaded_assets: Any) -> list[str]:
+    return [str(item.get("asset_id") or "").strip() for item in ecommerce_product_truth_assets(uploaded_assets)]
+
+def ecommerce_product_truth_validation_audit(issues: list[str]) -> dict[str, Any]:
+    safe = list(dict.fromkeys(item for item in issues if isinstance(item, str) and item in ECOMMERCE_PRODUCT_TRUTH_ISSUE_PATHS))[:8]
+    return {"validation_error_count": len(safe), "validation_error_paths": list(dict.fromkeys(ECOMMERCE_PRODUCT_TRUTH_ISSUE_PATHS[item] for item in safe)), "validation_error_types": safe} if safe else {}
+
 def _strict_positive_budget(value: Any) -> int | None:
     if type(value) is not int:
         return None
@@ -58,15 +93,10 @@ def ecommerce_product_truth_context_digest(
     if budget is None:
         return None
     asset_rows: list[dict[str, str]] = []
-    for item in uploaded_assets:
-        if not isinstance(item, dict):
-            continue
+    for item in ecommerce_product_truth_assets(uploaded_assets):
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        channel = str(metadata.get("codex_native_reference_channel") or "").strip()
         role = str(item.get("role") or "").strip()
-        effective_channel = channel or ("product_truth" if role == "product_reference" else role)
-        if effective_channel != "product_truth":
-            continue
+        effective_channel = ecommerce_uploaded_asset_reference_channel(item)
         asset_id = str(item.get("asset_id") or "").strip()
         if not asset_id:
             return None
@@ -112,6 +142,7 @@ def ecommerce_product_truth_context_digest(
 def ecommerce_product_truth_context_issues(
     *,
     uploaded_asset_ids: set[str],
+    uploaded_assets: Any = None,
     reference_pool: Any,
     provider_budget: Any,
 ) -> list[str]:
@@ -119,6 +150,12 @@ def ecommerce_product_truth_context_issues(
 
     issues: list[str] = []
     normalized_uploaded_ids = {str(item).strip() for item in uploaded_asset_ids if str(item).strip()}
+    if uploaded_assets is not None:
+        product_assets = ecommerce_product_truth_assets(uploaded_assets)
+        product_ids = ecommerce_product_truth_asset_ids(uploaded_assets)
+        all_ids = [str(_asset_record(item).get("asset_id") or "").strip() for item in uploaded_assets]
+        if any(not isinstance(item.get("asset_id"), str) or not item["asset_id"].strip() for item in product_assets) or any(all_ids.count(asset_id) != 1 for asset_id in product_ids) or set(product_ids) != normalized_uploaded_ids:
+            issues.append("selection_contract_context_invalid")
     if not normalized_uploaded_ids:
         issues.append("selection_contract_context_invalid")
     if not isinstance(reference_pool, list) or not reference_pool:
@@ -131,7 +168,8 @@ def ecommerce_product_truth_context_issues(
                 continue
             asset_id = str(item.get("asset_id") or "").strip()
             if (
-                not asset_id
+                not isinstance(item.get("asset_id"), str)
+                or not asset_id
                 or str(item.get("reference_channel") or "").strip() != "product_truth"
                 or str(item.get("source_type") or "").strip() != "uploaded"
             ):
@@ -150,7 +188,7 @@ def ecommerce_product_truth_selection_contract_issues(
     *,
     expected_count: int,
     allowed_asset_ids: set[str] | None = None,
-    max_source_refs: int | None = None,
+    max_source_refs: Any = None,
     context_issues: list[str] | None = None,
 ) -> list[str]:
     """Return safe semantic issue codes for one Brain product-truth contract.
@@ -163,7 +201,8 @@ def ecommerce_product_truth_selection_contract_issues(
     if not isinstance(entries, list) or len(entries) != expected_count:
         return ["selection_missing_or_incomplete"]
     issues: list[str] = list(dict.fromkeys(str(item) for item in (context_issues or []) if str(item).strip()))
-    if _strict_positive_budget(max_source_refs) is None:
+    budget = _strict_positive_budget(max_source_refs)
+    if budget is None:
         issues.append("selection_capacity_contract_missing")
     indexes: list[int] = []
     for entry in entries:
@@ -200,7 +239,7 @@ def ecommerce_product_truth_selection_contract_issues(
             issues.append("selection_invalid")
         if len(selected_ids) == 2 and role != ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE:
             issues.append("selection_invalid")
-        if max_source_refs is not None and 1 <= max_source_refs <= 2 and len(selected_ids) > max_source_refs:
+        if budget is not None and len(selected_ids) > budget:
             issues.append("selection_capacity_exceeded")
     if sorted(indexes) != list(range(1, expected_count + 1)):
         issues.append("selection_invalid")
