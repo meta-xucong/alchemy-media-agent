@@ -57,6 +57,10 @@ def preserve_requested_qr_code(
             fmt = _pil_format(output_format, mime_type)
             if raw.format != fmt:
                 raise _QrSkip("image_invariant_failed")
+            # These PNG rendering chunks are not retained by the current
+            # encoder path. Pixel-array equality alone cannot prove equal color.
+            if raw.format == "PNG" and any(key in raw.info for key in ("gamma", "chromaticity", "srgb")):
+                raise _QrSkip("unsupported_color_metadata")
             original_mode = raw.mode
             image_info = {k: raw.info[k] for k in ("icc_profile", "exif") if raw.info.get(k)}
             original = raw.convert("RGBA")
@@ -163,7 +167,13 @@ def _first_qr_crop(input_images: list[Any]) -> _QrCrop | None:
         return None
     source_bytes = path.read_bytes()
     with Image.open(io.BytesIO(source_bytes)) as raw:
-        source = ImageOps.exif_transpose(raw).convert("RGB")
+        if getattr(raw, "n_frames", 1) != 1:
+            raise _QrSkip("source_visibility_unverified")
+        visible_source = ImageOps.exif_transpose(raw).convert("RGBA")
+        if visible_source.getchannel("A").getextrema()[0] < 255:
+            # Do not turn hidden RGB under alpha into visible source truth.
+            raise _QrSkip("source_visibility_unverified")
+        source = visible_source.convert("RGB")
     detected = _detect_qr_bbox(source)
     if detected is None or not isinstance(detected[1], str) or not detected[1]:
         return None
@@ -189,18 +199,29 @@ def _detect_qr_bbox(image: Image.Image) -> tuple[tuple[int, int, int, int], str]
         return None
     detector = cv2.QRCodeDetector()
     detected = _detect_qr_bbox_on_image(image, detector=detector, cv2=cv2, np=np)
-    if detected:
+    if detected and detected[1]:
         return detected
+    candidates: list[tuple[tuple[int, int, int, int], str]] = []
     for zone in _qr_search_zones(image.size):
         crop = image.crop(zone)
         detected = _detect_qr_bbox_on_image(crop, detector=detector, cv2=cv2, np=np)
-        if not detected:
+        if not detected or not detected[1]:
             continue
         bbox, decoded = detected
         x_min, y_min, x_max, y_max = bbox
         zone_x, zone_y, _, _ = zone
-        return (x_min + zone_x, y_min + zone_y, x_max + zone_x, y_max + zone_y), decoded
-    return None
+        absolute = (x_min + zone_x, y_min + zone_y, x_max + zone_x, y_max + zone_y)
+        duplicate = any(
+            text == decoded
+            and max(box[0], absolute[0]) < min(box[2], absolute[2])
+            and max(box[1], absolute[1]) < min(box[3], absolute[3])
+            for box, text in candidates
+        )
+        if not duplicate:
+            candidates.append((absolute, decoded))
+        if len(candidates) > 1:
+            raise _QrSkip("source_ambiguous")
+    return candidates[0] if candidates else None
 
 
 def _detect_qr_bbox_on_image(image: Image.Image, *, detector: Any, cv2: Any, np: Any) -> tuple[tuple[int, int, int, int], str] | None:
@@ -361,8 +382,8 @@ def _composed_qr_decodes(image: Image.Image, paste_box: tuple[int, int, int, int
         return False
     try:
         detected = _detect_qr_bbox(image.crop(paste_box).convert("RGB"))
-    except _QrSkip:
-        return False
+    except _QrSkip as exc:
+        raise _QrSkip("target_ambiguous") from exc
     return bool(detected and detected[1] == expected)
 
 

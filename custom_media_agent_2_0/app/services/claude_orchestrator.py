@@ -128,7 +128,9 @@ QR_PRESERVATION_INSTRUCTION = (
     "slot=qr_code, target_surface=poster, rule=top_left/top_right/bottom_left/bottom_right/top_center/bottom_center/center. "
     "Do not borrow a Logo's placement, guess pixel coordinates or move a packaging QR into a poster corner. "
     "Preserve source_asset_id there only when the supplied binding is exact; a single current reference is unambiguous. "
-    "No reliable target means omit the QR slot. Internal IDs may occur only in structured bindings, never in final_prompt."
+    "No reliable target means omit the QR slot. Internal IDs may occur only in structured bindings, never in final_prompt. "
+    "user_asset_instructions contains current user directives, not automatic visual facts. "
+    "In staged runs the full intent stage decides qr_preservation_enabled; final compression may confirm or disable it, never promote an absent or false intent value."
 )
 
 CLAUDE_DECISION_SCHEMA: dict[str, Any] = {
@@ -195,6 +197,7 @@ CLAUDE_INTENT_CHECKPOINT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
+        "qr_preservation_enabled": {"type": "boolean", "default": False},
         "stage": {"type": "string", "enum": ["intent"]},
         "mode": {"type": "string", "enum": ["template_customize", "smart_enhance", "revision", "batch"]},
         "primary_subject": {"type": "string", "maxLength": 180},
@@ -1588,6 +1591,8 @@ def _is_checkpoint_soft_timeout(stage_name: str, timeout_seconds: float) -> bool
 
 def _coerce_checkpoint_payload(payload: dict[str, Any], schema: dict[str, Any], *, workspace: Path | None = None) -> dict[str, Any]:
     coerced = dict(payload)
+    if "qr_preservation_enabled" in coerced:
+        coerced["qr_preservation_enabled"] = coerced["qr_preservation_enabled"] is True
     properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
     stage_spec = properties.get("stage") if isinstance(properties.get("stage"), dict) else {}
     stage_enum = stage_spec.get("enum") if isinstance(stage_spec.get("enum"), list) else []
@@ -1721,6 +1726,10 @@ def _build_checkpoint_stage_prompt(
         "output_limits": output_limits,
         "json_skeleton": _checkpoint_json_skeleton(stage_name),
     }
+    if stage_name.startswith("intent"):
+        asset_instructions = _user_asset_instructions(context)
+        if asset_instructions:
+            payload["user_asset_instructions"] = asset_instructions
     if compact_task_relationship:
         payload["task_relationship_model"] = compact_task_relationship
     if not template_case_id:
@@ -1730,6 +1739,9 @@ def _build_checkpoint_stage_prompt(
             "",
         )
     if stage_name.startswith("intent") and not template_case_id and not uploaded_assets:
+        # QR is impossible without source pixels; its omitted optional field
+        # remains False. Keep the established no-reference context budget.
+        payload["json_skeleton"].pop("qr_preservation_enabled", None)
         payload["json_skeleton"].pop("task_intent", None)
         payload["output_contract"] = (
             "Object keys: stage, mode, primary_subject, scene_goal, must_keep, must_avoid, "
@@ -1811,7 +1823,7 @@ def _checkpoint_output_contract(stage_name: str) -> str:
     if stage_name.startswith("intent"):
         return (
             "Object keys: stage, mode, primary_subject, scene_goal, must_keep, must_avoid, "
-            "asset_requirements, task_intent, risk_notes, confidence. Short strings; arrays<=6."
+            "asset_requirements, task_intent, risk_notes, confidence; optional qr_preservation_enabled. Short strings; arrays<=6."
         )
     if stage_name.startswith("visual_strategy"):
         return (
@@ -1868,6 +1880,7 @@ def _checkpoint_json_skeleton(stage_name: str) -> dict[str, Any]:
     if stage_name.startswith("intent"):
         return {
             "stage": "intent",
+            "qr_preservation_enabled": False,
             "mode": "template_customize",
             "primary_subject": "...",
             "scene_goal": "...",
@@ -1962,6 +1975,7 @@ def _compact_generation_checkpoints(checkpoints: dict[str, Any] | None) -> dict[
     if isinstance(intent, dict):
         compact["intent"] = {
             "mode": intent.get("mode"),
+            "qr_preservation_enabled": intent.get("qr_preservation_enabled") is True,
             "primary_subject": _truncate(_text_value(intent.get("primary_subject")), 160),
             "scene_goal": _truncate(_text_value(intent.get("scene_goal")), 220),
             "must_keep": [_truncate(_text_value(item), 80) for item in (intent.get("must_keep") or [])[:6] if _text_value(item)],
@@ -2051,7 +2065,12 @@ def _compress_checkpoint_decision(
         "final_prompt": _truncate(final_prompt, settings.claude_final_prompt_max_chars),
         "negative_prompt": _truncate(negative_prompt, settings.claude_negative_prompt_max_chars),
         "provider_parameters": provider_parameters,
-        "qr_preservation_enabled": raw.get("qr_preservation_enabled") is True,
+        # The final stage sees only a compact request. It cannot grant a right
+        # that the full, current user-intent stage never granted.
+        "qr_preservation_enabled": (
+            raw.get("qr_preservation_enabled") is True
+            and intent.get("qr_preservation_enabled") is True
+        ),
         "prompt_rationale": _truncate(rationale, settings.claude_rationale_max_chars),
         "confidence": _bounded_float(raw.get("confidence"), _bounded_float(visual_strategy.get("confidence"), 0.78)),
     }
@@ -3079,6 +3098,19 @@ def _build_file_tool_prompt() -> str:
     )
 
 
+def _user_asset_instructions(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Carry current user-authored directives separately from automatic briefs."""
+    request = context.get("request")
+    assets = request.get("assets") if isinstance(request, dict) else None
+    if not isinstance(assets, list):
+        return []
+    return [
+        {key: item[key] for key in ("asset_id", "role", "reference_mode", "constraint_strength", "notes")
+         if key in item and item[key] is not None}
+        for item in assets if isinstance(item, dict)
+    ]
+
+
 def _build_inline_json_prompt(workspace: Path) -> str:
     context = _read_json(workspace / "context.json") or {}
     fallback = _read_json(workspace / "fallback_decision.json") or {}
@@ -3137,6 +3169,9 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             template_case_id=template_case_id,
         ),
     }
+    asset_instructions = _user_asset_instructions(context)
+    if asset_instructions:
+        payload["user_asset_instructions"] = asset_instructions
     return (
         "Return compact JSON only. final_prompt is the exact image prompt. "
         f"Total JSON <= {_CLAUDE_INLINE_JSON_CHAR_BUDGET} chars; final_prompt <= {_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET} chars. "
@@ -3808,15 +3843,19 @@ def _request_assets_for_cache(request: CreateCreativeRunRequest) -> list[dict[st
                 str(payload.get("asset_id") or ""),
                 role=payload.get("role"),
                 constraint_strength=payload.get("constraint_strength"),
+                reference_mode=payload.get("reference_mode"),
+                notes=payload.get("notes"),
             ))
     return assets
 
 
-def _asset_cache_payload(asset_id: str, *, role: str | None = None, constraint_strength: str | None = None) -> dict[str, Any]:
+def _asset_cache_payload(asset_id: str, *, role: str | None = None, constraint_strength: str | None = None, reference_mode: str | None = None, notes: str | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "asset_id": asset_id,
         "role": role,
         "constraint_strength": constraint_strength,
+        "reference_mode": reference_mode,
+        "notes": notes,
     }
     if not asset_id:
         return payload
