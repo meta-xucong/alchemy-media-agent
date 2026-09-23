@@ -2915,7 +2915,7 @@ def test_missing_uploaded_asset_fails_before_text_only_generation() -> None:
     assert run["generation_jobs"] == []
 
 
-def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset() -> None:
+def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset(monkeypatch) -> None:
     client = fresh_client()
     qr_payload = "https://alchemy.test/qr/preserve-original"
     asset_id = upload_image_asset(
@@ -2925,10 +2925,25 @@ def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset() -> None:
         filename="product-with-qr.png",
     )
 
+    object.__setattr__(settings, "claude_orchestrator_enabled", True)
+    object.__setattr__(settings, "persist_image_history", True)
+    def fake_qr_decision(**kwargs):
+        return {
+            "mode": "template_customize", "selected_case_ids": [kwargs["request"].template_case_id],
+            "final_prompt": "Preserve the product identity and retain the original reference QR in the explicitly requested bottom-right poster slot.",
+            "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
+            "qr_preservation_enabled": True,
+            "task_intent": {"primary_relationship": "free_reference", "slot_plan": [{
+                "slot": "qr_code", "source_asset_id": asset_id,
+                "target_surface": "poster", "rule": "bottom_right",
+            }]},
+        }
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_file_mode", fake_qr_decision)
+
     response = client.post(
         "/api/v2/creative/runs",
         json={
-            "user_prompt": "保留上传图中的产品和二维码，版式使用选定案例，二维码附加在图片中合适的位置。",
+            "user_prompt": "Keep the uploaded product and its existing QR; use the selected poster frame and put that QR at bottom right.",
             "template_case_id": "case_github_evolinkai_ad_0001",
             "assets": [
                 {
@@ -2949,9 +2964,18 @@ def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset() -> None:
     assert preservation["applied"] is True
     assert preservation["source_asset_id"] == asset_id
     assert decode_qr_from_image(Path(output["metadata"]["storage_path"])) == qr_payload
+    assert preservation["verified_decoded"] is True
+    assert run["prompt_plan"]["user_variables"]["qr_preservation_enabled"] is True
+    assert output["metadata"]["qr_preservation_enabled"] is True
+    assert client.get(output["url"]).content == Path(output["metadata"]["storage_path"]).read_bytes()
+    assert client.get(output["metadata"]["preview_url"]).content == Path(output["metadata"]["preview_path"]).read_bytes()
+    assert client.get(output["metadata"]["thumbnail_url"]).content == Path(output["metadata"]["thumbnail_path"]).read_bytes()
+    from app.services.image_history import get_image_history_item
+    history = get_image_history_item(output["output_id"])
+    assert history.metadata["pixel_preservation"]["qr_code"]["processed_sha256"] == preservation["processed_sha256"]
 
 
-def test_information_dense_qr_preservation_repositions_unsafe_placeholder(tmp_path: Path) -> None:
+def test_information_dense_qr_preservation_does_not_reposition_unbound_placeholder(tmp_path: Path) -> None:
     client = fresh_client()
     qr_payload = "https://alchemy.test/qr/info-dense-original"
     asset_id = upload_image_asset(
@@ -2981,21 +3005,17 @@ def test_information_dense_qr_preservation_repositions_unsafe_placeholder(tmp_pa
         },
         output_format="png",
         mime_type="image/png",
+        _qr_preservation_enabled=True,
     )
 
+    # An observed output QR is not permission to erase or relocate pixels.
     assert result.metadata is not None
-    assert result.metadata["applied"] is True
-    assert result.metadata["method"] == "unsafe_output_qr_repositioned"
-    assert result.metadata["placement"] == "right_lower"
-    paste_box = result.metadata["paste_box"]
-    assert paste_box[1] > int(1536 * 0.52)
-    assert paste_box[2] - paste_box[0] <= int(1024 * 0.24)
-    saved = tmp_path / "repositioned-qr.png"
-    saved.write_bytes(result.content)
-    assert decode_qr_from_image(saved) == qr_payload
+    assert result.metadata["applied"] is False
+    assert result.metadata["reason"] == "target_unresolved"
+    assert result.content == encoded.getvalue()
 
 
-def test_information_dense_qr_preservation_replaces_right_rail_placeholder(tmp_path: Path) -> None:
+def test_information_dense_qr_preservation_does_not_replace_unbound_right_rail(tmp_path: Path) -> None:
     client = fresh_client()
     qr_payload = "https://alchemy.test/qr/right-rail-original"
     asset_id = upload_image_asset(
@@ -3025,18 +3045,14 @@ def test_information_dense_qr_preservation_replaces_right_rail_placeholder(tmp_p
         },
         output_format="png",
         mime_type="image/png",
+        _qr_preservation_enabled=True,
     )
 
+    # An observed output QR is not permission to erase or relocate pixels.
     assert result.metadata is not None
-    assert result.metadata["applied"] is True
-    assert result.metadata["method"] == "detected_output_qr_placeholder_overlay"
-    paste_box = result.metadata["paste_box"]
-    assert paste_box[0] >= int(1024 * 0.74)
-    assert paste_box[1] < int(1536 * 0.52)
-    assert result.metadata["verified_decoded"] is True
-    saved = tmp_path / "right-rail-qr.png"
-    saved.write_bytes(result.content)
-    assert decode_qr_from_image(saved) == qr_payload
+    assert result.metadata["applied"] is False
+    assert result.metadata["reason"] == "target_unresolved"
+    assert result.content == encoded.getvalue()
 
 
 def test_v2_generation_running_job_is_reused_for_final_result() -> None:

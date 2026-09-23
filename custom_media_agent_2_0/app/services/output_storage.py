@@ -12,7 +12,7 @@ from app.config import settings
 from app.repositories import repository
 from app.schemas import ImageHistoryItem, ImageOutput
 from app.services.copy_safe_compositor import apply_deterministic_text_overlay
-from app.services.qr_preservation import preserve_requested_qr_code
+from app.services.qr_preservation import QrPreservationResult, preserve_requested_qr_code
 
 
 THUMBNAIL_SIZE = (512, 512)
@@ -21,7 +21,7 @@ PREVIEW_SIZE = (1600, 1600)
 PREVIEW_QUALITY = 84
 
 
-def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, output_format: str, mime_type: str) -> ImageOutput:
+def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, output_format: str, mime_type: str, _qr_preservation_enabled: bool = False) -> ImageOutput:
     content = base64.b64decode(encoded)
     private_delivery_contract = output.metadata.get("_reference_delivery_private") if isinstance(output.metadata, dict) else None
     content, overlay_receipt = apply_deterministic_text_overlay(
@@ -30,12 +30,20 @@ def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, outp
         output_format=output_format,
     )
     fmt = _normalize_format(output_format, mime_type)
-    qr_result = preserve_requested_qr_code(
-        content=content,
-        metadata=output.metadata,
-        output_format=fmt,
-        mime_type=mime_type,
-    )
+    # A disabled QR stage does not even call the helper. The normal overlay,
+    # storage and derivative-image path remains unchanged.
+    qr_result = QrPreservationResult(content=content)
+    if _qr_preservation_enabled is True:
+        try:
+            qr_result = preserve_requested_qr_code(
+                content=content, metadata=output.metadata, output_format=fmt,
+                mime_type=mime_type, _qr_preservation_enabled=True,
+            )
+        except Exception as exc:
+            qr_result = QrPreservationResult(content=content, metadata={
+                "requested": True, "applied": False, "reason": "qr_exception",
+                "error_type": type(exc).__name__,
+            })
     content = qr_result.content
     output_dir = settings.storage_dir / "outputs" / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -46,6 +54,7 @@ def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, outp
     metadata = {
         **{key: value for key, value in output.metadata.items() if key != "_reference_delivery_private"},
         "native_v2_storage": True,
+        "qr_preservation_enabled": _qr_preservation_enabled is True,
         "storage_path": str(output_path),
         "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
         "thumbnail_url": _thumbnail_url(output.output_id) if thumbnail_path else None,
@@ -55,6 +64,12 @@ def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, outp
         "format": fmt,
         "deterministic_text_overlay": overlay_receipt,
     }
+    # Provider metadata and old receipts never attest that this call edited pixels.
+    prior = metadata.get("pixel_preservation")
+    if isinstance(prior, dict):
+        metadata["pixel_preservation"] = {key: value for key, value in prior.items() if key != "qr_code"}
+    else:
+        metadata.pop("pixel_preservation", None)
     if qr_result.metadata:
         metadata["pixel_preservation"] = {
             **dict(metadata.get("pixel_preservation") or {}),

@@ -401,6 +401,7 @@ class CreativeManagerRuntime:
             if running_job.status != "failed":
                 job = await create_image_job(
                     image_request,
+                    _qr_preservation_enabled=prompt_plan.user_variables.get("qr_preservation_enabled") is True,
                     job_id=running_job.job_id,
                     created_at=running_job.created_at,
                 )

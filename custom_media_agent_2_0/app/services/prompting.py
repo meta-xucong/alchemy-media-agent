@@ -222,6 +222,10 @@ def compose_prompt_plan(
         style_basis=style_basis,
         user_variables={
             "user_prompt": user_prompt,
+            "qr_preservation_enabled": (
+                _should_use_claude_final_prompt(orchestrator_decision)
+                and orchestrator_decision.qr_preservation_enabled is True
+            ),
             "source_mode": mode,
             "primary_case_id": primary.case_id if primary else None,
             "orchestrator_decision_id": orchestrator_decision.decision_id if orchestrator_decision else None,

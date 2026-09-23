@@ -119,6 +119,18 @@ class ClaudeInvocationError(RuntimeError):
     pass
 
 
+QR_PRESERVATION_INSTRUCTION = (
+    "Return optional qr_preservation_enabled=false by default. Set true only when the current user "
+    "explicitly requests reuse of an existing QR from the current reference assets. Mere mention, "
+    "negative prompt, automatically extracted asset facts, template/module metadata, a request for a NEW QR, "
+    "uncertainty or no QR request means false. 'Preserve the original, do not invent another' can mean true. "
+    "Only for an explicitly requested flat poster QR placement, use the existing task_intent.slot_plan: "
+    "slot=qr_code, target_surface=poster, rule=top_left/top_right/bottom_left/bottom_right/top_center/bottom_center/center. "
+    "Do not borrow a Logo's placement, guess pixel coordinates or move a packaging QR into a poster corner. "
+    "Preserve source_asset_id there only when the supplied binding is exact; a single current reference is unambiguous. "
+    "No reliable target means omit the QR slot. Internal IDs may occur only in structured bindings, never in final_prompt."
+)
+
 CLAUDE_DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": True,
@@ -136,6 +148,7 @@ CLAUDE_DECISION_SCHEMA: dict[str, Any] = {
         "generation_directives": {"type": "object"},
         "quality_gates": {"type": "object"},
         "confidence": {"type": "number"},
+        "qr_preservation_enabled": {"type": "boolean", "default": False},
     },
     "required": ["mode", "selected_case_ids", "final_prompt"],
 }
@@ -144,6 +157,8 @@ CLAUDE_INLINE_DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
+        "qr_preservation_enabled": {"type": "boolean", "default": False},
+        "task_intent": {"type": "object"},
         "mode": {"type": "string", "enum": ["template_customize", "smart_enhance", "revision", "batch"]},
         "selected_case_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
         "final_prompt": {"type": "string", "minLength": 30, "maxLength": _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET},
@@ -1610,7 +1625,7 @@ def _coerce_checkpoint_payload(payload: dict[str, Any], schema: dict[str, Any], 
 
 
 def _checkpoint_system_prompt() -> str:
-    return (
+    return QR_PRESERVATION_INSTRUCTION + "\n" + (
         "You are the central creative brain for a staged image-generation orchestrator. "
         "Make a complete high-quality decision for the current narrow stage with bounded internal deliberation. "
         "For ordinary food, product, poster, menu, layout, or style-planning tasks, complete the requested schema. "
@@ -1806,7 +1821,7 @@ def _checkpoint_output_contract(stage_name: str) -> str:
         )
     return (
         "Object keys: mode, selected_case_ids, final_prompt, negative_prompt, provider_parameters, "
-        "prompt_rationale, confidence. final_prompt must be provider-ready and within visible_output_budget."
+        "prompt_rationale, confidence; optional qr_preservation_enabled and task_intent. final_prompt must be provider-ready and within visible_output_budget."
     )
 
 
@@ -1892,6 +1907,7 @@ def _checkpoint_json_skeleton(stage_name: str) -> dict[str, Any]:
         "final_prompt": "...",
         "negative_prompt": "",
         "provider_parameters": {"count": 1},
+        "qr_preservation_enabled": False,
         "prompt_rationale": "...",
         "confidence": 0.8,
     }
@@ -2035,6 +2051,7 @@ def _compress_checkpoint_decision(
         "final_prompt": _truncate(final_prompt, settings.claude_final_prompt_max_chars),
         "negative_prompt": _truncate(negative_prompt, settings.claude_negative_prompt_max_chars),
         "provider_parameters": provider_parameters,
+        "qr_preservation_enabled": raw.get("qr_preservation_enabled") is True,
         "prompt_rationale": _truncate(rationale, settings.claude_rationale_max_chars),
         "confidence": _bounded_float(raw.get("confidence"), _bounded_float(visual_strategy.get("confidence"), 0.78)),
     }
@@ -2562,6 +2579,7 @@ def _normalize_decision(
     quality_gates = raw.get("quality_gates") if isinstance(raw.get("quality_gates"), dict) else {}
     return CreativeOrchestratorDecision(
         decision_id=new_id("orc"),
+        qr_preservation_enabled=raw.get("qr_preservation_enabled") is True,
         provider="claude-code",
         mode=raw.get("mode") if raw.get("mode") in {"template_customize", "smart_enhance", "revision", "batch"} else fallback.mode,
         selected_case_ids=selected_case_ids,
@@ -3023,7 +3041,7 @@ def _request_needs_multimodal_claude(*, request: CreateCreativeRunRequest, asset
 
 
 def _build_file_tool_prompt() -> str:
-    return "\n".join(
+    return QR_PRESERVATION_INSTRUCTION + "\n" + "\n".join(
         [
             "请阅读当前目录内的 MISSION.md、context.json、candidate_cases.json、candidate_case_details.json、fallback_decision.json、OUTPUT_CONTRACT.json、decision_template.json。",
             "If task_relationship_model.json exists, read it before choosing prompt strategy; it defines whether uploads replace template slots, supply semantic content, or only serve as references.",
@@ -3035,7 +3053,7 @@ def _build_file_tool_prompt() -> str:
             "有手选原型时，不要改选其他案例作为主风格；只能在手选原型基础上融合用户主体和兼容的补充要求。",
             "有手选原型时，必须迁移原型的视觉语法：主体框架、构图重心、空间层级、背景密度、排版/注释处理、主视觉强度和设计语言；不要把海报/信息图/多卡片原型改写成普通单人肖像。",
             "无手选原型时，也必须选定一个主视觉语法锚点，最多用 1-2 个辅助案例提供局部风格；不得平均融合成无主构图。",
-            "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、明确要求或源图确有的二维码、小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
+            "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、用户明确要求保留的源图二维码、小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
             "必须遵守 asset_binding_policy 中的 fusion_mode、placement_intent、target_surface 和 review_expectations；这些字段是上传素材的真实意图判定，不是可选说明。",
             "You must output task_intent as the central-brain decision for how uploaded assets relate to the selected template. If task_relationship_model conflicts with the user's plain-language intent, task_intent should correct it.",
             "For food-photo replacement tasks, set task_intent.primary_relationship=replace_template_food_subject and make every uploaded food photo a distinct visible module inside the selected template hierarchy.",
@@ -3092,6 +3110,12 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             f"Prompt transform: {prompt_transform_profile.get('transform_mode') or 'auto'} / "
             f"{prompt_transform_profile.get('fidelity_mode') or 'auto'}; "
             f"{prompt_transform_profile.get('claude_instruction') or ''}"
+        ),
+        # No source pixels means preservation is impossible, not a semantic
+        # classification shortcut. Keep the normal no-upload fast path lean.
+        "qr_preservation_policy": (
+            QR_PRESERVATION_INSTRUCTION if uploaded_assets
+            else "No reference assets: qr_preservation_enabled=false."
         ),
         "user_request": (context.get("request") or {}).get("user_prompt", ""),
         "template_case_id": template_case_id,
@@ -3288,6 +3312,11 @@ def _compact_asset_slot_plan(raw: Any, *, limit: int) -> list[dict[str, str]]:
             "scale": _truncate(_text_value(item.get("scale") or item.get("relative_scale") or item.get("size")), 32),
             "rule": _truncate(_text_value(item.get("rule") or item.get("directive") or item.get("placement")), 80),
         }
+        if slot.get("slot") == "qr_code":
+            for key in ("source_asset_id", "target_surface"):
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    slot[key] = value
         cleaned = {key: value for key, value in slot.items() if value}
         if cleaned:
             compact.append(cleaned)
@@ -3448,6 +3477,7 @@ def _decision_template(fallback: CreativeOrchestratorDecision) -> dict[str, Any]
         "selected_case_ids": fallback.selected_case_ids,
         "case_retrieval_plan": fallback.case_retrieval_plan.model_dump(),
         "final_prompt": "",
+        "qr_preservation_enabled": False,
         "negative_prompt": "",
         "provider_parameters": {
             "aspect_ratio": fallback.generation_directives.get("aspect_ratio"),
@@ -3691,7 +3721,7 @@ def _read_semantic_cached_decision(metadata: dict[str, Any]) -> tuple[str, dict[
         if score < settings.claude_orchestrator_semantic_cache_threshold:
             continue
         if best is None or score > best[2]:
-            best = (cached_key, cached_decision, score)
+            best = (cached_key, {**cached_decision, "qr_preservation_enabled": False}, score)
     return best
 
 

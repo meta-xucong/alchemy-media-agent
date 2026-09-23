@@ -84,6 +84,7 @@ async def create_image_job(
     *,
     job_id: str | None = None,
     created_at: datetime | None = None,
+    _qr_preservation_enabled: bool = False,
 ) -> ImageJob:
     request = _with_prompt_transform(request)
     request, preflight = _with_prompt_integrity_preflight(request)
@@ -194,6 +195,7 @@ async def create_image_job(
             job_id=job_id,
             created_at=created_at,
             billing_result=billing_result,
+            _qr_preservation_enabled=_qr_preservation_enabled is True,
         )
     )
     if billing_result:
@@ -219,6 +221,7 @@ def _job_from_result(
     created_at: datetime,
     fallback_error: V2ImageProviderError | None = None,
     billing_result=None,
+    _qr_preservation_enabled: bool = False,
 ) -> ImageJob:
     now = utc_now()
     outputs: list[ImageOutput] = []
@@ -230,6 +233,8 @@ def _job_from_result(
             metadata={
                 **item.metadata,
                 "native_v2": True,
+                "qr_preservation_enabled": _qr_preservation_enabled is True,
+                "orchestrator_task_intent": request.prompt_plan.user_variables.get("orchestrator_task_intent"),
                 "live": not bool(item.metadata.get("mock")),
                 "requested_provider": _requested_provider(request.provider_hint),
                 "actual_provider": result.provider,
@@ -269,6 +274,7 @@ def _job_from_result(
                 encoded=item.b64_json,
                 output_format=item.format,
                 mime_type=item.mime_type,
+                _qr_preservation_enabled=_qr_preservation_enabled is True,
             )
         )
     return ImageJob(
