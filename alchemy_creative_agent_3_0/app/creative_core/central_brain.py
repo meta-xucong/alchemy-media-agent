@@ -672,8 +672,11 @@ class CentralCreativeBrain:
                     auto_identity_anchor_enabled
                     and auto_identity_anchor_reference is None
                     and index == 0
-                    and selected_evaluation is not None
-                    and selected_evaluation.recommendation == Recommendation.ACCEPT
+                    and (
+                        not selected_candidate.is_mock
+                        or selected_evaluation is not None
+                        and selected_evaluation.recommendation == Recommendation.ACCEPT
+                    )
                 ):
                     auto_identity_anchor_reference = self._auto_identity_anchor_reference_from_candidate(
                         selected_candidate,
@@ -691,7 +694,11 @@ class CentralCreativeBrain:
                         error_message=None if selected_candidate is not None else "shared generation returned no selected candidate",
                     )
                 )
-            if selected_evaluation is not None and selected_evaluation.recommendation != Recommendation.ACCEPT:
+            if (
+                selected_evaluation is not None
+                and not selected_evaluation.metadata.get("planning_only")
+                and selected_evaluation.recommendation != Recommendation.ACCEPT
+            ):
                 pack_warnings.append(
                     f"asset {asset.asset_id} packaged with {selected_evaluation.recommendation} recommendation"
                 )
@@ -1756,7 +1763,8 @@ class CentralCreativeBrain:
                 else {"pack": "none", "mode": "noop"}
             )
             for candidate in response.candidates:
-                evaluation = self.generation_scorer.score_candidate(
+                scorer = self.generation_scorer.score_candidate if candidate.is_mock else self.scorer.score_candidate_preflight
+                evaluation = scorer(
                     candidate=candidate,
                     asset_spec=asset,
                     commercial_brief=context.commercial_brief,
@@ -1774,6 +1782,9 @@ class CentralCreativeBrain:
             selected_candidate, selected_evaluation = select_best_candidate(response.candidates, round_evaluations)
             if selected_evaluation is None:
                 warnings.append(f"asset {asset.asset_id} produced no evaluated candidates")
+                break
+            # A real candidate advances to shared pixel review, never metadata refinement.
+            if selected_candidate is not None and not selected_candidate.is_mock:
                 break
             if selected_evaluation.recommendation == Recommendation.ACCEPT:
                 break

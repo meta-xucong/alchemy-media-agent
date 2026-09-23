@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..llm_brain.context_digest import compact_brand_visual_context
+
 from copy import deepcopy
 import hashlib
 import os
@@ -2758,6 +2760,10 @@ class ScenarioRuntime:
                 else "human_realism_semantic_contract_missing",
                 brain_result,
             ) from exc
+        # Reuse the exact factual context sent to planning, not later profile edits.
+        brand_context = compact_brand_visual_context(brain_result.audit.get("brand_visual_context"))
+        if brand_context:
+            canonical_prompt_context["brand_visual_context"] = brand_context
         if "human_realism" in plan.dependency_order:
             # This typed receipt requirement travels with the same frozen
             # context as the final prompt. It is not a prompt fragment.
@@ -3909,7 +3915,7 @@ class ScenarioRuntime:
         return {
             "applies": True,
             "subject_type": str(guidance.get("subject_type") or ""),
-            "human_subject_kind": str(metadata.get("human_subject_kind") or "person"),
+            "human_subject_kind": str(metadata.get("human_subject_kind") or ("hand_or_skin_detail" if semantic.get("rendering_goal") == "photographic_human_detail" else "person")),
             "semantic_contract": {
                 key: semantic.get(key)
                 for key in semantic_keys
@@ -7844,6 +7850,7 @@ class ScenarioRuntime:
             shared_capabilities=shared_capability_metadata,
             uploaded_assets=uploaded_assets,
             product_profile=dict(request.product_profile),
+            brand_context=self._brand_context(request.optional_brand_id),
             capability_catalog=capability_catalog,
             pre_activation_capabilities=pre_activation_capabilities,
             template_capability_policy=template_capability_policy,
@@ -7854,7 +7861,11 @@ class ScenarioRuntime:
         blocked_by_preflight = self._ecommerce_creative_risk_preflight_result(brain_request)
         if blocked_by_preflight is not None:
             return blocked_by_preflight
-        return self.llm_brain_adapter.run(brain_request)
+        result = self.llm_brain_adapter.run(brain_request)
+        return result.model_copy(update={"audit": {
+            **result.audit,
+            "brand_visual_context": dict(brain_request.brand_visual_context),
+        }})
 
     @staticmethod
     def _professional_ecommerce_pose_contract_result(

@@ -328,7 +328,10 @@ def test_doc276_explicit_provider_face_and_reference_certifications_can_cover_un
     ).inspect(resolution, metadata=metadata)
 
     assert identity_metric.calls == 1
-    assert provider.metadata_calls == [metadata]
+    assert len(provider.metadata_calls) == 1
+    runtime_metadata = dict(provider.metadata_calls[0])
+    assert runtime_metadata.pop("_inner_timeout_seconds") > 0
+    assert runtime_metadata == metadata
     assert provider.metadata_calls[0]["review_evidence_plan_digest"] == binding["review_evidence_plan_digest"]
     assert provider.metadata_calls[0]["review_evidence_plan_authority"] == "exact_review_evidence_resolver"
     assert report.status == "pass"
@@ -443,7 +446,10 @@ def test_doc276_provider_face_and_comparison_claims_require_exact_server_review_
         identity_metric_provider=_UnavailableIdentityMetric(),
     ).inspect(resolution, metadata=metadata)
 
-    assert provider.metadata_calls == [metadata]
+    assert len(provider.metadata_calls) == 1
+    runtime_metadata = dict(provider.metadata_calls[0])
+    assert runtime_metadata.pop("_inner_timeout_seconds") > 0
+    assert runtime_metadata == metadata
     assert provider.metadata_calls[0]["review_evidence_plan_digest"] == binding["review_evidence_plan_digest"]
     assert report.status == "manual_review"
     assert report.evidence["face_integrity_attestation"]["status"] == "not_verifiable"
@@ -705,6 +711,7 @@ def test_doc276_explicit_frozen_no_face_output_does_not_need_face_receipt(
                             "verification_state": "verified",
                             "status": "pass",
                             "evidence": {
+                                "provider_pixel_result_certified": True,
                                 "face_integrity_attestation": {"status": "pass"},
                                 "reference_comparison_certification": {"status": "not_required"},
                             },
@@ -715,7 +722,7 @@ def test_doc276_explicit_frozen_no_face_output_does_not_need_face_receipt(
                             "mode": "hybrid",
                             "verification_state": "verified",
                             "status": "pass",
-                            "evidence": {},
+                            "evidence": {"provider_pixel_result_certified": True},
                         },
                     ],
                 }
@@ -766,6 +773,7 @@ def test_doc276_uncertified_human_review_cannot_enter_final_delivery_and_legacy_
                         "verification_state": "verified",
                         "status": "pass",
                         "evidence": {
+                            "provider_pixel_result_certified": True,
                             "face_integrity_attestation": {"status": "missing"},
                             "identity_metric": {"status": "unavailable"},
                         },
@@ -797,6 +805,7 @@ def test_doc276_missing_required_review_row_cannot_be_covered_by_another_passing
                         "verification_state": "verified",
                         "status": "pass",
                         "evidence": {
+                            "provider_pixel_result_certified": True,
                             "face_integrity_attestation": {"status": "pass"},
                             "reference_comparison_certification": {"status": "not_required"},
                         },
@@ -808,10 +817,12 @@ def test_doc276_missing_required_review_row_cannot_be_covered_by_another_passing
 
     delivery, eligible_outputs, eligible_assets = V3ProductApiService()._public_final_delivery_projection(result)  # noqa: SLF001
 
-    assert delivery["final_delivery_status"] == "withheld_manual_confirmation"
-    assert delivery["automatic_delivery_available"] is False
-    assert eligible_outputs == set()
-    assert eligible_assets == set()
+    # DOC321: the missing row remains uncertified without revoking its sibling.
+    assert delivery["final_delivery_status"] == "ready"
+    assert delivery["automatic_delivery_available"] is True
+    assert eligible_outputs == {"output_other"}
+    assert "output_requires_face_receipt" not in eligible_outputs
+    assert eligible_assets == {"asset_other"}
 
 
 def test_doc276_project_operation_does_not_mislabel_another_manual_hold_as_face_integrity() -> None:

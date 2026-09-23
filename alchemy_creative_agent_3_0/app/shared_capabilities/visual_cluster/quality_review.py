@@ -61,7 +61,7 @@ class OutputQualityReviewMerger:
         manual_review_only = (
             receipt_status != "complete"
             or not ready_output_ids
-            or not ready_output_ids.issubset(certified_output_ids)
+            or not ready_output_ids.intersection(certified_output_ids)
         )
         if manual_review_only:
             decisions = []
@@ -86,7 +86,7 @@ class OutputQualityReviewMerger:
             recommended_output_ids = [
                 report.output_id
                 for report in reports
-                if report.output_id and report.status in {"pass", "warning"}
+                if report.output_id in certified_output_ids and report.status in {"pass", "warning"}
             ]
             hidden_output_ids = [
                 report.output_id
@@ -94,6 +94,11 @@ class OutputQualityReviewMerger:
                 if report.output_id and report.status in {"fail_final"}
             ]
             summary = self._package_summary(inspections, decisions)
+            if recommended_output_ids and ready_output_ids.difference(recommended_output_ids):
+                summary = [
+                    "Certified outputs are available; other outputs remain independently in review.",
+                    *summary,
+                ]
         return PostGenerationReviewPackage(
             package_id=stable_id("post_generation_review_package", project_id, job_id, len(inspections)),
             project_id=project_id,

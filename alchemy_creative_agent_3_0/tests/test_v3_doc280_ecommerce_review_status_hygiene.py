@@ -191,7 +191,12 @@ def test_doc280_public_review_disposition_is_exactly_derived_from_canonical_revi
     assert output.metadata["final_delivery"] == _final_delivery_facts(state)
     assert public_job["metadata"]["review_disposition"] == _expected_disposition(state)
     assert "asset-doc280" not in json.dumps(public_job, ensure_ascii=False, sort_keys=True)
-    assert output.output_id not in json.dumps(public_job, ensure_ascii=False, sort_keys=True)
+    # DOC321: opaque output IDs are needed for per-image Project review.
+    # Provider paths, asset IDs and raw evidence remain private.
+    review = public_job["metadata"]["post_generation_review"]
+    assert [item["output_id"] for item in review["review_items"]] == [output.output_id]
+    assert review["recommended_output_ids"] == ([output.output_id] if state == "final_delivery_available" else [])
+    assert all("asset_id" not in item and "evidence" not in item and "file_path" not in item for item in review["review_items"])
 
 
 @pytest.mark.parametrize(

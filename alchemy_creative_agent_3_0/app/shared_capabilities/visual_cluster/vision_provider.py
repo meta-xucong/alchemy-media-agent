@@ -970,6 +970,11 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         score_dimensions.extend(professional_identity["score_dimensions"])
         sources.append("professional_face_identity_quality")
     human_authenticity_contract = _frozen_human_authenticity_contract(review_contracts, active_ids)
+    human_scope = next((
+        dict(contract["human_scope"]) for contract in review_contracts
+        if isinstance(contract, dict) and contract.get("capability_id") == "human_realism"
+        and "human_realism" in active_ids and isinstance(contract.get("human_scope"), dict)
+    ), {})
     return {
         "activation_plan_id": composed.get("activation_plan_id") or plan.get("plan_id"),
         "active_capability_ids": list(dict.fromkeys(active_ids)),
@@ -988,6 +993,8 @@ def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
         "professional_identity_quality": professional_identity,
         "human_authenticity_contract": human_authenticity_contract,
         "human_naturalness_verdict_required": bool(human_authenticity_contract),
+        "human_scope": human_scope,
+        "face_integrity_required": bool(human_authenticity_contract) and human_scope.get("face_visible") is not False,
     }
 
 

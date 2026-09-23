@@ -312,7 +312,8 @@ class PromptCompilerAgent(BaseAgent):
             negative_prompt="",
             hard_constraints=[],
             text_policy=provider_text_policy,
-            style_notes=[],
+            # Factual brand context only; the signed renderer prompt remains untouched.
+            style_notes=list(dict.fromkeys([*brief.visual_tone, *brand_profile.visual_tone])),
             layout_notes=[],
             provider_notes={
                 "text_overlay_required": False,

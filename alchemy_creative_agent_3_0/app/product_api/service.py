@@ -6635,16 +6635,15 @@ class V3ProductApiService:
     ) -> bool:
         """Apply Doc276 only to a server-frozen visible-face Human Realism output.
 
-        Every newly reviewed Human Realism output receives a Product API
-        contract with a default visible-primary-face expectation.  Only an
-        explicit false in an already frozen deliverable may exempt a rear or
-        intentionally obscured output.  Public request metadata and provider
-        claims are not part of this predicate.
+        The frozen Human Realism scope distinguishes a whole person from
+        hands/limb detail and declared no-face outputs. A frozen deliverable
+        may further exempt a rear or intentionally obscured view. Public
+        request metadata and provider claims cannot self-exempt a face.
         """
 
         return (
             self._doc276_face_integrity_delivery_enabled()
-            and active_review_contract(review_metadata).get("human_naturalness_verdict_required") is True
+            and active_review_contract(review_metadata).get("face_integrity_required") is True
             and frozen_output_review_contract.get("primary_face_visibility_expected") is True
         )
 
@@ -11607,9 +11606,9 @@ class V3ProductApiService:
         review_disposition = self._doc280_ecommerce_review_disposition(record)
         if self._is_ecommerce_request(record.request):
             # E34 packages can be malformed or conflict with the persisted
-            # output binding. Their public representation is still
-            # identifier-free; only the typed disposition may depend on a
-            # successful exact OutputStore revalidation.
+            # output binding. Retain only opaque output IDs and safe per-image
+            # review facts; the typed disposition still requires exact
+            # OutputStore revalidation. Never expose provider evidence.
             status.metadata["post_generation_review"] = self._doc280_public_review_summary(
                 status.metadata.get("post_generation_review")
             )
@@ -11934,9 +11933,17 @@ class V3ProductApiService:
         receipt_status = str(package.get("review_evidence_receipt_status") or "").strip().lower()
         if receipt_status not in {"complete", "closed"}:
             receipt_status = "not_available"
+        raw_receipt_errors = package.get("review_evidence_receipt_errors", ())
+        receipt_errors_clear = (
+            isinstance(raw_receipt_errors, (list, tuple))
+            and not raw_receipt_errors
+        )
+        resolutions = package.get("resolutions", [])
+        if not isinstance(resolutions, list):
+            resolutions = []
         ready_output_ids = {
             str(item.get("output_id") or "").strip()
-            for item in package.get("resolutions", [])
+            for item in resolutions
             if isinstance(item, dict)
             and str(item.get("status") or "").strip().lower() == "ready"
             and str(item.get("output_id") or "").strip()
@@ -11944,7 +11951,10 @@ class V3ProductApiService:
         certified_output_ids: set[str] = set()
         inspections = []
         review_outcomes: list[dict[str, Any]] = []
-        for item in package.get("inspections", []):
+        raw_inspections = package.get("inspections", [])
+        if not isinstance(raw_inspections, list):
+            raw_inspections = []
+        for item in raw_inspections:
             if not isinstance(item, dict):
                 continue
             output_id = str(item.get("output_id") or "")
@@ -11956,6 +11966,9 @@ class V3ProductApiService:
                 and bool(evidence.get("provider_pixel_result_certified"))
             ):
                 certified_output_ids.add(output_id)
+            raw_detected_issues = item.get("detected_issues", [])
+            if not isinstance(raw_detected_issues, list):
+                raw_detected_issues = []
             issues = [
                 {
                     "code": str(issue.get("code") or "review_notice"),
@@ -11963,7 +11976,7 @@ class V3ProductApiService:
                     "retryable": bool(issue.get("retryable")),
                     "message": str(issue.get("message") or issue.get("code") or "V3 found a review notice."),
                 }
-                for issue in item.get("detected_issues", [])
+                for issue in raw_detected_issues
                 if isinstance(issue, dict)
             ]
             outcome = classify_review_outcome(
@@ -11991,12 +12004,13 @@ class V3ProductApiService:
         if not ready_output_ids:
             ready_output_ids = {
                 str(item.get("output_id") or "").strip()
-                for item in package.get("inspections", [])
+                for item in raw_inspections
                 if isinstance(item, dict) and str(item.get("output_id") or "").strip()
             }
         real_pixel_review_attempted = bool(certified_output_ids)
         real_pixel_review_certified = (
             receipt_status == "complete"
+            and receipt_errors_clear
             and bool(ready_output_ids)
             and ready_output_ids.issubset(certified_output_ids)
         )
@@ -12019,12 +12033,20 @@ class V3ProductApiService:
                 "role_coverage_status": str(raw_mode_review.get("role_coverage_status") or "planned").strip(),
                 "issue_codes": [
                     str(code)[:120]
-                    for code in raw_mode_review.get("issue_codes", [])
+                    for code in (
+                        raw_mode_review.get("issue_codes", [])
+                        if isinstance(raw_mode_review.get("issue_codes", []), list)
+                        else []
+                    )
                     if str(code).strip()
                 ][:24],
                 "user_visible_summary": [
                     str(line)[:300]
-                    for line in raw_mode_review.get("user_visible_summary", [])
+                    for line in (
+                        raw_mode_review.get("user_visible_summary", [])
+                        if isinstance(raw_mode_review.get("user_visible_summary", []), list)
+                        else []
+                    )
                     if isinstance(line, str) and line.strip()
                 ][:4],
                 "separate_from_universal_quality": True,
@@ -12032,15 +12054,24 @@ class V3ProductApiService:
             if isinstance(raw_mode_review, dict)
             else {}
         )
+        raw_user_visible_summary = package.get("user_visible_summary", [])
+        if not isinstance(raw_user_visible_summary, list):
+            raw_user_visible_summary = []
+        raw_recommended_output_ids = package.get("recommended_output_ids", [])
+        if not isinstance(raw_recommended_output_ids, list):
+            raw_recommended_output_ids = []
+        raw_hidden_output_ids = package.get("hidden_output_ids", [])
+        if not isinstance(raw_hidden_output_ids, list):
+            raw_hidden_output_ids = []
         return {
             "user_visible_summary": [
                 str(line)[:300]
-                for line in package.get("user_visible_summary", [])
+                for line in raw_user_visible_summary
                 if isinstance(line, str) and line.strip()
             ][:6],
             "inspections": inspections,
-            "recommended_output_ids": [str(value) for value in package.get("recommended_output_ids", []) if str(value)],
-            "hidden_output_ids": [str(value) for value in package.get("hidden_output_ids", []) if str(value)],
+            "recommended_output_ids": [str(value) for value in raw_recommended_output_ids if str(value)],
+            "hidden_output_ids": [str(value) for value in raw_hidden_output_ids if str(value)],
             "review_output_ids": list(dict.fromkeys(review_output_ids)),
             "universal_review_scope": universal_review_scope(),
             "quality_assessment": universal_quality["quality_assessment"],
@@ -12114,6 +12145,9 @@ class V3ProductApiService:
 
     @staticmethod
     def _is_verified_real_pixel_inspection(inspection: dict[str, Any]) -> bool:
+        evidence = inspection.get("evidence")
+        if not isinstance(evidence, dict) or evidence.get("provider_pixel_result_certified") is not True:
+            return False
         return (
             str(inspection.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
             and str(inspection.get("verification_state") or "").strip().lower() == "verified"
@@ -12129,11 +12163,81 @@ class V3ProductApiService:
         """
 
         package = result.metadata.get("post_generation_review_package")
+        review_receipt_fields_present = isinstance(package, dict) and any(
+            key in package
+            for key in (
+                "inspections",
+                "resolutions",
+                "review_evidence_plans",
+                "review_evidence_plan_digests",
+                "review_evidence_receipt_errors",
+            )
+        )
         receipt_status = (
             str(package.get("review_evidence_receipt_status") or "").strip().lower()
             if isinstance(package, dict) and "review_evidence_receipt_status" in package
             else None
         )
+        if package is not None and not isinstance(package, dict):
+            # A non-dict review package is malformed modern state.  It must not
+            # fall through to the legacy no-review projection.
+            return (
+                {
+                    "final_delivery_status": "withheld_review_failure",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": False,
+                    "reviewed_output_count": 0,
+                    "final_delivery_output_count": 0,
+                    "delivery_gate_applies": True,
+                },
+                set(),
+                set(),
+            )
+        if (
+            receipt_status == "complete"
+            and isinstance(package, dict)
+            and "review_evidence_receipt_errors" in package
+            and (
+                not isinstance(package["review_evidence_receipt_errors"], (list, tuple))
+                or bool(package["review_evidence_receipt_errors"])
+            )
+        ):
+            # The contract forbids closure errors on a complete receipt.  A
+            # contradictory retained package is non-certifying and must fail
+            # closed instead of authorizing the passing inspection rows.
+            inspections = package.get("inspections")
+            inspected_count = len(
+                [item for item in inspections if isinstance(item, dict)]
+            ) if isinstance(inspections, list) else 0
+            return (
+                {
+                    "final_delivery_status": "withheld_review_failure",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": False,
+                    "reviewed_output_count": inspected_count,
+                    "final_delivery_output_count": 0,
+                    "delivery_gate_applies": True,
+                },
+                set(),
+                set(),
+            )
+        if review_receipt_fields_present and receipt_status is None:
+            # A retained review package without an explicit receipt boundary
+            # is malformed. It must not be treated as a certifying package.
+            inspections = package.get("inspections") if isinstance(package, dict) else []
+            inspected_count = len([item for item in inspections if isinstance(item, dict)])
+            return (
+                {
+                    "final_delivery_status": "withheld_review_failure",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": False,
+                    "reviewed_output_count": inspected_count,
+                    "final_delivery_output_count": 0,
+                    "delivery_gate_applies": True,
+                },
+                set(),
+                set(),
+            )
         if receipt_status is not None and receipt_status != "complete":
             # A retained review package is an authoritative receipt boundary.
             # Its generated records remain append-only, but a partial, malformed,
@@ -12153,7 +12257,9 @@ class V3ProductApiService:
                 set(),
             )
         inspections = package.get("inspections") if isinstance(package, dict) else []
-        inspections = [dict(item) for item in inspections if isinstance(item, dict)]
+        inspections = [dict(item) for item in (inspections if isinstance(inspections, list) else []) if isinstance(item, dict)]
+        inspection_ids = [str(item.get("output_id") or "").strip() for item in inspections]
+        ambiguous_output_ids = {value for value in inspection_ids if value and inspection_ids.count(value) > 1}
         real_review_attempted = any(
             str(item.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
             for item in inspections
@@ -12162,6 +12268,7 @@ class V3ProductApiService:
             item
             for item in inspections
             if self._is_verified_real_pixel_inspection(item)
+            and str(item.get("output_id") or "").strip() not in ambiguous_output_ids
         ]
         if not real_inspections:
             manual_confirmation_required = any(
@@ -12177,7 +12284,7 @@ class V3ProductApiService:
                     "manual_confirmation_required": manual_confirmation_required,
                     "reviewed_output_count": 0,
                     "final_delivery_output_count": 0,
-                    "delivery_gate_applies": real_review_attempted,
+                    "delivery_gate_applies": isinstance(package, dict),
                 },
                 set(),
                 set(),
@@ -12217,23 +12324,21 @@ class V3ProductApiService:
             for item in real_inspections
             if str(item.get("status") or "").strip().lower() in {"pass", "warning"}
             and str(item.get("asset_id") or "").strip()
-            and str(item.get("output_id") or "").strip() not in doc276_uncertified
+            and str(item.get("output_id") or "").strip() in eligible_output_ids
         }
-        if doc276_uncertified or "manual_review" in statuses:
+        # DOC321: an independently certified output survives a held sibling.
+        # Scenario-owned atomic batch contracts are enforced by their owner.
+        if eligible_output_ids:
+            state = "ready"
+            automatic_delivery_available = True
+            manual_confirmation_required = False
+        elif doc276_uncertified or "manual_review" in statuses:
             state = "withheld_manual_confirmation"
             automatic_delivery_available = False
             manual_confirmation_required = True
-            eligible_output_ids = set()
-            eligible_asset_ids = set()
         elif statuses.intersection({"fail_retryable", "fail_final"}):
             state = "withheld_review_failure"
             automatic_delivery_available = False
-            manual_confirmation_required = False
-            eligible_output_ids = set()
-            eligible_asset_ids = set()
-        elif eligible_output_ids and statuses.issubset({"pass", "warning"}):
-            state = "ready"
-            automatic_delivery_available = True
             manual_confirmation_required = False
         else:
             state = "not_evaluated"
@@ -12248,6 +12353,12 @@ class V3ProductApiService:
                 "manual_confirmation_required": manual_confirmation_required,
                 "reviewed_output_count": len(real_inspections),
                 "final_delivery_output_count": len(eligible_output_ids),
+                **({"partial_delivery": True} if eligible_output_ids and (
+                    doc276_uncertified or any(
+                        str(item.get("output_id") or "").strip() not in eligible_output_ids
+                        for item in inspections
+                    )
+                ) else {}),
                 "delivery_gate_applies": True,
             },
             eligible_output_ids,
@@ -12372,20 +12483,31 @@ class V3ProductApiService:
 
     @staticmethod
     def _doc280_public_review_summary(value: Any) -> dict[str, Any]:
-        """Keep retained-review identity private once E34 owns the UI state."""
+        """Keep safe per-output delivery facts while excluding private E34 evidence."""
 
         raw = dict(value or {}) if isinstance(value, dict) else {}
         receipt_status = str(raw.get("review_evidence_receipt_status") or "").strip()
         reference_comparison = raw.get("reference_comparison")
         review_items = []
-        for item in raw.get("inspections", []):
+        raw_inspections = raw.get("inspections", [])
+        if not isinstance(raw_inspections, list):
+            raw_inspections = []
+        for item in raw_inspections:
             if not isinstance(item, dict):
                 continue
             output_id = str(item.get("output_id") or "").strip()
             if not output_id:
                 continue
+            raw_detected_issues = item.get("detected_issues", [])
+            if not isinstance(raw_detected_issues, list):
+                raw_detected_issues = []
             review_items.append(
                 {
+                    "output_id": output_id,
+                    "quality_assessment": str(item.get("quality_assessment") or "not_assessed"),
+                    "quality_failure": bool(item.get("quality_failure")),
+                    "evidence_state": str(item.get("evidence_state") or "unavailable"),
+                    "review_reason": str(item.get("review_reason") or "not_evaluated"),
                     "mode": str(item.get("mode") or "metadata_only"),
                     "status": str(item.get("status") or "unverified"),
                     "verification_state": str(item.get("verification_state") or "unverified"),
@@ -12395,16 +12517,27 @@ class V3ProductApiService:
                             "severity": str(issue.get("severity") or "warning"),
                             "retryable": bool(issue.get("retryable")),
                         }
-                        for issue in item.get("detected_issues", [])
+                        for issue in raw_detected_issues
                         if isinstance(issue, dict)
                     ],
                 }
             )
+        raw_recommended_output_ids = raw.get("recommended_output_ids", [])
+        if not isinstance(raw_recommended_output_ids, list):
+            raw_recommended_output_ids = []
         return {
             "review_evidence_receipt_status": receipt_status,
             "real_pixel_review_attempted": bool(raw.get("real_pixel_review_attempted")),
             "real_pixel_review_certified": bool(raw.get("real_pixel_review_certified")),
             "review_items": review_items,
+            "recommended_output_ids": [
+                str(value).strip() for value in raw_recommended_output_ids
+                if str(value).strip()
+            ],
+            "quality_assessment": str(raw.get("quality_assessment") or "not_assessed"),
+            "quality_failure": bool(raw.get("quality_failure")),
+            "evidence_state": str(raw.get("evidence_state") or "unavailable"),
+            "review_reason": str(raw.get("review_reason") or "not_evaluated"),
             "reference_comparison": (
                 {
                     channel: str(state)
@@ -12864,6 +12997,14 @@ class V3ProductApiService:
                         "status": "blocked",
                         "owner": "v3_product_api_runtime",
                         "failure_family": "remote_creative_brain",
+                        "failure_category": (
+                            "brain_timeout" if safe_remote_outcome.get("remote_error_class") == "timeout"
+                            else "provider_unavailable" if safe_remote_outcome.get("remote_provider_available") is False
+                            or safe_remote_outcome.get("outcome_class") == "remote_provider_unavailable"
+                            else "brain_provider_error"
+                        ),
+                        "quality_assessment": "not_assessed",
+                        "quality_failure": False,
                         "failure_code": reason_code,
                         "reason_code": reason_code,
                         "provider_request_started": False,
@@ -12884,6 +13025,8 @@ class V3ProductApiService:
                 "status": "blocked",
                 "owner": "v3_product_api_runtime",
                 "failure_family": "capability_activation",
+                "quality_assessment": "not_assessed",
+                "quality_failure": False,
                 # Keep the internal activation code out of the beginner-facing
                 # projection.  It remains available in private diagnostics;
                 # public status receives one stable, non-creative category.
@@ -14232,9 +14375,7 @@ class V3ProductApiService:
             output_id = str(candidate_metadata.get("output_id") or "").strip()
             if (
                 visible_output_ids is not None
-                and visible_asset_ids is not None
                 and output_id not in visible_output_ids
-                and asset.asset_id not in visible_asset_ids
             ):
                 continue
             item_status = "generated" if selected_candidate_id else status.value
@@ -14329,9 +14470,7 @@ class V3ProductApiService:
             output_id = str(candidate_metadata.get("output_id") or "").strip()
             if (
                 visible_output_ids is not None
-                and visible_asset_ids is not None
                 and output_id not in visible_output_ids
-                and asset.asset_id not in visible_asset_ids
             ):
                 continue
             asset_metadata = self._public_metadata_projection(
@@ -14347,7 +14486,7 @@ class V3ProductApiService:
                     download_url=candidate_metadata.get("download_url") or candidate_metadata.get("url"),
                     preview_url=candidate_metadata.get("preview_url"),
                     thumbnail_url=candidate_metadata.get("thumbnail_url"),
-                    overall_score=report.overall_score if report else None,
+                    overall_score=self._public_candidate_score(result, report, output_id, visible_output_ids),
                     recommendation=self._public_candidate_recommendation(
                         report,
                         output_id=output_id,
@@ -14365,6 +14504,19 @@ class V3ProductApiService:
             )
         return candidates
 
+    def _public_candidate_score(self, result: PlanningResult, report: Any, output_id: str, visible_output_ids: set[str] | None) -> float | None:
+        """Never label a legacy metadata score as measured pixel quality."""
+        if visible_output_ids is None:
+            return report.overall_score if report and not report.metadata.get("planning_only") else None
+        if output_id not in visible_output_ids:
+            return None
+        package = result.metadata.get("post_generation_review_package") or {}
+        for item in package.get("inspections", []):
+            if isinstance(item, dict) and str(item.get("output_id") or "").strip() == output_id:
+                scores = item.get("score_card")
+                return self._safe_score(scores.get("overall")) if isinstance(scores, dict) else None
+        return None
+
     @staticmethod
     def _public_candidate_recommendation(
         report: Any,
@@ -14374,8 +14526,8 @@ class V3ProductApiService:
     ) -> str | None:
         """Let the canonical final-delivery review supersede stale pre-review scoring."""
 
-        if output_id and visible_output_ids is not None and output_id in visible_output_ids:
-            return "accept"
+        if visible_output_ids is not None:
+            return "accept" if output_id and output_id in visible_output_ids else None
         if report is None:
             return None
         recommendation = getattr(report, "recommendation", None)

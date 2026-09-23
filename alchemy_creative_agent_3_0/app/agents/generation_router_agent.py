@@ -139,7 +139,7 @@ class GenerationRouterAgent(BaseAgent):
             candidate_count=4,
             quality_threshold=0.78,
             max_refine_rounds=2,
-            scorers=["mock_scoring_provider"] if provider_strategy != ProviderStrategy.PLANNING_ONLY else ["rule_based_planning_scorer"],
+            scorers=["mock_scoring_provider"] if provider_strategy == ProviderStrategy.MOCK_GENERATION else ["rule_based_planning_scorer"],
             rendering_required=asset.requires_text_overlay,
             metadata=self.metadata(
                 rules_version=RULE_VERSION,
