@@ -2915,7 +2915,8 @@ def test_missing_uploaded_asset_fails_before_text_only_generation() -> None:
     assert run["generation_jobs"] == []
 
 
-def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset(monkeypatch) -> None:
+@pytest.mark.parametrize("model_source", ["exact", None, "unrecognized_reference_token"])
+def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset(monkeypatch, model_source) -> None:
     client = fresh_client()
     qr_payload = "https://alchemy.test/qr/preserve-original"
     asset_id = upload_image_asset(
@@ -2934,7 +2935,7 @@ def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset(monkeypatch) -
             "provider_parameters": {"count": 1, "provider_hint": "mock_image"},
             "qr_preservation_enabled": True,
             "task_intent": {"primary_relationship": "free_reference", "slot_plan": [{
-                "slot": "qr_code", "source_asset_id": asset_id,
+                "slot": "qr_code", "source_asset_id": asset_id if model_source == "exact" else model_source,
                 "target_surface": "poster", "rule": "bottom_right",
             }]},
         }
@@ -2963,6 +2964,10 @@ def test_requested_qr_code_is_pixel_preserved_from_uploaded_asset(monkeypatch) -
     preservation = output["metadata"]["pixel_preservation"]["qr_code"]
     assert preservation["applied"] is True
     assert preservation["source_asset_id"] == asset_id
+    raw_slot = run["orchestrator_decision"]["task_intent"]["slot_plan"][0]
+    expected_raw = asset_id if model_source == "exact" else model_source
+    assert raw_slot["source_asset_id"] == expected_raw
+    assert run["prompt_plan"]["user_variables"]["orchestrator_task_intent"]["slot_plan"][0]["source_asset_id"] == asset_id
     assert decode_qr_from_image(Path(output["metadata"]["storage_path"])) == qr_payload
     assert preservation["verified_decoded"] is True
     assert run["prompt_plan"]["user_variables"]["qr_preservation_enabled"] is True

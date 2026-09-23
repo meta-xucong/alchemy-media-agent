@@ -290,3 +290,25 @@ def test_core_storage_failure_is_not_hidden_by_optional_qr(case, tmp_path, monke
                 output_format="png", mime_type="image/png")
     finally:
         object.__setattr__(settings, "storage_dir", old)
+
+@pytest.mark.parametrize('placement', ['top_left', 'top_right', 'bottom_left', 'bottom_right'])
+def test_correct_provider_qr_near_requested_edge_is_not_overlaid_again(case, monkeypatch, placement):
+    _, metadata, payload = case
+    code = qrcode.QRCode(box_size=4, border=4)
+    code.add_data(payload); code.make(fit=True)
+    pixels = code.make_image(fill_color='black', back_color='white').convert('RGB')
+    image = Image.new('RGB', (1024, 1024), 'white')
+    x = 0 if placement.endswith('left') else image.width-pixels.width
+    y = 0 if placement.startswith('top') else image.height-pixels.height
+    image.paste(pixels, (x, y))
+    assert qr._detect_qr_bbox(image)[1] == payload
+    metadata['orchestrator_task_intent']['slot_plan'][0]['rule'] = placement
+    content = encoded(image)
+    paste = Mock(side_effect=AssertionError('A correct existing QR must not be overlaid'))
+    monkeypatch.setattr(qr, '_paste_qr_crop', paste)
+    result = qr.preserve_requested_qr_code(content=content, metadata=metadata,
+        output_format='png', mime_type='image/png', _qr_preservation_enabled=True)
+    paste.assert_not_called()
+    assert result.content == content
+    assert result.metadata['reason'] == 'already_satisfied'
+    assert result.metadata['verified_decoded'] is True

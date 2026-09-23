@@ -127,7 +127,7 @@ QR_PRESERVATION_INSTRUCTION = (
     "Only for an explicitly requested flat poster QR placement, use the existing task_intent.slot_plan: "
     "slot=qr_code, target_surface=poster, rule=top_left/top_right/bottom_left/bottom_right/top_center/bottom_center/center. "
     "Do not borrow a Logo's placement, guess pixel coordinates or move a packaging QR into a poster corner. "
-    "Preserve source_asset_id there only when the supplied binding is exact; a single current reference is unambiguous. "
+    "Single-reference source IDs are bound by the server; omit source_asset_id. For multiple references use only a supplied exact binding. "
     "No reliable target means omit the QR slot. Internal IDs may occur only in structured bindings, never in final_prompt. "
     "user_asset_instructions contains current user directives, not automatic visual facts. "
     "In staged runs the full intent stage decides qr_preservation_enabled; final compression may confirm or disable it, never promote an absent or false intent value."

@@ -10,8 +10,6 @@ from PIL import Image, ImageOps, ImageChops
 from app.services.uploaded_assets import uploaded_asset_path
 
 
-
-
 @dataclass(frozen=True)
 class QrPreservationResult:
     content: bytes
@@ -72,8 +70,18 @@ def preserve_requested_qr_code(
         if not _valid_qr_box(target, original.size):
             raise _QrSkip("target_unresolved")
         receipt.update({"paste_box": list(target), "placement": placement})
-        if _composed_qr_decodes(original, target, source_crop.decoded_text):
-            receipt.update({"reason": "already_satisfied", "verified_decoded": True})
+        # Requested edge placement is not a request to enforce our default
+        # padding on a provider QR that already works. This wider region is
+        # for no-op recognition only; new pixels still certify in target.
+        existing_target = (
+            0 if placement.endswith("left") else target[0],
+            0 if placement.startswith("top") else target[1],
+            original.width if placement.endswith("right") else target[2],
+            original.height if placement.startswith("bottom") else target[3],
+        )
+        if _composed_qr_decodes(original, existing_target, source_crop.decoded_text):
+            receipt.update({"reason": "already_satisfied", "verified_decoded": True,
+                "paste_box": list(existing_target)})
             return QrPreservationResult(content=content, metadata=receipt)
         if fmt == "JPEG":
             raise _QrSkip("unsupported_lossless_edit")
@@ -136,23 +144,6 @@ def _valid_qr_box(box: Any, size: tuple[int, int]) -> bool:
     return (isinstance(box, (list, tuple)) and len(box) == 4
         and all(isinstance(v, int) and not isinstance(v, bool) for v in box)
         and 0 <= box[0] < box[2] <= size[0] and 0 <= box[1] < box[3] <= size[1])
-
-
-def _information_integrity_active(metadata: dict[str, Any]) -> bool:
-    if metadata.get("information_integrity_lock_enabled") is True:
-        return True
-    contract = metadata.get("information_integrity_contract")
-    if isinstance(contract, dict) and contract.get("active"):
-        return True
-    grammar = metadata.get("visual_grammar_contract")
-    if isinstance(grammar, dict):
-        info = grammar.get("information_integrity")
-        if isinstance(info, dict) and info.get("active"):
-            return True
-        source_layout_risk = grammar.get("source_layout_risk")
-        if isinstance(source_layout_risk, dict) and source_layout_risk.get("detected"):
-            return True
-    return False
 
 
 def _first_qr_crop(input_images: list[Any]) -> _QrCrop | None:
@@ -275,11 +266,10 @@ def _paste_qr_crop(
     crop: Image.Image,
     *,
     placement: str,
-    information_dense: bool = False,
 ) -> tuple[Image.Image, tuple[int, int, int, int]]:
     canvas = output_image.convert("RGBA")
     qr = crop.convert("RGBA")
-    target_size = _target_qr_size(canvas.size, qr.size, max_side_ratio=0.18 if information_dense else 0.3)
+    target_size = _target_qr_size(canvas.size, qr.size)
     if qr.size != target_size:
         qr = qr.resize(target_size, Image.Resampling.NEAREST)
     padding = max(10, int(min(canvas.size) * 0.012))
@@ -291,91 +281,6 @@ def _paste_qr_crop(
     return canvas, (x - padding, y - padding, x + qr.width + padding, y + qr.height + padding)
 
 
-def _paste_qr_crop_to_bbox(
-    output_image: Image.Image,
-    crop: Image.Image,
-    bbox: tuple[int, int, int, int],
-    *,
-    information_dense: bool = False,
-) -> tuple[Image.Image, tuple[int, int, int, int]]:
-    canvas = output_image.convert("RGBA")
-    qr = crop.convert("RGBA")
-    x_min, y_min, x_max, y_max = bbox
-    preferred_longest = max(80, x_max - x_min, y_max - y_min)
-    min_canvas = min(canvas.size)
-    max_longest = max(96, int(min_canvas * (0.2 if information_dense else 0.32)))
-    source_detection = _detect_qr_bbox(qr.convert("RGB"))
-    source_decoded = source_detection[1] if source_detection else ""
-    min_longest = min(max_longest, max(80, int(preferred_longest * 0.72)))
-    for longest in _qr_size_candidates(
-        preferred_longest=preferred_longest,
-        source_longest=max(qr.size),
-        min_longest=min_longest,
-        max_longest=max_longest,
-    ):
-        candidate_qr = _resize_preserving_aspect(qr, longest)
-        candidate_detection = _detect_qr_bbox(candidate_qr.convert("RGB"))
-        if not candidate_detection or not candidate_detection[1]:
-            continue
-        composed, paste_box = _compose_qr_crop_at_bbox(canvas, candidate_qr, bbox)
-        composed_detection = _detect_qr_bbox(composed.convert("RGB"))
-        if composed_detection and composed_detection[1] and (
-            not source_decoded or composed_detection[1] == source_decoded
-        ):
-            return composed, paste_box
-    qr = _resize_qr_crop_for_decoding(qr, preferred_longest=preferred_longest, max_longest=max_longest)
-    return _compose_qr_crop_at_bbox(canvas, qr, bbox)
-
-
-def _placeholder_safe_for_qr(
-    bbox: tuple[int, int, int, int],
-    canvas_size: tuple[int, int],
-    information_dense: bool,
-) -> bool:
-    if not information_dense:
-        return True
-    x_min, y_min, x_max, y_max = bbox
-    width, height = canvas_size
-    box_width = x_max - x_min
-    box_height = y_max - y_min
-    center_x = (x_min + x_max) / 2
-    center_y = (y_min + y_max) / 2
-    right_rail_card = (
-        x_min >= width * 0.76
-        and y_min >= height * 0.08
-        and y_max <= height * 0.62
-        and box_width <= width * 0.23
-        and box_height <= height * 0.28
-    )
-    if right_rail_card:
-        return True
-    return (
-        center_x >= width * 0.55
-        and center_y >= height * 0.52
-        and box_width <= width * 0.24
-        and box_height <= height * 0.22
-    )
-
-
-def _cover_bbox_with_light_card(
-    image: Image.Image,
-    bbox: tuple[int, int, int, int],
-) -> Image.Image:
-    canvas = image.convert("RGBA")
-    x_min, y_min, x_max, y_max = bbox
-    side = max(x_max - x_min, y_max - y_min)
-    margin = max(8, int(side * 0.08))
-    box = (
-        max(0, x_min - margin),
-        max(0, y_min - margin),
-        min(canvas.width, x_max + margin),
-        min(canvas.height, y_max + margin),
-    )
-    cover = Image.new("RGBA", (box[2] - box[0], box[3] - box[1]), (255, 252, 246, 255))
-    canvas.paste(cover, (box[0], box[1]), cover)
-    return canvas
-
-
 def _composed_qr_decodes(image: Image.Image, paste_box: tuple[int, int, int, int], expected: str) -> bool:
     # Only this exact target can certify the operation; never another whole-image QR.
     if not expected or not _valid_qr_box(paste_box, image.size):
@@ -385,96 +290,6 @@ def _composed_qr_decodes(image: Image.Image, paste_box: tuple[int, int, int, int
     except _QrSkip as exc:
         raise _QrSkip("target_ambiguous") from exc
     return bool(detected and detected[1] == expected)
-
-
-def _compose_qr_crop_at_bbox(
-    canvas: Image.Image,
-    qr: Image.Image,
-    bbox: tuple[int, int, int, int],
-) -> tuple[Image.Image, tuple[int, int, int, int]]:
-    canvas = canvas.convert("RGBA")
-    x_min, y_min, x_max, y_max = bbox
-    qr_longest = max(qr.size)
-    padding = max(8, int(qr_longest * 0.08))
-    backing = Image.new("RGBA", (qr.width + padding * 2, qr.height + padding * 2), (255, 255, 255, 255))
-    backing.paste(qr, (padding, padding), qr)
-    center_x = (x_min + x_max) // 2
-    center_y = (y_min + y_max) // 2
-    paste_x = center_x - backing.width // 2
-    paste_y = center_y - backing.height // 2
-    paste_x = max(0, min(canvas.width - backing.width, paste_x))
-    paste_y = max(0, min(canvas.height - backing.height, paste_y))
-    canvas.paste(backing, (paste_x, paste_y), backing)
-    return canvas, (paste_x, paste_y, paste_x + backing.width, paste_y + backing.height)
-
-
-def _resize_qr_crop_for_decoding(qr: Image.Image, *, preferred_longest: int, max_longest: int) -> Image.Image:
-    source_longest = max(qr.size)
-    min_longest = min(max_longest, max(80, int(preferred_longest * 0.72)))
-    candidates = _qr_size_candidates(
-        preferred_longest=preferred_longest,
-        source_longest=source_longest,
-        min_longest=min_longest,
-        max_longest=max_longest,
-    )
-    fallback = _resize_preserving_aspect(qr, max(min_longest, min(max_longest, preferred_longest)))
-    fallback_detected = _detect_qr_bbox(fallback.convert("RGB"))
-    for longest in candidates:
-        resized = _resize_preserving_aspect(qr, longest)
-        detected = _detect_qr_bbox(resized.convert("RGB"))
-        if detected and detected[1]:
-            return resized
-        if detected and not fallback_detected:
-            fallback = resized
-            fallback_detected = detected
-    return fallback
-
-
-def _qr_size_candidates(
-    *,
-    preferred_longest: int,
-    source_longest: int,
-    min_longest: int,
-    max_longest: int,
-) -> list[int]:
-    values: list[int] = []
-    upper = min(max_longest, max(preferred_longest + 96, source_longest, 260))
-    lower = max(80, min_longest)
-    for offset in range(0, 97):
-        values.append(preferred_longest + offset)
-        if offset:
-            values.append(preferred_longest - offset)
-    values.extend(
-        [
-            source_longest,
-            260,
-            256,
-            240,
-            230,
-            224,
-            200,
-            max(80, min(max_longest, preferred_longest)),
-        ]
-    )
-    seen: set[int] = set()
-    candidates: list[int] = []
-    for value in values:
-        longest = int(value)
-        if longest < lower or longest > upper or longest in seen:
-            continue
-        seen.add(longest)
-        candidates.append(longest)
-    return candidates
-
-
-def _resize_preserving_aspect(image: Image.Image, target_longest: int) -> Image.Image:
-    width, height = image.size
-    longest = max(width, height)
-    if longest <= 0 or longest == target_longest:
-        return image.copy()
-    scale = target_longest / float(longest)
-    target_size = (max(1, round(width * scale)), max(1, round(height * scale)))
-    return image.resize(target_size, Image.Resampling.NEAREST)
 
 
 def _target_qr_size(
@@ -522,16 +337,12 @@ def _placement_xy(
         "bottom_center": (center_x, bottom),
         "top_center": (center_x, top),
         "center": (center_x, center_y),
-        "right_lower": (right, max(top, min(bottom, int(height * 0.62)))),
         "bottom_right": (right, bottom),
     }
-    backing_x, backing_y = positions.get(placement, positions["bottom_right"])
+    backing_x, backing_y = positions[placement]
     backing_x = max(0, min(width - backing_width, backing_x))
     backing_y = max(0, min(height - backing_height, backing_y))
     return backing_x + padding, backing_y + padding
-
-
-
 
 
 def _pil_format(output_format: str, mime_type: str) -> str:

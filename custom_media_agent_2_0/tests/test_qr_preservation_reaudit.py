@@ -112,3 +112,44 @@ def test_explicit_intent_and_final_confirmation_keep_positive_capability():
     compact = brain._compact_generation_checkpoints({"intent": {"qr_preservation_enabled": True}})
     value = brain._compress_checkpoint_decision(raw, intent=compact["intent"], visual_strategy={}, fallback=decision())
     assert value["qr_preservation_enabled"] is True
+
+def test_retired_whitening_and_relocation_code_is_removed():
+    # These were unreachable after opt-in repair; keep them out of future fallbacks.
+    for name in ("_information_integrity_active", "_paste_qr_crop_to_bbox",
+        "_placeholder_safe_for_qr", "_cover_bbox_with_light_card", "_compose_qr_crop_at_bbox",
+        "_resize_qr_crop_for_decoding", "_qr_size_candidates", "_resize_preserving_aspect"):
+        assert not hasattr(qr, name)
+
+
+def test_invalid_internal_placement_cannot_fall_back_to_a_corner():
+    with pytest.raises(KeyError):
+        qr._placement_xy((1024, 1024), (200, 200), padding=12, margin=40, placement="unknown")
+
+def test_unique_current_reference_is_bound_by_server_not_model_identifier():
+    from app.services.prompting import _task_intent_payload
+    from test_qr_preservation_decision_flow import decision
+    model = decision(qr_preservation_enabled=True, task_intent={'slot_plan': [{
+        'slot': 'qr_code', 'rule': 'bottom_right', 'target_surface': 'poster',
+        'source_asset_id': 'not-a-real-asset-id'}]})
+    context = {'uploaded_assets': [{'asset_id': 'current'}],
+        'provider_input_images': [{'asset_id': 'current'}]}
+    projected = _task_intent_payload(model, asset_context=context)
+    assert projected['slot_plan'][0]['source_asset_id'] == 'current'
+    assert model.task_intent.slot_plan[0]['source_asset_id'] == 'not-a-real-asset-id'
+
+
+@pytest.mark.parametrize('uploads,inputs,enabled', [
+    (['first', 'second'], ['first', 'second'], True),
+    (['first', 'second'], ['first'], True),
+    (['first'], ['second'], True),
+    (['first'], ['first'], False),
+    ([], [], True),
+])
+def test_server_single_reference_binding_never_selects_or_grants_authority(uploads, inputs, enabled):
+    from app.services.prompting import _task_intent_payload
+    from test_qr_preservation_decision_flow import decision
+    model = decision(qr_preservation_enabled=enabled, task_intent={'slot_plan': [{
+        'slot': 'qr_code', 'rule': 'bottom_right', 'target_surface': 'poster', 'source_asset_id': 'original'}]})
+    context = {'uploaded_assets': [{'asset_id': value} for value in uploads],
+        'provider_input_images': [{'asset_id': value} for value in inputs]}
+    assert _task_intent_payload(model, asset_context=context)['slot_plan'][0]['source_asset_id'] == 'original'

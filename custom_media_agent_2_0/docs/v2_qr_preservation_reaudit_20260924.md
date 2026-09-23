@@ -89,3 +89,57 @@ R04/R05 收窄可选增强的支持范围，不取消生成结果、不标记整
 `ecommerce_product_truth_selection_context_digest_mismatch`；不是图像质量失败。
 当前生命周期投影仍正确给出 quality_failure=false / quality_assessment=not_assessed。
 诊断记录为 `v3-doc267-fixture-diagnostic.json`，不涉及真实项目、原始人物照片或线上调用。
+
+## 2026-09-24 最终精简审查：实施前模型
+已逐符号搜索整个 V2 跟踪目录，确认旧的 8 个私有辅助函数没有外部调用者：
+_information_integrity_active、_paste_qr_crop_to_bbox、_placeholder_safe_for_qr、
+_cover_bbox_with_light_card、_compose_qr_crop_at_bbox、_resize_qr_crop_for_decoding、
+_qr_size_candidates、_resize_preserving_aspect。内部相互调用也全部在这组死代码内。
+删除它们而不再留作潜在回退，保留当前默认关闭、精确源/目标及最终字节验证。
+同时删除粘贴函数已无调用场景的 information_dense 参数和旧 right_lower 位置。
+位置必须属于现有已授权枚举，不再对无效位置偷偷回退 bottom_right。
+这属于清除已退役路径，不增加模型、阈值、重试、模块或公共接口。
+后续结果以本节后的新测试记录为准；此前历史测试记录不改写。
+
+## 真实正例发现的剩余接口问题：修正模型
+原生 Brain 与 openai_gpt_image 正例 run_bf3e75ac95f4 已生成真实图片，但未通过 QR 验收。
+当前授权上传集合与实际 Provider 输入集合都只有 asset_800d430be2d3；源码实际可解码。
+Brain 正确给出 True 和 bottom_right，却在结构化 slot 中编造了 reference_uploaded 标识。
+保存阶段因此安全跳过，没有污染主图。这不是二维码识别失败，而是本地标识职责错误。
+最小修正：在已有提示词计划投影中，仅当两个当前素材集合完全一致且唯一、且有合法
+Brain True 时，由服务端填入唯一 source_asset_id。Brain 仍决定是否保留及明确位置。
+不存在素材选择时不让模型复述 opaque ID；多素材、集合不一致或未授权时不代选。
+不是为 reference_uploaded 添加别名，也不是忽略低层未知 ID 校验；直接入口仍默认关闭。
+复用这次真实 Provider 原始字节与保存的真实 Brain 决定复验，不重新请求图片，不改历史。
+
+## 逐图复核：正确原码不应因默认留白被再贴一次
+对真实 Provider 原图复核：右下二维码框为 (850,830,993,969)，payload 与参考完全一致。
+旧 no-op 只查本地合成预设框 (653,653,984,984)，漏掉原码最右9像素，因此误判未满足。
+这不是上游质量问题。修正只扩展“已满足”检测区至明确锚定的画布边缘：如右下锚点
+允许触及右/下边缘，而非强制本地默认留白。中心方向仍保留对应范围，不检查其他角落。
+若该区域已有唯一可解的同 payload，返回原始字节；真正贴入候选仍只在精确 paste_box
+内验证，不能用放大的 no-op 区替新贴图通过。无空白覆盖、无移动、无新二维码选择规则。
+新增“正确原码靠近请求边缘”的回归，确保 paste 零调用。沿用保存的同次真实供应商
+输出复验，不重新生成；之前的候选验证记录保留，以本次 no-op 验证作为最终交付依据。
+
+## 本轮最终 V2 结果（替代旧阶段结论，不改写旧证据）
+完整 V2：345 passed，0 failed/skipped/deselected；41.16 秒，pytest exit 0。
+QR 专项（不含原 API 集成文件）：85 passed。全量包含原生入口→计划→下载/派生图→历史。
+新增边缘 no-op 的四个反例先在旧路径全部失败，修正后全部通过；无放宽复验标准。
+生产 QR 文件删去8个死函数及旧兜底；比最初549行版本明显缩短。没有新增运行服务或依赖。
+
+真实外部调用共3个单图任务，均使用本机现有 Brain 配置与 openai_gpt_image：
+- ordinary：run_facf422be3bb / job_6e9767a31c59，QR=False、调用0、主图基线哈希一致。
+- forbidden：run_3b310baf2d8b / job_b22c88d087b9，参考图有真码但用户禁止，QR仍零调用。
+- preserve：run_bf3e75ac95f4 / job_20adb8806f66，真实 Brain=True；初次因模型源ID错误安全跳过。
+  之后仅重用已保存的真实 Brain/Provider 字节验证修复，没有追加模型或生图调用。
+  最终 out_878b412d7331_final 为 already_satisfied、verified_decoded=True，整个文件与
+  Provider 的 QR 前字节完全相同，保留原来正确码，不再贴第二层。原图/素材哈希未变化。
+一次复验脚本错设源存储目录导致读不到素材，属隔离验证配置错误；失败记录保留，未改代码绕过。
+最终实际解码、下载文件及预览/缩略图可读性证据在 `v2-real-preserve-final/`。
+
+证据根：`.controlled-validation/final-known-bug-closure-20260924/`。
+`v2-complete.log/xml`、三个真实任务目录及最终复验目录是最新依据。
+真实正例最终阶段为真实数据重放，不冒充修复后又发了一次全新 Brain/图片请求。
+尚未执行五个用户历史污染输出的原件恢复；VPS连接调用被平台安全检查拒绝。
+本地修复和真实数据验收不等于VPS发布或整个仓库不存在未知缺陷。
