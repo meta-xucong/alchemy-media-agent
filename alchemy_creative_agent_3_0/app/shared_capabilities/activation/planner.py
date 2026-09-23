@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .catalog import VisualCapabilityRegistry
+from .human_scope import frozen_human_scope
 from .contracts import (
     ActivatedCapability,
     CapabilityActivationIntent,
@@ -87,8 +88,14 @@ class CapabilityActivationPlanner:
                 candidates.append((capability_id, "optional", binding))
 
         evidence_ids = {item.evidence_id for item in task_profile.evidence}
+        human_scope = frozen_human_scope(task_profile.model_dump(mode="json"))
         for capability_id, default_mode, binding in candidates:
             if capability_id in active:
+                continue
+            if capability_id == "human_realism" and human_scope.get("human_present") is False:
+                inactive[capability_id] = InactiveCapability(
+                    capability_id=capability_id, reason_code="not_applicable_no_visible_human",
+                )
                 continue
             request = requested.get(capability_id)
             manifest = self.registry.manifest(capability_id)

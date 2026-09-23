@@ -42,6 +42,8 @@ def test_scenario_hub_contract_exposes_general_active_and_placeholders() -> None
 
 def test_product_job_lifecycle_records_create_generate_and_select(tmp_path) -> None:
     service = _service(tmp_path)
+    from alchemy_creative_agent_3_0.tests.test_v3_product_api_minimal_ux import _install_local_pixel_review_fixture
+    _install_local_pixel_review_fixture(service, tmp_path)
 
     created = service.create_job(
         {

@@ -105,8 +105,9 @@ def classify_review_outcome(
     ``VisualInspectionReport.status`` is deliberately not rewritten.  A
     ``manual_review`` report with only evidence/uncertainty codes means that
     no quality failure was established; a manual report with a substantive
-    issue remains unresolved and needs a person.  Only the existing fail
-    statuses set ``quality_failure`` to true.
+    issue remains unresolved and needs a person. Only a verified pixel review
+    with a substantive visual issue and a fail status sets ``quality_failure``.
+    Metadata preflight and missing certificates never establish poor pixels.
     """
 
     status = _text(_value(inspection, "status"), default="not_assessed").lower()
@@ -119,6 +120,7 @@ def classify_review_outcome(
     issue_codes = _issue_codes(_value(inspection, "detected_issues"))
     evidence_issue_codes = [code for code in issue_codes if _is_evidence_only(code)]
     quality_issue_codes = [code for code in issue_codes if code not in set(evidence_issue_codes)]
+    certification_denied = provider_pixel_certified is False or evidence.get("provider_pixel_result_certified") is False
     if provider_pixel_certified is None:
         provider_pixel_certified = bool(evidence.get("provider_pixel_result_certified"))
 
@@ -128,7 +130,16 @@ def classify_review_outcome(
         provider_pixel_certified=bool(provider_pixel_certified),
         issue_codes=issue_codes,
     )
-    if status in QUALITY_FAILURE_STATUSES:
+    has_verified_pixels = (
+        mode in REAL_PIXEL_REVIEW_MODES
+        and verification_state == "verified"
+        and not certification_denied
+    )
+    if not has_verified_pixels or (status in QUALITY_FAILURE_STATUSES and not quality_issue_codes):
+        quality_assessment = "not_assessed"
+        quality_failure = False
+        review_reason = "evidence_incomplete"
+    elif status in QUALITY_FAILURE_STATUSES:
         quality_assessment = status
         quality_failure = True
         review_reason = "quality_issue"

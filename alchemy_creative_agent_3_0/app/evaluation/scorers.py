@@ -107,6 +107,30 @@ class RuleBasedPlanningScorer:
             },
         )
 
+    @staticmethod
+    def score_candidate_preflight(
+        *, candidate: CandidateResult, asset_spec: AssetSpec,
+        commercial_brief: CommercialBrief, brand_profile: BrandProfile,
+        creative_plan: CreativePlan, layout_plan: LayoutPlan,
+        prompt_compilation: PromptCompilationResult, refine_round: int = 0,
+        retry_budget_exhausted: bool = False, evaluation_policy: dict | None = None,
+    ) -> EvaluationReport:
+        """Keep legacy structure diagnostics, never a verdict about real pixels."""
+        report = RuleBasedPlanningScorer().score(
+            asset_spec, commercial_brief, brand_profile, creative_plan,
+            layout_plan, prompt_compilation,
+        )
+        return report.model_copy(update={
+            "candidate_id": candidate.candidate_id,
+            "recommendation": Recommendation.PLANNING_ONLY,
+            "metadata": {
+                **report.metadata, "review_mode": "metadata_preflight",
+                "quality_assessment": "not_assessed", "quality_failure": False,
+                "final_review_authority": "post_generation_review_package",
+                "refine_round": refine_round,
+            },
+        })
+
     def _problems(
         self,
         asset_spec: AssetSpec,
@@ -180,6 +204,12 @@ class MockScoringProvider(RuleBasedPlanningScorer):
         retry_budget_exhausted: bool = False,
         evaluation_policy: dict | None = None,
     ) -> EvaluationReport:
+        if not candidate.is_mock:
+            return self.score_candidate_preflight(
+                candidate=candidate, asset_spec=asset_spec, commercial_brief=commercial_brief,
+                brand_profile=brand_profile, creative_plan=creative_plan, layout_plan=layout_plan,
+                prompt_compilation=prompt_compilation, refine_round=refine_round,
+            )
         problems = self._problems(asset_spec, layout_plan, prompt_compilation, brand_profile)
         for code in candidate.metadata.get("forced_problem_codes", []):
             problem = self._problem_from_code(code)

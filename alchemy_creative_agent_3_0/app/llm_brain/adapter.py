@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .context_digest import compact_brand_visual_context
+
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 import os
@@ -1260,6 +1262,7 @@ class V3LLMBrainAdapter:
         shared_capabilities: dict[str, Any] | None = None,
         uploaded_assets: list[dict[str, Any]] | None = None,
         product_profile: dict[str, Any] | None = None,
+        brand_context: dict[str, Any] | None = None,
         capability_catalog: dict[str, Any] | None = None,
         pre_activation_capabilities: dict[str, Any] | None = None,
         template_capability_policy: TemplateCapabilityPolicy | None = None,
@@ -1458,6 +1461,7 @@ class V3LLMBrainAdapter:
             reference_assets=reference_assets,
             selected_output_assets=selected_outputs,
             product_profile=dict(product_profile or {}),
+            brand_visual_context=compact_brand_visual_context(brand_context),
             requested_image_count=requested_count,
             requested_image_size=clean_text(metadata.get("requested_image_size"), 80) or None,
             reasoning_depth=_reasoning_depth(metadata),
