@@ -11963,7 +11963,7 @@ class V3ProductApiService:
                 output_id
                 and str(item.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
                 and str(item.get("verification_state") or "").strip().lower() == "verified"
-                and bool(evidence.get("provider_pixel_result_certified"))
+                and evidence.get("provider_pixel_result_certified") is True
             ):
                 certified_output_ids.add(output_id)
             raw_detected_issues = item.get("detected_issues", [])
@@ -11981,11 +11981,7 @@ class V3ProductApiService:
             ]
             outcome = classify_review_outcome(
                 item,
-                provider_pixel_certified=(
-                    bool(evidence.get("provider_pixel_result_certified"))
-                    if evidence
-                    else None
-                ),
+                provider_pixel_certified=evidence.get("provider_pixel_result_certified") is True,
             )
             review_outcomes.append(outcome)
             inspections.append(
@@ -12163,6 +12159,8 @@ class V3ProductApiService:
         """
 
         package = result.metadata.get("post_generation_review_package")
+        raw_inspections = package.get("inspections") if isinstance(package, dict) else []
+        inspections = [dict(item) for item in raw_inspections if isinstance(item, dict)] if isinstance(raw_inspections, list) else []
         review_receipt_fields_present = isinstance(package, dict) and any(
             key in package
             for key in (
@@ -12205,7 +12203,6 @@ class V3ProductApiService:
             # The contract forbids closure errors on a complete receipt.  A
             # contradictory retained package is non-certifying and must fail
             # closed instead of authorizing the passing inspection rows.
-            inspections = package.get("inspections")
             inspected_count = len(
                 [item for item in inspections if isinstance(item, dict)]
             ) if isinstance(inspections, list) else 0
@@ -12224,7 +12221,6 @@ class V3ProductApiService:
         if review_receipt_fields_present and receipt_status is None:
             # A retained review package without an explicit receipt boundary
             # is malformed. It must not be treated as a certifying package.
-            inspections = package.get("inspections") if isinstance(package, dict) else []
             inspected_count = len([item for item in inspections if isinstance(item, dict)])
             return (
                 {
@@ -12242,7 +12238,6 @@ class V3ProductApiService:
             # A retained review package is an authoritative receipt boundary.
             # Its generated records remain append-only, but a partial, malformed,
             # or explicitly closed receipt cannot authorize public delivery.
-            inspections = package.get("inspections") if isinstance(package, dict) else []
             inspected_count = len([item for item in inspections if isinstance(item, dict)])
             return (
                 {
@@ -12256,8 +12251,6 @@ class V3ProductApiService:
                 set(),
                 set(),
             )
-        inspections = package.get("inspections") if isinstance(package, dict) else []
-        inspections = [dict(item) for item in (inspections if isinstance(inspections, list) else []) if isinstance(item, dict)]
         inspection_ids = [str(item.get("output_id") or "").strip() for item in inspections]
         ambiguous_output_ids = {value for value in inspection_ids if value and inspection_ids.count(value) > 1}
         real_review_attempted = any(
@@ -12291,9 +12284,23 @@ class V3ProductApiService:
             )
 
         statuses = {str(item.get("status") or "").strip().lower() for item in real_inspections}
+        raw_doc276_required_output_ids = package.get("doc276_face_integrity_required_output_ids", [])
+        if not isinstance(raw_doc276_required_output_ids, (list, tuple, set)):
+            return (
+                {
+                    "final_delivery_status": "withheld_review_failure",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": False,
+                    "reviewed_output_count": len(real_inspections),
+                    "final_delivery_output_count": 0,
+                    "delivery_gate_applies": True,
+                },
+                set(),
+                set(),
+            )
         doc276_required_output_ids = {
             str(value).strip()
-            for value in package.get("doc276_face_integrity_required_output_ids", [])
+            for value in raw_doc276_required_output_ids
             if str(value).strip()
         }
         inspected_output_ids = {
@@ -13393,6 +13400,15 @@ class V3ProductApiService:
             return {}
         if request_acceptance:
             projected["request_acceptance"] = request_acceptance
+        if "attempts" in value:
+            aggregate = cls._public_remote_brain_transport_attempt({
+                **value, "schema_version": "v3_brain_transport_attempt_v1",
+            })
+            if not aggregate:
+                return {}
+            aggregate.pop("schema_version")
+            aggregate.pop("stage")
+            projected.update(aggregate)
         return projected
 
     @classmethod

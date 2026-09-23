@@ -162,3 +162,20 @@ Current targeted receipt on this PR worktree:
 The full historical manifest should be rerun and its result regenerated against the
 committed PR revision before merge. This PR is archival/review-only until that evidence,
 real-provider validation and VPS acceptance are completed.
+
+## PR17 integration correction model
+
+Integration baseline: main `4d76d6f7` (PR16). The PR17 changes combine without
+conflicts; transport aggregation remains intact. Current audit found additional
+malformed retained-state cases: missing/closed receipts with non-list inspections
+can raise while counting rows; truthy non-boolean pixel certificates can claim
+public certification; malformed required-face ID collections can crash or lose
+requirements. These are public projection/final-delivery boundary defects.
+
+Normalize inspection collections once before all gate branches. Pixel certification
+must be literal `True`, using the existing final-delivery inspection predicate.
+A malformed face-requirement collection must withhold delivery rather than become
+an empty exemption list. Preserve per-output independence for well-formed receipts.
+Add adversarial regressions before implementation and obtain fresh exit codes for
+the integrated revision. Historical test counts remain historical; no VPS or real
+provider acceptance is implied by local tests.
