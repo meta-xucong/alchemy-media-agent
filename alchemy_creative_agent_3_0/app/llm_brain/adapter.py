@@ -2671,7 +2671,15 @@ def _remote_brain_transport_failure(exc: Exception) -> dict[str, Any]:
 
     for item in _exception_chain(exc):
         if isinstance(item, BrainTransportTimeoutError):
-            return item.safe_metadata()
+            failure = item.safe_metadata()
+            # Lifecycle facts describe the whole bounded request; timing and
+            # phase still describe the terminal timeout, not cumulative time.
+            aggregate = transport_failure_receipt(exc)
+            failure.update({
+                key: value for key, value in aggregate.items()
+                if key not in {"schema_version", "stage"}
+            })
+            return failure
     return {}
 
 

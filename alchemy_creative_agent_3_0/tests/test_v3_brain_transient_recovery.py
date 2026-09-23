@@ -238,6 +238,7 @@ def test_failed_serialization_recovery_preserves_bounded_attempt_receipt(monkeyp
         brain_providers._mark_transport_event("request_dispatched")  # noqa: SLF001
         brain_providers._mark_transport_event("response_started")  # noqa: SLF001
         if calls == 1:
+            brain_providers._mark_transport_event("first_content_observed")  # noqa: SLF001
             raise BrainOutputTruncated("first response hit the output limit")
         raise BrainTransportTimeoutError(
             stage="plan",
@@ -261,7 +262,7 @@ def test_failed_serialization_recovery_preserves_bounded_attempt_receipt(monkeyp
             "request_acceptance": "dispatched",
             "request_dispatched": True,
         "response_started": True,
-        "first_content_observed": False,
+        "first_content_observed": True,
         "complete_response_observed": False,
         "json_parse_started": False,
         "json_parse_completed": False,
@@ -274,6 +275,14 @@ def test_failed_serialization_recovery_preserves_bounded_attempt_receipt(monkeyp
     audit = V3LLMBrainAdapter(provider=provider).provider_failure_audit(failure.value, stage="plan")
     assert audit["remote_brain_request_started"] is True
     assert audit["remote_brain_transport_attempt"] == receipt
+    failure_facts = audit["remote_brain_transport_failure"]
+    assert failure_facts["attempts"] == 2
+    assert failure_facts["request_dispatched"] is True
+    assert failure_facts["first_content_observed"] is True
+    assert failure_facts["complete_response_observed"] is False
+    assert failure_facts["json_parse_completed"] is False
+    assert failure_facts["timeout_phase"] == "read_timeout"
+    assert "first response hit" not in str(failure_facts)
 
 
 def test_budget_guard_keeps_dispatch_evidence_from_the_prior_attempt(monkeypatch) -> None:
@@ -306,3 +315,80 @@ def test_budget_guard_keeps_dispatch_evidence_from_the_prior_attempt(monkeypatch
     assert receipt["stage"] == "plan"
     assert receipt["request_dispatched"] is True
     assert receipt["transient_recovery_attempted"] is False
+
+
+@pytest.mark.parametrize("scenario", ["ecommerce", "general_creative"])
+def test_two_stream_timeouts_preserve_content_facts_and_never_generate(monkeypatch, scenario) -> None:
+    import json
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+    from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter
+    from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+    from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+    from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import _safe_remote_brain_transport_failure
+
+    _configure_brain(monkeypatch)
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "520")
+    calls = 0
+
+    def stream(**_kwargs):
+        nonlocal calls
+        calls += 1
+        brain_providers._mark_transport_event("request_dispatched")
+        brain_providers._mark_transport_event("response_started")
+        if calls == 1:
+            brain_providers._mark_transport_event("first_content_observed")
+        raise BrainTransportTimeoutError(
+            stage="plan", timeout_seconds=7, elapsed_ms=6000 + calls,
+            timeout_phase="read_timeout", response_started=True,
+            first_content_observed=calls == 1,
+        )
+
+    class NeverImageProvider:
+        calls = 0
+
+        def generate(self, request):
+            self.calls += 1
+            raise AssertionError("Incomplete Brain response must not authorize generation")
+
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", stream)
+    image_provider = NeverImageProvider()
+    runtime = ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=V3LLMBrainProvider()),
+        generation_router=GenerationRouter(provider=image_provider),
+    )
+    result = runtime.generate_job({
+        "user_input": "Create one real-camera product image.",
+        "scenario_selection": {"scenario_id": scenario},
+        "metadata": {"requested_image_count": 1, "require_real_images": True},
+    })
+    assert result.status.value == "blocked"
+    assert result.generation_result is None
+    assert calls == 2, result.model_dump(mode="json")
+    assert image_provider.calls == 0
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["remote_brain_request_started"] is True
+    failure = outcome["remote_brain_transport_failure"]
+    attempt = outcome["remote_brain_transport_attempt"]
+    for key in ("attempts", "request_dispatched", "response_started", "first_content_observed",
+                "complete_response_observed", "json_parse_started", "json_parse_completed"):
+        assert failure[key] == attempt[key]
+    assert failure["attempts"] == 2
+    assert failure["first_content_observed"] is True
+    assert failure["complete_response_observed"] is False
+    assert failure["json_parse_started"] is False
+    assert failure["json_parse_completed"] is False
+    assert failure["elapsed_ms"] == 6002
+    assert failure["timeout_seconds"] == 7
+    assert failure["timeout_phase"] == "read_timeout"
+    for project in (_safe_remote_brain_transport_failure,
+                    V3ProductApiService._public_remote_brain_transport_failure):
+        assert project({**failure, "raw_prompt": "secret"}) == failure
+        for bad in ({"attempts": 3}, {"attempts": True}, {"request_dispatched": "yes"},
+                    {"request_acceptance": "not_started"}):
+            assert project({**failure, **bad}) == {}
+    serialized = json.dumps(outcome)
+    assert "brain-test-key" not in serialized
+    assert "brain.example.test" not in serialized
+    assert "Create one real-camera" not in serialized

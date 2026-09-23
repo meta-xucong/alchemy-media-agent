@@ -83,3 +83,9 @@ environment example, and their regression tests together.
   that crosses the shared budget fails closed before image generation.
 - No V2, Sub2API, image Provider, MCP materialization, or frontend contract is
   changed by this correction.
+
+## Related failure evidence contract
+
+[Transport failure fact aggregation repair](V3_BRAIN_TRANSPORT_FAILURE_FACT_AGGREGATION_REPAIR.md)
+defines aggregate lifecycle evidence across the bounded attempts. It does not
+change the timeout or retry limits specified here.
