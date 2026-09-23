@@ -17,6 +17,7 @@ from .contracts import (
 from .review_scope import (
     aggregate_review_outcomes,
     classify_review_outcome,
+    has_certified_provider_pixels,
     universal_review_scope,
 )
 
@@ -150,9 +151,7 @@ class OutputQualityReviewMerger:
             str(inspection.output_id).strip()
             for inspection in inspections
             if str(inspection.output_id or "").strip()
-            and str(inspection.mode or "").strip().lower() in {"vision_model", "hybrid"}
-            and str(inspection.verification_state or "").strip().lower() == "verified"
-            and bool(inspection.evidence.get("provider_pixel_result_certified"))
+            and has_certified_provider_pixels(inspection)
         }
 
     def _review_report(self, inspection: VisualInspectionReport) -> VisualQualityReviewReport:

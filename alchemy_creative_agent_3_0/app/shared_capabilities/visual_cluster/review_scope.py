@@ -95,6 +95,15 @@ def universal_review_scope() -> dict[str, Any]:
     }
 
 
+def has_certified_provider_pixels(inspection: Any) -> bool:
+    """Require an actual boolean certificate; persisted evidence is untrusted."""
+    return (
+        _text(_value(inspection, "mode")).lower() in REAL_PIXEL_REVIEW_MODES
+        and _text(_value(inspection, "verification_state")).lower() == "verified"
+        and _mapping(_value(inspection, "evidence")).get("provider_pixel_result_certified") is True
+    )
+
+
 def classify_review_outcome(
     inspection: Any,
     *,
@@ -116,26 +125,20 @@ def classify_review_outcome(
         _value(inspection, "verification_state"),
         default="unverified",
     ).lower()
-    evidence = _mapping(_value(inspection, "evidence"))
     issue_codes = _issue_codes(_value(inspection, "detected_issues"))
     evidence_issue_codes = [code for code in issue_codes if _is_evidence_only(code)]
     quality_issue_codes = [code for code in issue_codes if code not in set(evidence_issue_codes)]
-    certification_denied = provider_pixel_certified is False or evidence.get("provider_pixel_result_certified") is False
-    if provider_pixel_certified is None:
-        provider_pixel_certified = bool(evidence.get("provider_pixel_result_certified"))
+    certified = has_certified_provider_pixels(inspection) and (
+        provider_pixel_certified is None or provider_pixel_certified is True
+    )
 
     evidence_state = _evidence_state(
         mode=mode,
         verification_state=verification_state,
-        provider_pixel_certified=bool(provider_pixel_certified),
+        provider_pixel_certified=certified,
         issue_codes=issue_codes,
     )
-    has_verified_pixels = (
-        mode in REAL_PIXEL_REVIEW_MODES
-        and verification_state == "verified"
-        and not certification_denied
-    )
-    if not has_verified_pixels or (status in QUALITY_FAILURE_STATUSES and not quality_issue_codes):
+    if not certified or (status in QUALITY_FAILURE_STATUSES and not quality_issue_codes):
         quality_assessment = "not_assessed"
         quality_failure = False
         review_reason = "evidence_incomplete"
@@ -259,7 +262,7 @@ def _evidence_state(
         return "unavailable"
     if (
         verification_state == "verified"
-        and provider_pixel_certified
+        and provider_pixel_certified is True
         and not any(_is_evidence_only(code) for code in issue_codes)
     ):
         return "certified"

@@ -237,10 +237,10 @@ def test_doc118_unverified_retryable_issue_cannot_trigger_auto_retry_or_pass_pro
     )
     delivery, output_ids, asset_ids = V3ProductApiService()._public_final_delivery_projection(result)  # noqa: SLF001
     assert delivery == {
-        "final_delivery_status": "withheld_manual_confirmation",
+        "final_delivery_status": "withheld_review_failure",
         "automatic_delivery_available": False,
-        "manual_confirmation_required": True,
-        "reviewed_output_count": 0,
+        "manual_confirmation_required": False,
+        "reviewed_output_count": 1,
         "final_delivery_output_count": 0,
         "delivery_gate_applies": True,
     }

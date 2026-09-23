@@ -179,3 +179,22 @@ an empty exemption list. Preserve per-output independence for well-formed receip
 Add adversarial regressions before implementation and obtain fresh exit codes for
 the integrated revision. Historical test counts remain historical; no VPS or real
 provider acceptance is implied by local tests.
+
+## Shared certification type repair after PR18
+
+Confirmed: the merger used Python truthiness for the pixel certificate, while
+review_scope treated anything except explicit False as permission to classify
+quality. Nonempty strings and 1 could therefore disagree with the final API gate.
+
+Correction authority: a shared predicate requires real-pixel mode, verified
+inspection state, and evidence.provider_pixel_result_certified is True. The
+merger and classifier both consume it. A classifier override may restrict this
+result but may not upgrade missing, false or malformed evidence. None as the
+optional override retains its existing meaning of no override; None in the
+stored evidence is never certified. Preserve raw inspection status, receipt
+closure checks, per-output independence and valid boolean True behavior.
+
+Regression matrix: False, None, missing, strings (including false and
+not-certified), integers, floats and collections; literal True positive control;
+invalid-only and mixed sibling packages; classifier override contradictions.
+No timeout, image generation, retry budget or quality threshold changes.
