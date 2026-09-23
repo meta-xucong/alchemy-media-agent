@@ -70,3 +70,26 @@ def negative_notes_from_context(project_context: dict[str, Any]) -> list[str]:
         ],
         limit=10,
     )
+
+
+def compact_brand_visual_context(profile: Any) -> dict[str, Any]:
+    """Project factual brand direction, excluding references and private history.
+
+    Do not synthesize renderer prose or truncate a user's declared brand facts.
+    The remote Brain reconciles these defaults with current-request ownership.
+    """
+    if not isinstance(profile, dict):
+        return {}
+    context: dict[str, Any] = {}
+    for key in (
+        "brand_name", "visual_tone", "color_palette", "rejected_style_tags",
+        "layout_preference", "typography_preference", "copywriting_tone",
+    ):
+        value = profile.get(key)
+        if isinstance(value, str) and value.strip():
+            context[key] = value.strip()
+        elif isinstance(value, list):
+            values = list(dict.fromkeys(item.strip() for item in value if isinstance(item, str) and item.strip()))
+            if values:
+                context[key] = values
+    return context

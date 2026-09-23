@@ -826,6 +826,8 @@ class HumanPhotorealismLayer:
                     "reference_scope": "resolved_channels_only",
                 },
                 "universal_rendering_profile": rendering_profile,
+                "human_subject_kind": human_subject_kind,
+                "frozen_human_scope": dict(metadata.get("frozen_human_scope") or {}),
                 "has_identity_reference": has_identity_reference,
                 "brain_owned_forward_execution": brain_owned_forward_execution,
                 **(
@@ -904,6 +906,11 @@ class HumanPhotorealismLayer:
                 "doc91_human_realism_plugin": True,
                 "doc128_shared_constraint_contract": True,
                 "human_detail_scope": "hand_or_skin_only",
+                "human_subject_kind": "hand_or_skin_detail",
+                "frozen_human_scope": {
+                    "known": True, "human_present": True,
+                    "human_subject_kind": "hand_or_skin_detail", "face_visible": False,
+                },
                 HUMAN_REALISM_PLUGIN_METADATA_KEY: activation,
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": False,

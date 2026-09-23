@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .context_digest import compact_brand_visual_context
+
 import hashlib
 import json
 from typing import NoReturn
@@ -137,6 +139,17 @@ CANONICAL_FINALIZER_SYSTEM_PROMPT = (
     f"{GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS}"
 )
 
+BRAND_VISUAL_CONTEXT_INSTRUCTIONS = (
+    "When brand_visual_context (or frozen_render_context.brand_visual_context) is present, "
+    "integrate its visual tone, palette and brand presentation into your complete authored direction. "
+    "These are factual brand defaults; explicit current-request choices retain priority. "
+    "Do not substitute brand metadata for pixel review or introduce a person to illustrate product benefits. "
+    "For photographic_human_detail, render only the declared hands or limb detail; face, identity, age "
+    "and expression obligations do not apply unless a separate visible person or identity reference requires them."
+)
+SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n{BRAND_VISUAL_CONTEXT_INSTRUCTIONS}"
+CANONICAL_FINALIZER_SYSTEM_PROMPT = f"{CANONICAL_FINALIZER_SYSTEM_PROMPT}\n{BRAND_VISUAL_CONTEXT_INSTRUCTIONS}"
+
 _CANONICAL_FINALIZER_STAGES = frozenset(
     {
         "provider_prompt_finalize",
@@ -156,7 +169,8 @@ def system_prompt_for_stage(stage: str) -> str:
     return CANONICAL_FINALIZER_SYSTEM_PROMPT if stage in _CANONICAL_FINALIZER_STAGES else SYSTEM_PROMPT
 CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
-Do not infer a real person from generic photography words alone. Distinguish real humans from illustration/CG intent.
+Do not infer a real person from generic photography words or skincare/product claims alone. Distinguish real humans from illustration/CG intent.
+For human entities, put explicit boolean face_visible in attributes when known. Declare hands/limb-only subjects with human_subject_kind=hand_or_skin_detail and the typed visible_body_parts; do not call them a visible face. Product-only frames have no human entity.
 Do not invent a professional deliverable map beyond template_capability_policy. Unknown needs stay unresolved instead of enabling every capability."""
 ECOMMERCE_CONTEXT_INSTRUCTIONS = """Treat ecommerce_creative_context only as factual evidence,
 user-approved literal copy, and platform constraints. Decide the complete
@@ -535,7 +549,7 @@ def _compact_human_realism_execution_contract(shared_capabilities: dict[str, obj
         "applies": True,
         "subject_type": str(guidance.get("subject_type") or ""),
         "realism_level": str(guidance.get("realism_level") or ""),
-        "human_subject_kind": str(guidance.get("metadata", {}).get("human_subject_kind") or "person"),
+        "human_subject_kind": str(guidance.get("metadata", {}).get("human_subject_kind") or ("hand_or_skin_detail" if semantic.get("rendering_goal") == "photographic_human_detail" else "person")),
         "semantic_contract": {
             key: semantic.get(key)
             for key in (
@@ -865,6 +879,7 @@ def _compact_remote_creative_payload(
         "reference_assets": _compact_specialized_assets(request.reference_assets),
         "uploaded_assets": _compact_specialized_assets(request.uploaded_assets),
         "product_profile": _compact_remote_creative_product_profile(request.product_profile),
+        "brand_visual_context": compact_brand_visual_context(request.brand_visual_context),
         "template_capability_policy": {
             "policy_id": policy.policy_id,
             "deliverable_role_owner": policy.deliverable_role_owner,
@@ -1037,6 +1052,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         "uploaded_assets": request.uploaded_assets,
         "shared_capabilities": request.shared_capabilities,
         "product_profile": request.product_profile,
+        "brand_visual_context": compact_brand_visual_context(request.brand_visual_context),
         "capability_catalog": request.capability_catalog,
         "pre_activation_capabilities": request.pre_activation_capabilities,
         "template_capability_policy": request.template_capability_policy.model_dump(mode="json"),
@@ -1199,6 +1215,9 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
 
     context = request.metadata.get("canonical_prompt_context")
     context = dict(context) if isinstance(context, dict) else {}
+    brand_context = compact_brand_visual_context(context.get("brand_visual_context", request.brand_visual_context))
+    if brand_context:
+        context["brand_visual_context"] = brand_context
     variation_execution_contract = _validated_general_variation_contract_for_finalizer(request, context)
     is_human_naturalness_resign = request.stage == "provider_prompt_human_naturalness_resign"
     is_developmental_presence_verify = (

@@ -12858,6 +12858,7 @@ class V3ProjectModeService:
             and verification_state == "verified"
             and review_status in {"pass", "warning"}
             and public_delivery_state == "ready"
+            and (canonical_final_output_ids is None or output_id in canonical_final_output_ids)
         )
         if certified:
             certification_state = "certified"
@@ -12871,6 +12872,10 @@ class V3ProjectModeService:
             "review_mode": review_mode,
             "review_status": review_status,
             "verification_state": verification_state,
+            "quality_assessment": str(inspection.get("quality_assessment") or "not_assessed"),
+            "quality_failure": bool(inspection.get("quality_failure")),
+            "evidence_state": str(inspection.get("evidence_state") or "unavailable"),
+            "review_reason": str(inspection.get("review_reason") or "not_evaluated"),
             "certification_state": certification_state,
             "public_delivery_state": public_delivery_state,
             # Internal control used only while aggregating the ordinary

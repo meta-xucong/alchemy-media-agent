@@ -328,6 +328,8 @@ def test_public_projection_preserves_safe_capability_activation_failure() -> Non
         "status": "blocked",
         "owner": "v3_product_api_runtime",
         "failure_family": "capability_activation",
+        "quality_assessment": "not_assessed",
+        "quality_failure": False,
         "failure_code": "capability_activation_blocked",
         "reason_code": "capability_activation_blocked",
         "provider_request_started": False,
@@ -364,6 +366,8 @@ def test_local_capability_failure_persists_without_assuming_remote_receipt(
         "status": "blocked",
         "owner": "v3_product_api_runtime",
         "failure_family": "capability_activation",
+        "quality_assessment": "not_assessed",
+        "quality_failure": False,
         "failure_code": "capability_activation_blocked",
         "reason_code": "capability_activation_blocked",
         "provider_request_started": False,
@@ -1161,6 +1165,9 @@ def test_remote_finalizer_timeout_block_has_closed_lifecycle_failure_on_create_a
         "status": "blocked",
         "owner": "v3_product_api_runtime",
         "failure_family": "remote_creative_brain",
+        "failure_category": "brain_timeout",
+        "quality_assessment": "not_assessed",
+        "quality_failure": False,
         "failure_code": "remote_creative_brain_prompt_signoff_unavailable",
         "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
         "provider_request_started": False,
@@ -1659,8 +1666,36 @@ def test_v3_product_api_accepts_campaign_and_style_continuation_product_concepts
     assert "sampler" not in created.model_dump_json()
 
 
-def test_v3_product_api_generates_selects_and_applies_brand_memory_update() -> None:
+def _install_local_pixel_review_fixture(service: V3ProductApiService, tmp_path: Path) -> None:
+    """Happy-path UI tests need reviewed pixels, not a metadata-only mock pass.
+
+    The in-process reviewer and local image fixtures make no external calls.
+    Exact Job/output evidence binding still runs through production code.
+    """
+    from alchemy_creative_agent_3_0.tests.test_v3_post_generation_vision_review import (
+        _ready_resolution, _StaticVisionProvider,
+    )
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import VisionOutputInspector
+    fixture = _ready_resolution(tmp_path)
+    class BoundPixelResolver:
+        def resolve_result(self, result, project_id=None):
+            return [fixture.model_copy(update={
+                "project_id": project_id or fixture.project_id,
+                "job_id": result.creative_job.job_id,
+                "candidate_id": asset.metadata.get("selected_candidate_id"),
+                "asset_id": asset.asset_id,
+                "output_id": asset.metadata.get("candidate_metadata", {}).get("output_id"),
+            }) for asset in result.asset_pack.assets]
+    service.output_resolver = BoundPixelResolver()
+    service.vision_inspector = VisionOutputInspector(vision_provider=_StaticVisionProvider({
+        "status": "pass", "confidence": 0.98, "issue_codes": [],
+        "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
+    }))
+
+
+def test_v3_product_api_generates_selects_and_applies_brand_memory_update(tmp_path) -> None:
     service, brand_service, balance = _service("select")
+    _install_local_pixel_review_fixture(service, tmp_path)
     brand_response = service.create_brand(
         {
             "brand_id": "brand_product_api",
@@ -1772,8 +1807,9 @@ def test_minimal_ui_contract_uses_semantic_controls_and_v3_routes() -> None:
     assert status.job_id in html
 
 
-def test_framework_neutral_route_handlers_return_product_status_payloads() -> None:
+def test_framework_neutral_route_handlers_return_product_status_payloads(tmp_path) -> None:
     service, _, _ = _service("routes")
+    _install_local_pixel_review_fixture(service, tmp_path)
     handlers = V3ProductRouteHandlers(service)
 
     created = handlers.post_jobs({"user_input": "帮我做一张清爽活动海报，适合小红书。"})
@@ -1786,8 +1822,9 @@ def test_framework_neutral_route_handlers_return_product_status_payloads() -> No
     assert selected["selected_result"]["selected_asset_ids"]
 
 
-def test_framework_neutral_route_handlers_support_v37_product_aliases() -> None:
+def test_framework_neutral_route_handlers_support_v37_product_aliases(tmp_path) -> None:
     service, _, _ = _service("route_aliases")
+    _install_local_pixel_review_fixture(service, tmp_path)
     handlers = V3ProductRouteHandlers(service)
 
     brand = handlers.post_product_brands(

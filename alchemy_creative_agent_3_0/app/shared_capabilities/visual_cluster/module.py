@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..activation.human_scope import frozen_human_scope
+
 import re
 from typing import Any
 
@@ -1832,6 +1834,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         activation_plan = self._activation_plan(capability_input)
         frozen_profile = capability_input.metadata.get("visual_task_profile")
         frozen_profile = dict(frozen_profile) if isinstance(frozen_profile, dict) else {}
+        human_scope = frozen_human_scope(frozen_profile)
         rendering_intent = frozen_profile.get("rendering_intent")
         rendering_intent = dict(rendering_intent) if isinstance(rendering_intent, dict) else {}
         developmental_age_intent = str(
@@ -1852,7 +1855,15 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "uploaded_asset_roles": uploaded_asset_roles,
             # This is a frozen semantic/activation binding, not a local
             # request to compose Human Realism words into a provider prompt.
-            "human_realism_execution_required": "human_realism" in active_capability_ids,
+            "human_realism_execution_required": (
+                "human_realism" in active_capability_ids and human_scope.get("human_present") is not False
+            ),
+            "disable_human_photorealism": (
+                human_scope.get("human_present") is False
+                or capability_input.metadata.get("disable_human_photorealism", False)
+            ),
+            "human_subject_kind": human_scope.get("human_subject_kind", "person"),
+            "frozen_human_scope": human_scope,
             "frozen_rendering_intent": rendering_intent,
             "frozen_developmental_age_intent": developmental_age_intent,
             "project_context_summary": {

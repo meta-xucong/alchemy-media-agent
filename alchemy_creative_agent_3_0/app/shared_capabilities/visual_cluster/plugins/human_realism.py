@@ -44,6 +44,7 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             # prose.  It is copied from the active shared semantic
             # contract so stale mutable metadata cannot opt a job in.
             "human_authenticity_contract": human_authenticity_contract,
+            "human_scope": as_dict(metadata.get("frozen_human_scope")),
             "human_naturalness_verdict_required": (
                 semantic_contract.get("expression_ownership_requirement")
                 == "situation_owned_unless_explicit_user_direction"
