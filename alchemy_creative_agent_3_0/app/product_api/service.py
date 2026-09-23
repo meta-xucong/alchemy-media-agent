@@ -16071,8 +16071,15 @@ class V3ProductApiService:
     def _planned_job_id_for_request(self, request: CreateCreativeJobRequest) -> str:
         """Mirror ScenarioRuntime's deterministic job-id inputs before Brain."""
 
-        payload = self._runtime_request_payload(request)
-        runtime_request = ScenarioRuntimeRequest.model_validate(payload)
+        # Identity needs no asset materialization or admission construction.
+        # Use the same four inputs as _runtime_request_payload, without its
+        # side effects, so admission can bind the final Job before Brain runs.
+        runtime_request = ScenarioRuntimeRequest(
+            user_input=request.user_input,
+            optional_brand_id=request.effective_brand_id,
+            scenario_selection=self._runtime_scenario_selection_without_retired_ecommerce_execution(request),
+            metadata=self._runtime_metadata_without_retired_ecommerce_execution(request),
+        )
         resolution = self.scenario_runtime.scenario_registry.resolve(runtime_request.scenario_selection)
         return self.scenario_runtime._runtime_job_id(runtime_request, resolution)  # noqa: SLF001
 
@@ -17159,7 +17166,7 @@ class V3ProductApiService:
         ).hexdigest()
         return build_product_truth_admission(
             project_id=str(metadata.get("project_id") or "ecommerce_project"),
-            job_id=str(metadata.get("v3_job_instance_id") or "pending_ecommerce_job"),
+            job_id=self._planned_job_id_for_request(request),
             sources=sources,
             product_truth_plan_digest=plan_digest,
         )

@@ -75,10 +75,10 @@ GATE_A_BASELINE = {
     },
     "general_multi": {
         "plan": (21480, 14997, 40889, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
-        # Doc299 closes the finalizer lifecycle/source-projection contract;
-        # Doc306 adds the required semantic variation evidence fields; keep
-        # the measured current schema hash instead of the retired baseline.
-        "provider_prompt_finalize": (5359, 65281, 88469, "d43ce91665ce9b0b9b0e50543db67f327ec246fe995c3db3897914d823737c9d"),
+        # DOC323 remeasured the current per-output variation receipt schema:
+        # the frozen contract digest and semantic axes/purpose are asserted
+        # below. Historical Gate A byte measurements remain unchanged.
+        "provider_prompt_finalize": (5359, 65281, 88469, "7eef15ecc60258514b352223f12cc6b0f0014c7fb6a28ffd1242d531ca3c09f0"),
     },
     "professional_ecommerce": {
         "plan": (21480, 21210, 47495, "5c485b5493ae3538fe006292cf296adde4e1a3d464fd01d0964c7dab33badd5b"),
@@ -362,6 +362,14 @@ def test_doc290_normal_entry_dispatch_baseline(captured_entry):
         assert state.image_capture.requests == []
     if state.case == "general_multi":
         assert state.source_calls == {"brain": 1}
+        receipt_schema = finalizer["return_schema"]["canonical_provider_prompts"][0]["variation_execution_receipt"]
+        assert set(receipt_schema) == {
+            "contract_digest", "contract_version", "output_index", "owner",
+            "semantic_output_purpose", "semantic_variation_axes", "status",
+        }
+        assert receipt_schema["contract_digest"] == context["variation_execution_contract"]["contract_digest"]
+        assert receipt_schema["owner"] == "remote_v3_llm_brain"
+        assert receipt_schema["contract_version"] == "v3_general_variation_execution_v1"
 
 
 def test_doc290_original_user_input_is_lossless_at_dispatch(captured_entry):
@@ -717,6 +725,12 @@ def test_doc290_combined_recovery_uses_one_deadline(tmp_path, monkeypatch, offli
         else min(300.0, value)
         for index, value in enumerate(remaining)
     ]
+    # Socket-idle protection is narrower than the logical stage budget.
+    # The current first-semantic watchdog is 60s, with a 1s socket allowance;
+    # it does not reset the shared 520s deadline or create more attempts.
+    assert brain_providers._stream_first_semantic_timeout_seconds() == 60.0
+    assert brain_providers._stream_semantic_idle_timeout_seconds() <= 60.0
+    expected_read_timeouts = [min(61.0, stage_window) for stage_window in expected_read_timeouts]
     assert [item["timeout"]["read"] for item in state.captures] == expected_read_timeouts
     assert all(item["user"]["user_input"] == original for item in state.captures)
     assert all(item.user_input == original for item in state.requests)

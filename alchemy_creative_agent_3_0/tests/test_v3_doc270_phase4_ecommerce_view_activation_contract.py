@@ -466,7 +466,8 @@ def test_doc270_phase4_activated_public_status_preserves_generated_review_lifecy
         assert private not in public_text
 
 
-def test_doc280_public_review_items_restore_per_output_certification_projection() -> None:
+@pytest.mark.parametrize("automatic", [True, False, None, 1, "true", "false", "missing"])
+def test_doc280_public_review_items_restore_per_output_certification_projection(automatic) -> None:
     output_id = "v3_output_doc280_public_review"
     job_status = SimpleNamespace(
         metadata={
@@ -489,14 +490,21 @@ def test_doc280_public_review_items_restore_per_output_certification_projection(
             },
         }
     )
+    if automatic != "missing":
+        job_status.metadata["final_delivery"]["automatic_delivery_available"] = automatic
     record = SimpleNamespace(output_id=output_id, metadata={})
 
     projection = V3ProjectModeService._public_output_review_projection(job_status, record)  # noqa: SLF001
 
     assert projection["review_status"] == "pass"
     assert projection["verification_state"] == "verified"
-    assert projection["certification_state"] == "certified"
-    assert projection["public_delivery_state"] == "ready"
+    if automatic is True:
+        assert projection["certification_state"] == "certified"
+        assert projection["public_delivery_state"] == "ready"
+        assert V3ProjectModeService._review_projection_allows_project_delivery(projection) is True
+    else:
+        assert projection["certification_state"] != "certified"
+        assert V3ProjectModeService._review_projection_allows_project_delivery(projection) is False
 
 
 def test_doc270_phase4_real_registry_replay_is_frozen_without_second_analysis(tmp_path) -> None:
