@@ -79,7 +79,7 @@ def compose_prompt_plan(
     asset_sections = _asset_sections_for_compiler(asset_context)
     visual_grammar_section = _visual_grammar_section_for_compiler(visual_grammar_contract)
     qr_excluded = _qr_explicitly_excluded(user_prompt)
-    task_intent_payload = _task_intent_payload(orchestrator_decision)
+    task_intent_payload = _task_intent_payload(orchestrator_decision, asset_context=asset_context)
     language_lock = _language_lock_from_task_intent(task_intent_payload)
     information_integrity = (
         visual_grammar_contract.get("information_integrity")
@@ -222,6 +222,10 @@ def compose_prompt_plan(
         style_basis=style_basis,
         user_variables={
             "user_prompt": user_prompt,
+            "qr_preservation_enabled": (
+                _should_use_claude_final_prompt(orchestrator_decision)
+                and orchestrator_decision.qr_preservation_enabled is True
+            ),
             "source_mode": mode,
             "primary_case_id": primary.case_id if primary else None,
             "orchestrator_decision_id": orchestrator_decision.decision_id if orchestrator_decision else None,
@@ -986,10 +990,36 @@ def _append_qr_exclusion_instruction(prompt: str, *, qr_excluded: bool) -> str:
     return f"{prompt_text}\n\n{instruction}" if prompt_text else instruction
 
 
-def _task_intent_payload(orchestrator_decision: CreativeOrchestratorDecision | None) -> dict[str, object]:
+def _task_intent_payload(
+    orchestrator_decision: CreativeOrchestratorDecision | None,
+    *, asset_context: dict | None = None,
+) -> dict[str, object]:
     if not orchestrator_decision or not orchestrator_decision.task_intent:
         return {}
-    return orchestrator_decision.task_intent.model_dump(mode="json", exclude_none=True)
+    payload = orchestrator_decision.task_intent.model_dump(mode="json", exclude_none=True)
+    if not (
+        _should_use_claude_final_prompt(orchestrator_decision)
+        and orchestrator_decision.qr_preservation_enabled is True
+        and isinstance(asset_context, dict)
+    ):
+        return payload
+    source_sets: list[set[str]] = []
+    for key in ("uploaded_assets", "provider_input_images"):
+        rows = asset_context.get(key)
+        if not isinstance(rows, list) or not rows or any(
+            not isinstance(row, dict) or not isinstance(row.get("asset_id"), str)
+            or not row["asset_id"] for row in rows
+        ):
+            return payload
+        source_sets.append({row["asset_id"] for row in rows})
+    if source_sets[0] == source_sets[1] and len(source_sets[0]) == 1:
+        # No semantic source selection exists for one identical current input.
+        # Keep the Brain's intent/placement; bind the opaque local ID ourselves.
+        source_id = next(iter(source_sets[0]))
+        for slot in payload.get("slot_plan", []):
+            if isinstance(slot, dict) and slot.get("slot") == "qr_code":
+                slot["source_asset_id"] = source_id
+    return payload
 
 
 def _language_lock_from_task_intent(task_intent: dict[str, object]) -> dict[str, object]:

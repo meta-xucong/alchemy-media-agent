@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 
 
 RunStatus = Literal[
@@ -376,6 +376,14 @@ class OrchestratorTaskIntent(BaseModel):
 
 
 class CreativeOrchestratorDecision(BaseModel):
+    qr_preservation_enabled: bool = False
+
+    @field_validator("qr_preservation_enabled", mode="before")
+    @classmethod
+    def strict_optional_qr_permission(cls, value: Any) -> bool:
+        # Optional enhancement permission never coerces strings or numbers.
+        return value is True
+
     decision_id: str
     provider: str = "deterministic-fallback"
     mode: Literal["template_customize", "smart_enhance", "revision", "batch"]
