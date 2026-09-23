@@ -251,6 +251,15 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
         return {}
     if request_acceptance is not None and response_started and request_acceptance != "dispatched":
         return {}
+    aggregate = {}
+    if "attempts" in value:
+        aggregate = _safe_remote_brain_transport_attempt({
+            **value, "schema_version": "v3_brain_transport_attempt_v1",
+        })
+        if not aggregate:
+            return {}
+        aggregate.pop("schema_version")
+        aggregate.pop("stage")
     return {
         "schema_version": "v3_brain_transport_failure_v1",
         "stage": stage,
@@ -268,6 +277,7 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
         "complete_response_observed": complete_response_observed,
         "json_parse_started": json_parse_started,
         "json_parse_completed": json_parse_completed,
+        **aggregate,
     }
 
 

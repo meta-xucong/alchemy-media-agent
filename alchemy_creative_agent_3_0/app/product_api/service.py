@@ -13250,6 +13250,15 @@ class V3ProductApiService:
             return {}
         if request_acceptance:
             projected["request_acceptance"] = request_acceptance
+        if "attempts" in value:
+            aggregate = cls._public_remote_brain_transport_attempt({
+                **value, "schema_version": "v3_brain_transport_attempt_v1",
+            })
+            if not aggregate:
+                return {}
+            aggregate.pop("schema_version")
+            aggregate.pop("stage")
+            projected.update(aggregate)
         return projected
 
     @classmethod
