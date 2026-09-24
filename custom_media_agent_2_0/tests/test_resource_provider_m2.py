@@ -360,3 +360,24 @@ def test_case_thumbnail_prewarm_uses_current_cases(monkeypatch) -> None:
     assert result.failed == 0
     assert result.skipped == 2
     assert calls == [("images/poster_case147/output.jpg", "grid")]
+
+
+def test_case_thumbnail_prewarm_contains_cache_permission_failure(monkeypatch) -> None:
+    repository.reset()
+    _, seed_cases = load_seed_cases()
+    current_cases = [seed_cases[0].model_copy(update={"preview_url": "/api/v2/case-thumbnails/images/poster_case147/output.jpg"})]
+    repository.upsert_provider(build_evolinkai_provider().model_copy(update={"active_index_version": current_cases[0].index_version}))
+    repository.replace_cases_for_provider(EVOLINKAI_PROVIDER_ID, current_cases)
+
+    monkeypatch.setattr("app.services.case_thumbnail_prewarm.bootstrap_v2_repository", lambda seed_cases=True: None)
+
+    def fail_cache_write(asset_path: str, variant: str = "grid"):
+        raise PermissionError(13, "Permission denied", "/var/lib/alchemy/v2/case_thumbnails/aa/output.webp.tmp")
+
+    monkeypatch.setattr("app.services.case_thumbnail_prewarm.read_case_thumbnail", fail_cache_write)
+
+    result = prewarm_case_thumbnails(variant="grid", limit=0)
+
+    assert result.attempted == 1
+    assert result.succeeded == 0
+    assert result.failed == 1

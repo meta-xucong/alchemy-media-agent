@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from app.repositories import repository
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_assets import read_case_thumbnail
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,7 +37,15 @@ def prewarm_case_thumbnails(*, variant: str = "grid", limit: int = 0) -> CaseThu
     failed = 0
     for asset_path in asset_paths:
         attempted += 1
-        if read_case_thumbnail(asset_path, variant=variant):
+        try:
+            thumbnail = read_case_thumbnail(asset_path, variant=variant)
+        except OSError:
+            # Thumbnail prewarming is auxiliary.  A stale cache ownership
+            # issue must not turn a successfully published case index into a
+            # failed provider sync; the next read can retry this asset.
+            logger.warning("case_thumbnail_prewarm_failed asset_path=%s", asset_path, exc_info=True)
+            thumbnail = None
+        if thumbnail:
             succeeded += 1
         else:
             failed += 1
