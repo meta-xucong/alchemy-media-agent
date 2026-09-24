@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import time
 
 from app.config import ensure_runtime_dirs, settings
 from app.providers.evolinkai import EVOLINKAI_PROVIDER_ID
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.case_thumbnail_prewarm import prewarm_case_thumbnails
-from app.services.resource_sync import sync_resource_provider
+from app.services.resource_sync import describe_sync_error, sync_resource_provider
+
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -52,7 +56,14 @@ def main() -> None:
                 flush=True,
             )
         except Exception as exc:
-            print({"provider_id": args.provider_id, "status": "failed", "error": repr(exc)}, flush=True)
+            error = describe_sync_error(exc)
+            logger.exception(
+                "resource_sync_worker_failed provider_id=%s error_type=%s path=%s",
+                args.provider_id,
+                error.get("error_type"),
+                error.get("path"),
+            )
+            print({"provider_id": args.provider_id, "status": "failed", "error": error}, flush=True)
 
         if args.once:
             return

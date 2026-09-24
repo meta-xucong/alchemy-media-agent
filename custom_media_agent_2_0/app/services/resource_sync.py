@@ -17,6 +17,29 @@ from app.services.ids import new_id
 SyncMode = Literal["auto", "seed", "remote"]
 
 
+def describe_sync_error(exc: BaseException) -> dict[str, object]:
+    """Return safe, structured diagnostics for a sync failure.
+
+    The sync state machine must keep its old-index fallback behavior.  This
+    helper only makes the failure observable enough to identify the failing
+    stage/path on a remote worker; it must not be used as a creative fallback.
+    """
+
+    details: dict[str, object] = {
+        "error_type": type(exc).__name__,
+        "message": str(exc) or repr(exc),
+    }
+    if isinstance(exc, PermissionError):
+        details["cause_code"] = "permission_denied"
+    if getattr(exc, "errno", None) is not None:
+        details["errno"] = exc.errno
+    if getattr(exc, "filename", None) is not None:
+        details["path"] = str(exc.filename)
+    if getattr(exc, "filename2", None) is not None:
+        details["path2"] = str(exc.filename2)
+    return details
+
+
 def list_resource_providers() -> list[ResourceProvider]:
     ensure_default_provider()
     return repository.list_providers()
@@ -86,13 +109,15 @@ def sync_resource_provider(provider_id: str, mode: SyncMode = "auto") -> Provide
                 return repository.save_sync_run(completed)
         source_version, cases, adapter = _load_provider_cases(mode)
     except Exception as exc:
+        error_details = describe_sync_error(exc)
         failed = sync_run.model_copy(
             update={
                 "status": "failed",
                 "finished_at": utc_now(),
                 "error": {
                     "error_code": "provider_sync_failed",
-                    "message": str(exc),
+                    "message": error_details["message"],
+                    **{key: value for key, value in error_details.items() if key != "message"},
                     "retryable": True,
                     "safe_fallback": "Keep the previously active case index.",
                 },

@@ -16,6 +16,25 @@ from app.services.resource_sync_scheduler import ResourceSyncScheduler
 from app.services.case_parser import MarkdownCaseDocument, parse_evolinkai_markdown_cases
 
 
+def test_sync_error_diagnostics_preserve_permission_path() -> None:
+    error = PermissionError(13, "Permission denied", "/var/lib/alchemy/v2/remote_snapshots/test.zip")
+
+    assert resource_sync.describe_sync_error(error) == {
+        "error_type": "PermissionError",
+        "message": "[Errno 13] Permission denied: '/var/lib/alchemy/v2/remote_snapshots/test.zip'",
+        "cause_code": "permission_denied",
+        "errno": 13,
+        "path": "/var/lib/alchemy/v2/remote_snapshots/test.zip",
+    }
+
+
+def test_sync_error_diagnostics_keep_generic_error_compatible() -> None:
+    assert resource_sync.describe_sync_error(RuntimeError("provider unavailable")) == {
+        "error_type": "RuntimeError",
+        "message": "provider unavailable",
+    }
+
+
 def test_markdown_case_parser_handles_repo_heading_and_prompt() -> None:
     markdown = """
 # Example
