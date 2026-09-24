@@ -2616,6 +2616,15 @@ button.v2-template-preview {
   background: rgba(255, 255, 252, 0.68);
 }
 
+.retention-settings-form {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 252, 0.68);
+}
+
 .billing-toggle-row {
   min-height: 42px;
   display: flex;

@@ -465,6 +465,18 @@ class RuntimeProviderSettingsRequest(BaseModel):
     lab_doubao_vision_base_url: str | None = Field(default=None, max_length=512)
 
 
+class RetentionSettingsRequest(BaseModel):
+    delete_protected_data: bool = False
+    retention_days: int = Field(default=30, ge=1, le=3650)
+
+
+class RetentionSettingsResponse(BaseModel):
+    delete_protected_data: bool
+    retention_days: int
+    persisted: bool
+    updated_at: str | None = None
+
+
 class RuntimeProviderSettingsResponse(BaseModel):
     default_image_provider: str
     default_image_model: str

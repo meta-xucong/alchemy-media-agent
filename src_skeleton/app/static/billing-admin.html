@@ -46,6 +46,32 @@
             </div>
           </form>
         </section>
+
+        <section class="panel flow-section retention-console-panel">
+          <div class="panel-head section-title">
+            <div>
+              <p class="eyebrow">Storage Maintenance</p>
+              <h3>数据自动清理</h3>
+            </div>
+            <span id="retentionConsoleState" class="state-pill">未加载</span>
+          </div>
+
+          <form id="retentionSettingsForm" class="retention-settings-form" aria-live="polite">
+            <label class="billing-toggle-row">
+              <input id="retentionProtectedData" type="checkbox" />
+              <span>同时清理成功生成的图片、用户历史、项目记录、上传素材、活动任务和未知 MCP 任务</span>
+            </label>
+            <label class="field">
+              <span>保留天数</span>
+              <input id="retentionDays" type="number" min="1" max="3650" step="1" value="30" required />
+              <small class="micro-copy">默认 30 天；现有失败任务和缓存规则保持不变。</small>
+            </label>
+            <div class="billing-actions">
+              <button id="retentionSaveBtn" class="button primary" type="submit">保存清理设置</button>
+              <span id="retentionSettingsHint" class="micro-copy">只有管理员可以修改。</span>
+            </div>
+          </form>
+        </section>
       </main>
     </div>
 

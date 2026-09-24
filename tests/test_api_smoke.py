@@ -4015,3 +4015,25 @@ def test_runtime_provider_settings_apply_when_persistence_fails(monkeypatch):
         assert settings.image_work_intensity == "atelier"
     finally:
         settings.image_work_intensity = original_intensity
+
+
+def test_retention_admin_settings_default_and_persist(monkeypatch):
+    async def allow_admin(*args, **kwargs):
+        return {"is_admin": True}
+
+    monkeypatch.setattr(main_module, "_require_veyra_admin", allow_admin)
+    client = TestClient(app)
+
+    initial = client.get("/v1/admin/retention/settings")
+    assert initial.status_code == 200
+    assert initial.json()["retention_days"] == 30
+    assert initial.json()["delete_protected_data"] is False
+
+    saved = client.post(
+        "/v1/admin/retention/settings",
+        json={"delete_protected_data": True, "retention_days": 45},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["retention_days"] == 45
+    assert saved.json()["delete_protected_data"] is True
+    assert (media_store.root / "retention_settings.json").exists()

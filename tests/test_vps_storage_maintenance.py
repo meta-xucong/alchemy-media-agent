@@ -19,6 +19,9 @@ build_inventory = _MODULE.build_inventory
 candidates = _MODULE.candidates
 quarantine = _MODULE.quarantine
 delete_expired_failures = _MODULE.delete_expired_failures
+expired_history_records = _MODULE.expired_history_records
+load_retention_policy = _MODULE.load_retention_policy
+prune_history_file = _MODULE.prune_history_file
 Candidate = _MODULE.Candidate
 
 
@@ -118,10 +121,76 @@ def test_recent_failed_job_remains_visible_to_the_cleanup_scan(tmp_path: Path) -
     assert items == []
 
 
-def test_vps_timer_runs_weekly_on_sunday_at_four_without_jitter() -> None:
+def test_protected_data_requires_explicit_opt_in(tmp_path: Path) -> None:
+    root = tmp_path / "media"
+    protected_paths = [
+        root / "v3_projects/project_old/project.json",
+        root / "v3_jobs/job_old.json",
+        root / "v3_outputs/v3_output_cccccccccccccccccccc/output.json",
+        root / "v3_uploads/v3_asset_old/asset.json",
+        root / "v3_mcp_materializations/handoff_old.json",
+    ]
+    for path in protected_paths:
+        _write(path, {"created_at": "2020-01-01T00:00:00+00:00", "updated_at": "2020-01-01T00:00:00+00:00"})
+        old = datetime.now(timezone.utc) - timedelta(days=45)
+        os.utime(path, (old.timestamp(), old.timestamp()))
+    history = root / "history/outputs.jsonl"
+    _write(history, {"id": "out_old", "created_at": "2020-01-01T00:00:00+00:00"})
+
+    inventory = build_inventory(root)
+    assert candidates(root, inventory, retention_days=30, now=datetime.now(timezone.utc)) == []
+    items = candidates(
+        root,
+        inventory,
+        retention_days=30,
+        delete_protected_data=True,
+        now=datetime.now(timezone.utc),
+    )
+    assert {item.kind for item in items} == {"protected_data"}
+    assert len(expired_history_records(history, retention_days=30, now=datetime.now(timezone.utc))) == 1
+
+
+def test_prune_history_file_keeps_recent_records_and_quarantines_expired(tmp_path: Path) -> None:
+    root = tmp_path / "media"
+    history = root / "history/outputs.jsonl"
+    history.parent.mkdir(parents=True)
+    history.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "out_old", "created_at": "2020-01-01T00:00:00+00:00"}),
+                json.dumps({"id": "out_recent", "created_at": "2099-01-01T00:00:00+00:00"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    trash = root / ".v3_maintenance_trash/run"
+    trash.mkdir(parents=True)
+    manifest: list[dict] = []
+    assert prune_history_file(
+        root,
+        retention_days=30,
+        now=datetime.now(timezone.utc),
+        trash=trash,
+        manifest=manifest,
+    ) == 1
+    remaining = history.read_text(encoding="utf-8")
+    assert "out_old" not in remaining
+    assert "out_recent" in remaining
+    assert (trash / "history/outputs.expired.jsonl").exists()
+    assert manifest[0]["records"] == 1
+
+
+def test_retention_policy_defaults_to_thirty_days_and_protected_off(tmp_path: Path) -> None:
+    policy = load_retention_policy(tmp_path / "missing.json")
+    assert policy.retention_days == 30
+    assert policy.delete_protected_data is False
+
+
+def test_vps_timer_runs_daily_at_four_without_jitter() -> None:
     root = Path(__file__).parents[1] / "ops" / "vps-storage-maintenance"
     timer = (root / "systemd" / "alchemy-v3-storage-maintenance.timer").read_text(encoding="utf-8")
     service = (root / "systemd" / "alchemy-v3-storage-maintenance.service").read_text(encoding="utf-8")
-    assert "OnCalendar=Sun *-*-* 04:00:00" in timer
+    assert "OnCalendar=*-*-* 20:00:00 UTC" in timer
     assert "RandomizedDelaySec=0" in timer
     assert "V3_FAILURE_RETENTION_DAYS=7" in service

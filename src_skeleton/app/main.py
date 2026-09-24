@@ -56,6 +56,8 @@ from app.schemas import (
     ReviseImageRequest,
     RuntimeProviderSettingsRequest,
     RuntimeProviderSettingsResponse,
+    RetentionSettingsRequest,
+    RetentionSettingsResponse,
 )
 from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content, store_asset_content_bytes
 from app.services.alchemy_lab import (
@@ -85,6 +87,7 @@ from app.services.events import format_sse_events
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
 from app.services.media_acceleration import signed_output_url as signed_v1_output_url
+from app.services.retention_settings import get_retention_settings, save_retention_settings
 from app.services.session_service import create_session, handle_message
 from app.services.veyra_auth import (
     VeyraAuthDisabled,
@@ -329,6 +332,25 @@ def v3_frontend_app(request: Request):
 @app.get("/admin/billing")
 def billing_admin_app(request: Request):
     return _asset_versioned_shell_response(STATIC_DIR / "billing-admin.html")
+
+
+@app.get("/v1/admin/retention/settings", response_model=RetentionSettingsResponse)
+async def get_retention_settings_endpoint(request: Request, authorization: str = Header(default="")):
+    await _require_veyra_admin(request, authorization)
+    return get_retention_settings()
+
+
+@app.post("/v1/admin/retention/settings", response_model=RetentionSettingsResponse)
+async def update_retention_settings_endpoint(
+    body: RetentionSettingsRequest,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    await _require_veyra_admin(request, authorization)
+    return save_retention_settings(
+        delete_protected_data=body.delete_protected_data,
+        retention_days=body.retention_days,
+    )
 
 
 @app.get("/share/image", response_class=HTMLResponse)
@@ -2173,6 +2195,21 @@ async def _veyra_account(user_id: int):
 
 def _is_veyra_admin_account(account) -> bool:
     return str(getattr(account, "role", "") or "").lower() == "admin"
+
+
+async def _require_veyra_admin(request: Request, authorization: str = ""):
+    if not settings.veyra_auth_enabled:
+        raise HTTPException(
+            status_code=401,
+            detail={"error_code": "veyra_session_required", "message": "Veyra admin session is required."},
+        )
+    context = await _veyra_history_context(request, authorization)
+    if not context.get("is_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error_code": "veyra_admin_required", "message": "Veyra admin role is required."},
+        )
+    return context
 
 
 async def _proxy_v2_request(path: str, request: Request) -> Response:

@@ -4,7 +4,8 @@
 The default operation is read-only. ``--apply`` moves only proven-safe
 objects into a quarantine directory. Failed terminal jobs and their output
 records expire from the user-visible V3 store after the configured failure
-retention; successful deliveries and project/upload records are untouched.
+retention. Successful deliveries and project/upload records remain protected
+unless the admin retention policy explicitly enables protected-data cleanup.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -25,7 +27,25 @@ JOB_ID_RE = re.compile(r"^job_[A-Za-z0-9_-]+$")
 OUTPUT_ID_RE = re.compile(r"^v3_output_[a-f0-9]{20}$")
 MOCK_PROVIDERS = {"v3_mock_contract_fixture", "mock", "test"}
 CACHE_DIRS = ("provider_reference_cache", "share_cache")
+PROTECTED_DIRS = (
+    "v3_projects",
+    "v3_jobs",
+    "v3_outputs",
+    "v3_uploads",
+    "v3_mcp_materializations",
+)
 FAILURE_STATUSES = {"failed", "blocked", "not_found"}
+DEFAULT_RETENTION_DAYS = 30
+MIN_RETENTION_DAYS = 1
+MAX_RETENTION_DAYS = 3650
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    retention_days: int = DEFAULT_RETENTION_DAYS
+    delete_protected_data: bool = False
+    source: str = "default"
+    warning: str | None = None
 
 
 @dataclass
@@ -47,6 +67,44 @@ class Candidate:
     path: Path
     size: int
     reason: str
+
+
+def load_retention_policy(path: Path | None, *, fallback_days: int = DEFAULT_RETENTION_DAYS) -> RetentionPolicy:
+    fallback_days = _normalize_retention_days(fallback_days)
+    if path is None:
+        return RetentionPolicy(retention_days=fallback_days)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return RetentionPolicy(retention_days=fallback_days)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return RetentionPolicy(
+            retention_days=fallback_days,
+            warning=f"retention settings could not be read: {type(exc).__name__}",
+        )
+    if not isinstance(payload, dict):
+        return RetentionPolicy(
+            retention_days=fallback_days,
+            warning="retention settings must be a JSON object",
+        )
+    raw_days = payload.get("retention_days", fallback_days)
+    try:
+        retention_days = _normalize_retention_days(raw_days)
+    except (TypeError, ValueError):
+        retention_days = fallback_days
+    return RetentionPolicy(
+        retention_days=retention_days,
+        delete_protected_data=payload.get("delete_protected_data") is True,
+        source=str(path),
+    )
+
+
+def _normalize_retention_days(value: object) -> int:
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RETENTION_DAYS
+    return max(MIN_RETENTION_DAYS, min(MAX_RETENTION_DAYS, days))
 
 
 def _json(path: Path) -> dict[str, Any] | list[Any] | None:
@@ -153,6 +211,19 @@ def _record_expired(record: dict[str, Any], *, retention_days: int, now: datetim
     return now - updated_at.astimezone(timezone.utc) >= timedelta(days=max(1, retention_days))
 
 
+def _history_record_expired(record: dict[str, Any], *, retention_days: int, now: datetime) -> bool:
+    value = str(record.get("created_at") or record.get("updated_at") or "").strip()
+    if not value:
+        return False
+    try:
+        created_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return now - created_at.astimezone(timezone.utc) >= timedelta(days=max(1, retention_days))
+
+
 def _size(path: Path) -> int:
     if path.is_file():
         return path.stat().st_size
@@ -169,12 +240,27 @@ def _mock_job(job: dict[str, Any]) -> bool:
     return False
 
 
+def _protected_candidates(root: Path, *, retention_days: int, now: datetime) -> list[Candidate]:
+    cutoff = timedelta(days=max(1, retention_days))
+    result: list[Candidate] = []
+    for name in PROTECTED_DIRS:
+        storage_root = root / name
+        if not storage_root.exists():
+            continue
+        for path in storage_root.iterdir():
+            if path.name.startswith(".") or not _old_enough(path, cutoff=cutoff, now=now):
+                continue
+            result.append(Candidate("protected_data", path, _size(path), f"expired_{name}"))
+    return result
+
+
 def candidates(
     root: Path,
     inventory: Inventory,
     *,
     retention_days: int,
     failure_retention_days: int = 7,
+    delete_protected_data: bool = False,
     now: datetime,
 ) -> list[Candidate]:
     result: list[Candidate] = []
@@ -215,6 +301,13 @@ def candidates(
             continue
         if _old_enough(path, cutoff=cutoff, now=now):
             result.append(Candidate("mock_output", path, _size(path), "unreferenced_mock_output"))
+    if delete_protected_data:
+        existing_paths = {item.path.resolve() for item in result}
+        result.extend(
+            item
+            for item in _protected_candidates(root, retention_days=retention_days, now=now)
+            if item.path.resolve() not in existing_paths
+        )
     return result
 
 
@@ -232,6 +325,77 @@ def delete_expired_failures(root: Path, items: list[Candidate]) -> list[str]:
             item.path.unlink()
         deleted.append(str(item.path.relative_to(root)))
     return deleted
+
+
+def expired_history_records(path: Path, *, retention_days: int, now: datetime) -> list[str]:
+    if not path.exists():
+        return []
+    expired: list[str] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and _history_record_expired(record, retention_days=retention_days, now=now):
+            expired.append(line)
+    return expired
+
+
+def prune_history_file(
+    root: Path,
+    *,
+    retention_days: int,
+    now: datetime,
+    trash: Path,
+    manifest: list[dict[str, Any]],
+) -> int:
+    history = root / "history" / "outputs.jsonl"
+    if not history.exists():
+        return 0
+    try:
+        lines = history.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return 0
+    kept: list[str] = []
+    removed: list[str] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        if isinstance(record, dict) and _history_record_expired(record, retention_days=retention_days, now=now):
+            removed.append(line)
+        else:
+            kept.append(line)
+    if not removed:
+        return 0
+
+    backup = trash / "history" / "outputs.expired.jsonl"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    backup.write_text("\n".join(removed) + "\n", encoding="utf-8")
+    temporary = history.with_suffix(history.suffix + ".tmp")
+    temporary.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+    temporary.replace(history)
+    manifest.append(
+        {
+            "kind": "expired_history",
+            "path": str(history.relative_to(root)),
+            "size": backup.stat().st_size,
+            "reason": "expired_user_history",
+            "records": len(removed),
+            "quarantine_path": str(backup.relative_to(root)),
+        }
+    )
+    return len(removed)
 
 
 def _safe_child(root: Path, path: Path) -> None:
@@ -276,35 +440,67 @@ def purge_trash(root: Path, *, retention_days: int, now: datetime) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="V1 V3 media storage root")
-    parser.add_argument("--retention-days", type=int, default=30)
+    parser.add_argument("--retention-days", type=int, default=None)
     parser.add_argument("--failure-retention-days", type=int, default=7)
     parser.add_argument("--trash-retention-days", type=int, default=7)
+    parser.add_argument(
+        "--settings-file",
+        type=Path,
+        default=None,
+        help="JSON policy file written by the admin panel; defaults to <root>/retention_settings.json",
+    )
+    parser.add_argument(
+        "--delete-protected",
+        action="store_true",
+        help="also expire successful outputs, history, projects, uploads, jobs, and MCP materializations",
+    )
     parser.add_argument("--apply", action="store_true", help="quarantine proven-safe candidates")
     parser.add_argument("--purge-trash", action="store_true", help="delete quarantine batches older than retention")
     args = parser.parse_args(argv)
     root = args.root.resolve()
     if not root.is_dir():
         parser.error(f"storage root does not exist: {root}")
+    settings_file = (args.settings_file or (root / "retention_settings.json")).resolve()
+    fallback_days = int(os.getenv("V3_STORAGE_RETENTION_DAYS", str(DEFAULT_RETENTION_DAYS)))
+    policy = load_retention_policy(settings_file, fallback_days=fallback_days)
+    retention_days = _normalize_retention_days(
+        args.retention_days if args.retention_days is not None else policy.retention_days
+    )
+    delete_protected_data = bool(args.delete_protected or policy.delete_protected_data)
     now = datetime.now(timezone.utc)
     inventory = build_inventory(root)
     items = candidates(
         root,
         inventory,
-        retention_days=args.retention_days,
+        retention_days=retention_days,
         failure_retention_days=args.failure_retention_days,
+        delete_protected_data=delete_protected_data,
         now=now,
+    )
+    expired_history = (
+        expired_history_records(root / "history" / "outputs.jsonl", retention_days=retention_days, now=now)
+        if delete_protected_data
+        else []
     )
     report = {
         "root": str(root),
         "generated_at": now.isoformat(),
+        "policy": {
+            "retention_days": retention_days,
+            "delete_protected_data": delete_protected_data,
+            "settings_file": str(settings_file),
+            "settings_source": policy.source,
+            "warning": policy.warning,
+        },
         "counts": {
             "projects_jobs": len(inventory.project_job_ids),
             "projects_outputs": len(inventory.project_output_ids),
             "jobs": len(inventory.job_records),
             "outputs": len(inventory.output_records),
             "history_outputs": len(inventory.history_output_ids),
+            "expired_history_records": len(expired_history),
             "unreadable": len(inventory.unreadable),
-            "candidates": len(items),
+            "candidates": len(items) + (1 if expired_history else 0),
         },
         "candidates": [
             {"kind": item.kind, "path": str(item.path.relative_to(root)), "size": item.size, "reason": item.reason}
@@ -315,8 +511,29 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if args.apply:
         failure_items = [item for item in items if item.kind.startswith("expired_failed_")]
-        quarantine_path = quarantine(root, [item for item in items if item not in failure_items], now=now)
-        if quarantine_path:
+        quarantine_items = [item for item in items if item not in failure_items]
+        quarantine_path = None
+        manifest: list[dict[str, Any]] = []
+        if quarantine_items or expired_history:
+            stamp = now.strftime("%Y%m%dT%H%M%SZ")
+            quarantine_path = root / ".v3_maintenance_trash" / stamp
+            quarantine_path.mkdir(parents=True, exist_ok=False)
+            for item in quarantine_items:
+                _safe_child(root, item.path)
+                relative = item.path.relative_to(root)
+                target = quarantine_path / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(item.path), str(target))
+                manifest.append({"kind": item.kind, "path": str(relative), "size": item.size, "reason": item.reason})
+            if expired_history:
+                prune_history_file(
+                    root,
+                    retention_days=retention_days,
+                    now=now,
+                    trash=quarantine_path,
+                    manifest=manifest,
+                )
+            (quarantine_path / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             print(json.dumps({"quarantined_to": str(quarantine_path)}, ensure_ascii=False))
         print(json.dumps({"deleted_expired_failures": delete_expired_failures(root, failure_items)}, ensure_ascii=False))
     if args.purge_trash:

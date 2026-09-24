@@ -19,6 +19,12 @@ const els = {
   billingRulesGrid: document.querySelector("#billingRulesGrid"),
   billingSaveBtn: document.querySelector("#billingSaveBtn"),
   billingSettingsHint: document.querySelector("#billingSettingsHint"),
+  retentionConsoleState: document.querySelector("#retentionConsoleState"),
+  retentionSettingsForm: document.querySelector("#retentionSettingsForm"),
+  retentionProtectedData: document.querySelector("#retentionProtectedData"),
+  retentionDays: document.querySelector("#retentionDays"),
+  retentionSaveBtn: document.querySelector("#retentionSaveBtn"),
+  retentionSettingsHint: document.querySelector("#retentionSettingsHint"),
   globalToast: document.querySelector("#globalToast"),
 };
 
@@ -31,7 +37,9 @@ document.addEventListener("DOMContentLoaded", () => {
   hydratePortalHomeLink();
   els.billingRefreshBtn?.addEventListener("click", () => loadBillingSettings({ silent: false }));
   els.billingSettingsForm?.addEventListener("submit", saveBillingSettings);
+  els.retentionSettingsForm?.addEventListener("submit", saveRetentionSettings);
   loadBillingSettings({ silent: true }).catch((error) => showGlobalToast(friendlyError(error), "error"));
+  loadRetentionSettings().catch((error) => showGlobalToast(friendlyError(error), "error"));
 });
 
 function hydratePortalHomeLink() {
@@ -95,6 +103,47 @@ async function saveBillingSettings(event) {
   }
 }
 
+async function loadRetentionSettings() {
+  try {
+    const settings = await adminRequest("/v1/admin/retention/settings");
+    if (els.retentionProtectedData) els.retentionProtectedData.checked = Boolean(settings.delete_protected_data);
+    if (els.retentionDays) els.retentionDays.value = String(settings.retention_days ?? 30);
+    if (els.retentionConsoleState) els.retentionConsoleState.textContent = settings.persisted ? "已持久化" : "默认配置";
+    if (els.retentionSettingsHint) els.retentionSettingsHint.textContent = "只有管理员可以修改。";
+  } catch (error) {
+    if (error.status === 403) renderRetentionForbidden();
+    else if (error.status === 401) renderRetentionSignedOut();
+    throw error;
+  }
+}
+
+async function saveRetentionSettings(event) {
+  event.preventDefault();
+  const retentionDays = Number(els.retentionDays?.value || 30);
+  if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
+    showGlobalToast("保留天数必须是 1 到 3650 之间的整数。", "error");
+    return;
+  }
+  if (els.retentionSaveBtn) els.retentionSaveBtn.disabled = true;
+  try {
+    const settings = await adminRequest("/v1/admin/retention/settings", {
+      method: "POST",
+      body: {
+        delete_protected_data: Boolean(els.retentionProtectedData?.checked),
+        retention_days: retentionDays,
+      },
+    });
+    if (els.retentionProtectedData) els.retentionProtectedData.checked = Boolean(settings.delete_protected_data);
+    if (els.retentionDays) els.retentionDays.value = String(settings.retention_days ?? retentionDays);
+    if (els.retentionConsoleState) els.retentionConsoleState.textContent = "已持久化";
+    showGlobalToast("清理设置已保存。");
+  } catch (error) {
+    showGlobalToast(`保存失败：${friendlyError(error)}`, "error");
+  } finally {
+    if (els.retentionSaveBtn) els.retentionSaveBtn.disabled = false;
+  }
+}
+
 function renderRules() {
   if (!els.billingRulesGrid) return;
   els.billingRulesGrid.innerHTML = "";
@@ -139,6 +188,18 @@ function renderForbidden() {
   if (els.billingRulesGrid) els.billingRulesGrid.innerHTML = `<p class="empty-state">当前账户不是 sub2api 管理员。</p>`;
 }
 
+function renderRetentionSignedOut() {
+  if (els.retentionConsoleState) els.retentionConsoleState.textContent = "未登录";
+  if (els.retentionSettingsHint) els.retentionSettingsHint.textContent = "请从 Veyra Agent 登录后再进入管理员页。";
+  if (els.retentionSettingsForm) els.retentionSettingsForm.innerHTML = `<p class="empty-state">当前没有 Alchemy 管理员会话。</p>`;
+}
+
+function renderRetentionForbidden() {
+  if (els.retentionConsoleState) els.retentionConsoleState.textContent = "非管理员";
+  if (els.retentionSettingsHint) els.retentionSettingsHint.textContent = "只有管理员可以修改清理设置。";
+  if (els.retentionSettingsForm) els.retentionSettingsForm.innerHTML = `<p class="empty-state">当前账户不是管理员。</p>`;
+}
+
 function setLoading(isLoading) {
   state.loading = isLoading;
   if (els.billingRefreshBtn) {
@@ -157,6 +218,26 @@ async function v2Request(path, options = {}) {
   const token = getVeyraToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${v2ApiBase}${path}`, {
+    method: options.method || "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    credentials: "include",
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    const error = new Error(detail || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
+async function adminRequest(path, options = {}) {
+  const headers = {};
+  if (options.body) headers["Content-Type"] = "application/json";
+  const token = getVeyraToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(path, {
     method: options.method || "GET",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,

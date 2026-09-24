@@ -1,8 +1,8 @@
 [Unit]
-Description=Run Alchemy V3 storage maintenance weekly
+Description=Run Alchemy V3 storage maintenance daily at 04:00 China Standard Time
 
 [Timer]
-OnCalendar=Sun *-*-* 04:00:00
+OnCalendar=*-*-* 20:00:00 UTC
 Persistent=true
 RandomizedDelaySec=0
 

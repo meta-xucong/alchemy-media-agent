@@ -8,7 +8,7 @@ handoff recovery, review, or audit.
 ## Safety model
 
 `ops/vps-storage-maintenance/v3_storage_maintenance.py` scans project records, history, Job records,
-output records, and MCP handoffs before proposing anything. It may propose or expire:
+output records, and MCP handoffs before proposing anything. By default it may propose or expire:
 
 - expired files in `provider_reference_cache` and `share_cache`;
 - old, unreferenced Jobs explicitly produced by a mock/test provider;
@@ -17,23 +17,30 @@ output records, and MCP handoffs before proposing anything. It may propose or ex
   output directories after seven days from their last update.
 
 It never automatically removes project records, uploads, successful deliveries,
-history, or pending/unknown MCP handoffs. Failure cleanup uses the existing
-terminal status and last-update timestamp only; it does not inspect prompts,
-filenames, providers, or image contents. Unreadable records are left alone.
+history, or pending/unknown MCP handoffs unless the persisted admin retention
+policy has `delete_protected_data` enabled. When enabled, those protected
+records are included in the configured retention-day scan. Failure cleanup uses
+the existing terminal status and last-update timestamp only; it does not inspect
+prompts, filenames, providers, or image contents. Unreadable records are left
+alone.
 
 ## Manual validation
 
 ```bash
 python3 ops/vps-storage-maintenance/v3_storage_maintenance.py \
-  --root /var/lib/alchemy/v1/media_storage \
-  --retention-days 30
+  --root /var/lib/alchemy/v1/media_storage
 ```
+
+The admin panel stores the optional policy in
+`<root>/retention_settings.json`. The default retention is 30 days and
+protected-data cleanup is disabled. `--retention-days N` and
+`--delete-protected` remain available as explicit manual overrides.
 
 The command is read-only by default. `--apply` moves only listed candidates to
 `.v3_maintenance_trash/<timestamp>` and writes a manifest. Expired terminal
 failures are removed directly after their seven-day user-visible window;
-cache/mock cleanup remains reversible quarantine. The VPS timer runs every
-Sunday at 04:00 and purges old quarantine batches.
+cache/mock cleanup remains reversible quarantine. The VPS timer runs daily at
+04:00 China Standard Time and purges old quarantine batches.
 
 ```bash
 python3 ops/vps-storage-maintenance/v3_storage_maintenance.py \
