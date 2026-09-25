@@ -106,6 +106,7 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "alchemy-media-agent.nginx.conf" in migration
     assert "nginx -t" in migration
     assert "assert_runtime_access_config" in migration
+    assert "fingerprint_value" in migration
     assert "/proc/${api_pid}/environ" in migration
     assert "start_v1_container" in migration
     assert 'ALCHEMY_ACCESS_BRIDGE_SECRET: "${bridge_secret}"' in migration

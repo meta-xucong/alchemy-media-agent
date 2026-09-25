@@ -173,20 +173,20 @@ runtime_env_value() {
   tr '\0' '\n' < "${env_file}" | sed -n "s/^${key}=//p" | head -n 1
 }
 
+fingerprint_value() {
+  printf %s "$1" | sha256sum | awk '{print $1}'
+}
+
 assert_runtime_access_config() {
   local expected_bridge_fingerprint=""
   local v1_bridge_fingerprint=""
-  local v1_config_fingerprint=""
-  local v1_file_fingerprint=""
   local v2_bridge_fingerprint=""
 
-  expected_bridge_fingerprint="$(env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" | sha256sum | awk '{print $1}')"
+  expected_bridge_fingerprint="$(fingerprint_value "$(env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET")")"
   v1_bridge_fingerprint="$(docker exec "${V1_CONTAINER}" python -c 'import hashlib, os; print(hashlib.sha256((os.getenv("ALCHEMY_ACCESS_BRIDGE_SECRET") or "").encode()).hexdigest())')"
-  v1_config_fingerprint="$(docker inspect "${V1_CONTAINER}" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^ALCHEMY_ACCESS_BRIDGE_SECRET=//p' | tr -d '\r' | sha256sum | awk '{print $1}')"
-  v1_file_fingerprint="$(docker exec "${V1_CONTAINER}" python -c 'from pathlib import Path; import hashlib; value=next((line.split("=", 1)[1].rstrip("\\r\\n") for line in Path("/app/.env").read_text(encoding="utf-8").splitlines(True) if line.startswith("ALCHEMY_ACCESS_BRIDGE_SECRET=")), ""); print(hashlib.sha256(value.encode()).hexdigest())')"
-  v2_bridge_fingerprint="$(runtime_env_value "/proc/${api_pid}/environ" "ALCHEMY_ACCESS_BRIDGE_SECRET" | sha256sum | awk '{print $1}')"
+  v2_bridge_fingerprint="$(fingerprint_value "$(runtime_env_value "/proc/${api_pid}/environ" "ALCHEMY_ACCESS_BRIDGE_SECRET")")"
   [[ -n "${expected_bridge_fingerprint}" && "${v1_bridge_fingerprint}" == "${expected_bridge_fingerprint}" && "${v2_bridge_fingerprint}" == "${expected_bridge_fingerprint}" ]] || {
-    echo "bridge fingerprint mismatch expected=${expected_bridge_fingerprint:0:12} v1=${v1_bridge_fingerprint:0:12} config=${v1_config_fingerprint:0:12} file=${v1_file_fingerprint:0:12} v2=${v2_bridge_fingerprint:0:12}" >&2
+    echo "V1/V2 runtime bridge secret fingerprints do not match the release env." >&2
     exit 1
   }
   [[ "$(docker exec "${V1_CONTAINER}" python -c 'import os; print((os.getenv("VEYRA_AUTH_ENABLED") or "").lower())')" == "true" ]] || {
