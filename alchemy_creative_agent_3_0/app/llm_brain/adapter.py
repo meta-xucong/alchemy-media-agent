@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..reference_input_plan import plan_from_metadata
+
 from .context_digest import compact_brand_visual_context
 
 from contextlib import contextmanager, nullcontext
@@ -1448,6 +1450,10 @@ class V3LLMBrainAdapter:
             # candidate records and planning metadata cannot cross the Brain
             # boundary.
             request_metadata["visual_asset_library_binding"] = visual_asset_library_binding
+        scoped_references = plan_from_metadata(metadata)
+        if scoped_references is not None:
+            request_metadata["reference_input_summary"] = scoped_references.facts()
+            project_context["reference_input_summary"] = scoped_references.facts()
         return BrainRunRequest(
             user_input=user_input,
             job_id=job_id,

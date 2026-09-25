@@ -934,6 +934,15 @@ class V3ProductRouteHandlers:
             )
         ).model_dump(mode="json")
 
+    def get_project_continuity_anchor(self, project_id: str) -> dict[str, Any]:
+        return self.project_service.get_continuity_anchor(project_id)
+
+    def post_project_continuity_anchor(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.bind_continuity_anchor(project_id, payload)
+
+    def post_project_continuity_anchor_unbind(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.unbind_continuity_anchor(project_id, payload)
+
     def post_project_job_select(self, project_id: str, job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.project_service.select_project_job(project_id, job_id, payload or {})
 

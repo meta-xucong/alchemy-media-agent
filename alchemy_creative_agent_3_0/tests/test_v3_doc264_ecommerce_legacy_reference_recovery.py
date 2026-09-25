@@ -892,14 +892,15 @@ def test_doc264_generated_and_review_history_never_enter_recovered_product_truth
         model="fixture",
         encoded_image=_png_base64((190, 125, 95)),
     )
-    handlers.post_project_reference(
-        project["project_id"],
-        {
-            "asset_ref_id": output.output_id,
-            "source_type": "generated_selected",
-            "use_policy": "product",
-        },
-    )
+    with pytest.raises(ValueError, match="continuity_anchor"):
+        handlers.post_project_reference(
+            project["project_id"],
+            {
+                "asset_ref_id": output.output_id,
+                "source_type": "generated_selected",
+                "use_policy": "product",
+            },
+        )
 
     created = handlers.post_project_job(
         project["project_id"],

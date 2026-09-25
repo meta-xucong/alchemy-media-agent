@@ -150,6 +150,16 @@ BRAND_VISUAL_CONTEXT_INSTRUCTIONS = (
 SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n{BRAND_VISUAL_CONTEXT_INSTRUCTIONS}"
 CANONICAL_FINALIZER_SYSTEM_PROMPT = f"{CANONICAL_FINALIZER_SYSTEM_PROMPT}\n{BRAND_VISUAL_CONTEXT_INSTRUCTIONS}"
 
+REFERENCE_INPUT_MODE_INSTRUCTION = (
+    "When reference_input_summary is present, treat its four booleans independently. "
+    "Direct uploaded references do not establish a bound generated continuity anchor. "
+    "Use only current mode-admitted evidence; do not search or imply historical/project source pools. "
+    "Continuity guides this project's consistency; it does not replace current explicit subject, product "
+    "or identity facts, and does not add another physical source or an undeclared crop."
+)
+SYSTEM_PROMPT = f"{SYSTEM_PROMPT}\n{REFERENCE_INPUT_MODE_INSTRUCTION}"
+CANONICAL_FINALIZER_SYSTEM_PROMPT = f"{CANONICAL_FINALIZER_SYSTEM_PROMPT}\n{REFERENCE_INPUT_MODE_INSTRUCTION}"
+
 _CANONICAL_FINALIZER_STAGES = frozenset(
     {
         "provider_prompt_finalize",
@@ -457,6 +467,14 @@ def _compact_specialized_project_context(project_context: dict[str, object]) -> 
     """Keep continuation intent, never transport provider/local-storage history."""
 
     compact: dict[str, object] = {}
+    summary = project_context.get("reference_input_summary")
+    if isinstance(summary, dict):
+        compact["reference_input_summary"] = {
+            key: summary[key] for key in ("has_explicit_continuity_anchor","has_direct_reference_inputs",
+                "has_professional_binding","has_ecommerce_product_truth","reference_mode","project_mode",
+                "logical_continuity_reference_count","logical_mode_input_count","physical_provider_reference_count","physical_count_state")
+            if key in summary
+        }
     goal = _compact_text(project_context.get("goal_summary"), 480)
     if goal:
         compact["goal_summary"] = goal

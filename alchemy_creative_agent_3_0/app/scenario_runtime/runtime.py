@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..reference_input_plan import PLAN_KEY, plan_from_metadata
+
 from ..llm_brain.context_digest import compact_brand_visual_context
 
 from copy import deepcopy
@@ -7153,6 +7155,26 @@ class ScenarioRuntime:
         stable asset/file identity.
         """
 
+        frozen = plan_from_metadata(dict(request.metadata or {}))
+        if frozen is not None:
+            metadata = dict(request.metadata or {})
+            context = dict(metadata.get("project_context_snapshot") or {})
+            p = frozen.as_dict()
+            # Keep admitted role/use-policy semantics, but intersect with this
+            # immutable Job's sources rather than merging a historical pool.
+            current = context.get("uploaded_reference_assets")
+            by_id = {str(item.get("asset_id") or item.get("asset_ref_id") or ""): item
+                     for item in current if isinstance(item, dict)} if isinstance(current, list) else {}
+            admitted = [item for item in frozen.references() if item.get("reference_channel") != "continuity"]
+            context["uploaded_reference_assets"] = [
+                {**source, **by_id.get(source["asset_id"], {}),
+                 "asset_id": source["asset_id"], "file_path": source["file_path"],
+                 "content_sha256": source["content_sha256"], "reference_channel": source["reference_channel"]}
+                for source in admitted
+            ]
+            context["reference_input_summary"] = frozen.facts()
+            metadata["project_context_snapshot"] = context
+            return request.model_copy(update={"metadata":metadata})
         uploaded_assets = list(request.uploaded_assets or [])
         if not uploaded_assets:
             return request
@@ -8104,6 +8126,9 @@ class ScenarioRuntime:
 
     def _reference_assets_from_request_metadata(self, request: ScenarioRuntimeRequest) -> list[dict[str, Any]]:
         metadata = dict(request.metadata or {})
+        frozen = plan_from_metadata(metadata)
+        if frozen is not None:
+            return frozen.references()
         refs = metadata.get("reference_assets")
         if isinstance(refs, list):
             # The Product API may carry the same project reference through an

@@ -184,110 +184,49 @@ def test_doc281_fixture_reconstruction_ignores_an_enabled_environment_issuer(tmp
     assert handlers.project_service.ecommerce_view_activation_issuer is not issuer
 
 
-def test_doc281_general_brain_selection_binds_only_current_opaque_handles(tmp_path) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    calls: dict[str, int] = {}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[1], calls=calls))
-    created = handlers.post_project_job(
-        project["project_id"],
-        _general_payload(
-            metadata={
-                "selected_original_asset_ids": [asset_ids[0]],
-                "source_evidence_profile": {"view_kind": "browser-forged"},
-                "browser_source_labels": {asset_ids[2]: "front"},
-            }
-        ),
-    )
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None
-    assert calls == {"brain": 1}
-    assert record.request.uploaded_asset_ids == [asset_ids[1]]
-    activation = record.request.metadata["doc270_general_source_activation_receipts"]
-    assert activation[0]["state"] == "activated_resolved"
-    assert record.request.metadata["doc270_general_original_source_projection"]["sources"][0]["asset_id"] == asset_ids[1]
+def test_doc322_standard_does_not_run_retired_global_source_selection(tmp_path):
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={}
+    _replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=ids[1],calls=calls))
+    response=handlers.post_project_job(project["project_id"],_general_payload(metadata={"selected_original_asset_ids":[ids[0]],"browser_source_labels":{ids[2]:"front"}}))
+    record=handlers.service.get_job_record(response["job_id"])
+    assert calls=={}
+    assert record.request.uploaded_asset_ids==[]
+    assert record.request.metadata["reference_input_plan"]["direct_references"]==[]
+    assert "doc270_general_source_activation_receipts" not in record.request.metadata
 
 
-def test_doc281_source_order_filename_and_browser_prose_do_not_change_snapshot_or_server_binding(tmp_path) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    calls: dict[str, int] = {}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[2], calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload(user_input="Use the third current original."))
-    record = handlers.service.get_job_record(first["job_id"])
-    assert record is not None and record.request.uploaded_asset_ids == [asset_ids[2]]
-
-    durable = handlers.project_service._require_project(project["project_id"])  # noqa: SLF001
-    durable.reference_assets = list(reversed(durable.reference_assets))
-    handlers.project_service.project_store.save_project(durable)
-    renamed = handlers.service.get_uploaded_asset(asset_ids[2])
-    assert renamed is not None
-    handlers.service.asset_store._save_record(renamed.model_copy(update={"filename": "misleading-front-name.png"}))  # noqa: SLF001
-    permuted = handlers.project_service._doc270_project_source_library(durable)  # noqa: SLF001
-    assert permuted["snapshot_digest"] == snapshot["snapshot_digest"]
+def test_doc322_explicit_order_is_independent_of_historical_source_order(tmp_path):
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={};_replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=ids[2],calls=calls))
+    payload=_general_payload();payload["uploaded_asset_ids"]=[ids[1],ids[0]]
+    first=handlers.post_project_job(project["project_id"],payload)
+    durable=handlers.project_service._require_project(project["project_id"])
+    durable.reference_assets.reverse();handlers.project_service.project_store.save_project(durable)
+    second=handlers.post_project_job(project["project_id"],payload)
+    plans=[handlers.service.get_job_record(item["job_id"]).request.metadata["reference_input_plan"] for item in [first,second]]
+    assert calls=={}
+    assert all([r["asset_id"] for r in plan["direct_references"]]==[ids[1],ids[0]] for plan in plans)
+    assert [r["content_sha256"] for r in plans[0]["direct_references"]]==[r["content_sha256"] for r in plans[1]["direct_references"]]
 
 
-def test_doc281_prompt_only_has_no_job_source_expansion_or_needs_input(tmp_path) -> None:
-    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None))
-    created = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None and record.request.uploaded_asset_ids == []
-    assert record.request.metadata["doc270_general_source_activation_receipts"] == [{"state": "prompt_only"}]
-    assert created["status"] == "planned"
-    assert "current_operation" not in created["metadata"]
+def test_doc322_prompt_only_has_no_source_pool_receipt(tmp_path):
+    handlers,project,_,_=_general_project(tmp_path)
+    result=handlers.post_project_job(project["project_id"],_general_payload())
+    record=handlers.service.get_job_record(result["job_id"])
+    assert record.request.uploaded_asset_ids==[]
+    assert record.request.metadata["reference_input_plan"]["physical_provider_reference_count"]==0
+    assert "doc270_general_source_activation_receipts" not in record.request.metadata
 
 
-def test_doc281_environment_composition_uses_openai_visual_route_and_opaque_selection(tmp_path, monkeypatch) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    class Completions:
-        def create(self, **kwargs: Any) -> Any:
-            calls.append(kwargs)
-            content = kwargs["messages"][0]["content"]
-            handles = [
-                part["text"].split(": ", 1)[1]
-                for part in content
-                if part.get("type") == "text" and str(part.get("text", "")).startswith("Candidate handle: ")
-            ]
-            count = int(next(part["text"].split(": ", 1)[1] for part in content if str(part.get("text", "")).startswith("Requested output count: ")))
-            target_handle = handles[0]
-            payload = {
-                "state": "selected",
-                "output_selections": [
-                    {"output_index": index, "candidate_handles": [target_handle]}
-                    for index in range(1, count + 1)
-                ],
-            }
-            assert general_source_selection_response_from_text(
-                json.dumps(payload),
-                candidate_handles=set(handles),
-                requested_output_count=count,
-                maximum_sources=2,
-            ) is not None
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))])
-
-    class Client:
-        chat = SimpleNamespace(completions=Completions())
-
-    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import vision_provider
-
-    monkeypatch.delenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH", raising=False)
-    monkeypatch.setattr(vision_provider, "_lab_vision_enabled", lambda: True)
-    monkeypatch.setattr(vision_provider, "_lab_vision_setting", lambda _field: "private-test-route")
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: Client()))
-    registry = doc281_general_source_registry_from_environment()
-    _replace_general_service(handlers, registry)
-    assert handlers.project_service.doc281_general_source_registry.enabled is True
-    created = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None and len(record.request.uploaded_asset_ids) == 1
-    selected_asset = record.request.uploaded_asset_ids[0]
-    assert selected_asset in asset_ids
-    assert len(calls) == 1
-    assert calls[0]["max_tokens"] == GENERAL_SOURCE_SELECTION_OUTPUT_TOKEN_BUDGET
-    text_parts = [part["text"] for part in calls[0]["messages"][0]["content"] if part.get("type") == "text"]
-    assert all(asset_id not in "\n".join(text_parts) for asset_id in asset_ids)
-    assert "browser" not in "\n".join(text_parts).lower()
+def test_doc322_environment_source_registry_cannot_activate_saved_images(tmp_path,monkeypatch):
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={};registry=_selection_registry(snapshot,target_asset_id=ids[0],calls=calls)
+    # Registry injected through its actual service constructor below.
+    _replace_general_service(handlers,registry)
+    result=handlers.post_project_job(project["project_id"],_general_payload())
+    assert calls=={}
+    assert handlers.service.get_job_record(result["job_id"]).request.uploaded_asset_ids==[]
 
 
 @pytest.mark.parametrize(
@@ -313,181 +252,93 @@ def test_doc281_openai_selection_response_is_strict_and_semantic_free() -> None:
         assert general_source_selection_response_from_text(raw, candidate_handles=handles, requested_output_count=1, maximum_sources=1) is None
 
 
-def test_doc281_invalid_brain_selection_degrades_to_prompt_only(tmp_path) -> None:
-    handlers, project, _asset_ids, _snapshot = _general_project(tmp_path)
-
-    def forged_selection(**_kwargs: Any) -> dict[str, Any]:
-        return {"state": "selected", "output_selections": [{"output_index": 1, "candidate_handles": ["f" * 64]}]}
-
-    _replace_general_service(handlers, Doc281GeneralSourceRegistry(selection_brain=forged_selection, maximum_sources=1))
-    created = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None and record.request.uploaded_asset_ids == []
-    assert record.request.metadata["doc270_general_source_activation_receipts"] == [{"state": "prompt_only"}]
+def test_doc322_legacy_matcher_cannot_drop_explicit_current_uploads(tmp_path):
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={};_replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=None,calls=calls))
+    payload=_general_payload();payload["uploaded_asset_ids"]=ids
+    response=handlers.post_project_job(project["project_id"],payload)
+    record=handlers.service.get_job_record(response["job_id"])
+    assert calls=={}
+    assert record.request.uploaded_asset_ids==ids
+    assert record.request.metadata["reference_input_plan"]["physical_provider_reference_count"]==3
 
 
-def test_doc281_selection_receipt_replays_after_fresh_service_and_source_mutation_creates_new_identity(tmp_path) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    calls = {"brain": 0}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    assert calls == {"brain": 1}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
-    replay = handlers.post_project_job(project["project_id"], _general_payload())
-    assert replay["job_id"] == first["job_id"] and calls == {"brain": 1}
-
-    upload = handlers.service.get_uploaded_asset(asset_ids[0])
-    assert upload is not None
-    mutated = Path(str(upload.file_path)).read_bytes() + b"doc281-source-mutation"
-    Path(str(upload.file_path)).write_bytes(mutated)
-    handlers.service.asset_store._save_record(upload.model_copy(update={"content_sha256": hashlib.sha256(mutated).hexdigest()}))  # noqa: SLF001
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
-    changed = handlers.post_project_job(project["project_id"], _general_payload(user_input="Use the current original after mutation."))
-    assert changed["job_id"] != first["job_id"] and calls == {"brain": 2}
+def test_doc322_frozen_current_sources_survive_service_restart_but_detect_byte_drift(tmp_path):
+    from alchemy_creative_agent_3_0.app.reference_input_plan import ReferenceInputPlan
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={};_replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=ids[0],calls=calls))
+    payload=_general_payload();payload["uploaded_asset_ids"]=[ids[0]]
+    first=handlers.post_project_job(project["project_id"],payload)
+    record=handlers.service.get_job_record(first["job_id"])
+    frozen=deepcopy(record.request.metadata["reference_input_plan"])
+    _replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=ids[1],calls=calls))
+    assert handlers.service._runtime_request_payload(record.request)["metadata"]["reference_input_plan"]==frozen
+    source=handlers.service.get_uploaded_asset(ids[0]);Path(source.file_path).write_bytes(b"changed")
+    with pytest.raises(ValueError,match="integrity_mismatch"):
+        ReferenceInputPlan.from_dict(frozen).references()
+    assert calls=={}
 
 
-def test_doc281_tampered_selection_receipt_fails_closed_without_reselection(tmp_path) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    calls = {"brain": 0}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    assert first["job_id"] and calls == {"brain": 1}
-    records = handlers.project_service.project_store._private_records[project["project_id"]]["doc281_general_selection_receipts_v2"]  # noqa: SLF001
-    records[-1]["receipt_digest"] = "0" * 64
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
-    second = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(second["job_id"])
-    assert record is not None and record.request.uploaded_asset_ids == [] and calls == {"brain": 1}
+def test_doc322_tampered_current_plan_fails_without_reselecting_history(tmp_path):
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={};_replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=ids[0],calls=calls))
+    response=handlers.post_project_job(project["project_id"],_general_payload())
+    record=handlers.service.get_job_record(response["job_id"])
+    record.request.metadata["reference_input_plan"]["plan_digest"]="0"*64
+    with pytest.raises(ValueError,match="digest"):
+        handlers.service._runtime_request_payload(record.request)
+    assert calls=={}
 
 
-def test_doc281_prompt_only_receipt_replays_without_brain(tmp_path) -> None:
-    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
-    calls = {"brain": 0}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    assert calls == {"brain": 1}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
-    replay = handlers.post_project_job(project["project_id"], _general_payload())
-    assert replay["job_id"] == first["job_id"] and calls == {"brain": 1}
+def test_doc322_frozen_prompt_only_does_not_rehydrate_sources_on_replay(tmp_path):
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={};_replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=ids[0],calls=calls))
+    response=handlers.post_project_job(project["project_id"],_general_payload())
+    record=handlers.service.get_job_record(response["job_id"])
+    before=deepcopy(record.request.metadata["reference_input_plan"])
+    for _ in range(2):
+        replay=handlers.service._runtime_request_payload(record.request)
+        assert replay["metadata"]["reference_input_plan"]==before
+        assert replay["uploaded_assets"]==[]
+    assert calls=={}
 
 
-def test_doc281_transient_brain_block_replans_same_command_after_recovery(tmp_path) -> None:
-    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
-    calls = {"brain": 0}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(first["job_id"])
-    assert record is not None
-    record.status = "blocked"
-    record.request.metadata["generation_lifecycle_failure"] = {
-        "schema_version": "v3_generation_lifecycle_failure_v1",
-        "status": "blocked",
-        "owner": "v3_product_api_runtime",
-        "failure_family": "remote_creative_brain",
-        "failure_code": "remote_brain_unavailable",
-        "reason_code": "remote_brain_unavailable",
-        "provider_request_started": False,
-        "remote_creative_brain_outcome": {
-            "schema_version": "v3_remote_creative_brain_outcome_v1",
-            "state": "blocked",
-            "reason_code": "remote_brain_unavailable",
-            "remote_error_class": "timeout",
-        },
-    }
-    handlers.service.job_store.save(record)
-    assert not handlers.project_service._doc270_general_existing_job_replayable(  # noqa: SLF001
-        handlers.project_service._require_project(project["project_id"]),
-        record,
-    )
-    assert handlers.project_service._doc270_general_retryable_command_exists(  # noqa: SLF001
-        handlers.project_service._require_project(project["project_id"]),  # noqa: SLF001
-        record.request.metadata["doc270_general_command_identity"],
-    )
-
-    retry = handlers.post_project_job(project["project_id"], _general_payload())
-    assert retry["job_id"] != first["job_id"]
-    assert calls == {"brain": 1}
+def test_doc322_explicit_new_command_does_not_reuse_a_blocked_job(tmp_path):
+    handlers,project,_,_=_general_project(tmp_path)
+    first=handlers.post_project_job(project["project_id"],_general_payload())
+    record=handlers.service.get_job_record(first["job_id"]);record.status="blocked";handlers.service.job_store.save(record)
+    second=handlers.post_project_job(project["project_id"],_general_payload())
+    assert second["job_id"]!=first["job_id"]
+    assert handlers.service.get_job_record(second["job_id"]).request.uploaded_asset_ids==[]
 
 
-def test_doc281_generated_without_persisted_output_is_not_replayed(tmp_path) -> None:
-    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
-    calls = {"brain": 0}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(first["job_id"])
-    assert record is not None
-    record.status = "generated"
-    handlers.service.job_store.save(record)
-    assert handlers.project_service._doc270_general_retryable_command_exists(  # noqa: SLF001
-        handlers.project_service._require_project(project["project_id"]),
-        record.request.metadata["doc270_general_command_identity"],
-    )
-
-    rebuilt = handlers.post_project_job(project["project_id"], _general_payload())
-    assert rebuilt["job_id"] != first["job_id"]
-
-    stored = handlers.service.output_store.save_base64_output(
-        job_id=rebuilt["job_id"],
-        candidate_id="doc281-replay-candidate",
-        asset_id="doc281-replay-asset",
-        provider="fixture",
-        model="fixture",
-        encoded_image=_png_base64(),
-    )
-    rebuilt_record = handlers.service.get_job_record(rebuilt["job_id"])
-    assert rebuilt_record is not None
-    rebuilt_record.status = "generated"
-    handlers.service.job_store.save(rebuilt_record)
-    replay = handlers.post_project_job(project["project_id"], _general_payload())
-    assert replay["job_id"] == rebuilt["job_id"]
-    assert stored.file_path and Path(stored.file_path).is_file()
+def test_doc322_generated_label_without_pixels_cannot_supply_an_anchor(tmp_path):
+    handlers,project,_,_=_general_project(tmp_path)
+    first=handlers.post_project_job(project["project_id"],_general_payload())
+    record=handlers.service.get_job_record(first["job_id"]);record.status="generated";handlers.service.job_store.save(record)
+    second=handlers.post_project_job(project["project_id"],_general_payload())
+    assert second["job_id"]!=first["job_id"]
+    assert handlers.service.get_job_record(second["job_id"]).request.metadata["reference_input_plan"]["continuity_anchor"] is None
 
 
-def test_doc281_explicit_terminal_retry_opens_new_job(tmp_path) -> None:
-    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
-    calls = {"brain": 0}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(first["job_id"])
-    assert record is not None
-    record.status = "generated"
-    handlers.service.job_store.save(record)
-
-    retry = handlers.post_project_job(
-        project["project_id"],
-        _general_payload(metadata={"v3_retry_after_terminal_job_id": first["job_id"]}),
-    )
-
-    assert retry["job_id"] != first["job_id"]
-    assert calls == {"brain": 1}
+def test_doc322_user_terminal_retry_is_new_without_legacy_source_activation(tmp_path):
+    handlers,project,ids,snapshot=_general_project(tmp_path)
+    calls={};_replace_general_service(handlers,_selection_registry(snapshot,target_asset_id=ids[0],calls=calls))
+    first=handlers.post_project_job(project["project_id"],_general_payload())
+    response=handlers.post_project_job(project["project_id"],_general_payload(metadata={"v3_retry_after_terminal_job_id":first["job_id"]}))
+    assert response["job_id"]!=first["job_id"]
+    assert calls=={}
 
 
-def test_doc281_user_initiated_generation_does_not_reuse_old_output(tmp_path) -> None:
-    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
-    calls = {"brain": 0}
-    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    stored = handlers.service.output_store.save_base64_output(
-        job_id=first["job_id"],
-        candidate_id="doc281-user-click-candidate",
-        asset_id="doc281-user-click-asset",
-        provider="fixture",
-        model="fixture",
-        encoded_image=_png_base64(),
-    )
-    record = handlers.service.get_job_record(first["job_id"])
-    assert record is not None
-    record.status = "generated"
-    handlers.service.job_store.save(record)
-    assert stored.file_path and Path(stored.file_path).is_file()
-
-    fresh = handlers.post_project_job(
-        project["project_id"],
-        _general_payload(metadata={"v3_user_initiated_generation": True}),
-    )
-
-    assert fresh["job_id"] != first["job_id"]
-    assert calls == {"brain": 1}
+def test_doc322_user_initiated_request_never_reuses_an_unbound_old_output(tmp_path):
+    from alchemy_creative_agent_3_0.tests.test_v3_doc322_project_workflow import create_source
+    handlers,project,_,_=_general_project(tmp_path)
+    old,output=create_source(handlers,project)
+    fresh=handlers.post_project_job(project["project_id"],_general_payload())
+    record=handlers.service.get_job_record(fresh["job_id"])
+    assert fresh["job_id"]!=old.job_id
+    assert record.request.metadata["reference_input_plan"]["continuity_anchor"] is None
+    assert handlers.service.output_store.get_output(output.output_id) is not None
 
 
 def test_doc281_public_activation_has_no_private_selection_disclosure(tmp_path) -> None:

@@ -284,6 +284,7 @@ def _shell_asset_version(path: Path) -> str:
 def _shell_asset_version_replacements() -> dict[str, str]:
     return {
         "__STATIC_STYLES_VERSION__": _shell_asset_version(STATIC_DIR / "styles.css"),
+        "__CONTINUITY_ANCHOR_VERSION__": _shell_asset_version(STATIC_DIR / "continuity-anchor.js"),
         "__STATIC_APP_VERSION__": _shell_asset_version(STATIC_DIR / "app.js"),
         "__STATIC_BILLING_ADMIN_VERSION__": _shell_asset_version(STATIC_DIR / "billing-admin.js"),
         "__MOBILE_STYLES_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.css"),
@@ -1693,6 +1694,26 @@ async def v3_project_output_reject_endpoint(
     _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
     return _run_v3_handler(v3_route_handlers.post_project_output_reject, project_id, output_id, payload)
+
+
+@app.get("/api/v3/creative-agent/projects/{project_id}/continuity-anchor")
+def v3_get_continuity_anchor(project_id: str, request: Request, authorization: str = Header(default="")):
+    _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(v3_route_handlers.get_project_continuity_anchor, project_id)
+
+
+@app.post("/api/v3/creative-agent/projects/{project_id}/continuity-anchor/bind")
+async def v3_bind_continuity_anchor(project_id: str, request: Request, authorization: str = Header(default="")):
+    _require_v3_project_visible(request, project_id, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_project_continuity_anchor, project_id, payload)
+
+
+@app.post("/api/v3/creative-agent/projects/{project_id}/continuity-anchor/unbind")
+async def v3_unbind_continuity_anchor(project_id: str, request: Request, authorization: str = Header(default="")):
+    _require_v3_project_visible(request, project_id, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_project_continuity_anchor_unbind, project_id, payload)
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs")

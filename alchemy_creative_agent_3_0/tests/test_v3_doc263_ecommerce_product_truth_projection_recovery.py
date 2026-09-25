@@ -1322,14 +1322,15 @@ def test_doc263_continuation_dedupes_product_content_and_does_not_promote_genera
         model="fixture",
         encoded_image=content,
     )
-    generated_reference = handlers.post_project_reference(
-        project["project_id"],
-        {
-            "asset_ref_id": generated.output_id,
-            "source_type": "generated_selected",
-            "use_policy": "product",
-        },
-    )
+    with pytest.raises(ValueError, match="continuity_anchor"):
+        generated_reference = handlers.post_project_reference(
+            project["project_id"],
+            {
+                "asset_ref_id": generated.output_id,
+                "source_type": "generated_selected",
+                "use_policy": "product",
+            },
+        )
 
     continuation = handlers.post_project_job(
         project["project_id"],
@@ -1344,7 +1345,7 @@ def test_doc263_continuation_dedupes_product_content_and_does_not_promote_genera
 
     assert first_reference["reference"]["asset_ref_id"] == first_upload
     assert duplicate_reference["reference"]["asset_ref_id"] == first_upload
-    assert generated_reference["reference"]["source_type"] == "generated_selected"
+    assert handlers.project_service.get_continuity_anchor(project["project_id"])["active_continuity_anchor"] is None
     assert [item["asset_ref_id"] for item in active_products] == [first_upload]
     assert continuation["ecommerce"]["product_truth"]["evidence_sources"] == [
         f"uploaded_asset:{first_upload}"

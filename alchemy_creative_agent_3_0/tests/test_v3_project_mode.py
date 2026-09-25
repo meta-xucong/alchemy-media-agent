@@ -1,3 +1,5 @@
+import pytest
+from alchemy_creative_agent_3_0.tests.doc322_test_support import install_offline_pixel_provider, certify_output
 import base64
 from io import BytesIO
 from pathlib import Path
@@ -89,6 +91,7 @@ def _project_handlers_with_certified_review(
         ),
     )
     product_service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
+    install_offline_pixel_provider(product_service)
     return V3ProductRouteHandlers(
         service=product_service,
         project_store=project_store or PersistentProjectStore(tmp_path / "v3_projects"),
@@ -879,6 +882,7 @@ def test_project_mode_forwards_explicit_approved_copy_to_remote_brain_context(tm
 
 def test_selected_ecommerce_output_enters_project_context_without_brand_memory_auto_write(tmp_path) -> None:
     handlers = _ecommerce_handlers()
+    install_offline_pixel_provider(handlers.service)
     product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
     project = handlers.post_projects({"user_goal": "Create a marketplace image suite"})["project"]
     job = handlers.post_project_job(
@@ -954,7 +958,7 @@ def test_project_selection_updates_project_context_without_brand_memory_auto_app
     job = handlers.post_project_job(project["project_id"], {"user_input": "生成第一张活动图"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
 
-    selected = handlers.post_project_job_select(project["project_id"], generated["job_id"], {})
+    selected = handlers.post_project_job_select(project["project_id"], generated["job_id"], {"selected_output_ids": [generated["candidates"][0]["output_id"]]})
 
     assert selected["status"] == "selected"
     assert selected["selected_result"]["memory_update_applied"] is False
@@ -980,7 +984,7 @@ def test_persistent_project_store_survives_service_restart(tmp_path) -> None:
     )["project"]
     job = first.post_project_job(project["project_id"], {"user_input": "Create the first launch poster"})
     generated = first.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
-    selected = first.post_project_job_select(project["project_id"], generated["job_id"], {})
+    selected = first.post_project_job_select(project["project_id"], generated["job_id"], {"selected_output_ids": [generated["candidates"][0]["output_id"]]})
 
     assert selected["project"]["selected_output_refs"]
     assert (store_root / project["project_id"] / "project.json").exists()
@@ -1062,14 +1066,11 @@ def test_project_summary_restores_generated_output_thumbnail_after_restart(tmp_p
     selected_refs = selected["project"]["selected_output_refs"]
     active_references = selected["project"]["reference_assets"]
 
-    assert selected["status"] == "selected"
-    assert selected["job_status"]["metadata"]["selected_from_restored_outputs"] is True
-    assert selected_refs[0]["candidate_id"] == "candidate_persisted_output"
-    assert selected_refs[0]["asset_id"] == "asset_persisted_output"
-    assert selected_refs[0]["output_id"] == record.output_id
-    assert selected["context"]["selected_output_assets"][0]["output_id"] == record.output_id
-    assert active_references[0]["source_type"] == "generated_selected"
-    assert active_references[0]["created_from_output_id"] == record.output_id
+    assert selected["metadata"]["selection_held"] is True
+    assert selected["metadata"]["hold_reason"] == "continuity_anchor_unverified"
+    assert selected_refs == []
+    assert active_references == []
+    assert output_store.get_output(record.output_id) is not None
 
 
 def test_old_project_record_loads_with_default_context_fields(tmp_path) -> None:
@@ -1127,6 +1128,8 @@ def test_uploaded_reference_can_be_saved_to_project_and_used_in_context(tmp_path
             "use_policy": "style",
         },
     )
+    assert handlers.get_project_context(project["project_id"])["uploaded_reference_assets"] == []
+    handlers.post_project_job(project["project_id"], {"user_input":project["user_goal"],"uploaded_asset_ids":[reference_asset_id]})
     context = handlers.get_project_context(project["project_id"])
 
     assert reference["reference"]["source_type"] == "uploaded"
@@ -1232,16 +1235,20 @@ def test_selected_output_creates_active_generated_reference_and_selection_state(
     job = handlers.post_project_job(project["project_id"], {"user_input": "Generate first cover"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
 
-    selected = handlers.post_project_job_select(project["project_id"], generated["job_id"], {})
+    selected = handlers.post_project_job_select(project["project_id"], generated["job_id"], {"selected_output_ids": [generated["candidates"][0]["output_id"]]})
 
-    refs = selected["project"]["reference_assets"]
+    refs = handlers.project_service.project_store.get_project(project["project_id"]).reference_assets
+    refs = [ref.model_dump(mode="json") for ref in refs]
+    assert len(selected["project"]["selected_output_refs"]) == 1
+    assert selected["project"]["metadata"]["continuity_anchor"]["state"] == "active"
     states = selected["project"]["selected_output_states"]
     assert refs
     assert refs[0]["source_type"] == "generated_selected"
     assert refs[0]["status"] == "active"
     assert states[0]["selection_state"] == "selected"
     assert selected["context"]["selected_output_assets"]
-    assert selected["context"]["selected_reference_assets"]
+    assert selected["context"]["metadata"]["continuity_anchor"]["active_continuity_anchor"]["output_id"] == selected["context"]["selected_output_assets"][0]["output_id"]
+    assert selected["context"]["uploaded_reference_assets"] == []
 
 
 def test_general_project_preserves_multiple_selected_continuation_references(tmp_path) -> None:
@@ -1274,30 +1281,12 @@ def test_general_project_preserves_multiple_selected_continuation_references(tmp
     )
     # Selected output refs are append-only; the second selection is the
     # second entry, while entry zero remains the first continuation anchor.
-    second_output_id = second_selected["project"]["selected_output_refs"][1]["output_id"]
-    context = handlers.get_project_context(project["project_id"])
-
-    assert first_output_id != second_output_id
-    assert [ref["output_id"] for ref in second_selected["project"]["selected_output_refs"]] == [
-        first_output_id,
-        second_output_id,
-    ]
-    states = {
-        item["output_id"]: item["selection_state"]
-        for item in second_selected["project"]["selected_output_states"]
-    }
-    assert states[first_output_id] == "selected"
-    assert states[second_output_id] == "selected"
-    active_generated = [
-        ref
-        for ref in second_selected["project"]["reference_assets"]
-        if ref["source_type"] == "generated_selected" and ref["status"] == "active"
-    ]
-    assert [ref["created_from_output_id"] for ref in active_generated] == [first_output_id, second_output_id]
-    assert len(context["selected_output_assets"]) == 2
-    assert len(context["selected_reference_assets"]) == 2
-    assert len(context["strong_reference_bindings"]) == 2
-    assert context["metadata"]["general_forced_reference_count"] == 2
+    second_output_id = second_selected["project"]["selected_output_refs"][0]["output_id"]
+    assert second_output_id != first_output_id
+    assert [r["output_id"] for r in second_selected["context"]["selected_output_assets"]] == [second_output_id]
+    assert second_selected["project"]["metadata"]["continuity_anchor"]["active_continuity_anchor"]["output_id"] == second_output_id
+    stored=handlers.project_service.project_store.get_project(project["project_id"])
+    assert {r.output_id for r in stored.selected_output_refs} == {first_output_id, second_output_id}
 
 
 def test_general_context_preserves_legacy_multiple_selected_references(tmp_path) -> None:
@@ -1353,84 +1342,33 @@ def test_general_context_preserves_legacy_multiple_selected_references(tmp_path)
 
     context = handlers.get_project_context(project_record.project_id)
 
-    assert [ref["output_id"] for ref in context["selected_output_assets"]] == [first.output_id, second.output_id]
-    assert [item["output_id"] for item in context["selected_reference_assets"]] == [first.output_id, second.output_id]
-    assert [item["output_id"] for item in context["strong_reference_bindings"]] == [first.output_id, second.output_id]
-    assert context["metadata"]["general_forced_reference_count"] == 2
+    assert context["selected_output_assets"] == []
+    assert context["metadata"]["continuity_anchor"]["active_continuity_anchor"] is None
+    raw=handlers.project_service.project_store.get_project(project["project_id"])
+    assert {ref.output_id for ref in raw.selected_output_refs} == {first.output_id,second.output_id}
+    assert handlers.service.output_store.get_output(first.output_id) is not None
+    assert handlers.service.output_store.get_output(second.output_id) is not None
 
 
 def test_portrait_selection_becomes_strong_identity_reference(tmp_path) -> None:
-    project_store_root = tmp_path / "v3_projects"
-    output_store = V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs")
-    first_service = V3ProductApiService(output_store=output_store)
-    first = V3ProductRouteHandlers(
-        service=first_service,
-        project_store=PersistentProjectStore(project_store_root),
-    )
-    project = first.post_projects({"user_goal": "Create a fresh summer portrait of an East Asian woman"})["project"]
-    job = first.post_project_job(project["project_id"], {"user_input": "Generate the first clean bright portrait"})
-    record = output_store.save_base64_output(
-        job_id=job["job_id"],
-        candidate_id="candidate_identity_output",
-        asset_id="asset_identity_output",
-        provider="test_provider",
-        model="test-model",
-        encoded_image=_png_base64(),
-        mime_type="image/png",
-        output_format="png",
-    )
-    second_service = V3ProductApiService(output_store=output_store)
-    handlers = V3ProductRouteHandlers(
-        service=second_service,
-        project_store=PersistentProjectStore(project_store_root),
-    )
-
-    selected = handlers.post_project_job_select(
-        project["project_id"],
-        job["job_id"],
-        {"selected_candidate_id": "candidate_identity_output"},
-    )
-    context = selected["context"]
-
-    assert context["selected_visual_references"][0]["use_policy"] == "identity"
-    assert "file_path" not in context["selected_visual_references"][0]
-    assert context["selected_visual_references"][0]["output_id"] == record.output_id
-    assert context["metadata"]["source"] == "V3ProjectModeService"
-    assert context["selected_output_assets"][0]["job_id"] == record.job_id
-    assert context["selected_reference_assets"][0]["created_from_job_id"] == record.job_id
-    assert "file_path" not in context["selected_output_assets"][0]["metadata"]
-    assert context["strong_reference_bindings"][0]["use_policy"] == "identity"
-    assert context["strong_reference_bindings"][0]["provider_input_required"] is True
-    assert context["identity_lock_profiles"][0]["subject_type"] == "character"
-    assert context["project_identity_anchors"][0]["subject_type"] == "character"
-    assert context["project_identity_anchors"][0]["provider_reference_required"] is True
-    assert context["strong_reference_continuation_plan"]["active_anchor_ids"]
-    assert context["batch_identity_diversity_review"]["applies"] is True
-    assert "face_identity" in context["strong_reference_bindings"][0]["lock_targets"]
-
-    continuation = handlers.post_project_job(project["project_id"], {"user_input": "Continue this as a second same-style portrait"})
-    continuation_status = handlers.post_project_job_generate(
-        project["project_id"],
-        continuation["job_id"],
-        {"quality_mode": "standard"},
-    )
-    continuation_context = handlers.get_project_context(project["project_id"])
-    reference_assets = continuation_context["strong_reference_bindings"]
-    assert any(item.get("use_policy") == "identity" for item in reference_assets)
-    assert all("file_path" not in item for item in reference_assets)
-    assert continuation_context["project_identity_anchors"][0]["subject_type"] == "character"
-    assert continuation_context["strong_reference_continuation_plan"]["reference_mode"] == "provider_image_reference"
-    continuation_record = handlers.service.get_job_record(continuation["job_id"])
-    continuation_result = continuation_record.generation_result or continuation_record.planning_result
-    shared_capabilities = continuation_result.metadata["shared_capabilities"]
-    cluster_results = [
-        item
-        for item in shared_capabilities["results"]
-        if item["module_id"] == "visual_capability_cluster"
-    ]
-    assert cluster_results[0]["facts"]["visual_capability_cluster"]["identity_lock_profiles"][0]["subject_type"] == "character"
-    assert cluster_results[0]["facts"]["visual_capability_cluster"]["project_identity_anchors"]
-    assert cluster_results[0]["facts"]["visual_capability_cluster"]["general_suite_role_plan"]["roles"]
+    handlers=_project_handlers_with_certified_review(tmp_path)
+    project=handlers.post_projects({"user_goal":"A same-person portrait series"})["project"]
+    job=handlers.post_project_job(project["project_id"],{"user_input":"A natural adult portrait","metadata":{"requested_image_count":1}})
+    generated=handlers.post_project_job_generate(project["project_id"],job["job_id"],{"quality_mode":"standard"})
+    output_id=generated["candidates"][0]["output_id"]
+    selected=handlers.post_project_job_select(project["project_id"],job["job_id"],{"selected_output_ids":[output_id]})
+    assert [ref["output_id"] for ref in selected["context"]["selected_output_assets"]]==[output_id]
+    assert "file_path" not in selected["context"]["selected_output_assets"][0]["metadata"]
+    next_job=handlers.post_project_job(project["project_id"],{"user_input":"Continue the same person with a new setting"})
+    record=handlers.service.get_job_record(next_job["job_id"])
+    plan=record.request.metadata["reference_input_plan"]
+    assert plan["continuity_anchor"]["output_id"]==output_id
+    assert plan["continuity_anchor"]["reference"]["reference_channel"]=="continuity"
+    assert plan["direct_references"]==[]
+    assert plan["physical_provider_reference_count"]==1
+    runtime=handlers.service._runtime_request_payload(record.request)
+    assert runtime["uploaded_assets"]==[]
+    assert [item["asset_id"] for item in runtime["metadata"]["reference_assets"]]==[output_id]
 
 
 def test_chinese_portrait_goal_uses_identity_reference_policy() -> None:
@@ -1446,6 +1384,7 @@ def test_chinese_portrait_goal_uses_identity_reference_policy() -> None:
 
 def test_uploaded_portrait_reference_is_promoted_and_kept_before_selected_output(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
+    install_offline_pixel_provider(handlers.service)
     upload_id = _ready_upload(handlers, tmp_path, role="face_reference", filename="prototype-face.png")
     project = handlers.post_projects(
         {"user_goal": "\u751f\u6210\u540c\u4e00\u4f4d\u4e1c\u65b9\u7f8e\u5973\u7684\u590f\u65e5\u5199\u771f"}
@@ -1457,7 +1396,7 @@ def test_uploaded_portrait_reference_is_promoted_and_kept_before_selected_output
 
     assert saved["use_policy"] == "identity"
 
-    job = handlers.post_project_job(project["project_id"], {"user_input": "Generate a bright portrait variation"})
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Generate a bright portrait variation", "uploaded_asset_ids": [upload_id]})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
     selected = handlers.post_project_job_select(
         project["project_id"],
@@ -1509,6 +1448,8 @@ def test_identity_only_portrait_does_not_misapply_structured_appearance_lock(tmp
         {"asset_ref_id": upload_id, "source_type": "uploaded", "use_policy": "general"},
     )
 
+    assert handlers.get_project_context(project["project_id"])["uploaded_reference_assets"] == []
+    handlers.post_project_job(project["project_id"], {"user_input":project["user_goal"],"uploaded_asset_ids":[upload_id]})
     context = handlers.get_project_context(project["project_id"])
 
     assert context["identity_lock_profiles"][0]["subject_type"] == "character"
@@ -1535,11 +1476,14 @@ def test_portrait_project_create_marks_uploaded_asset_as_face_reference() -> Non
         }
     )["project"]
 
-    assert project["uploaded_asset_refs"][0]["role"] == "face_reference"
+    assert project["uploaded_asset_refs"] == []
+    stored=handlers.project_service.project_store.get_project(project["project_id"])
+    assert stored.uploaded_asset_refs[0]["role"] == "face_reference"
 
 
 def test_removed_generated_reference_unselects_output_context() -> None:
     handlers = V3ProductRouteHandlers()
+    install_offline_pixel_provider(handlers.service)
     project = handlers.post_projects({"user_goal": "Create a premium social cover"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Generate first cover"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
@@ -1548,7 +1492,7 @@ def test_removed_generated_reference_unselects_output_context() -> None:
         generated["job_id"],
         {"selected_candidate_id": generated["candidates"][0]["candidate_id"]},
     )
-    reference_id = selected["project"]["reference_assets"][0]["reference_id"]
+    reference_id = handlers.project_service.project_store.get_project(project["project_id"]).reference_assets[0].reference_id
 
     removed = handlers.post_project_reference_remove(project["project_id"], reference_id, {"plain_text": "不沿用这张"})
     context = handlers.get_project_context(project["project_id"])
@@ -1562,6 +1506,7 @@ def test_removed_generated_reference_unselects_output_context() -> None:
 
 def test_unselected_output_exits_positive_context_but_remains_history() -> None:
     handlers = V3ProductRouteHandlers()
+    install_offline_pixel_provider(handlers.service)
     project = handlers.post_projects({"user_goal": "Create a clean campaign visual"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Generate first visual"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
@@ -1577,13 +1522,15 @@ def test_unselected_output_exits_positive_context_but_remains_history() -> None:
 
     assert unselected["project"]["selected_output_refs"] == []
     assert unselected["project"]["selected_output_states"][0]["selection_state"] == "unselected"
-    assert unselected["project"]["reference_assets"][0]["status"] == "inactive"
+    assert unselected["project"]["metadata"]["continuity_anchor"]["state"] == "unbound"
+    assert handlers.project_service.project_store.get_project(project["project_id"]).reference_assets[0].status.value == "inactive"
     assert context["selected_output_assets"] == []
     assert context["metadata"]["unselected_candidates_excluded"] is True
 
 
 def test_rejected_output_adds_negative_context() -> None:
     handlers = V3ProductRouteHandlers()
+    install_offline_pixel_provider(handlers.service)
     project = handlers.post_projects({"user_goal": "Create a warm product style visual"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Generate visual"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
@@ -1609,6 +1556,7 @@ def test_rejected_output_adds_negative_context() -> None:
 
 def test_unselected_candidate_does_not_enter_context() -> None:
     handlers = V3ProductRouteHandlers()
+    install_offline_pixel_provider(handlers.service)
     project = handlers.post_projects({"user_goal": "Create a minimal event poster"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Generate options"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
@@ -1639,7 +1587,7 @@ def test_project_job_creation_reads_enriched_project_context(tmp_path) -> None:
         {"feedback_type": "avoid_direction", "plain_text": "避免拥挤背景", "reason_tags": ["clutter"]},
     )
 
-    job = handlers.post_project_job(project["project_id"], {"user_input": "继续同风格做封面"})
+    job = handlers.post_project_job(project["project_id"], {"user_input": "继续同风格做封面", "uploaded_asset_ids": [reference_asset_id]})
     status = handlers.get_job(job["job_id"])
 
     job_record = handlers.service.get_job_record(job["job_id"])
@@ -1759,6 +1707,7 @@ def test_brand_memory_confirm_appends_existing_brand(tmp_path) -> None:
 
 def test_unselected_outputs_excluded_from_brand_proposal(tmp_path) -> None:
     handlers, _brand_service = _project_handlers_with_brand_store(tmp_path)
+    install_offline_pixel_provider(handlers.service)
     reference_asset_id = _ready_upload(handlers, tmp_path, role="style_reference", filename="active-style.png")
     project = handlers.post_projects({"user_goal": "Create a minimal project style"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Generate options"})
@@ -1933,59 +1882,27 @@ def test_doc73_auto_anchor_is_publicly_rebindable_and_excluded_from_review(tmp_p
         else original_get_job(target_job_id),
     )
 
-    detail = handlers.get_project(project["project_id"])
-    public_anchor = detail["project"]["metadata"]["doc73_auto_identity_anchor"]
-    assert public_anchor["output_id"] == anchor.output_id
-    assert public_anchor["state"] == "bound"
-    assert public_anchor["can_unbind"] is True
-    assert public_anchor["can_bind"] is False
-
-    review_payload = handlers.get_project_outputs(
-        project_id=project["project_id"],
-        limit=10,
-        compact=True,
-    )
-    assert anchor.output_id not in {
-        item["output_id"] for item in review_payload["review_items"]
-    }
-
-    unbound = handlers.post_project_output_unselect(project["project_id"], anchor.output_id, {})
-    unbound_anchor = unbound["project"]["metadata"]["doc73_auto_identity_anchor"]
-    assert unbound_anchor["state"] == "unbound"
-    assert unbound_anchor["can_unbind"] is False
-    assert unbound_anchor["can_bind"] is True
-    assert unbound["context"]["metadata"]["doc73_auto_identity_anchor_state"] == "unbound"
-
-    rebound = handlers.post_project_job_select(
-        project["project_id"],
-        job["job_id"],
-        {
-            "selected_output_id": anchor.output_id,
-            "metadata": {"identity_anchor_action": "bind"},
-        },
-    )
-    rebound_anchor = rebound["project"]["metadata"]["doc73_auto_identity_anchor"]
-    assert rebound_anchor["state"] == "bound"
-    assert rebound_anchor["can_unbind"] is True
-    assert rebound["context"]["metadata"]["doc73_auto_identity_anchor_state"] == "bound"
-
-    handlers.project_service.project_store.append_private_record(
-        project["project_id"],
-        "doc73_auto_identity_anchor_controls_v1",
-        {
-            "schema_version": "doc73_auto_identity_anchor_control_v1",
-            "project_id": project["project_id"],
-            "job_id": job["job_id"],
-            "output_id": anchor.output_id,
-            "state": "bound",
-            "changed_at": "tampered",
-            "unexpected": True,
-        },
-    )
-    invalid_detail = handlers.get_project(project["project_id"])
-    assert "doc73_auto_identity_anchor" not in invalid_detail["project"]["metadata"]
-    invalid_context = handlers.get_project_context(project["project_id"])
-    assert invalid_context["metadata"]["doc73_auto_identity_anchor_state"] == "invalid"
+    detail=handlers.get_project(project["project_id"])
+    assert "doc73_auto_identity_anchor" not in detail["project"]["metadata"]
+    assert detail["project"]["metadata"]["continuity_anchor"]["active_continuity_anchor"] is None
+    review=handlers.get_project_outputs(project_id=project["project_id"])
+    assert anchor.output_id in {item["output_id"] for item in review["review_items"]}
+    with pytest.raises(ValueError):
+        handlers.project_service.bind_continuity_anchor(project["project_id"],{
+            "output_id":anchor.output_id,"expected_job_id":job["job_id"],
+            "expected_version":detail["project"]["metadata"]["continuity_anchor"]["version"],"confirm_binding":True})
+    monkeypatch.setattr(handlers.service,"get_job",original_get_job)
+    certify_output(handlers.service,anchor)
+    before=handlers.project_service.get_continuity_anchor(project["project_id"])
+    bound=handlers.project_service.bind_continuity_anchor(project["project_id"],{
+        "output_id":anchor.output_id,"expected_job_id":job["job_id"],"expected_version":before["version"],"confirm_binding":True})
+    assert bound["active_continuity_anchor"]["output_id"]==anchor.output_id
+    unbound=handlers.project_service.unbind_continuity_anchor(project["project_id"],{"expected_version":bound["version"],"confirm_unbind":True})
+    handlers.project_service.project_store.append_private_record(project["project_id"],"doc73_auto_identity_anchor_controls_v1",{
+        "schema_version":"doc73_auto_identity_anchor_control_v1","project_id":project["project_id"],
+        "job_id":job["job_id"],"output_id":anchor.output_id,"state":"bound","changed_at":"tampered","unexpected":True})
+    assert handlers.project_service.get_continuity_anchor(project["project_id"]) == unbound
+    assert unbound["state"]=="unbound" and unbound["auto_enabled"] is False
 
 
 def test_project_outputs_separate_rejected_pixels_from_formal_delivery(tmp_path) -> None:
@@ -2560,7 +2477,7 @@ def test_project_output_board_discloses_safe_shared_review_state() -> None:
     assert "function mobileV3ReviewOutputsForProject(projectId)" in mobile
     assert "function mobileV3CanonicalFinalDelivery(item)" in mobile
     assert 'mobileV3OutputDeliveryState(item) !== "final_delivery"' in mobile
-    assert "mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs);" in mobile
+    assert "mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs, historyOutputs);" in mobile
 
 
 def test_v3_template_catalog_rerenders_after_initial_loading_settles() -> None:
@@ -2611,7 +2528,7 @@ def test_v3_terminal_failure_never_uses_successful_image_ready_copy() -> None:
     renderer = source[renderer_start:renderer_end]
 
     footnote_branch = renderer.index("els.v3SummaryFootnote.textContent = deliveryWithheld")
-    withheld_copy = renderer.index("图片已生成，但未通过自动质量审查；项目已保留，可以查看复核图或修改需求后重新生成。")
+    withheld_copy = renderer.index("v3JobFinalDeliveryNotice(v3State.currentJob)", footnote_branch)
     success_copy = renderer.index("图片已准备好，下一步可以挑选满意方向。")
     no_delivery_copy = renderer.index("本次没有交付图片，项目记录已保留；不会自动重复提交。")
 

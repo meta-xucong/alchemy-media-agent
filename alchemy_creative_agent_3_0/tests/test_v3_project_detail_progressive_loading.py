@@ -361,6 +361,11 @@ def test_mobile_releases_project_mask_after_first_preview_while_history_is_slow(
                 ({ project, template, preview }) => {
                   const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
                   const requests = [];
+                  // A causal barrier proves that preview release does not
+                  // wait for history, independent of a busy CI machine's clock.
+                  const historyGate = new Promise(resolve => { window.__releaseMobileHistory = resolve; });
+                  window.__mobileHistoryCompleted = 0;
+                  window.__mobileHistoryPending = 0;
                   const projectPayload = { project, templates: [template], metadata: {} };
                   const outputsPayload = { items: [preview], review_items: [] };
                   window.fetch = async (input, init = {}) => {
@@ -373,7 +378,11 @@ def test_mobile_releases_project_mask_after_first_preview_while_history_is_slow(
                     const isPreview = url.includes("/project-outputs") && url.includes("surface=delivery_preview");
                     const isOutputs = url.includes("/project-outputs") && !isPreview;
                     if (isSummary || isPreview) await delay(35);
-                    if (isFullProject || isTimeline || isOutputs) await delay(420);
+                    if (isFullProject || isTimeline || isOutputs) {
+                      window.__mobileHistoryPending++;
+                      await historyGate;
+                      window.__mobileHistoryCompleted++;
+                    }
                     if (isSummary) return new Response(JSON.stringify(projectPayload), { status: 200 });
                     if (isPreview || isOutputs) return new Response(JSON.stringify(outputsPayload), { status: 200 });
                     if (isTimeline) return new Response(JSON.stringify({ items: [] }), { status: 200 });
@@ -398,6 +407,8 @@ def test_mobile_releases_project_mask_after_first_preview_while_history_is_slow(
                 """
                 () => ({
                   releasedMs: performance.now() - window.__mobileProgressiveStarted,
+                  historyCompleted: window.__mobileHistoryCompleted,
+                  historyPending: window.__mobileHistoryPending,
                   backgroundRequests: window.__mobileProgressiveRequests.filter(({ url }) =>
                     url.includes("/timeline") || url.includes("/project-outputs") || url.includes("/projects/mobile-progressive-project")
                   ).length,
@@ -407,6 +418,8 @@ def test_mobile_releases_project_mask_after_first_preview_while_history_is_slow(
             )
             assert result["firstPreviewCount"] == 1
             assert result["backgroundRequests"] >= 3
-            assert result["releasedMs"] < 220
+            assert result["historyPending"] >= 1
+            assert result["historyCompleted"] == 0
+            page.evaluate("window.__releaseMobileHistory()")
         finally:
             browser.close()

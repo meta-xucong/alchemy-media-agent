@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..reference_input_plan import PLAN_KEY, plan_from_metadata, digest as reference_plan_digest
+
 import asyncio
 from dataclasses import dataclass, field
 import hashlib
@@ -299,6 +301,7 @@ def build_provider_generation_request(
         metadata={
             "refine_round": refine_round,
             "mock_profile": metadata.get("mock_profile", "balanced"),
+            **({PLAN_KEY:metadata[PLAN_KEY]} if PLAN_KEY in metadata else {}),
             "job_id": job_id or metadata.get("job_id"),
             "quality_mode": metadata.get("quality_mode", "standard"),
             "uploaded_assets": metadata.get("uploaded_assets", []),
@@ -1391,6 +1394,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "reference_truth_package": reference_truth_package,
                     "provider_reference_assets": provider_reference_assets,
                     "provider_reference_resolution_audit": provider_reference_resolution_audit,
+                    "reference_input_plan_receipt": asset_plan.get("reference_input_plan_receipt"),
                     "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                     "final_provider_prompt": final_provider_prompt,
                     "final_provider_prompt_chars": len(final_provider_prompt),
@@ -1504,6 +1508,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "reference_truth_package": reference_truth_package,
                         "provider_reference_assets": provider_reference_assets,
                         "provider_reference_resolution_audit": provider_reference_resolution_audit,
+                    "reference_input_plan_receipt": asset_plan.get("reference_input_plan_receipt"),
                         "compiled_visual_direction": request.prompt_compilation.visual_prompt,
                         "final_provider_prompt": final_provider_prompt,
                         "final_provider_prompt_chars": len(final_provider_prompt),
@@ -1586,6 +1591,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "reference_truth_package": reference_truth_package,
                 "provider_reference_assets": provider_reference_assets,
                 "provider_reference_resolution_audit": provider_reference_resolution_audit,
+                    "reference_input_plan_receipt": asset_plan.get("reference_input_plan_receipt"),
                 "reference_asset_ids": reference_asset_ids,
                 "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                 "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
@@ -2346,6 +2352,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _raw_reference_assets(request: GenerationRequest) -> list[dict[str, Any]]:
         """Read declared reference evidence without materializing or mutating it."""
 
+        plan = plan_from_metadata(ProductionImageGenerationProvider._generation_request_metadata(request))
+        if plan is not None:
+            return plan.references()
         values: list[Any] = []
         for source in (
             request.metadata.get("reference_assets"),
@@ -2513,6 +2522,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         admitted_reference_assets = [] if self._has_doc269_ecommerce_physical_plan(request) else self._reference_assets(request)
         asset_plan = self._asset_plan(request, admitted_reference_assets)
         asset_plan = self._provider_materialization_asset_plan(request, asset_plan)
+        self._bind_reference_materialization_receipt(request, asset_plan)
         self._assert_professional_view_evidence_ready(request, asset_plan)
         # ``asset_plan`` is the single provider-input authority.  The Web
         # adapter reads its ``storage_path`` entries, so this materializer and
@@ -2677,6 +2687,28 @@ class ProductionImageGenerationProvider(GenerationProvider):
             settings.openai_base_url = settings.lab_openai_base_url
 
     def _reference_assets(self, request: GenerationRequest) -> list[dict[str, Any]]:
+        plan = plan_from_metadata(self._generation_request_metadata(request), job_id=str(request.metadata.get("job_id") or "") or None)
+        if plan is not None:
+            sources = plan.references()
+            mode = plan.as_dict()["project_mode"]
+            if mode == "ecommerce":
+                sources = self._reference_input_scope(request, sources)
+            exact, seen = [], set()
+            for source in sources:
+                ok, reason = self._reference_technical_admission(Path(source["file_path"]))
+                if not ok:
+                    raise ReferenceInputAdmissionError("A frozen reference is not usable.", provider=self.provider_name,
+                        detail={"reference_input_failure_code":"reference_input_unsupported", "reason":reason})
+                # Approved Professional views have distinct provenance even when
+                # test/source bytes coincide; Standard deduplicates identical bytes.
+                key = source["content_sha256"] if mode == "standard" else source["asset_id"]
+                if key not in seen:
+                    exact.append(source); seen.add(key)
+            limit = self._reference_capacity_limit(request, exact)
+            if limit is not None and len(exact) > limit:
+                raise ReferenceInputAdmissionError("Frozen reference plan exceeds provider capacity.", provider=self.provider_name,
+                    detail={"reference_input_failure_code":"reference_input_plan_over_capacity", "reference_count":len(exact), "maximum_reference_images":limit})
+            return exact
         raw_assets = request.metadata.get("uploaded_assets")
         if not isinstance(raw_assets, list):
             raw_assets = request.generation_plan.metadata.get("uploaded_assets", [])
@@ -3536,7 +3568,89 @@ class ProductionImageGenerationProvider(GenerationProvider):
         except OSError:
             return ""
 
+    def _standard_direct_asset_plan(self, request, references: list[dict], plan) -> dict:
+        # One physical representation per declared source. Do not even construct
+        # product/portrait crops for Standard Jobs; no downstream trimming.
+        truth = self._reference_truth_package(request, references,
+            allow_product_language=self._product_language_allowed(request,references),
+            human_photo_context=bool(self._human_photorealism_guidance(request)))
+        assets=[]
+        for index, source in enumerate(references):
+            entry=dict(truth.get("sources",{}).get(source["asset_id"],{}))
+            layers=list(entry.get("truth_layers") or [])
+            if source.get("reference_channel") == "continuity":
+                layers=[]  # Continuity is not a new uploaded-identity certification.
+            policy=self._reference_channel_policy_for_asset(request,source)
+            assets.append({"asset_id":source["asset_id"],"source_asset_id":source["asset_id"],
+                "role":_v1_reference_role(source.get("role")),"source_type":source.get("source_type"),
+                "priority":100-index,"provider_input_mode":"reference_image","storage_path":source["file_path"],
+                "filename":source.get("filename") or Path(source["file_path"]).name,"mime_type":source.get("mime_type"),
+                "provider_input_required":True,"provider_reference_derivative":False,"selected_representation":"original_full_frame",
+                "prompt_constraints":self._string_list(policy.get("provider_prompt_rules")),
+                "negative_constraints":[],"truth_layers":layers,"reference_truth_layer":next((v for v in layers if v != "style_context_truth"), layers[0] if layers else None),
+                "provider_reference_bytes":Path(source["file_path"]).stat().st_size})
+        return {"asset_mode":"advanced","assets":assets,
+            "provider_requirements":{"needs_image_reference":bool(assets),"needs_image_edit":False},
+            "provider_input_plan":{"operation":"image_edit_with_reference_images" if assets else "generate",
+                "reference_image_asset_ids":[a["asset_id"] for a in assets],"reference_image_count":len(assets),
+                "original_reference_asset_ids":[a["asset_id"] for a in assets],
+                "requires_image_reference":bool(assets),"reference_truth_package":truth,
+                "reference_truth_layers":[{"asset_id":a["asset_id"],"source_asset_id":a["source_asset_id"],
+                    "truth_layer":a["reference_truth_layer"],"truth_layers":a["truth_layers"],"provider_reference_derivative":False} for a in assets]}}
+
+    def _bind_reference_materialization_receipt(self, request, asset_plan: dict) -> None:
+        plan=plan_from_metadata(self._generation_request_metadata(request), job_id=str(request.metadata.get("job_id") or "") or None)
+        if plan is None:
+            return
+        logical=plan.as_dict()
+        sources=plan.references()
+        allowed={s["asset_id"]:s for s in sources}
+        physical=[a for a in asset_plan.get("assets",[]) if a.get("provider_input_mode")=="reference_image"]
+        limit=self._reference_capacity_limit(request, sources)
+        if limit is not None and len(physical)>limit:
+            raise ReferenceInputAdmissionError("Frozen reference plan exceeds provider capacity.",provider=self.provider_name,
+                detail={"reference_input_failure_code":"reference_input_plan_over_capacity","reference_count":len(physical),"maximum_reference_images":limit})
+        records=[]
+        for item in physical:
+            source_id=str(item.get("source_asset_id") or item.get("asset_id") or "")
+            if source_id not in allowed:
+                raise ValueError("reference_input_plan_unbound_source")
+            content_hash=hashlib.sha256(Path(item["storage_path"]).read_bytes()).hexdigest()
+            if logical["project_mode"]=="standard" and (item.get("provider_reference_derivative") or content_hash!=allowed[source_id]["content_sha256"]):
+                raise ValueError("reference_input_plan_unapproved_representation")
+            records.append({"source_asset_id":source_id,"asset_id":item["asset_id"],"content_sha256":content_hash,
+                "selected_representation":item.get("derivative_kind") or "original_full_frame",
+                "derived":item.get("provider_reference_derivative") is True,"required":True})
+        if logical["project_mode"] == "standard":
+            seen_hashes = set()
+            expected = []
+            for source in sources:
+                if source["content_sha256"] not in seen_hashes:
+                    expected.append((source["asset_id"], source["content_sha256"]))
+                    seen_hashes.add(source["content_sha256"])
+            actual = [(record["source_asset_id"], record["content_sha256"]) for record in records]
+            if actual != expected or len(records) != logical["physical_provider_reference_count"]:
+                raise ValueError("reference_input_plan_physical_count_mismatch")
+        anchor=logical.get("continuity_anchor")
+        if anchor and anchor["reference"]["asset_id"] not in {r["source_asset_id"] for r in records}:
+            raise ValueError("reference_input_plan_anchor_missing")
+        receipt={"schema_version":"v3_reference_materialization_receipt_v1","job_id":logical["job_id"],
+            "project_id":logical["project_id"],"plan_digest":logical["plan_digest"],**plan.facts(),
+            "physical_count_state":"verified","physical_provider_reference_count":len(records),
+            "max_physical_provider_reference_count":limit,"derived_evidence_count":sum(r["derived"] for r in records),
+            "suppressed_reference_count":len(allowed.keys()-{r["source_asset_id"] for r in records}),
+            "representations":records}
+        receipt["receipt_digest"]=reference_plan_digest(receipt)
+        asset_plan["reference_input_plan_receipt"]=receipt
+        request.metadata["reference_input_plan_receipt"]=receipt
+
     def _asset_plan(self, request: GenerationRequest, reference_assets: list[dict[str, Any]]) -> dict[str, Any]:
+        scoped_plan = plan_from_metadata(self._generation_request_metadata(request))
+        if scoped_plan is not None and scoped_plan.as_dict()["project_mode"] == "standard":
+            return self._standard_direct_asset_plan(request, reference_assets, scoped_plan)
+        if (scoped_plan is not None and scoped_plan.as_dict()["project_mode"] == "ecommerce"
+                and reference_assets and not self._has_doc269_ecommerce_physical_plan(request)):
+            raise ValueError("reference_input_plan_ecommerce_physical_plan_missing")
         allow_product_language = self._product_language_allowed(request, reference_assets)
         human_guidance = self._human_photorealism_guidance(request)
         human_photo_context = bool(human_guidance) or self._looks_like_human_photo_request(request)
@@ -3573,6 +3687,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         suppressed_original_ids: list[str] = []
         reference_sanitization_records: list[dict[str, Any]] = []
         for index, asset in enumerate(reference_assets):
+            if scoped_plan is not None and asset.get("reference_channel") == "continuity":
+                assets.extend(self._standard_direct_asset_plan(request, [asset], scoped_plan)["assets"])
+                continue
             role = str(asset.get("role") or "")
             use_policy = str(asset.get("use_policy") or role)
             truth_entry = dict((truth_package.get("sources") or {}).get(asset["asset_id"]) or {})
@@ -4095,6 +4212,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if isinstance(generation_plan_metadata, dict):
             metadata.update(generation_plan_metadata)
         if isinstance(request.metadata, dict):
+            if (PLAN_KEY in metadata and PLAN_KEY in request.metadata
+                    and metadata[PLAN_KEY] != request.metadata[PLAN_KEY]):
+                raise ValueError("reference_input_plan_transport_conflict")
             metadata.update(request.metadata)
         return metadata
 
@@ -4769,7 +4889,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
             layers: list[str] = []
             priority_note = "style_or_context_reference"
             channel_policy = self._reference_channel_policy_for_asset(request, asset)
-            if is_doc73_continuity:
+            if asset.get("reference_channel") == "continuity":
+                priority_note = "single_project_continuity_input"
+            elif is_doc73_continuity:
                 # Same-batch continuity is provider input context only.  It is
                 # deliberately represented in the package without any formal
                 # truth layer so the review resolver cannot manufacture a
@@ -7847,7 +7969,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             and self._is_strict_character_card_body_refresh(metadata)
             and str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip() == "reference_assisted"
         ):
-            return asset_plan
+            return super()._provider_materialization_asset_plan(request, asset_plan)
 
         physical_assets = [
             dict(item or {})
@@ -8192,6 +8314,10 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             self._is_character_card_body_mcp_materialization(metadata)
             and self._is_strict_character_card_body_refresh(metadata)
         )
+        reference_receipt = (variables.get("asset_plan") or {}).get("reference_input_plan_receipt")
+        if isinstance(reference_receipt, dict):
+            contract["reference_input_plan_digest"] = reference_receipt["plan_digest"]
+            contract["reference_input_receipt_digest"] = reference_receipt["receipt_digest"]
         context = {
             "operation_id": str(
                 metadata.get("mcp_operation_id")

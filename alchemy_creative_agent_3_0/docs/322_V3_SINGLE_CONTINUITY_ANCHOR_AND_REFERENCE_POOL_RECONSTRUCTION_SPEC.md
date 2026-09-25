@@ -1,6 +1,6 @@
 # Doc322 - V3 Single Continuity Anchor And Mode-Scoped Reference Input Reconstruction
 
-状态：设计冻结 v2，待实现
+状态：代码已实现，本地专项模拟通过；真实环境待验收。边界与旧基线失败见 [322_IMPLEMENTATION_AUDIT.md](322_IMPLEMENTATION_AUDIT.md)，实测清单见 [322_TEST_HANDOFF.md](322_TEST_HANDOFF.md)。
 
 范围：V3 Foundation reference/continuity layer
 
@@ -220,6 +220,7 @@ POST /api/v3/creative-agent/projects/{project_id}/continuity-anchor/unbind
   "output_id": "v3_output_xxx",
   "expected_job_id": "job_xxx",
   "confirm_binding": true,
+  "expected_version": 3,
   "reason": "用户选择这张图作为后续人物/风格连续性主图"
 }
 ```
@@ -262,6 +263,7 @@ active(anchor_A)
 ```json
 {
   "confirm_unbind": true,
+  "expected_version": 4,
   "reason": "用户不再沿用当前连续性主图"
 }
 ```

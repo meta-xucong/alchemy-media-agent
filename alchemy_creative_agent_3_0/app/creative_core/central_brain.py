@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..reference_input_plan import PLAN_KEY, plan_from_metadata
+
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -385,8 +387,10 @@ class CentralCreativeBrain:
         use_mock_generation = provider_strategy == ProviderStrategy.MOCK_GENERATION
         explicit_references_present = self._has_explicit_user_reference_assets(context)
         auto_identity_anchor_state = self._project_auto_identity_anchor_state(context)
+        frozen_reference_plan = plan_from_metadata(context.metadata)
         auto_identity_anchor_enabled = (
-            not use_mock_generation
+            frozen_reference_plan is None
+            and not use_mock_generation
             and not explicit_references_present
             and self._is_human_identity_suite_context(context)
             and self._generated_output_reference_chain_allowed(context)
@@ -448,6 +452,7 @@ class CentralCreativeBrain:
                 "mock_profile": mock_profile,
                 "job_id": job.job_id,
                 "quality_mode": context.metadata.get("quality_mode", "standard"),
+                PLAN_KEY: frozen_reference_plan.as_dict() if frozen_reference_plan else None,
                 "uploaded_assets": context.metadata.get("uploaded_assets", []),
                 "reference_assets": context.metadata.get("reference_assets", []),
                 "llm_brain": self._llm_brain_metadata(context),
@@ -621,6 +626,8 @@ class CentralCreativeBrain:
                     "source_rule": "first_generated_output_if_no_user_reference",
                 },
             }
+            if frozen_reference_plan is None:
+                generation_plan.metadata.pop(PLAN_KEY, None)
             if auto_identity_anchor_reference is not None:
                 generation_plan.metadata = self._with_auto_identity_anchor_reference(
                     generation_plan.metadata,
@@ -814,6 +821,9 @@ class CentralCreativeBrain:
                 "template_id": context.metadata.get("template_id"),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
+                **({PLAN_KEY:frozen_reference_plan.as_dict(), "reference_input_summary":frozen_reference_plan.facts(),
+                    "doc322_auto_anchor_candidate":(not use_mock_generation and self._is_human_identity_suite_context(context)
+                        and self._generated_output_reference_chain_allowed(context))} if frozen_reference_plan else {}),
                 "requested_image_count": _requested_image_count_for_context(context),
                 "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
                 "requested_image_aspect_ratio_source": context.metadata.get(
@@ -1244,6 +1254,10 @@ class CentralCreativeBrain:
 
     def _has_explicit_user_reference_assets(self, context: PipelineContext) -> bool:
         metadata = dict(context.metadata or {})
+        frozen = plan_from_metadata(metadata)
+        if frozen is not None:
+            # Direct uploads are evidence, not proof of a bound generated anchor.
+            return frozen.facts()["has_explicit_continuity_anchor"]
         for key in ("reference_assets", "uploaded_assets"):
             if self._non_empty_dict_list(metadata.get(key)):
                 return True
