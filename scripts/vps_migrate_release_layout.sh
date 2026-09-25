@@ -85,6 +85,7 @@ ensure_access_bridge_secret() {
 
   [[ -f "${live_env}" ]] || { echo "V1 env file is missing: ${live_env}" >&2; exit 1; }
   [[ -f "${v2_env}" ]] || { echo "V2 env file is missing: ${v2_env}" >&2; exit 1; }
+  sed -i 's/\r$//' "${live_env}" "${v2_env}"
   bridge_secret="$(env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET")"
   if [[ -z "${bridge_secret}" ]]; then
     if command -v openssl >/dev/null 2>&1; then

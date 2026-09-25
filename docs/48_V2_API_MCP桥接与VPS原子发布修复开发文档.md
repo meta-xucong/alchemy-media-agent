@@ -144,6 +144,9 @@ GitHub Actions 仅上传必要的迁移脚本，向 VPS 传入 checkout 的完�
 迁移后的值，V1 启动还使用一次性的 0600 权限 Compose override 显式注入桥接密钥。
 override 在容器启动命令返回后立即删除，不进入 release、Git 或日志。
 
+迁移开始时还会清理两份受控 env 文件的 CRLF 行尾，再写入规范值，避免 Docker
+将隐藏的 `CR` 字符带入 V1 进程而导致 HMAC 指纹表面一致、实际验签失败。
+
 ## 5. 验收矩阵
 
 | 编号 | 验收条件 |
