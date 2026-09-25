@@ -36,26 +36,6 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Sync source to VPS
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
-          DEPLOY_DIR: ${{ inputs.deploy_dir }}
-        run: |
-          REMOTE="${VPS_USER:-root}@${VPS_HOST}"
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "mkdir -p '$DEPLOY_DIR'"
-          tar \
-            --exclude='.git' \
-            --exclude='.media_storage' \
-            --exclude='src_skeleton/.media_storage' \
-            --exclude='src_skeleton/.env' \
-            --exclude='.codex-longrun' \
-            --exclude='.codex-tmp' \
-            --exclude='tmp' \
-            --exclude='**/__pycache__' \
-            -czf - . | ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "tar -xzf - -C '$DEPLOY_DIR'"
-
       - name: Ensure runtime env exists
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -126,4 +106,5 @@ jobs:
           V1_MEDIA_STORAGE_DIR: ${{ vars.V1_MEDIA_STORAGE_DIR || '/var/lib/alchemy/v1/media_storage' }}
         run: |
           REMOTE="${VPS_USER:-root}@${VPS_HOST}"
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "cd '$DEPLOY_DIR' && APP_PORT='$APP_PORT' V1_MEDIA_STORAGE_DIR='$V1_MEDIA_STORAGE_DIR' ./scripts/deploy_vps.sh --local --skip-env"
+          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" scripts/vps_migrate_release_layout.sh "$REMOTE:/tmp/alchemy-vps-migrate-release-layout.sh"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "chmod 755 /tmp/alchemy-vps-migrate-release-layout.sh && TARGET_SHA='$GITHUB_SHA' DEPLOY_LINK='$DEPLOY_DIR' APP_PORT='$APP_PORT' REPO_URL='https://github.com/meta-xucong/alchemy-media-agent.git' V1_MEDIA_STORAGE_DIR='$V1_MEDIA_STORAGE_DIR' bash /tmp/alchemy-vps-migrate-release-layout.sh"

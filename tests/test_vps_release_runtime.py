@@ -93,6 +93,15 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "VPS_ALCHEMY_SUB2API=untouched" in migration
     assert 'runtime_requirements="${candidate}/custom_media_agent_2_0/requirements.txt"' in migration
     assert migration.index('v2_runtime_guard.py" --release "${candidate}" --verify') < migration.index('ln -sfn "${candidate}" "${DEPLOY_LINK}"')
+    assert "ensure_access_bridge_secret" in migration
+    assert "ALCHEMY_ACCESS_BRIDGE_SECRET" in migration
+    assert "V2 env file is missing" in migration
+    assert 'APP_PORT="${APP_PORT:-8017}"' in migration
+    assert 'active release link; use scripts/vps_migrate_release_layout.sh' in deploy
+    workflow = (root / ".github" / "workflows" / "deploy-vps.yml").read_text(encoding="utf-8")
+    assert "Sync source to VPS" not in workflow
+    assert "vps_migrate_release_layout.sh" in workflow
+    assert "TARGET_SHA='$GITHUB_SHA'" in workflow
 
 
 def test_runtime_guard_requires_bridge_transport_import() -> None:

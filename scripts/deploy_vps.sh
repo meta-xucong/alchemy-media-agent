@@ -126,6 +126,10 @@ git_with_auth() {
 }
 
 sync_repo() {
+  if [[ -L "${DEPLOY_DIR}" ]]; then
+    echo "${DEPLOY_DIR} is an active release link; use scripts/vps_migrate_release_layout.sh for atomic deployment." >&2
+    exit 1
+  fi
   if [[ "${LOCAL_MODE}" == "1" ]]; then
     DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     return
