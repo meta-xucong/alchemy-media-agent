@@ -107,6 +107,9 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "nginx -t" in migration
     assert "assert_runtime_access_config" in migration
     assert "/proc/${api_pid}/environ" in migration
+    assert "start_v1_container" in migration
+    assert 'ALCHEMY_ACCESS_BRIDGE_SECRET: "${bridge_secret}"' in migration
+    assert '"${override_file}"' in migration
     assert "V2 env file is missing" in migration
     assert 'APP_PORT="${APP_PORT:-8017}"' in migration
     assert 'active release link; use scripts/vps_migrate_release_layout.sh' in deploy

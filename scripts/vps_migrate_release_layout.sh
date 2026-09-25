@@ -192,6 +192,36 @@ assert_runtime_access_config() {
   }
 }
 
+start_v1_container() {
+  local release_dir="$1"
+  local bridge_secret=""
+  local override_file=""
+  local status=0
+
+  bridge_secret="$(env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET")"
+  [[ -n "${bridge_secret}" ]] || { echo "V1 bridge secret is missing before container start." >&2; exit 1; }
+  override_file="$(mktemp)"
+  chmod 600 "${override_file}"
+  cat > "${override_file}" <<EOF
+services:
+  alchemy-media-agent:
+    environment:
+      ALCHEMY_ACCESS_BRIDGE_SECRET: "${bridge_secret}"
+EOF
+  if (
+    cd "${release_dir}"
+    APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL=http://127.0.0.1:8020 \
+      V1_MEDIA_STORAGE_DIR="${v1_media}" V2_STORAGE_DIR="${v2_storage}" \
+      "${compose_cmd[@]}" -f "${release_dir}/docker-compose.yml" -f "${override_file}" up -d --no-build "${V1_CONTAINER}"
+  ); then
+    status=0
+  else
+    status=$?
+  fi
+  rm -f "${override_file}"
+  return "${status}"
+}
+
 wait_for_unit() {
   local unit="$1"
   for _ in $(seq 1 60); do
@@ -243,12 +273,7 @@ rollback() {
   fi
   docker rm -f "${V1_CONTAINER}" >/dev/null 2>&1 || true
   if [[ -f "${old_release}/docker-compose.yml" ]]; then
-    (
-      cd "${old_release}"
-      APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL=http://127.0.0.1:8020 \
-        V1_MEDIA_STORAGE_DIR="${v1_media}" V2_STORAGE_DIR="${v2_storage}" \
-        "${compose_cmd[@]}" -f "${old_release}/docker-compose.yml" up -d --no-build "${V1_CONTAINER}"
-    ) || true
+    start_v1_container "${old_release}" || true
   fi
   for unit in "${V2_UNITS[@]}"; do
     systemctl restart "${unit}" || true
@@ -314,12 +339,7 @@ done
 systemctl daemon-reload
 
 docker rm -f "${V1_CONTAINER}" >/dev/null 2>&1 || true
-(
-  cd "${candidate}"
-  APP_PORT="${APP_PORT}" V2_API_PROXY_BASE_URL=http://127.0.0.1:8020 \
-    V1_MEDIA_STORAGE_DIR="${v1_media}" V2_STORAGE_DIR="${v2_storage}" \
-    "${compose_cmd[@]}" -f "${candidate}/docker-compose.yml" up -d --no-build "${V1_CONTAINER}"
-)
+start_v1_container "${candidate}"
 for unit in "${V2_UNITS[@]}"; do
   systemctl restart "${unit}"
 done

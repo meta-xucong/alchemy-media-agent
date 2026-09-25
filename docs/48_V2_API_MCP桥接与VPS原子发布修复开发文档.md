@@ -140,6 +140,10 @@ GitHub Actions 仅上传必要的迁移脚本，向 VPS 传入 checkout 的完�
 重启后还检查 V1 容器和 V2 API 进程实际读取的桥接密钥 SHA256 指纹，以及两侧
 `VEYRA_AUTH_ENABLED=true`；只输出匹配状态，不输出密钥原文。
 
+由于 Docker Compose 的 `env_file` 只保证文件注入，不足以证明最终容器环境已采用
+迁移后的值，V1 启动还使用一次性的 0600 权限 Compose override 显式注入桥接密钥。
+override 在容器启动命令返回后立即删除，不进入 release、Git 或日志。
+
 ## 5. 验收矩阵
 
 | 编号 | 验收条件 |
