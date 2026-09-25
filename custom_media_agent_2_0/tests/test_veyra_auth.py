@@ -73,7 +73,7 @@ def test_invalid_loopback_access_bridge_fails_closed(monkeypatch: pytest.MonkeyP
     assert raised.value.detail["error_code"] == "access_bridge_invalid"
 
 
-def test_non_loopback_access_bridge_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_loopback_access_bridge_fails_closed_when_signature_is_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
     object.__setattr__(settings, "veyra_auth_enabled", True)
     request = Request(
         {
@@ -92,7 +92,7 @@ def test_non_loopback_access_bridge_fails_closed(monkeypatch: pytest.MonkeyPatch
     with pytest.raises(HTTPException) as raised:
         main_module._veyra_user_id_from_request(request)
     assert raised.value.status_code == 401
-    assert raised.value.detail["error_code"] == "access_bridge_untrusted_source"
+    assert raised.value.detail["error_code"] == "access_bridge_invalid"
 
 
 def test_private_access_bridge_source_can_authenticate(monkeypatch: pytest.MonkeyPatch) -> None:

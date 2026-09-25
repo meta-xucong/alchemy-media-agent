@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import ipaddress
 import json
 import logging
 from collections import OrderedDict
@@ -328,18 +327,7 @@ def _veyra_session_token_from_request(request: Request, authorization: str = "")
     return str(request.cookies.get(settings.veyra_session_cookie_name) or "").strip()
 
 
-def _access_bridge_source_trusted(host: str) -> bool:
-    normalized = str(host or "").strip().lower()
-    if normalized in {"127.0.0.1", "::1", "localhost"}:
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_private
-    except ValueError:
-        return False
-
-
 def _veyra_user_id_from_request(request: Request, authorization: str = "") -> int:
-    client_host = str(getattr(getattr(request, "client", None), "host", "") or "").lower()
     bridge_header_present = any(
         name in request.headers
         for name in (
@@ -351,7 +339,7 @@ def _veyra_user_id_from_request(request: Request, authorization: str = "") -> in
             "x-alchemy-access-signature",
         )
     )
-    if _access_bridge_source_trusted(client_host):
+    if bridge_header_present:
         bridged = verify_access_headers(
             request.headers,
             method=request.method,
@@ -365,11 +353,6 @@ def _veyra_user_id_from_request(request: Request, authorization: str = "") -> in
                 status_code=401,
                 detail={"error_code": "access_bridge_invalid", "message": "Alchemy access bridge identity is invalid."},
             )
-    elif bridge_header_present:
-        raise HTTPException(
-            status_code=401,
-            detail={"error_code": "access_bridge_untrusted_source", "message": "Alchemy access bridge source is not trusted."},
-        )
     token = _veyra_session_token_from_request(request, authorization)
     if not token:
         raise HTTPException(status_code=401, detail={"error_code": "veyra_session_required", "message": "Veyra session is required."})
