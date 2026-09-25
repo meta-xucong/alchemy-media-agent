@@ -146,7 +146,10 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
             response.headers["Cache-Control"] = "no-store"
             response.headers["Vary"] = "Authorization, Cookie"
             return response
-        return await call_next(request)
+        response = await call_next(request)
+        if getattr(request.state, "alchemy_api_user_id", None) is not None:
+            response.headers["X-Alchemy-API-Key-Auth"] = "accepted"
+        return response
 
     router = APIRouter(prefix="/api/access", include_in_schema=False)
 
