@@ -5019,7 +5019,8 @@ def _strong_reference_aliases(binding: StrongReferenceBinding) -> set[str]:
             aliases.add(f"id:{text}")
     file_path = str(binding.file_path or "").strip()
     if file_path:
-        aliases.add(f"path:{file_path.replace('\\', '/')}")
+        normalized_path = file_path.replace("\\", "/")
+        aliases.add(f"path:{normalized_path}")
     return aliases
 
 
