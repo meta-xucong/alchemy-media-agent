@@ -66,7 +66,7 @@ class ProductToolError(ValueError):
             result["outcome_unknown"] = True
             result["instruction"] = "Do not repeat the write; check the existing project/operation or upload first."
         elif self.http_status == 401 or self.code == "product_session_required":
-            result["instruction"] = "Sign in through the existing account flow and supply a valid session."
+            result["instruction"] = "Use a valid Alchemy API key from /api-access or a valid existing account session."
         return result
 
 

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Veyra Billing Admin</title>
     <link rel="stylesheet" href="/static/styles.css?v=__STATIC_STYLES_VERSION__" />
+    <link rel="stylesheet" href="/static/api-access.css?v=__API_ACCESS_CSS_VERSION__" />
   </head>
   <body>
     <div class="app-shell billing-admin-shell">
@@ -47,6 +48,11 @@
           </form>
         </section>
 
+        <section class="panel flow-section" aria-label="API 管理">
+          <div class="panel-head section-title"><div><p class="eyebrow">API Access</p><h3>API 密钥管理</h3></div><a class="button secondary" href="/admin/api-access">查看与管理密钥</a></div>
+          <div id="apiAdminOverview" aria-live="polite">正在读取密钥概览…</div>
+        </section>
+
         <section class="panel flow-section retention-console-panel">
           <div class="panel-head section-title">
             <div>
@@ -77,5 +83,6 @@
 
     <div id="globalToast" class="global-toast" role="status" aria-live="polite" hidden></div>
     <script src="/static/billing-admin.js?v=__STATIC_BILLING_ADMIN_VERSION__" defer></script>
+    <script src="/static/api-access.js?v=__API_ACCESS_JS_VERSION__" defer></script>
   </body>
 </html>

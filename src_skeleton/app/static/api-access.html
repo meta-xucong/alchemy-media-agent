@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>API 与 MCP · Alchemy</title>
+  <link rel="stylesheet" href="/static/api-access.css?v=__API_ACCESS_CSS_VERSION__">
+  <script src="/static/api-access.js?v=__API_ACCESS_JS_VERSION__" defer></script>
+</head>
+<body class="access-body">
+  <header class="access-header">
+    <a class="access-brand" href="/">A<span>ALCHEMY</span></a>
+    <nav aria-label="页面导航"><a href="/">返回创作</a><a id="adminLink" href="/admin/api-access" hidden>API 管理</a><span id="accountLabel">正在验证登录…</span></nav>
+  </header>
+  <main id="apiAccessApp" class="access-main">
+    <div class="access-heading"><p class="access-eyebrow">连接 · 不改变创作方式</p><h1 id="pageTitle">连接你的工具</h1><p id="pageDescription">创建密钥，连接脚本或 Alchemy MCP。账户与计费规则保持不变。</p></div>
+    <section id="accessAlert" class="access-alert" role="status" aria-live="polite" hidden></section>
+    <a id="loginLink" class="access-button" href="/" hidden>前往登录</a>
+    <section id="createPanel" class="access-card access-create">
+      <div><span class="access-step">01 / 创建</span><h2>创建一把 API 密钥</h2><p>像密码一样保管它。默认有效期 90 天，最多同时保留 5 把。</p></div>
+      <form id="createKeyForm">
+        <details class="access-options"><summary>给密钥起个名字（可选）</summary><label for="keyName">名称</label><input id="keyName" name="name" maxlength="50" placeholder="例如：我的 Codex" autocomplete="off"></details>
+        <button id="createKeyButton" class="access-button" type="submit" disabled>创建密钥</button>
+        <small>创建本身不触发生图；实际调用按原规则处理。</small>
+      </form>
+    </section>
+    <section id="adminSummary" class="access-stats" aria-label="API 概览" hidden></section>
+    <section class="access-card">
+      <div class="access-card-head"><div><span class="access-step">02 / 管理</span><h2 id="listTitle">我的密钥</h2></div><button id="refreshKeys" class="access-button secondary" type="button" disabled>刷新</button></div>
+      <form id="adminSearch" class="access-search" hidden><label for="keySearch">按名称或账户 ID 查找</label><div><input id="keySearch" maxlength="50" placeholder="名称 / 账户 ID"><button class="access-button secondary" type="submit">查找</button></div></form>
+      <p class="access-muted" id="listHelp">这里不会再次显示完整密钥。忘记密钥时，停用旧密钥后新建即可。</p>
+      <div id="keyList" class="access-key-list" aria-live="polite"><p class="access-empty">正在读取…</p></div>
+      <div id="keyPagination" class="access-pagination" hidden><button id="prevKeys" class="access-button secondary" type="button">上一页</button><span id="pageCount"></span><button id="nextKeys" class="access-button secondary" type="button">下一页</button></div>
+    </section>
+    <details id="usageHelp" class="access-card access-help"><summary>第一次使用？只需两步</summary><p>① 创建后保存密钥。② 在调用工具中填入本页的服务地址和密钥。</p><p>已经安装 Alchemy MCP 的用户，可复制「MCP 连接配置」，填入原插件的环境配置；无需更换工具或模型。尚未安装插件，请先按项目的 MCP 安装说明完成一次安装。</p><p>API 使用现有 <code>/api/v3/creative-agent/…</code>。密钥仅支持产品操作，不用于登录网页、后台管理或本地 handoff。密钥停用后，新请求立即被拒绝；已受理任务沿用原任务流程。</p><label for="serviceAddress">服务地址</label><input id="serviceAddress" readonly><button id="copyAddress" class="access-button secondary" type="button">复制地址</button></details>
+  </main>
+  <dialog id="secretDialog" class="access-dialog" aria-labelledby="secretTitle">
+    <div class="access-dialog-body"><span class="access-step">已创建</span><h2 id="secretTitle">保存好，这把钥匙只显示一次</h2><p>离开或关闭此窗口后无法找回。不要分享密钥、示例或包含它的配置。</p>
+      <label for="newSecret">完整密钥</label><textarea id="newSecret" class="access-code" readonly rows="2" spellcheck="false"></textarea>
+      <div class="access-actions"><button id="copySecret" class="access-button" type="button">选中密钥并复制</button></div>
+      <details class="access-help"><summary>用于脚本或 MCP</summary><div class="access-actions"><button id="copyApi" class="access-button secondary" type="button">复制 API 示例</button><button id="copyMcp" class="access-button secondary" type="button">复制 MCP 连接配置</button></div><p>API 示例只查询项目，不生成图片。MCP 配置用于已安装的 Alchemy 插件，不包含安装命令。</p></details>
+      <p id="secretFeedback" role="status" aria-live="polite"></p><textarea id="manualCopy" class="access-code" aria-label="请手动复制以下内容" readonly rows="5" hidden></textarea>
+      <button id="closeSecret" class="access-button secondary access-wide" type="button">我已保存，关闭</button>
+    </div>
+  </dialog>
+  <dialog id="revokeDialog" class="access-dialog" aria-labelledby="revokeTitle"><div class="access-dialog-body"><h2 id="revokeTitle">停用这把密钥？</h2><p id="revokeDescription"></p><p>使用它的工具将无法发起新请求。已有任务不会被删除，停用后不能恢复。</p><div class="access-actions"><button id="cancelRevoke" class="access-button secondary" type="button">暂不停用</button><button id="confirmRevoke" class="access-button danger" type="button">确认停用</button></div><p id="revokeFeedback" role="status" aria-live="polite"></p></div></dialog>
+  <footer class="access-footer">Alchemy · 一套账户，一条创作流程</footer>
+</body>
+</html>

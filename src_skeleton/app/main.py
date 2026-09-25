@@ -286,6 +286,8 @@ def _shell_asset_version_replacements() -> dict[str, str]:
         "__STATIC_STYLES_VERSION__": _shell_asset_version(STATIC_DIR / "styles.css"),
         "__STATIC_APP_VERSION__": _shell_asset_version(STATIC_DIR / "app.js"),
         "__STATIC_BILLING_ADMIN_VERSION__": _shell_asset_version(STATIC_DIR / "billing-admin.js"),
+        "__API_ACCESS_JS_VERSION__": _shell_asset_version(STATIC_DIR / "api-access.js"),
+        "__API_ACCESS_CSS_VERSION__": _shell_asset_version(STATIC_DIR / "api-access.css"),
         "__MOBILE_STYLES_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.css"),
         "__MOBILE_APP_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.js"),
     }
@@ -2155,6 +2157,10 @@ def _veyra_session_token_from_request(request: Request, authorization: str = "")
 
 
 def _veyra_user_id_from_request(request: Request, authorization: str = "") -> int | None:
+    # Set only by the access-key middleware after existing-account validation.
+    api_owner = getattr(getattr(request, "state", None), "alchemy_api_user_id", None)
+    if type(api_owner) is int and api_owner > 0:
+        return api_owner
     if not settings.veyra_auth_enabled:
         return None
     token = _veyra_session_token_from_request(request, authorization)
@@ -3566,3 +3572,24 @@ def _runtime_provider_settings_response(runtime_persistence_warning: str | None 
             "alchemy_lab_brain": "Alchemy Lab uses its own LLM/Vision gateway for intent planning and does not call the V2 Claude orchestrator.",
         },
     )
+
+
+# UI/credential adapter only. Existing session checks, account service and role
+# decisions are reused; API-key requests still execute the original V3 routes.
+from app.api_access import install_api_access
+install_api_access(
+    app,
+    session_user=lambda request, authorization: _veyra_user_id_from_request(request, authorization),
+    account_loader=lambda user_id: _veyra_account(user_id),
+    admin_resolver=lambda request, authorization: _require_veyra_admin(request, authorization),
+)
+
+
+@app.get("/api-access", include_in_schema=False)
+@app.get("/admin/api-access", include_in_schema=False)
+def api_access_page():
+    response = _asset_versioned_shell_response(STATIC_DIR / "api-access.html")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    return response
