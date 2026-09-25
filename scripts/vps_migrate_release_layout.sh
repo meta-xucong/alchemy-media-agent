@@ -176,6 +176,12 @@ configure_nginx_for_active_gateway() {
   systemctl reload nginx
 }
 
+report_nginx_route_summary() {
+  local summary=""
+  summary="$(nginx -T 2>/dev/null | awk '$1 == "location" || $1 == "proxy_pass" { printf "%s %s;", $1, $2 }')"
+  echo "VPS_ALCHEMY_NGINX_ROUTES=${summary}"
+}
+
 runtime_env_value() {
   local env_file="$1"
   local key="$2"
@@ -368,6 +374,7 @@ done
 wait_for_http "http://127.0.0.1:${APP_PORT}/healthz"
 wait_for_http http://127.0.0.1:8020/api/v2/health
 configure_nginx_for_active_gateway
+report_nginx_route_summary
 wait_for_http https://alchemy.aiself.vip/api/v2/health
 
 api_pid="$(systemctl show -p MainPID --value alchemy-v2-api.service)"

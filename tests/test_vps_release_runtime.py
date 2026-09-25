@@ -107,6 +107,8 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "nginx -t" in migration
     assert "/etc/nginx/conf.d/alchemy-media-agent.conf" in migration
     assert "nginx_legacy_removed" in migration
+    assert "report_nginx_route_summary" in migration
+    assert "VPS_ALCHEMY_NGINX_ROUTES" in migration
     assert "assert_runtime_access_config" in migration
     assert "fingerprint_value" in migration
     assert "/proc/${api_pid}/environ" in migration
