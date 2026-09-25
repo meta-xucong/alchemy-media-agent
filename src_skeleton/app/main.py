@@ -84,6 +84,7 @@ from app.services.alchemy_lab_uploads import (
 )
 from app.services.alchemy_lab_uploads_models import CreateLabUploadRequest, LabAssetContentUploadRequest
 from app.services.events import format_sse_events
+from app.services.access_bridge import build_access_headers
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
 from app.services.media_acceleration import signed_output_url as signed_v1_output_url
@@ -2012,15 +2013,15 @@ async def search_rare_style_explorer_styles(body: SearchLabStylesRequest, reques
 
 
 @app.get("/api/lab/history")
-def list_alchemy_lab_history(
+async def list_alchemy_lab_history(
     request: Request,
     limit: int = Query(default=50, ge=1, le=1000),
     include_mock: bool = Query(default=False),
     authorization: str = Header(default=""),
 ):
-    _require_veyra_user_if_enabled(request, authorization)
+    context = await _veyra_history_context(request, authorization)
     limit = min(limit, 200)
-    return list_lab_history(limit=limit, include_mock=include_mock)
+    return list_lab_history(limit=limit, include_mock=include_mock, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
 
 
 @app.post("/api/lab/uploads")
@@ -2073,13 +2074,13 @@ def get_lab_upload_content_endpoint(asset_id: str, request: Request, authorizati
 
 
 @app.get("/api/lab/rare-style-explorer/history")
-def list_rare_style_explorer_history(
+async def list_rare_style_explorer_history(
     request: Request,
     limit: int = Query(default=50, ge=1, le=1000),
     include_mock: bool = Query(default=False),
     authorization: str = Header(default=""),
 ):
-    return list_alchemy_lab_history(request=request, limit=limit, include_mock=include_mock, authorization=authorization)
+    return await list_alchemy_lab_history(request=request, limit=limit, include_mock=include_mock, authorization=authorization)
 
 
 @app.post("/api/lab/rare-style-explorer/sessions")
@@ -2097,23 +2098,23 @@ async def create_rare_style_explorer_session(
 
 
 @app.get("/api/lab/rare-style-explorer/sessions/{session_id}")
-def get_rare_style_explorer_session(session_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
-    session = get_exploration_session(session_id)
+async def get_rare_style_explorer_session(session_id: str, request: Request, authorization: str = Header(default="")):
+    context = await _veyra_history_context(request, authorization)
+    session = get_exploration_session(session_id, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
     return {"session": public_exploration_session(session), "board": comparison_board(session)}
 
 
 @app.post("/api/lab/rare-style-explorer/sessions/{session_id}/favorites")
-def update_rare_style_explorer_favorites(
+async def update_rare_style_explorer_favorites(
     session_id: str,
     body: FavoriteSelection,
     request: Request,
     authorization: str = Header(default=""),
 ):
-    _require_veyra_user_if_enabled(request, authorization)
-    session = update_favorites(session_id, body)
+    context = await _veyra_history_context(request, authorization)
+    session = update_favorites(session_id, body, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
     return {"session": public_exploration_session(session), "board": comparison_board(session)}
@@ -2221,6 +2222,22 @@ async def _require_veyra_admin(request: Request, authorization: str = ""):
 async def _proxy_v2_request(path: str, request: Request) -> Response:
     target_url = _v2_proxy_target_url(path, str(request.url.query))
     headers = _v2_proxy_request_headers(request)
+    api_user_id = getattr(getattr(request, "state", None), "alchemy_api_user_id", None)
+    api_surfaces = getattr(getattr(request, "state", None), "alchemy_api_key_surfaces", None)
+    if type(api_user_id) is int and "v2" in set(api_surfaces or ()):
+        bridge_secret = str(os.getenv("ALCHEMY_ACCESS_BRIDGE_SECRET") or "")
+        if not bridge_secret:
+            raise HTTPException(status_code=503, detail={"code": "access_bridge_not_configured", "message": "V2 access bridge is not configured."})
+        headers.pop("authorization", None)
+        headers.update(
+            build_access_headers(
+                user_id=api_user_id,
+                surfaces=list(api_surfaces or ()),
+                method=request.method,
+                path=request.url.path,
+                secret=bridge_secret,
+            )
+        )
     body = await request.body()
     timeout = httpx.Timeout(settings.v2_api_proxy_timeout_seconds, connect=8.0)
     try:
@@ -2394,7 +2411,7 @@ async def _require_output_visible(request: Request, output_id: str, authorizatio
         return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v1_output_owner_id(output_id)}
     context = await _veyra_history_context(request, authorization)
     owner_id = _v1_output_owner_id(output_id)
-    if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and _is_lab_output_id(output_id)) or (allow_legacy_public and owner_id is None):
+    if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
 

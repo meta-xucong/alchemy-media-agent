@@ -50,8 +50,15 @@ def test_six_tools_append_without_changing_legacy_names():
         "prepare_shared_mcp_materialization", "submit_shared_mcp_materialization",
         "prepare_native_imagegen_plan", "prepare_frozen_specialized_native_imagegen_plan",
         "prepare_frozen_professional_native_imagegen_plan"]
-    assert len(mcp_server.TOOL_SCHEMAS) == 11
+    assert [item["name"] for item in mcp_server.TOOL_SCHEMAS[5:11]] == [item["name"] for item in tools.PRODUCT_TOOL_SCHEMAS]
+    assert len(mcp_server.TOOL_SCHEMAS) == 34
     assert len(tools.PRODUCT_TOOL_NAMES) == 6
+    assert {item["name"] for item in mcp_server.TOOL_SCHEMAS[11:]} == {
+        "alchemy_list_capabilities",
+        "alchemy_v1_create_session", "alchemy_v1_upload_asset", "alchemy_v1_create_image_job", "alchemy_v1_get_image_job", "alchemy_v1_list_history", "alchemy_v1_revise_image",
+        "alchemy_v2_create_creative_run", "alchemy_v2_get_creative_run", "alchemy_v2_upload_asset", "alchemy_v2_create_image_job", "alchemy_v2_get_image_job", "alchemy_v2_list_history", "alchemy_v2_search_cases", "alchemy_v2_get_case",
+        "alchemy_lab_list_modules", "alchemy_lab_list_styles", "alchemy_lab_search_styles", "alchemy_lab_upload_reference", "alchemy_lab_create_session", "alchemy_lab_get_session", "alchemy_lab_list_history", "alchemy_lab_update_favorites",
+    }
 
 
 @pytest.mark.parametrize("url", ["", "http://example.test", "https://user:pass@example.test", "https://a.test/?token=s",
@@ -230,7 +237,7 @@ def test_stdio_registration_and_bad_configuration_do_not_break_old_tools(tmp_pat
         env=env, input="\n".join(json.dumps(r) for r in requests)+"\n", text=True, encoding="utf-8", capture_output=True, timeout=30)
     assert completed.returncode == 0, completed.stderr
     replies = [json.loads(line) for line in completed.stdout.splitlines()]
-    assert len(replies[0]["result"]["tools"]) == 11
+    assert len(replies[0]["result"]["tools"]) == 34
     assert replies[1]["result"]["isError"] is True
     assert json.loads(replies[1]["result"]["content"][0]["text"])["code"] == "product_session_required"
 

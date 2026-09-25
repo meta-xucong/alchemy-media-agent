@@ -5,15 +5,24 @@ import sqlite3
 from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.config import settings
 from app.storage import media_store
-from app.services.api_keys import ApiKeyStore, KeyAccessError, PREFIX
+from app.services.api_keys import ALL_SURFACES, ApiKeyStore, KeyAccessError, LIVE_PREFIX, PREFIX
 
 
 class CreateAccessKey(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(default="", max_length=50)
+    surfaces: list[str] = Field(default_factory=lambda: list(ALL_SURFACES), min_length=1, max_length=4)
+
+    @field_validator("surfaces")
+    @classmethod
+    def validate_surfaces(cls, value):
+        normalized = sorted({str(item).strip().lower() for item in value if str(item).strip()})
+        if not normalized or any(item not in ALL_SURFACES for item in normalized):
+            raise ValueError("invalid key surfaces")
+        return normalized
 
 
 def key_store():
@@ -32,10 +41,31 @@ _PRODUCT_PATHS = {
 }
 
 
-def key_allows(method, path):
+def _surface_for_path(method: str, path: str) -> str | None:
     prefix = "/api/v3/creative-agent/"
-    return path.startswith(prefix) and any(re.fullmatch(pattern,path[len(prefix):])
-        for pattern in _PRODUCT_PATHS.get(method, ()))
+    if path == "/api/access/capabilities":
+        return "capabilities"
+    if path.startswith("/v1/"):
+        if path.startswith(("/v1/admin/", "/v1/runtime/")):
+            return None
+        return "v1"
+    if path.startswith("/api/v2/"):
+        if path.startswith(("/api/v2/veyra/login", "/api/v2/veyra/billing", "/api/v2/admin/")):
+            return None
+        return "v2"
+    if path.startswith("/api/lab/"):
+        return "lab"
+    if path.startswith(prefix) and any(re.fullmatch(pattern, path[len(prefix):]) for pattern in _PRODUCT_PATHS.get(method, ())):
+        return "v3"
+    return None
+
+
+def key_allows(method, path, surfaces=None):
+    surface = _surface_for_path(method, path)
+    if surface == "capabilities":
+        return True
+    allowed = set(surfaces or ("v3",))
+    return surface in allowed
 
 
 def _error(code, status):
@@ -66,7 +96,7 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
         if not settings.veyra_auth_enabled:
             raise HTTPException(503, detail={"code": "account_login_not_configured"})
         authorization = request.headers.get("authorization", "")
-        if authorization.partition(" ")[2].strip().startswith(PREFIX):
+        if authorization.partition(" ")[2].strip().startswith((PREFIX, LIVE_PREFIX)):
             raise HTTPException(403, detail={"code": "session_login_required"})
         owner = session_user(request, authorization)
         if type(owner) is not int or owner <= 0:
@@ -81,19 +111,27 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
         authorization = request.headers.get("authorization", "")
         scheme, _, token = authorization.partition(" ")
         token = token.strip()
-        if scheme.lower() == "bearer" and token.startswith(PREFIX):
+        if scheme.lower() == "bearer" and token.startswith((PREFIX, LIVE_PREFIX)):
             if not settings.veyra_auth_enabled:
                 return _error("account_login_not_configured", 503)
-            if not key_allows(request.method, request.url.path):
-                return _error("api_key_route_not_allowed", 403)
             try:
                 store = key_store()
                 identity = store.resolve(token)
+            except KeyAccessError as exc:
+                return _error(exc.code, exc.status)
+            except (sqlite3.Error, OSError):
+                return _error("key_service_unavailable", 503)
+            if not key_allows(request.method, request.url.path, identity.get("surfaces")):
+                return _error("api_key_route_not_allowed", 403)
+            try:
                 account = await account_loader(identity["owner_id"])
                 if account.user_id != identity["owner_id"] or account.status != "active":
                     return _error("account_inactive", 403)
                 store.record_use(identity["id"])
                 request.state.alchemy_api_user_id = identity["owner_id"]
+                request.state.alchemy_api_key_id = identity["id"]
+                request.state.alchemy_api_key_surfaces = list(identity.get("surfaces") or ())
+                request.state.alchemy_api_key_token = token
             except KeyAccessError as exc:
                 return _error(exc.code, exc.status)
             except HTTPException as exc:
@@ -118,6 +156,32 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
         return {"user_id": account.user_id, "email": account.email,
             "is_admin": str(account.role).lower() == "admin"}
 
+    @router.get("/capabilities")
+    async def capabilities(request: Request):
+        if getattr(request.state, "alchemy_api_user_id", None) is not None:
+            surfaces = list(getattr(request.state, "alchemy_api_key_surfaces", ()) or ())
+            user_id = request.state.alchemy_api_user_id
+        else:
+            account = await account_for(request)
+            surfaces = list(ALL_SURFACES)
+            user_id = account.user_id
+        return {
+            "user_id": user_id,
+            "surfaces": surfaces,
+            "api": {
+                "v1": "/v1",
+                "v2": "/api/v2",
+                "v3": "/api/v3/creative-agent",
+                "lab": "/api/lab",
+            },
+            "mcp": {
+                "v1": ["alchemy_v1_create_session", "alchemy_v1_upload_asset", "alchemy_v1_create_image_job", "alchemy_v1_get_image_job", "alchemy_v1_list_history", "alchemy_v1_revise_image"],
+                "v2": ["alchemy_v2_create_creative_run", "alchemy_v2_get_creative_run", "alchemy_v2_upload_asset", "alchemy_v2_create_image_job", "alchemy_v2_get_image_job", "alchemy_v2_list_history", "alchemy_v2_search_cases", "alchemy_v2_get_case"],
+                "v3": ["alchemy_create_project", "alchemy_upload_asset", "alchemy_create_generation", "alchemy_get_generation", "alchemy_list_outputs", "alchemy_select_outputs"],
+                "lab": ["alchemy_lab_list_modules", "alchemy_lab_list_styles", "alchemy_lab_search_styles", "alchemy_lab_upload_reference", "alchemy_lab_create_session", "alchemy_lab_get_session", "alchemy_lab_list_history", "alchemy_lab_update_favorites"],
+            },
+        }
+
     @router.get("/keys")
     async def keys(request: Request, offset: int = Query(0, ge=0, le=100000)):
         account = await account_for(request)
@@ -128,7 +192,7 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
         _ui_write(request)
         account = await account_for(request)
         try:
-            return key_store().create(account.user_id, body.name)
+            return key_store().create(account.user_id, body.name, body.surfaces)
         except KeyAccessError as exc:
             raise HTTPException(exc.status, detail={"code": exc.code}) from exc
 

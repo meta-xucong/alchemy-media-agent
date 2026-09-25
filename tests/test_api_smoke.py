@@ -3285,7 +3285,7 @@ def test_v1_media_acceleration_falls_back_when_remote_file_missing(tmp_path, mon
     assert "location" not in response.headers
 
 
-def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, monkeypatch):
+def test_alchemy_lab_history_and_images_are_private_across_accounts(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     repository.reset()
     original_auth_enabled = settings.veyra_auth_enabled
@@ -3354,6 +3354,8 @@ def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, mon
 
         lab_history = client.get("/api/lab/history?limit=10&include_mock=true", headers={"Authorization": f"Bearer {other_token}"})
         legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10&include_mock=true", headers={"Authorization": f"Bearer {other_token}"})
+        owner_lab_history = client.get("/api/lab/history?limit=10&include_mock=true", headers={"Authorization": f"Bearer {owner_token}"})
+        owner_legacy_lab_history = client.get("/api/lab/rare-style-explorer/history?limit=10&include_mock=true", headers={"Authorization": f"Bearer {owner_token}"})
         v1_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
         lab_download = client.get(f"/v1/outputs/{lab_id}/download", headers={"Authorization": f"Bearer {other_token}"})
         v1_download = client.get(f"/v1/outputs/{v1_id}/download", headers={"Authorization": f"Bearer {other_token}"})
@@ -3361,12 +3363,14 @@ def test_alchemy_lab_history_and_images_are_shared_across_accounts(tmp_path, mon
         other_delete = client.delete(f"/v1/image/history/{lab_id}", headers={"Authorization": f"Bearer {other_token}"})
 
         assert lab_history.status_code == 200
-        assert lab_id in {item["id"] for item in lab_history.json()["items"]}
+        assert lab_id not in {item["id"] for item in lab_history.json()["items"]}
         assert legacy_lab_history.status_code == 200
-        assert lab_id in {item["id"] for item in legacy_lab_history.json()["items"]}
+        assert lab_id not in {item["id"] for item in legacy_lab_history.json()["items"]}
+        assert lab_id in {item["id"] for item in owner_lab_history.json()["items"]}
+        assert lab_id in {item["id"] for item in owner_legacy_lab_history.json()["items"]}
         assert v1_history.status_code == 200
         assert v1_id not in {item["id"] for item in v1_history.json()["items"]}
-        assert lab_download.status_code == 200
+        assert lab_download.status_code == 403
         assert owner_download.status_code == 200
         assert v1_download.status_code == 403
         assert other_delete.status_code == 403

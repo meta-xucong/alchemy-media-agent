@@ -608,7 +608,7 @@ def test_active_source_has_no_platform_api_web_fallback_or_artifact_import() -> 
         # Product tools intentionally call the existing authenticated HTTP API;
         # this historical restriction still applies to every native renderer file.
         *(path for path in (ROOT / "services" / "alchemy_codex_local_adapter").glob("*.py")
-          if path.name != "product_tools.py"),
+          if path.name not in {"product_tools.py", "versioned_tools.py"}),
         ROOT / "plugins" / "alchemy-codex-local-mode" / ".codex-plugin" / "plugin.json",
         ROOT / "plugins" / "alchemy-codex-local-mode" / ".mcp.json",
         ROOT / "plugins" / "alchemy-codex-local-mode" / "scripts" / "start_mcp.py",

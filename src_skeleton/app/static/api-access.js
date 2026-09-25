@@ -98,7 +98,7 @@
     try {
       const payload = await request("/api/access/keys", { method: "POST", body: JSON.stringify({ name: $("keyName").value.trim() || "我的 API" }) });
       if (!ready || epoch !== sessionEpoch) return;
-      if (!/^alk_v3_[A-Za-z0-9_-]{43}$/.test(payload.secret || "")) throw new Error("invalid_response");
+      if (!/^alk_(?:v3|live)_[A-Za-z0-9_-]{43}$/.test(payload.secret || "")) throw new Error("invalid_response");
       secret = payload.secret; $("newSecret").value = secret; $("secretFeedback").textContent = "";
       $("manualCopy").hidden = true; $("secretDialog").showModal(); $("copySecret").focus();
       $("keyName").value = ""; offset = 0; await loadKeys();

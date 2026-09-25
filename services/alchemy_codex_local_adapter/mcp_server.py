@@ -16,6 +16,7 @@ from .contracts import (
 from .facade import CodexNativeImageGenFacade
 from .materialized_bridge import MaterializedBridgeError, V3MaterializedMcpBridge
 from .product_tools import PRODUCT_TOOL_NAMES, PRODUCT_TOOL_SCHEMAS, ProductToolError, ProductTools
+from .versioned_tools import VERSIONED_TOOL_NAMES, VERSIONED_TOOL_SCHEMAS, VersionedToolError, VersionedTools
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -173,6 +174,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 
 # Append only: existing planning/materialization names, order and contracts stay intact.
 TOOL_SCHEMAS.extend(PRODUCT_TOOL_SCHEMAS)
+# Compatibility append: legacy/native tools and the existing V3 product tools
+# remain first and unchanged; the unified versioned outlet is additive.
+TOOL_SCHEMAS.extend(VERSIONED_TOOL_SCHEMAS)
 
 def _tool_result(payload: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
@@ -257,6 +261,12 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
             try:
                 result = _tool_result(ProductTools.from_environment().call(name, params.get("arguments", {})))
             except ProductToolError as exc:
+                result = {**_tool_result(exc.as_dict()), "isError": True}
+            return {"jsonrpc": "2.0", "id": request_id, "result": result}
+        if name in VERSIONED_TOOL_NAMES:
+            try:
+                result = _tool_result(VersionedTools.from_environment().call(name, params.get("arguments", {})))
+            except VersionedToolError as exc:
                 result = {**_tool_result(exc.as_dict()), "isError": True}
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
         if name in bridge_handlers:

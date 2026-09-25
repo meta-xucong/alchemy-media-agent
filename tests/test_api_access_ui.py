@@ -2,6 +2,7 @@
 from pathlib import Path
 from urllib.parse import urlsplit
 import json
+import re
 import os
 import pytest
 from playwright.sync_api import sync_playwright, expect
@@ -50,7 +51,7 @@ def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,wid
         page.evaluate("document.getElementById('createKeyForm').requestSubmit(); document.getElementById('createKeyForm').requestSubmit();")
         expect(page.locator("#secretDialog")).to_be_visible()
         secret=page.locator("#newSecret").input_value()
-        assert secret.startswith("alk_v3_")
+        assert re.fullmatch(r"alk_(?:v3|live)_[A-Za-z0-9_-]{43}", secret)
         assert len([x for x in calls if x==("POST","/api/access/keys")])==1
         page.click("#copySecret")
         assert page.locator("#manualCopy").input_value()==secret

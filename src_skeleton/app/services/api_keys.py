@@ -4,6 +4,7 @@ No account, password, balance, billing or generation state lives here.
 """
 from __future__ import annotations
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -14,7 +15,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 PREFIX = "alk_v3_"
-_TOKEN = re.compile(r"^alk_v3_[A-Za-z0-9_-]{43}$")
+LIVE_PREFIX = "alk_live_"
+_TOKEN = re.compile(r"^alk_(?:v3|live)_[A-Za-z0-9_-]{43}$")
+ALL_SURFACES = ("v1", "v2", "v3", "lab")
 MAX_ACTIVE_KEYS = 5
 LIFETIME_DAYS = 90
 
@@ -46,7 +49,11 @@ class ApiKeyStore:
                 digest TEXT UNIQUE NOT NULL, masked TEXT NOT NULL,
                 created_at REAL NOT NULL, expires_at REAL NOT NULL,
                 revoked_at REAL, revoked_by INTEGER, last_used_at REAL,
-                request_count INTEGER NOT NULL DEFAULT 0)""")
+                request_count INTEGER NOT NULL DEFAULT 0,
+                surfaces TEXT NOT NULL DEFAULT '[\"v3\"]')""")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(access_keys)").fetchall()}
+            if "surfaces" not in columns:
+                connection.execute("ALTER TABLE access_keys ADD COLUMN surfaces TEXT NOT NULL DEFAULT '[\"v3\"]'")
             connection.execute("CREATE INDEX IF NOT EXISTS access_keys_owner ON access_keys(owner_id)")
             connection.commit()
             with connection:
@@ -59,25 +66,34 @@ class ApiKeyStore:
         result.update({k: _iso(row[k]) for k in ("created_at", "expires_at", "revoked_at", "last_used_at")})
         result["status"] = "revoked" if row["revoked_at"] is not None else (
             "expired" if row["expires_at"] <= self.clock() else "active")
+        try:
+            surfaces = json.loads(row["surfaces"] or "[\"v3\"]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            surfaces = ["v3"]
+        result["surfaces"] = [item for item in surfaces if item in ALL_SURFACES]
         return result
 
-    def create(self, owner_id: int, name: str):
+    def create(self, owner_id: int, name: str, surfaces: list[str] | tuple[str, ...] | None = None):
         if type(owner_id) is not int or owner_id <= 0:
             raise KeyAccessError("account_required")
         if not isinstance(name, str) or len(name) > 50 or any(ord(c) < 32 for c in name):
             raise KeyAccessError("invalid_key_name", 400)
         name = name.strip() or "My API"
+        selected = tuple(sorted({str(item).strip().lower() for item in (surfaces or ALL_SURFACES) if str(item).strip()}))
+        if not selected or any(item not in ALL_SURFACES for item in selected):
+            raise KeyAccessError("invalid_key_surfaces", 400)
         now = self.clock()
-        token = PREFIX + secrets.token_urlsafe(32)
+        token = LIVE_PREFIX + secrets.token_urlsafe(32)
         key_id = "key_" + secrets.token_hex(12)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             active = db.execute("SELECT COUNT(*) FROM access_keys WHERE owner_id=? AND revoked_at IS NULL AND expires_at>?", (owner_id, now)).fetchone()[0]
             if active >= MAX_ACTIVE_KEYS:
                 raise KeyAccessError("active_key_limit", 409)
-            db.execute("INSERT INTO access_keys (id,owner_id,name,digest,masked,created_at,expires_at) VALUES (?,?,?,?,?,?,?)",
+            db.execute("INSERT INTO access_keys (id,owner_id,name,digest,masked,created_at,expires_at,surfaces) VALUES (?,?,?,?,?,?,?,?)",
                 (key_id, owner_id, name, hashlib.sha256(token.encode()).hexdigest(),
-                 PREFIX + token[len(PREFIX):len(PREFIX)+4] + "..." + token[-4:], now, now + LIFETIME_DAYS*86400))
+                 LIVE_PREFIX + token[len(LIVE_PREFIX):len(LIVE_PREFIX)+4] + "..." + token[-4:], now, now + LIFETIME_DAYS*86400,
+                 json.dumps(selected, separators=(",", ":"))))
             row = db.execute("SELECT * FROM access_keys WHERE id=?", (key_id,)).fetchone()
         return {"key": self._public(row), "secret": token}
 
@@ -88,7 +104,11 @@ class ApiKeyStore:
             row = db.execute("SELECT * FROM access_keys WHERE digest=?", (hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
         if row is None or row["revoked_at"] is not None or row["expires_at"] <= self.clock():
             raise KeyAccessError("api_key_invalid")
-        return {"id": row["id"], "owner_id": row["owner_id"]}
+        try:
+            surfaces = json.loads(row["surfaces"] or "[\"v3\"]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            surfaces = ["v3"]
+        return {"id": row["id"], "owner_id": row["owner_id"], "surfaces": [item for item in surfaces if item in ALL_SURFACES]}
 
     def record_use(self, key_id: str):
         # Check again after the account service call; concurrent revocation wins.

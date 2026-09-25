@@ -37,6 +37,7 @@ from app.schemas import (
     VeyraBillingSettingsResponse,
 )
 from app.services.bootstrap import bootstrap_v2_repository
+from app.services.access_bridge import verify_access_headers
 from app.services.case_assets import read_case_asset, read_case_thumbnail
 from app.services import case_intelligence
 from app.services.case_intelligence import (
@@ -327,6 +328,16 @@ def _veyra_session_token_from_request(request: Request, authorization: str = "")
 
 
 def _veyra_user_id_from_request(request: Request, authorization: str = "") -> int:
+    client_host = str(getattr(getattr(request, "client", None), "host", "") or "").lower()
+    if client_host in {"127.0.0.1", "::1", "localhost"}:
+        bridged = verify_access_headers(
+            request.headers,
+            method=request.method,
+            path=request.url.path,
+            secret=settings.alchemy_access_bridge_secret or "",
+        )
+        if bridged and "v2" in set(bridged.get("surfaces") or ()):
+            return int(bridged["user_id"])
     token = _veyra_session_token_from_request(request, authorization)
     if not token:
         raise HTTPException(status_code=401, detail={"error_code": "veyra_session_required", "message": "Veyra session is required."})

@@ -81,6 +81,41 @@ def test_old_session_still_calls_product_routes(native):
     assert native.client.get("/api/v3/creative-agent/projects",headers=headers()).json()["owner"] == 101
 
 
+def test_unified_key_exposes_capabilities_and_allowed_legacy_surfaces(native, monkeypatch):
+    key = create(native)["secret"]
+    capabilities = native.client.get("/api/access/capabilities", headers=headers(key))
+    assert capabilities.status_code == 200
+    body = capabilities.json()
+    assert body["surfaces"] == ["lab", "v1", "v2", "v3"]
+    assert "alchemy_v1_create_image_job" in body["mcp"]["v1"]
+    captured = {}
+
+    async def fake_proxy(path, request):
+        captured["path"] = path
+        captured["user_id"] = request.state.alchemy_api_user_id
+        captured["surfaces"] = request.state.alchemy_api_key_surfaces
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": True})
+
+    monkeypatch.setattr(native.main, "_proxy_v2_request", fake_proxy)
+    response = native.client.get("/api/v2/image/history", headers=headers(key))
+    assert response.status_code == 200 and response.json() == {"ok": True}
+    assert captured == {"path": "image/history", "user_id": 101, "surfaces": ["lab", "v1", "v2", "v3"]}
+
+
+def test_old_v3_key_row_does_not_gain_new_surfaces(native):
+    old_token = "alk_v3_" + "A" * 43
+    import hashlib
+    with native.store._db() as db:
+        db.execute(
+            "INSERT INTO access_keys (id,owner_id,name,digest,masked,created_at,expires_at) VALUES (?,?,?,?,?,?,?)",
+            ("key_old", 101, "old", hashlib.sha256(old_token.encode()).hexdigest(), "alk_v3_A...AAAA", native.clock[0], native.clock[0] + 86400),
+        )
+    assert native.store.resolve(old_token)["surfaces"] == ["v3"]
+    assert native.client.get("/api/access/capabilities", headers=headers(old_token)).json()["surfaces"] == ["v3"]
+    assert native.client.get("/api/lab/modules", headers=headers(old_token)).status_code == 403
+
+
 @pytest.mark.parametrize("token", ["bad", "", "session-expired"])
 def test_bad_session_cannot_create_keys(native, token):
     response = native.client.post("/api/access/keys", headers=headers(token,write=True),json={})

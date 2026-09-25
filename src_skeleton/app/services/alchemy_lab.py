@@ -196,6 +196,7 @@ class GenerationVariant(BaseModel):
 
 class ExplorationSession(BaseModel):
     id: str
+    veyra_user_id: int | None = None
     feature: str = "rare-style-explorer"
     status: str
     created_at: str
@@ -461,6 +462,7 @@ async def prepare_exploration_session(request: ExplorationRequest, *, veyra_user
     total_variants = sum(variant_counts.values())
     session = ExplorationSession(
         id=make_id("lab"),
+        veyra_user_id=veyra_user_id,
         status="queued",
         created_at=timestamp,
         updated_at=timestamp,
@@ -496,6 +498,10 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
     session = lab_store.get(session_id)
     if not session:
         raise ValueError("Exploration session not found.")
+    # The persisted session owner is authoritative.  A background task's
+    # argument is only a compatibility hint and must not be able to retarget
+    # an existing session to another account.
+    effective_user_id = session.veyra_user_id if session.veyra_user_id is not None else veyra_user_id
     if session.status in TERMINAL_SESSION_STATUSES:
         return session
 
@@ -542,7 +548,7 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
                     work_intensity="lab_quality",
                     provider_preference=session.request.provider_preference,
                     idempotency_key=f"lab:{session.id}:{variant.id}:attempt:{attempt}",
-                    veyra_user_id=veyra_user_id,
+                    veyra_user_id=effective_user_id,
                 )
                 job = prepared.job
                 if prepared.request and job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.provider_not_configured, JobStatus.rejected, JobStatus.canceled}:
@@ -616,20 +622,24 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
     return lab_store.save(session)
 
 
-def get_exploration_session(session_id: str) -> ExplorationSession | None:
-    return lab_store.get(session_id)
+def get_exploration_session(session_id: str, *, veyra_user_id: int | None = None, is_admin: bool = False) -> ExplorationSession | None:
+    session = lab_store.get(session_id)
+    if session is None or is_admin or veyra_user_id is None:
+        return session
+    return session if session.veyra_user_id == veyra_user_id else None
 
 
 def public_exploration_session(session: ExplorationSession) -> dict[str, Any]:
     payload = session.model_dump()
+    payload.pop("veyra_user_id", None)
     reference_plan = payload.get("reference_plan")
     if isinstance(reference_plan, dict):
         payload["reference_plan"] = _public_reference_plan(reference_plan)
     return payload
 
 
-def update_favorites(session_id: str, selection: FavoriteSelection) -> ExplorationSession | None:
-    session = lab_store.get(session_id)
+def update_favorites(session_id: str, selection: FavoriteSelection, *, veyra_user_id: int | None = None, is_admin: bool = False) -> ExplorationSession | None:
+    session = get_exploration_session(session_id, veyra_user_id=veyra_user_id, is_admin=is_admin)
     if not session:
         return None
     valid_ids = {variant.id for variant in session.variants}
@@ -676,8 +686,10 @@ def _public_reference_plan(reference_plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_lab_history(*, limit: int = 50, include_mock: bool = False) -> dict[str, Any]:
+def list_lab_history(*, limit: int = 50, include_mock: bool = False, veyra_user_id: int | None = None, is_admin: bool = False) -> dict[str, Any]:
     records = media_store.list_history_records(limit=10000)
+    if veyra_user_id is not None and not is_admin:
+        records = [record for record in records if _lab_record_owner_id(record) == veyra_user_id]
     items = [
         item
         for item in (_lab_history_item_from_record(record) for record in records)
@@ -687,6 +699,16 @@ def list_lab_history(*, limit: int = 50, include_mock: bool = False) -> dict[str
         items = [item for item in items if not _is_mock_lab_history_item(item)]
     items.sort(key=lambda item: item.created_at or item.updated_at or "", reverse=True)
     return {"items": [item.model_dump() for item in items[:limit]], "total": len(items)}
+
+
+def _lab_record_owner_id(record: dict[str, Any]) -> int | None:
+    metadata = record.get("alchemy_lab") if isinstance(record.get("alchemy_lab"), dict) else {}
+    raw = record.get("veyra_user_id") or metadata.get("veyra_user_id")
+    try:
+        value = int(raw or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _is_mock_lab_history_item(item: LabHistoryItem) -> bool:
@@ -1468,6 +1490,7 @@ def _attach_lab_history_metadata(
         "generation_interval_seconds": session.request.generation_interval_seconds,
         "variant_id": variant.id,
         "prompt_id": prompt.id,
+        "veyra_user_id": session.veyra_user_id,
         "intent_summary": intent.get("summary"),
         "intent_target_use": intent.get("target_use"),
         "intent_confidence": intent.get("confidence"),
@@ -1521,7 +1544,7 @@ def _append_lab_history_records(job: GenerationJob, metadata: dict[str, Any], *,
                 "prompt": final_prompt,
                 "size": job.prompt_plan.size if job.prompt_plan else None,
                 "version_parent_id": output.version_parent_id,
-                "veyra_user_id": output.metadata.get("veyra_user_id"),
+                "veyra_user_id": metadata.get("veyra_user_id"),
                 "alchemy_lab": metadata,
                 "created_at": job.created_at,
                 "updated_at": job.updated_at,
