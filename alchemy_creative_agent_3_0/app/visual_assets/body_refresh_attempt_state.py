@@ -290,8 +290,9 @@ class BodyRefreshAttemptStateStore:
         if analyzer_call_count != 1:
             raise BodyRefreshAttemptStateError("body refresh analyzer must be called exactly once")
         now = datetime.now(UTC).isoformat()
+        state_identity = f"{visual_asset_id}\0{attempt_identity.attempt_id}"
         state = BodyRefreshAttemptState(
-            state_id=f"body_refresh_state_{hashlib.sha256(f'{visual_asset_id}\0{attempt_identity.attempt_id}'.encode()).hexdigest()[:32]}",
+            state_id=f"body_refresh_state_{hashlib.sha256(state_identity.encode()).hexdigest()[:32]}",
             visual_asset_id=visual_asset_id,
             attempt_identity=attempt_identity,
             analysis_context=analysis_context,
