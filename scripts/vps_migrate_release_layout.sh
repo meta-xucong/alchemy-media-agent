@@ -179,7 +179,7 @@ assert_runtime_access_config() {
   v1_bridge_fingerprint="$(docker exec "${V1_CONTAINER}" python -c 'import hashlib, os; print(hashlib.sha256((os.getenv("ALCHEMY_ACCESS_BRIDGE_SECRET") or "").encode()).hexdigest())')"
   v2_bridge_fingerprint="$(runtime_env_value "/proc/${api_pid}/environ" "ALCHEMY_ACCESS_BRIDGE_SECRET" | sha256sum | awk '{print $1}')"
   [[ -n "${expected_bridge_fingerprint}" && "${v1_bridge_fingerprint}" == "${expected_bridge_fingerprint}" && "${v2_bridge_fingerprint}" == "${expected_bridge_fingerprint}" ]] || {
-    echo "V1/V2 runtime bridge secret fingerprints do not match the release env." >&2
+    echo "V1/V2 runtime bridge secret fingerprint mismatch: expected=${expected_bridge_fingerprint:0:16} v1=${v1_bridge_fingerprint:0:16} v2=${v2_bridge_fingerprint:0:16}" >&2
     exit 1
   }
   [[ "$(docker exec "${V1_CONTAINER}" python -c 'import os; print((os.getenv("VEYRA_AUTH_ENABLED") or "").lower())')" == "true" ]] || {
