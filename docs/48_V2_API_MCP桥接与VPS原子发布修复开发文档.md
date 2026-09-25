@@ -77,6 +77,9 @@ V2 不直接把 `alk_live_*` 当作 Veyra Session。API Key 只允许从 V1 公�
 - 只比较 SHA256 指纹，不在日志、接口或验收回执中输出原值。
 - 密钥缺失时部署失败，不允许以 V2 Session 路径冒充 API Key 通过。
 - V2 进程必须在密钥写入后重启，运行态检查必须绑定当前 release。
+- V2 在本机收到但无法验证桥接头时返回 `access_bridge_invalid`，不再把桥接失败
+  伪装成 `veyra_session_required`；这样 API/MCP 调用能准确暴露桥接配置或签名
+  不一致，而不会误导排查方向。
 
 ## 4. 修复设计
 

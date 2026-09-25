@@ -4,11 +4,14 @@ import asyncio
 from pathlib import Path
 import pytest
 import httpx
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.config import settings
 import app.services.veyra_auth as veyra_auth_module
 from app.main import app
+import app.main as main_module
 from app.schemas import CreateImageJobRequest, ImagePromptPlan
 import app.services.generation as generation_service
 from app.services.veyra_billing_settings import reset_billing_settings_cache
@@ -46,6 +49,28 @@ def test_veyra_client_requires_internal_token_when_enabled() -> None:
 
     with pytest.raises(VeyraAuthMisconfigured):
         client.ensure_enabled()
+
+
+def test_invalid_loopback_access_bridge_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v2/image/history",
+            "query_string": b"",
+            "headers": [(b"x-alchemy-access-user", b"42")],
+            "client": ("127.0.0.1", 8017),
+            "server": ("127.0.0.1", 8020),
+            "scheme": "http",
+        }
+    )
+    monkeypatch.setattr(main_module, "verify_access_headers", lambda *args, **kwargs: None)
+
+    with pytest.raises(HTTPException) as raised:
+        main_module._veyra_user_id_from_request(request)
+    assert raised.value.status_code == 401
+    assert raised.value.detail["error_code"] == "access_bridge_invalid"
 
 
 def test_veyra_session_token_round_trip() -> None:
