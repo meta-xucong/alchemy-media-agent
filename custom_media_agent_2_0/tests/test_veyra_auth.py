@@ -82,7 +82,7 @@ def test_non_loopback_access_bridge_fails_closed(monkeypatch: pytest.MonkeyPatch
             "path": "/api/v2/image/history",
             "query_string": b"",
             "headers": [(b"x-alchemy-access-user", b"42")],
-            "client": ("172.17.0.2", 8017),
+            "client": ("8.8.8.8", 8017),
             "server": ("127.0.0.1", 8020),
             "scheme": "http",
         }
@@ -93,6 +93,25 @@ def test_non_loopback_access_bridge_fails_closed(monkeypatch: pytest.MonkeyPatch
         main_module._veyra_user_id_from_request(request)
     assert raised.value.status_code == 401
     assert raised.value.detail["error_code"] == "access_bridge_untrusted_source"
+
+
+def test_private_access_bridge_source_can_authenticate(monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v2/image/history",
+            "query_string": b"",
+            "headers": [(b"x-alchemy-access-user", b"42")],
+            "client": ("172.17.0.2", 8017),
+            "server": ("127.0.0.1", 8020),
+            "scheme": "http",
+        }
+    )
+    monkeypatch.setattr(main_module, "verify_access_headers", lambda *args, **kwargs: {"user_id": 42, "surfaces": ["v2"]})
+
+    assert main_module._veyra_user_id_from_request(request) == 42
 
 
 def test_veyra_session_token_round_trip() -> None:
