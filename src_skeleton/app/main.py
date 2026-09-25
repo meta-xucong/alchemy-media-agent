@@ -2254,10 +2254,13 @@ async def _proxy_v2_request(path: str, request: Request) -> Response:
             status_code=502,
             detail={"code": "v2_proxy_unavailable", "message": "V2 local API is not reachable."},
         ) from exc
+    response_headers = _v2_proxy_response_headers(upstream.headers)
+    if type(api_user_id) is int and "v2" in set(api_surfaces or ()):
+        response_headers["X-Alchemy-Access-Bridge"] = "hmac"
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
-        headers=_v2_proxy_response_headers(upstream.headers),
+        headers=response_headers,
         media_type=upstream.headers.get("content-type"),
     )
 
