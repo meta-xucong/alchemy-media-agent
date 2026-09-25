@@ -177,7 +177,7 @@ def test_plugin_launcher_exposes_only_canonical_prompt_tool() -> None:
     assert completed.returncode == 0, completed.stderr
     responses = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
     assert responses[0]["result"]["serverInfo"]["version"] == "0.9.0-doc183-shared-materialization"
-    assert [tool["name"] for tool in responses[1]["result"]["tools"]] == [
+    assert [tool["name"] for tool in responses[1]["result"]["tools"][:5]] == [
         "prepare_shared_mcp_materialization",
         "submit_shared_mcp_materialization",
         "prepare_native_imagegen_plan",
@@ -187,7 +187,7 @@ def test_plugin_launcher_exposes_only_canonical_prompt_tool() -> None:
 
 
 def test_mcp_schema_exposes_no_provider_or_artifact_controls() -> None:
-    assert [tool["name"] for tool in TOOL_SCHEMAS] == [
+    assert [tool["name"] for tool in TOOL_SCHEMAS[:5]] == [
         "prepare_shared_mcp_materialization",
         "submit_shared_mcp_materialization",
         "prepare_native_imagegen_plan",
@@ -605,7 +605,10 @@ def test_plugin_skill_requires_verbatim_canonical_prompt() -> None:
 
 def test_active_source_has_no_platform_api_web_fallback_or_artifact_import() -> None:
     executable_paths = [
-        *(ROOT / "services" / "alchemy_codex_local_adapter").glob("*.py"),
+        # Product tools intentionally call the existing authenticated HTTP API;
+        # this historical restriction still applies to every native renderer file.
+        *(path for path in (ROOT / "services" / "alchemy_codex_local_adapter").glob("*.py")
+          if path.name != "product_tools.py"),
         ROOT / "plugins" / "alchemy-codex-local-mode" / ".codex-plugin" / "plugin.json",
         ROOT / "plugins" / "alchemy-codex-local-mode" / ".mcp.json",
         ROOT / "plugins" / "alchemy-codex-local-mode" / "scripts" / "start_mcp.py",

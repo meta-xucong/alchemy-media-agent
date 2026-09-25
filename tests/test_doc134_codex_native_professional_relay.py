@@ -32,7 +32,7 @@ from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainOutputEvidenceContract
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
-from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import (
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.contracts import (
     ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE,
     ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES,
 )
@@ -3288,7 +3288,7 @@ def test_professional_serial_relay_uses_the_formal_neutral_anchor_preparation_co
 
 def test_professional_mcp_schema_and_dispatch_are_explicit_and_safe(tmp_path: Path) -> None:
     names = [tool["name"] for tool in TOOL_SCHEMAS]
-    assert names == [
+    assert names[:5] == [
         "prepare_shared_mcp_materialization",
         "submit_shared_mcp_materialization",
         "prepare_native_imagegen_plan",

@@ -205,3 +205,29 @@ Validate the plugin after manifest changes:
 ```powershell
 python C:\Users\T14S\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .
 ```
+
+## Product API tools (existing account and billing)
+
+The five native planning/materialization tools above keep their contracts.
+Six additional `alchemy_*` tools call the existing authenticated V3 HTTP API;
+this is a product entry point, not a fallback renderer for Native ImageGen.
+
+Supply these values through explicitly authorized process/local configuration:
+- `ALCHEMY_PRODUCT_API_BASE_URL`: existing service origin, such as `https://alchemy.aiself.vip`.
+- `ALCHEMY_PRODUCT_SESSION_TOKEN`: an existing account's Bearer session value, without the `Bearer ` prefix.
+
+No API Key, new login or billing system is created. No browser credential discovery
+is performed. Do not commit or put credentials in tool arguments. Missing/expired
+credentials produce a tool error; the five original tools do not require these variables.
+Restart the MCP process after updating this checkout/configuration.
+
+Tools: `alchemy_create_project`, `alchemy_upload_asset`, `alchemy_create_generation`,
+`alchemy_get_generation`, `alchemy_list_outputs`, `alchemy_select_outputs`.
+Generation can charge the existing account. It sends one `auto_generate` request;
+do not repeat an uncertain write or separately call `/generate`.
+Uploads read only the image explicitly selected by the user. The API validates it.
+Results keep existing IDs, review/selection states and authenticated relative URLs.
+A returned HTTP success is not a quality certification or a successful selection.
+
+See [API/MCP usage and acceptance](../../docs/44_API与MCP适配开发与验收.md)
+for parameters, original HTTP examples, expected limitations and test scope.
