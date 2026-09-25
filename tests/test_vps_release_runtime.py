@@ -95,6 +95,13 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert migration.index('v2_runtime_guard.py" --release "${candidate}" --verify') < migration.index('ln -sfn "${candidate}" "${DEPLOY_LINK}"')
     assert "ensure_access_bridge_secret" in migration
     assert "ALCHEMY_ACCESS_BRIDGE_SECRET" in migration
+    assert "ensure_veyra_auth_config" in migration
+    assert "VEYRA_AUTH_ENABLED" in migration
+    assert "VEYRA_SUB2API_BASE_URL" in migration
+    assert "VEYRA_INTERNAL_TOKEN" in migration
+    assert "VEYRA_SESSION_SECRET" in migration
+    assert "VEYRA_BILLING_SETTINGS_URL" in migration
+    assert "refusing deployment" in migration
     assert "V2 env file is missing" in migration
     assert 'APP_PORT="${APP_PORT:-8017}"' in migration
     assert 'active release link; use scripts/vps_migrate_release_layout.sh' in deploy

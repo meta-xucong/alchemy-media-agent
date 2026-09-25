@@ -69,6 +69,12 @@ set_env_value() {
   printf '\n%s=%s\n' "${key}" "${value}" >> "${env_file}"
 }
 
+env_value() {
+  local env_file="$1"
+  local key="$2"
+  sed -n "s/^${key}=//p" "${env_file}" | head -n 1
+}
+
 ensure_access_bridge_secret() {
   local bridge_secret=""
 
@@ -88,6 +94,41 @@ ensure_access_bridge_secret() {
   fi
   set_env_value "${v2_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" "${bridge_secret}"
   bridge_env_changed=1
+}
+
+ensure_veyra_auth_config() {
+  local key=""
+  local v1_value=""
+  local v2_value=""
+  local shared_keys=(VEYRA_SUB2API_BASE_URL VEYRA_INTERNAL_TOKEN VEYRA_SESSION_SECRET)
+
+  for key in "${shared_keys[@]}"; do
+    v1_value="$(env_value "${live_env}" "${key}")"
+    v2_value="$(env_value "${v2_env}" "${key}")"
+    if [[ -z "${v1_value}" && -z "${v2_value}" ]]; then
+      echo "Required Veyra setting is missing from both V1 and V2 env files: ${key}" >&2
+      exit 1
+    fi
+    if [[ -z "${v1_value}" ]]; then
+      set_env_value "${live_env}" "${key}" "${v2_value}"
+      v1_value="${v2_value}"
+    fi
+    if [[ -z "${v2_value}" ]]; then
+      set_env_value "${v2_env}" "${key}" "${v1_value}"
+      v2_value="${v1_value}"
+    fi
+    if [[ "${v1_value}" != "${v2_value}" ]]; then
+      echo "V1/V2 Veyra setting mismatch: ${key}; refusing deployment." >&2
+      exit 1
+    fi
+  done
+
+  set_env_value "${live_env}" "VEYRA_AUTH_ENABLED" "true"
+  set_env_value "${v2_env}" "VEYRA_AUTH_ENABLED" "true"
+
+  if [[ -z "$(env_value "${live_env}" "VEYRA_BILLING_SETTINGS_URL")" ]]; then
+    set_env_value "${live_env}" "VEYRA_BILLING_SETTINGS_URL" "https://alchemy.aiself.vip/api/v2/veyra/billing/settings/public"
+  fi
 }
 
 wait_for_unit() {
@@ -149,6 +190,7 @@ mkdir -p "${RELEASE_ROOT}" "${backup_dir}"
 cp -p "${live_env}" "${v1_env_backup}"
 cp -p "${v2_env}" "${v2_env_backup}"
 ensure_access_bridge_secret
+ensure_veyra_auth_config
 
 if [[ -e "${REPOSITORY_ROOT}/.git" ]]; then
   git -C "${REPOSITORY_ROOT}" fetch --prune origin

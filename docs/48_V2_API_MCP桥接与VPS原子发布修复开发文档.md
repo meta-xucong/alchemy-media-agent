@@ -13,6 +13,7 @@
 3. VPS 发布改为干净的、按目标 commit 创建并切换的原子 release。
 4. 部署后具备 API/MCP 读操作闭环测试条件。
 5. 增加 V1 代理签名到 V2 验签的回归测试。
+6. 发布时同步并校验 V1/V2 的 Veyra 账户认证运行配置。
 
 不包含：V2 生图业务逻辑重写、V1/V2 数据合并、API Key 存储重构、MCP 工具扩展、
 计费规则调整和真实生图任务。
@@ -40,6 +41,13 @@ GUARDED_PREFLIGHT_STOP=active_release_tracked_changes
 
 这说明旧部署流程把新文件覆盖到旧 release 目录，却没有保持 release 的 Git
 提交一致性，无法证明 V1、V2 进程加载的是同一目标版本。
+
+随后真实验收又确认了一个独立的运行配置缺口：原子 release 已成功切换，V2
+Session 仍可用，但使用 Session 创建 API Key 返回 `503 account_login_not_configured`。
+代码路径明确表明这是 V1 的 `VEYRA_AUTH_ENABLED` 未开启，而不是 HMAC、API Key
+索引或 V2 业务处理错误。V1/V2 还必须共享 `VEYRA_SUB2API_BASE_URL`、
+`VEYRA_INTERNAL_TOKEN`、`VEYRA_SESSION_SECRET`，否则账户验证、session 和后续
+扣费链路可能在不同阶段失败。
 
 ## 3. 权威认证契约
 
@@ -96,7 +104,22 @@ V2 不直接把 `alk_live_*` 当作 Veyra Session。API Key 只允许从 V1 公�
 
 这样既不覆盖既有生产密钥，也不允许 V1、V2 在不同 secret 下启动。
 
-### 4.3 部署工作流
+### 4.3 Veyra 账户认证配置同步
+
+迁移脚本在桥接密钥同步后执行 `ensure_veyra_auth_config`：
+
+- 从 V1 容器挂载的 env 和 `/etc/alchemy/alchemy-v2.env` 读取三个共享配置；
+- 一侧缺失时从另一侧补齐；两侧都缺失或值不一致时立即失败，不输出密钥原文；
+- 将 V1、V2 的 `VEYRA_AUTH_ENABLED` 固定为 `true`，但不改变独立的
+  `VEYRA_REQUIRE_UI_AUTH` 页面跳转开关；
+- V1 缺少容器可达的计费地址时补齐生产地址
+  `https://alchemy.aiself.vip/api/v2/veyra/billing/settings/public`；
+- 所有 env 在切换 release 前备份，失败时与 release、systemd 单元一起回滚。
+
+这样 API Key 创建不会再被 V1 默认值静默关闭，V1 发出的 API Key、V1 代理签名、
+V2 session/账户解析和扣费配置使用同一份生产认证契约。
+
+### 4.4 部署工作流
 
 GitHub Actions 仅上传必要的迁移脚本，向 VPS 传入 checkout 的完整
 `GITHUB_SHA`，由 VPS 迁移脚本自行创建目标 worktree。工作流不再向稳定软链接
