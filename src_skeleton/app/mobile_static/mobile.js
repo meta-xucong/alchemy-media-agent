@@ -6333,7 +6333,10 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   });
   outputs.forEach((item, index) => {
     const thumb = mobileV3ThumbUrl(item);
-    const isSelected = mobileV3IsOutputItemSelected(item, project);
+    const anchorState = project?.metadata?.continuity_anchor;
+    const isSelected = anchorState
+      ? anchorState.state === "active" && anchorState.active_continuity_anchor?.output_id === item.output_id
+      : mobileV3IsOutputItemSelected(item, project);
     const card = document.createElement("article");
     card.className = "v3-mobile-output-card";
     card.innerHTML = `
@@ -6345,7 +6348,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
         <span>${escapeHtml(mobileV3OutputSummary(item))}</span>
         <button class="v3-mobile-output-prompt" type="button" data-mobile-v3-output-prompt="${index}">提示词</button>
         <div class="v3-mobile-output-actions">
-          <button type="button" data-mobile-v3-output-action="select_continuation" data-mobile-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>${isSelected ? "已设为延续方向" : "设为延续方向"}</button>
+          <button type="button" data-mobile-v3-output-action="select_continuation" data-mobile-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>${isSelected ? "已设为主图" : "设为主图"}</button>
           <button type="button" data-mobile-v3-output-action="remove_from_project" data-mobile-v3-output-index="${index}">从项目成果移除</button>
         </div>
       </div>
@@ -6894,6 +6897,12 @@ function renderMobileV3EcommerceProjectViewReferences(project, ecommerceView) {
 function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
   const board = document.querySelector("#mobileV3ReferenceBoard");
   if (!board) return;
+  if (window.AlchemyContinuity?.render(board, {
+      project, request: (path, options) => mobileV3Request(path, options),
+      refresh: () => refreshMobileV3ProjectDetail(project.project_id),
+      isCurrent: (id) => mobileV3State.currentProject?.project_id === id,
+      notify: (text, tone) => updateMobileV3Status(text),
+    })) return;
   const ecommerceView = mobileV3EcommerceProjectView(project);
   if (project && ecommerceView) {
     renderMobileV3EcommerceProjectViewReferences(project, ecommerceView);
@@ -7023,7 +7032,19 @@ async function selectMobileV3OutputItem(item) {
   const jobId = item?.job_id || mobileV3State.currentJob?.job_id || "";
   const outputId = mobileV3OutputId(item);
   if (!projectId || !jobId || !outputId) {
-    updateMobileV3Status("这张图片暂时不能设为延续方向。");
+    updateMobileV3Status("这张图片暂时不能设为主图。");
+    return;
+  }
+  const project = mobileV3State.currentProject;
+  if (project?.metadata?.continuity_anchor && window.AlchemyContinuity) {
+    const outputId = String(item?.output_id || "");
+    if (!outputId || !jobId) return;
+    await window.AlchemyContinuity.bind({
+      project, request: (path, options) => mobileV3Request(path, options),
+      refresh: () => refreshMobileV3ProjectDetail(project.project_id),
+      isCurrent: (id) => mobileV3State.currentProject?.project_id === id,
+      notify: (text, tone) => updateMobileV3Status(text),
+    }, {output_id: outputId, job_id: jobId});
     return;
   }
   try {
@@ -7040,9 +7061,9 @@ async function selectMobileV3OutputItem(item) {
     mobileV3State.currentProject = payload.project || mobileV3State.currentProject;
     mobileV3State.currentJob = payload.job_status || mobileV3State.currentJob;
     await refreshMobileV3ProjectDetail(projectId);
-    updateMobileV3Status("已设为延续方向。原始参考图和人物资产仍然优先。");
+    updateMobileV3Status("已设为主图。原始参考图和人物资产仍然优先。");
   } catch (error) {
-    updateMobileV3Status(`设为延续方向失败：${friendlyError(error)}`);
+    updateMobileV3Status(`设为主图失败：${friendlyError(error)}`);
   } finally {
     setMobileV3Busy(false);
   }
@@ -7703,7 +7724,8 @@ function mobileV3EcommerceProjectReferenceGroups(project = mobileV3State.current
 }
 
 function mobileV3ProjectSourceLibraryEntries(project = mobileV3State.currentProject) {
-  const library = project?.metadata?.project_source_library;
+  if (project?.primary_template_id !== "ecommerce_template") return [];
+  const library = project?.metadata?.ecommerce_product_truth_inputs || project?.metadata?.project_source_library;
   if (!library || typeof library !== "object" || library.schema_version !== "doc270_project_source_library_public_v1") return [];
   return Array.isArray(library.entries)
     ? library.entries.filter((entry) => entry && typeof entry === "object" && entry.association_reference_id)

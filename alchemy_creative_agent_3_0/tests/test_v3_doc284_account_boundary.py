@@ -410,6 +410,13 @@ def test_authenticated_project_summary_and_record_ignore_nonvisible_selected_out
     service._scenario_id_for_template = lambda value: "general"
     service._template_label = lambda value: "通用模板"
 
+    # This unit isolates ownership projection. The new authoritative binding
+    # service itself is covered with real stores in Doc322 tests.
+    service._continuity_state = lambda value: {"state":"none","version":1,"auto_enabled":False,"project_id":value.project_id}
+    service._current_job_direct_reference_ids = lambda value: []
+    service.get_continuity_anchor = lambda project_id: {"state":"none","version":1}
+    service._reference_project_mode = lambda *args: "standard"
+    service._reference_scoped_project = lambda value, *args: value
     summary = service._memory_summary(project, owner_user_id=101)
     public = service._public_project_record(
         project,
@@ -672,6 +679,7 @@ def test_project_output_projection_requires_both_job_and_output_owner():
             }.get(job_id, [])
         ),
     )
+    service._continuity_state = lambda value: {"active_continuity_anchor": None}
     service._selected_output_state_map = lambda value: {}
     service._job_delivery_is_settled = lambda value: True
     service._public_output_review_projection = lambda *args: {}

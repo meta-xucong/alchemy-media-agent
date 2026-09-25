@@ -348,6 +348,8 @@ def test_doc269_explicit_selected_continuation_is_the_only_continuation_admissio
         model="fixture",
         encoded_image=_png_base64((125, 150, 175)),
     )
+    from alchemy_creative_agent_3_0.tests.doc322_test_support import certify_output
+    certify_output(handlers.service, continuation)
     handlers.post_project_reference(
         project["project_id"],
         {
@@ -502,6 +504,8 @@ def test_doc269_internal_continuation_admission_drift_stops_before_adapter(tmp_p
         model="fixture",
         encoded_image=_png_base64((110, 60, 30)),
     )
+    from alchemy_creative_agent_3_0.tests.doc322_test_support import certify_output
+    certify_output(handlers.service, continuation)
     handlers.post_project_reference(
         project["project_id"],
         {

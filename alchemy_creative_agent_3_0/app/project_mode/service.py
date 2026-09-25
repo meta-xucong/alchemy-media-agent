@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from .continuity_anchor import ContinuityAnchorBindingService, NAMESPACE as CONTINUITY_NAMESPACE
+from ..reference_input_plan import PLAN_KEY, plan_from_metadata
+
 import base64
 from datetime import datetime, timezone
 import hashlib
@@ -953,6 +956,7 @@ class V3ProjectModeService:
         doc281_general_source_registry: Doc281GeneralSourceRegistry | None = None,
     ) -> None:
         self.product_service = product_service or V3ProductApiService()
+        self.product_service._continuity_anchor_finalizer = self._maybe_claim_continuity_anchor
         self.project_store = project_store or InMemoryProjectStore()
         scenario_registry = getattr(getattr(self.product_service, "scenario_runtime", None), "scenario_registry", None)
         self.template_registry = template_registry or ProjectTemplateRegistry(scenario_registry=scenario_registry)
@@ -3232,9 +3236,7 @@ class V3ProjectModeService:
             "project_detail_view": "summary",
             "project_outputs": [],
             "project_outputs_complete": False,
-            "project_source_library": public_project_source_library(
-                self._doc270_project_source_library(project)
-            ),
+            "continuity_anchor": self.get_continuity_anchor(project.project_id),
         }
         return ProjectResponse(
             api_namespace=API_NAMESPACE,
@@ -3716,6 +3718,12 @@ class V3ProjectModeService:
             self._clear_ecommerce_reference_channel_issue(project)
         elif project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
             self._clear_ecommerce_reference_channel_issue(project)
+        if reference_request.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
+            before = self._continuity_state(project)
+            self._anchor_bindings().change(project_id,
+                output_id=str(reference_request.created_from_output_id or reference_request.asset_ref_id),
+                expected_job_id=reference_request.created_from_job_id,
+                expected_version=reference_request.metadata.get("expected_anchor_version", before["version"]))
         reference = self._upsert_project_reference(
             project,
             source_type=reference_request.source_type,
@@ -3798,6 +3806,9 @@ class V3ProjectModeService:
         removed_output_ref: OutputRef | None = None
         if reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
             output_id = reference.created_from_output_id or reference.asset_ref_id
+            before = self._continuity_state(project)
+            if (before.get("active_continuity_anchor") or {}).get("output_id") == output_id:
+                self._anchor_bindings().change(project_id, output_id=None, expected_version=before["version"])
             try:
                 removed_output_ref = self._find_output_ref(project, output_id)
                 self._set_output_state(
@@ -3888,7 +3899,9 @@ class V3ProjectModeService:
     ) -> ProjectBrandMemoryProposalResponse:
         project = self._require_project(project_id)
         proposal_request = self._coerce_brand_memory_proposal_request(request)
-        context = self._refresh_project_context(project)
+        context = self._build_context(
+            project, direct_reference_ids=self._project_asset_ids(project),
+        )
         self._ensure_brand_memory_proposal_available(context)
         if proposal_request.mode == ProjectBrandMemoryProposalMode.APPEND:
             target_brand_id = proposal_request.target_brand_id or project.linked_brand_id
@@ -3977,8 +3990,11 @@ class V3ProjectModeService:
         output_id: str,
         request: ProjectOutputStateRequest | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        project = self._require_project(project_id)
         state_request = self._coerce_output_state_request(request or {})
+        project = self._require_project(project_id)
+        before = self._continuity_state(project)
+        if (before.get("active_continuity_anchor") or {}).get("output_id") == output_id:
+            self._anchor_bindings().change(project_id, output_id=None, expected_version=before["version"])
         now = _utc_now_iso()
         auto_anchor = self._doc73_auto_identity_anchor_record(
             project,
@@ -4052,6 +4068,9 @@ class V3ProjectModeService:
             raise ValueError("plain_text is required")
         now = _utc_now_iso()
         ref = self._find_output_ref(project, output_id)
+        before = self._continuity_state(project)
+        if (before.get("active_continuity_anchor") or {}).get("output_id") == ref.output_id:
+            self._anchor_bindings().change(project_id, output_id=None, expected_version=before["version"])
         self._set_output_state(
             project,
             ref,
@@ -4213,6 +4232,7 @@ class V3ProjectModeService:
         _trusted_capability_continuation: bool = False,
     ) -> ProductJobStatus:
         project = self._require_project(project_id)
+        continuity_snapshot = self._continuity_state(project)
         job_request = self._coerce_create_project_job_request(request)
         # Doc270 Phase 1 fields are server-owned compatibility evidence.  A
         # browser may not author them for any template, including General or
@@ -4228,142 +4248,7 @@ class V3ProjectModeService:
             }
         )
         template_manifest = self._ensure_active_template(job_request.template_id)
-        doc270_general_identity: dict[str, Any] | None = None
-        doc270_general_activation: dict[str, Any] | None = None
-        doc270_general_retry_instance_id: str | None = None
-        if template_manifest.template_id == GENERAL_TEMPLATE_ID:
-            job_request = job_request.model_copy(
-                update={
-                    "metadata": {
-                        key: value
-                        for key, value in dict(job_request.metadata or {}).items()
-                        if key not in _DOC270_PHASE3_IGNORED_CLIENT_METADATA
-                    }
-                }
-            )
-            # Materialize explicit upload intent before the Doc281 snapshot is
-            # issued. Otherwise a direct General job can snapshot an empty
-            # project association and lose its ready upload before the later
-            # context build sees it.
-            explicit_uploaded_asset_ids = list(
-                dict.fromkeys(
-                    str(asset_id).strip()
-                    for asset_id in job_request.uploaded_asset_ids
-                    if str(asset_id).strip()
-                )
-            )
-            if explicit_uploaded_asset_ids:
-                self._persist_job_uploaded_references(
-                    project,
-                    explicit_uploaded_asset_ids,
-                    template_id=template_manifest.template_id,
-                    user_input=str(job_request.user_input or project.user_goal or "").strip(),
-                )
-            doc281_registry = self.doc281_general_source_registry
-            if doc281_registry.enabled:
-                try:
-                    identity = doc281_registry.issue_command_identity(
-                        project_id=project.project_id,
-                        template_id=template_manifest.template_id,
-                        command_direction=str(job_request.user_input or project.user_goal or "").strip(),
-                        source_library_snapshot=self._doc270_project_source_library(project),
-                        requested_output_count=_bounded_requested_image_count(
-                            job_request.metadata.get("requested_image_count")
-                        ) or 2,
-                    )
-                    if isinstance(identity, dict):
-                        self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_COMMAND_NAMESPACE, {
-                            "schema_version": "doc281_general_command_v2", "identity": dict(identity),
-                            "identity_digest": str(identity.get("identity_digest") or ""),
-                        })
-                    retry_requested = (
-                        self._doc270_general_retry_requested(
-                            project,
-                            identity,
-                            job_request.metadata.get("v3_retry_after_terminal_job_id"),
-                        )
-                        if isinstance(identity, dict)
-                        else False
-                    )
-                    fresh_generation_requested = (
-                        job_request.metadata.get("v3_user_initiated_generation") is True
-                        or retry_requested
-                    )
-                    existing_general = (
-                        None
-                        if fresh_generation_requested
-                        else self._doc270_general_existing_command(project, identity)
-                        if isinstance(identity, dict)
-                        else None
-                    )
-                    if existing_general is not None:
-                        return existing_general
-                    if (
-                        isinstance(identity, dict)
-                        and (
-                            fresh_generation_requested
-                            or self._doc270_general_retryable_command_exists(project, identity)
-                        )
-                    ):
-                        doc270_general_retry_instance_id = uuid4().hex
-                    persisted = next((record.get("entry") for record in reversed(self.project_store.list_private_records(
-                        project.project_id, _DOC281_GENERAL_RECEIPT_NAMESPACE,
-                    )) if record.get("identity_digest") == identity.get("identity_digest")), None) if isinstance(identity, dict) else None
-                    entry = dict(persisted) if isinstance(persisted, dict) else doc281_registry.lookup_registered_receipt(
-                        project_id=project.project_id,
-                        command_identity=dict(identity) if isinstance(identity, dict) else None,
-                    )
-                    if isinstance(identity, dict) and isinstance(entry, dict):
-                        self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_RECEIPT_NAMESPACE, {
-                            "schema_version": "doc281_general_resolution_receipt_v2", "identity_digest": str(identity.get("identity_digest") or ""),
-                            "entry": dict(entry),
-                        })
-                except Exception:
-                    identity, entry = None, None
-                if isinstance(identity, dict):
-                    doc270_general_identity = dict(identity)
-                    doc270_general_activation = self._doc281_general_registered_receipt_decision(
-                        project,
-                        identity=doc270_general_identity,
-                        entry=entry,
-                    )
-                else:
-                    # An unavailable, optional, or invalid Doc281 decision is
-                    # ordinary prompt-only General.  Do not fall through to
-                    # the legacy project-asset expansion below.
-                    doc270_general_activation = {"state": "prompt_only"}
-            else:
-                capability = self._doc270_general_activation_capability_lookup()
-                if self._doc270_general_activation_capability_valid(
-                    capability,
-                    template_id=template_manifest.template_id,
-                ):
-                    try:
-                        identity = self._doc270_general_command_identity_lookup(
-                            project_id=project.project_id,
-                            template_id=template_manifest.template_id,
-                        )
-                    except Exception:
-                        identity = None
-                    if identity is not None:
-                        if self._doc270_general_command_identity_valid(
-                            identity,
-                            project_id=project.project_id,
-                            template_id=template_manifest.template_id,
-                        ) and identity.get("capability_version") == capability.get("capability_version"):
-                            existing_general = self._doc270_general_existing_command(project, identity)
-                            if existing_general is not None:
-                                return existing_general
-                            if self._doc270_general_retryable_command_exists(project, identity):
-                                doc270_general_retry_instance_id = uuid4().hex
-                            doc270_general_identity = dict(identity)
-                            doc270_general_activation = self._doc270_general_activation_decision(
-                                project,
-                                template_id=template_manifest.template_id,
-                                identity=doc270_general_identity,
-                            )
-                        else:
-                            doc270_general_activation = {"state": "receipt_invalid"}
+        # Doc322: Standard references belong to this command, not a global source search.
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID and (
             job_request.suite_slot_request
             or (
@@ -4435,7 +4320,7 @@ class V3ProjectModeService:
                 )
             self._ensure_ecommerce_selected_output_integrity(project)
             doc269_selected_continuation_admissions = (
-                self._doc269_selected_continuation_admissions(project)
+                self._doc269_selected_continuation_admissions(project, continuity_snapshot=continuity_snapshot)
             )
             # Explicit selectors have now been admitted into Project Mode.
             # A project created with ready product uploads starts with an
@@ -4602,44 +4487,8 @@ class V3ProjectModeService:
             commerce_profile = self._merge_commerce_profile(project, job_request)
         else:
             uploaded_asset_ids = list(
-                dict.fromkeys([*self._project_asset_ids(project), *job_request.uploaded_asset_ids])
+                dict.fromkeys(job_request.uploaded_asset_ids)
             )
-            if doc270_general_activation is not None:
-                if doc270_general_activation["state"] == "activated_resolved":
-                    uploaded_asset_ids = list(doc270_general_activation["selected_original_asset_ids"])
-                else:
-                    uploaded_asset_ids = []
-                job_request = job_request.model_copy(
-                    update={
-                        "metadata": {
-                            **dict(job_request.metadata or {}),
-                            "doc270_general_command_identity": doc270_general_identity,
-                            "doc270_general_source_activation_receipts": [
-                                {
-                                    key: value
-                                    for key, value in doc270_general_activation.items()
-                                    if key != "projection"
-                                }
-                            ],
-                            **(
-                                {
-                                    "doc270_general_original_source_projection": doc270_general_activation["projection"],
-                                    **(
-                                        {
-                                            "doc281_general_output_source_bindings_v1": doc270_general_activation[
-                                                "output_source_bindings"
-                                            ],
-                                        }
-                                        if isinstance(doc270_general_activation.get("output_source_bindings"), list)
-                                        else {}
-                                    ),
-                                }
-                                if doc270_general_activation["state"] == "activated_resolved"
-                                else {}
-                            ),
-                        }
-                    }
-                )
             current_reference_binding_digest = ""
             idempotency_key = ""
             supersedes_job_id = None
@@ -4648,13 +4497,6 @@ class V3ProjectModeService:
             project.allowed_template_ids.append(template_manifest.template_id)
         project.primary_template_id = template_manifest.template_id
         user_input = job_request.user_input or project.user_goal
-        if template_manifest.template_id != ECOMMERCE_TEMPLATE_ID:
-            self._persist_job_uploaded_references(
-                project,
-                uploaded_asset_ids,
-                template_id=template_manifest.template_id,
-                user_input=user_input,
-            )
         advanced_reference_controls = self._advanced_reference_controls_for_template(
             project=project,
             request=job_request,
@@ -4670,7 +4512,7 @@ class V3ProjectModeService:
                 requested_count=job_request.metadata.get("requested_image_count"),
                 has_reference=bool(
                     uploaded_asset_ids
-                    or self._project_has_active_reference(project)
+                    or continuity_snapshot.get("active_continuity_anchor")
                 ),
                 selected_size=job_request.metadata.get("requested_image_size"),
             )
@@ -4685,8 +4527,9 @@ class V3ProjectModeService:
             template_id=template_manifest.template_id,
             commerce_profile=commerce_profile,
             generation_overrides=context_generation_overrides,
+            direct_reference_ids=uploaded_asset_ids,
+            continuity_snapshot=continuity_snapshot,
         )
-        doc73_auto_identity_anchor_transport = self._doc73_auto_identity_anchor_transport(project)
         context_snapshot = context.model_dump(mode="json")
         scenario_selection = self._scenario_selection_for_template(
             template_manifest,
@@ -4785,6 +4628,7 @@ class V3ProjectModeService:
                 doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
                 doc270_source_library_enabled=True,
                 trusted_doc270_ecommerce_view_activation=doc270_ecommerce_view_activation_enabled,
+                continuity_snapshot=continuity_snapshot,
             )
             if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
             and not _trusted_capability_continuation
@@ -4795,14 +4639,12 @@ class V3ProjectModeService:
             else self.product_service.create_project_visual_asset_bound_job(
                 create_payload,
                 binding_service=self.project_visual_asset_binding_service,
-                server_job_instance_id=doc270_general_retry_instance_id,
-                doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
+                continuity_snapshot=continuity_snapshot,
             )
             if self.project_visual_asset_binding_service is not None
             else self.product_service.create_job(
                 create_payload,
-                server_job_instance_id=doc270_general_retry_instance_id,
-                doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
+                continuity_snapshot=continuity_snapshot,
             )
         )
         if (
@@ -5643,6 +5485,7 @@ class V3ProjectModeService:
         self._ensure_project_job(project, job_id)
         template_id = self._template_id_for_project_job(project, job_id)
         payload = dict(request or {})
+        expected_anchor_version = payload.pop("expected_anchor_version", None)
         payload["apply_memory_update"] = False
         metadata = dict(payload.get("metadata") or {})
         metadata.update({"project_id": project.project_id, "template_id": template_id, "project_mode": True})
@@ -5660,61 +5503,12 @@ class V3ProjectModeService:
             ).strip()
         )
         if str(metadata.get("identity_anchor_action") or "").strip() == "bind":
-            selected_output_id = str(
-                payload.get("selected_output_id")
-                or payload.get("selected_asset_id")
-                or ""
-            ).strip()
-            auto_anchor = self._doc73_auto_identity_anchor_record(
-                project,
-                output_id=selected_output_id,
-            )
-            anchor_record = auto_anchor.get("record") if auto_anchor is not None else None
-            if (
-                anchor_record is None
-                or str(getattr(anchor_record, "job_id", "") or "").strip() != job_id
-                or str(getattr(anchor_record, "output_id", "") or "").strip() != selected_output_id
-            ):
-                raise ValueError("automatic_identity_anchor_not_found")
-            if not self._record_doc73_auto_identity_anchor_control(
-                project_id=project.project_id,
-                job_id=job_id,
-                output_id=selected_output_id,
-                state="bound",
-                changed_at=_utc_now_iso(),
-            ):
-                raise ValueError("identity_anchor_state_unavailable")
-            context = self._refresh_project_context(project)
-            self._append_timeline(
-                project.project_id,
-                TimelineItemType.CANDIDATE_SELECTED,
-                "绑定了人物身份锚点",
-                "这张图会继续作为本项目的人物一致性依据；正式参考图和生成方向仍保持独立。",
-                job_id=job_id,
-                asset_ids=[str(getattr(anchor_record, "asset_id", "") or "").strip()],
-                candidate_ids=[str(getattr(anchor_record, "candidate_id", "") or "").strip()],
-                metadata={
-                    "output_id": selected_output_id,
-                    "reference_binding_mode": "automatic_continuity",
-                    "anchor_state": "bound",
-                },
-            )
-            visible_output_items = self._project_output_items(project, limit=60)
-            return {
-                "job_id": job_id,
-                "status": current_status.status.value,
-                "job_status": self._public_job_status(current_status).model_dump(mode="json"),
-                "project": self._public_project_record(
-                    project,
-                    visible_output_items=visible_output_items,
-                ).model_dump(mode="json"),
-                "context": self._public_project_context(context).model_dump(mode="json") if context else None,
-                "metadata": {
-                    **self._metadata(),
-                    "project_outputs": visible_output_items,
-                    "identity_anchor_action": "bind",
-                },
-            }
+            selected_id = str(payload.get("selected_output_id") or "").strip()
+            state = self._continuity_state(project)
+            self._anchor_bindings().change(project_id,output_id=selected_id,expected_job_id=job_id,
+                expected_version=state["version"] if expected_anchor_version is None else expected_anchor_version)
+            return {"job_id":job_id,"status":current_status.status.value,
+                "metadata":{"continuity_anchor":self.get_continuity_anchor(project_id)}}
         if current_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
             return self._selection_hold_response(
                 project,
@@ -5741,6 +5535,22 @@ class V3ProjectModeService:
                 reason="output_unavailable",
                 message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
                 unresolved_refs=unresolved_refs,
+            )
+        if len(preflight_refs) != 1:
+            return self._selection_hold_response(
+                project, template_id=template_id, status=current_status,
+                reason="single_continuity_anchor_required",
+                message="Select exactly one formally approved output as the continuity anchor.",
+            )
+        try:
+            self._continuity_output(project.project_id, preflight_refs[0].output_id, job_id)
+        except (ValueError, KeyError, OSError):
+            # Do not perform old selection writes before proving that the
+            # chosen output can legally become the one active binding.
+            return self._selection_hold_response(
+                project, template_id=template_id, status=current_status,
+                reason="continuity_anchor_unverified",
+                message="This output does not yet have complete formal delivery evidence.",
             )
         has_explicit_output_selector = bool(
             self._selection_id_set(payload.get("selected_output_ids"))
@@ -5803,6 +5613,11 @@ class V3ProjectModeService:
                 message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
                 unresolved_refs=unresolved_refs,
             )
+        if len(refs) == 1 and refs[0].output_id:
+            before = self._continuity_state(project)
+            self._anchor_bindings().change(project.project_id, output_id=refs[0].output_id,
+                expected_job_id=refs[0].job_id,
+                expected_version=before["version"] if expected_anchor_version is None else expected_anchor_version)
         now = _utc_now_iso()
         existing_ref_ids = {ref.output_ref_id for ref in project.selected_output_refs}
         project.selected_output_refs.extend([ref for ref in refs if ref.output_ref_id not in existing_ref_ids])
@@ -6848,7 +6663,11 @@ class V3ProjectModeService:
     def _ensure_ecommerce_selected_output_integrity(self, project: ProjectRecord) -> None:
         """Revalidate persisted Doc265 selections before a new command exists."""
 
+        anchor = self._continuity_state(project).get("active_continuity_anchor")
+        active_id = anchor.get("output_id") if anchor else None
         for reference in self._active_project_references(project):
+            if (reference.created_from_output_id or reference.asset_ref_id) != active_id:
+                continue
             if reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED:
                 continue
             try:
@@ -6862,44 +6681,27 @@ class V3ProjectModeService:
                 raise ValueError("continuation output reference unavailable") from exc
 
     def _doc269_selected_continuation_admissions(
-        self,
-        project: ProjectRecord,
+        self, project: ProjectRecord, *, continuity_snapshot: dict | None = None,
     ) -> list[dict[str, str]]:
-        """Freeze only Doc265-validated selections for Doc269's renderer plan."""
-
-        admissions: list[dict[str, str]] = []
-        for reference in self._active_project_references(project):
-            if reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED:
-                continue
-            if reference.use_policy != ProjectReferenceUsePolicy.STYLE:
-                # Generated records on other existing Doc265 channels remain
-                # history/review evidence. Only the explicit style selection
-                # may enter Doc269's fifth physical renderer slot.
-                continue
-            record = self._validate_ecommerce_selected_output_reference(project, reference)
-            digest = self._doc265_output_source_integrity_id(record)
-            if not digest.startswith("sha256:"):
-                raise ValueError("continuation output reference unavailable")
-            admissions.append(
-                {
-                    "selection_authority": "doc265_project_mode",
-                    "project_id": project.project_id,
-                    "reference_id": reference.reference_id,
-                    "output_id": str(record.output_id),
-                    "source_job_id": str(record.job_id),
-                    "candidate_id": str(record.candidate_id),
-                    "project_job_ids": list(project.job_ids),
-                    "content_sha256": digest.removeprefix("sha256:"),
-                    "source_type": "generated_selected",
-                    "use_policy": "style",
-                    "role": "selected_continuation_reference",
-                    "channel": "generated_selected",
-                    "file_path": str(Path(str(record.file_path)).resolve()),
-                }
-            )
-        if len(admissions) > 1:
-            raise ValueError("continuation output reference unavailable")
-        return admissions
+        """Adapt the one verified binding to the existing Doc269 admission shape."""
+        state = continuity_snapshot if continuity_snapshot is not None else self._continuity_state(project)
+        if state.get("state") == "invalid":
+            raise ValueError("continuity_anchor_integrity_mismatch")
+        anchor = state.get("active_continuity_anchor") if state.get("state") == "active" else None
+        if anchor is None:
+            return []
+        reference = self._continuity_output(project.project_id, anchor["output_id"], anchor["source_job_id"])
+        if reference["content_sha256"] != anchor["source_content_sha256"]:
+            raise ValueError("continuity_anchor_integrity_mismatch")
+        return [{
+            "selection_authority": "doc265_project_mode", "project_id": project.project_id,
+            "reference_id": anchor["binding_id"], "output_id": anchor["output_id"],
+            "source_job_id": anchor["source_job_id"], "candidate_id": reference["candidate_id"],
+            "project_job_ids": list(project.job_ids), "content_sha256": reference["content_sha256"],
+            "source_type": "generated_selected", "use_policy": "style",
+            "role": "selected_continuation_reference", "channel": "generated_selected",
+            "file_path": reference["file_path"],
+        }]
 
     def _validate_ecommerce_selected_output_reference(
         self,
@@ -9914,10 +9716,17 @@ class V3ProjectModeService:
         commerce_profile: ProjectCommerceProfile | None = None,
         owner_user_id: int | None = None,
         generation_overrides: dict[str, Any] | None = None,
+        direct_reference_ids: list[str] | None = None,
+        continuity_snapshot: dict[str, Any] | None = None,
     ) -> ProjectContextPackage:
         now = _utc_now_iso()
         effective_template_id = template_id or project.primary_template_id or GENERAL_TEMPLATE_ID
-        effective_commerce_profile = commerce_profile or project.commerce_profile
+        continuity_snapshot = continuity_snapshot or self._continuity_state(project)
+        direct_reference_ids = (list(direct_reference_ids) if direct_reference_ids is not None
+            else self._current_job_direct_reference_ids(project))
+        original_project = project
+        project = self._reference_scoped_project(project, effective_template_id, direct_reference_ids, continuity_snapshot)
+        effective_commerce_profile = (commerce_profile or project.commerce_profile) if effective_template_id == ECOMMERCE_TEMPLATE_ID else None
         timeline_ids = list(project.timeline_refs)
         state_map = self._selected_output_state_map(project)
         selected_ref_candidates = [
@@ -10054,6 +9863,7 @@ class V3ProjectModeService:
         version = stable_id(
             "project_context",
             project.project_id,
+            continuity_snapshot["version"],
             len(selected_refs_for_context),
             len(active_references),
             len(negative_notes),
@@ -10188,14 +9998,15 @@ class V3ProjectModeService:
         metadata["general_suite_role_plan_id"] = general_suite_role_plan.get("plan_id")
         metadata["batch_identity_diversity_review_id"] = batch_identity_diversity_review.get("review_id")
         metadata["template_consistency_policy"] = template_policy
-        auto_anchor = self._doc73_auto_identity_anchor_record(
-            project,
-            owner_user_id=owner_user_id,
-        )
-        if auto_anchor is not None:
-            metadata["doc73_auto_identity_anchor_state"] = str(
-                auto_anchor.get("state") or ""
-            ).strip().lower()
+        metadata["continuity_anchor"] = ContinuityAnchorBindingService.public(continuity_snapshot)
+        reference_mode = self._reference_project_mode(original_project, effective_template_id)
+        metadata["current_job_reference_mode"] = {"standard":"standard_direct_reference",
+            "professional":"professional_asset_binding", "ecommerce":"ecommerce_product_truth"}[reference_mode]
+        metadata["current_job_reference_summary"] = {
+            "direct_reference_count":len(active_uploaded_references) if reference_mode == "standard" else 0,
+            "professional_binding_active":reference_mode == "professional",
+            "ecommerce_product_truth_active":reference_mode == "ecommerce" and bool(active_uploaded_references),
+        }
         if effective_template_id == ECOMMERCE_TEMPLATE_ID and effective_commerce_profile is not None:
             metadata["commerce_profile"] = effective_commerce_profile.model_dump(mode="json")
             metadata["product_reference_required"] = True
@@ -11193,16 +11004,8 @@ class V3ProjectModeService:
             for item in final_items
             if self._public_project_output_identity(item)
         }
-        auto_anchor = self._doc73_auto_identity_anchor_record(
-            project,
-            owner_user_id=owner_user_id,
-            output_records_by_job=output_records_by_job,
-        )
-        auto_anchor_output_id = (
-            str(getattr(auto_anchor.get("record"), "output_id", "") or "").strip()
-            if auto_anchor is not None
-            else ""
-        )
+        anchor = self._continuity_state(project).get("active_continuity_anchor")
+        auto_anchor_output_id = anchor["output_id"] if anchor else ""
         review_items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in all_items:
@@ -11398,7 +11201,6 @@ class V3ProjectModeService:
         original_inputs: list[dict[str, Any]] = []
         seen_original_asset_ids: set[str] = set()
         selected_directions: list[dict[str, Any]] = []
-        seen_direction_ids: set[str] = set()
         for reference in self._active_references(project):
             if (
                 reference.source_type == ProjectReferenceSourceType.UPLOADED
@@ -11415,38 +11217,15 @@ class V3ProjectModeService:
                         "created_at": reference.created_at,
                     }
                 )
-            if reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
-                output_id = str(reference.created_from_output_id or reference.asset_ref_id or "").strip()
-                if output_id and output_id not in seen_direction_ids:
-                    seen_direction_ids.add(output_id)
-                    selected_directions.append(
-                        {
-                            "reference_id": reference.reference_id,
-                            "output_id": output_id,
-                            "job_id": reference.created_from_job_id,
-                            "preview_url": reference.preview_url,
-                            "created_at": reference.created_at,
-                        }
-                    )
-
-        state_map = self._selected_output_state_map(project)
-        for reference in project.selected_output_refs:
-            output_id = self._output_identity(reference)
-            if (
-                output_id
-                and output_id not in seen_direction_ids
-                and state_map.get(output_id) == ProjectOutputSelectionStateValue.SELECTED
-            ):
-                seen_direction_ids.add(output_id)
-                selected_directions.append(
-                    {
-                        "reference_id": reference.output_ref_id,
-                        "output_id": output_id,
-                        "job_id": reference.job_id,
-                        "preview_url": reference.preview_url,
-                        "created_at": reference.selected_at,
-                    }
-                )
+        binding = self._continuity_state(project)
+        anchor = binding.get("active_continuity_anchor") if binding.get("state") == "active" else None
+        if anchor:
+            output = self.product_service.output_store.get_output(anchor["output_id"])
+            selected_directions = [{
+                "reference_id": anchor["binding_id"], "output_id": anchor["output_id"],
+                "job_id": anchor["source_job_id"], "created_at": binding.get("created_at"),
+                "preview_url": output.preview_url if output else None,
+            }]
 
         locked_person_identity: list[dict[str, Any]] = []
         if self.project_visual_asset_binding_service is not None:
@@ -12146,6 +11925,9 @@ class V3ProjectModeService:
         if output_store is None:
             return []
         state_map = self._selected_output_state_map(project)
+        active = self._continuity_state(project).get("active_continuity_anchor")
+        if active:
+            state_map[active["output_id"]] = ProjectOutputSelectionStateValue.SELECTED
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for job_id in reversed(project.job_ids):
@@ -13756,6 +13538,210 @@ class V3ProjectModeService:
         except OSError:
             return ""
 
+    def _anchor_bindings(self):
+        return ContinuityAnchorBindingService(self.project_store, self._continuity_output)
+
+    def _continuity_output(self, project_id: str, output_id: str, expected_job_id: str | None = None) -> dict:
+        project = self._require_project(project_id)
+        record = self.product_service.output_store.get_output(output_id)
+        if record is None or not record.candidate_id or not record.asset_id:
+            raise ValueError("continuity_anchor_output_not_canonical")
+        if record.job_id not in project.job_ids or record.metadata.get("project_id") not in {None,"",project_id} or (expected_job_id and record.job_id != expected_job_id):
+            raise ValueError("continuity_anchor_project_mismatch")
+        owner = self._positive_owner_id(project.metadata.get("veyra_user_id"))
+        if not self._project_output_record_visible_to_owner(project, record, owner):
+            raise ValueError("continuity_anchor_project_mismatch")
+        if record.metadata.get("not_a_provider_delivery") or record.metadata.get("mock_contract_fixture"):
+            raise ValueError("continuity_anchor_not_formally_accepted")
+        job = self.product_service.get_job_record(record.job_id)
+        result = getattr(job, "generation_result", None)
+        if job is not None and job.request.metadata.get("project_id") != project_id:
+            raise ValueError("continuity_anchor_project_mismatch")
+        if result is not None:
+            exact = [asset for asset in result.asset_pack.assets if asset.asset_id == record.asset_id
+                and asset.metadata.get("selected_candidate_id") == record.candidate_id
+                and str((asset.metadata.get("candidate_metadata") or {}).get("output_id") or asset.metadata.get("output_id") or "") == record.output_id]
+            if len(exact) != 1:
+                raise ValueError("continuity_anchor_output_not_canonical")
+            if record.output_id not in self.product_service._public_final_delivery_projection(result)[1]:
+                raise ValueError("continuity_anchor_not_formally_accepted")
+        else:
+            # Existing immutable shared-review closure, not a new review rule.
+            # Never use an old closure to override a present generation result.
+            closure = self.product_service._output_store_job_closure(record.job_id)
+            records = self.product_service.output_store.list_by_job(record.job_id)
+            valid, _ = self.product_service._valid_output_store_job_closure(
+                closure, job_id=record.job_id, records=records)
+            if (record.metadata.get("project_id") != project_id or not valid
+                or closure.get("automatic_delivery_available") is not True
+                or output_id not in closure.get("eligible_output_ids", [])
+                or not self.product_service._output_store_closure_files_match(closure, records)):
+                raise ValueError("continuity_anchor_not_formally_accepted")
+        ref = OutputRef(output_ref_id=stable_id("output_ref",project_id,record.job_id,output_id),
+            source_type="generated_output", selected_at=record.created_at,
+            project_id=project_id, job_id=record.job_id, candidate_id=record.candidate_id, asset_id=record.asset_id, output_id=output_id)
+        if self._selected_output_state_map(project).get(self._output_identity(ref)) == ProjectOutputSelectionStateValue.REJECTED:
+            raise ValueError("continuity_anchor_not_formally_accepted")
+        expected = str(record.metadata.get("content_sha256") or "").removeprefix("sha256:")
+        actual = hashlib.sha256(Path(record.file_path).read_bytes()).hexdigest()
+        if len(expected) != 64 or actual != expected:
+            raise ValueError("continuity_anchor_integrity_mismatch")
+        return {"asset_id":output_id, "output_id":output_id, "job_id":record.job_id,
+            "candidate_id":record.candidate_id, "source_asset_id":record.asset_id,
+            "content_sha256":actual, "file_path":record.file_path, "mime_type":record.mime_type,
+            "source_type":"continuity_anchor", "role":"continuity_reference", "use_policy":"continuity",
+            "provider_input_required":True, "metadata":{"canonical_output_binding":True,"project_id":project_id}}
+
+    def _continuity_state(self, project: ProjectRecord) -> dict:
+        service = self._anchor_bindings()
+        state = service.state(project.project_id)
+        if state["version"]:
+            return state
+        # Migration is one-time and unambiguous; never rank or pick newest history.
+        controls = self.project_store.list_private_records(project.project_id,"doc73_auto_identity_anchor_controls_v1")
+        explicit_unbind = any(r.get("state") in {"unbound","invalid"} for r in controls)
+        refs = [r for r in project.selected_output_refs if self._selected_output_state_map(project).get(self._output_identity(r), ProjectOutputSelectionStateValue.SELECTED) == ProjectOutputSelectionStateValue.SELECTED]
+        candidates = {r.output_id:r for r in refs if r.output_id}
+        try:
+            if not explicit_unbind and len(candidates) == 1:
+                ref = next(iter(candidates.values()))
+                try:
+                    return service.change(project.project_id, output_id=ref.output_id, expected_job_id=ref.job_id,
+                        expected_version=0, migration=True)
+                except (ValueError, KeyError, OSError) as exc:
+                    if str(exc) == "continuity_anchor_conflict":
+                        raise
+                    explicit_unbind = True
+            if not explicit_unbind and not candidates:
+                legacy = []
+                reader = getattr(self.product_service.output_store,"get_doc73_auto_identity_anchor_receipt",None)
+                for job_id in project.job_ids:
+                    receipt = reader(job_id) if callable(reader) else None
+                    if isinstance(receipt,dict) and receipt.get("project_id") == project.project_id:
+                        old = self._doc73_auto_identity_anchor_record(project,output_id=receipt.get("source_output_id"))
+                        if old is not None:
+                            legacy.append(old)
+                if len(legacy) == 1 and legacy[0].get("state") == "bound":
+                    rec=legacy[0]["record"]
+                    try:
+                        return service.change(project.project_id,output_id=rec.output_id,expected_job_id=rec.job_id,
+                            expected_version=0,mode="auto_first_formal",migration=True)
+                    except (ValueError, KeyError, OSError) as exc:
+                        if str(exc)=="continuity_anchor_conflict":
+                            raise
+                explicit_unbind = bool(legacy)
+            return service.finish_empty_migration(project.project_id,blocked=explicit_unbind or bool(candidates))
+        except ValueError as exc:
+            if str(exc) == "continuity_anchor_conflict":
+                return service.state(project.project_id)
+            raise
+
+    def get_continuity_anchor(self, project_id: str) -> dict:
+        return ContinuityAnchorBindingService.public(self._continuity_state(self._require_project(project_id)))
+
+    def bind_continuity_anchor(self, project_id: str, payload: dict) -> dict:
+        if set(payload) - {"output_id","expected_job_id","expected_version","confirm_binding","reason"} or payload.get("confirm_binding") is not True:
+            raise ValueError("continuity_anchor_confirmation_required")
+        if not isinstance(payload.get("output_id"),str) or not payload["output_id"] or not isinstance(payload.get("expected_job_id"),str) or not payload["expected_job_id"]:
+            raise ValueError("continuity_anchor_request_invalid")
+        self._continuity_state(self._require_project(project_id))
+        state=self._anchor_bindings().change(project_id,output_id=payload["output_id"],
+            expected_job_id=payload["expected_job_id"],expected_version=payload.get("expected_version"))
+        return ContinuityAnchorBindingService.public(state)
+
+    def unbind_continuity_anchor(self, project_id: str, payload: dict) -> dict:
+        if set(payload) - {"expected_version","confirm_unbind","reason"} or payload.get("confirm_unbind") is not True:
+            raise ValueError("continuity_anchor_confirmation_required")
+        self._continuity_state(self._require_project(project_id))
+        return ContinuityAnchorBindingService.public(self._anchor_bindings().change(
+            project_id,output_id=None,expected_version=payload.get("expected_version")))
+
+    def _maybe_claim_continuity_anchor(self, project_id: str, job_id: str) -> None:
+        job=self.product_service.get_job_record(job_id)
+        result=getattr(job,"generation_result",None)
+        if result is None:
+            return
+        frozen=plan_from_metadata(dict(job.request.metadata or {}))
+        if frozen is None or frozen.as_dict()["project_mode"] == "ecommerce":
+            return
+        p=frozen.as_dict()
+        if p["continuity_anchor"] is not None or not p["anchor_auto_enabled"] or result.metadata.get("doc322_auto_anchor_candidate") is not True:
+            return
+        planned=getattr(job,"planning_result",None)
+        if planned is None or len(planned.series_plan.assets)<2:
+            return
+        source_asset=planned.series_plan.assets[0].asset_id
+        matching=[a for a in result.asset_pack.assets if a.asset_id==source_asset]
+        if len(matching)!=1:
+            return
+        asset=matching[0]; cm=dict(asset.metadata.get("candidate_metadata") or {})
+        output_id=str(cm.get("output_id") or asset.metadata.get("output_id") or "")
+        if not output_id or any(cm.get(k) not in (None,0,False) for k in ("refine_round","retry_attempt","visual_auto_retry_attempt")):
+            return
+        records=[r for r in self.product_service.output_store.list_by_job(job_id) if r.asset_id==source_asset]
+        if len(records)!=1 or records[0].output_id!=output_id or records[0].candidate_id!=asset.metadata.get("selected_candidate_id"):
+            return
+        try:
+            self._anchor_bindings().change(project_id,output_id=output_id,expected_job_id=job_id,
+                expected_version=p["anchor_version"],mode="auto_first_formal")
+        except (ValueError,OSError):
+            return  # Concurrent user action or unverified pixels cannot be overwritten.
+
+    def _reference_project_mode(self, project: ProjectRecord, template_id: str | None = None) -> str:
+        if (template_id or project.primary_template_id)==ECOMMERCE_TEMPLATE_ID:
+            return "ecommerce"
+        binding=self.project_visual_asset_binding_service
+        if binding is not None:
+            current=binding.current(project_id=project.project_id)
+            if current.state=="blocked":
+                raise ValueError("visual_asset_binding_set_blocked")
+            if current.state=="valid":
+                return "professional"
+        return "standard"
+
+    def _current_job_direct_reference_ids(self, project: ProjectRecord) -> list[str]:
+        if not project.job_ids:
+            return []
+        job=self.product_service.get_job_record(project.job_ids[-1])
+        request=getattr(job,"request",None)
+        if request is None:
+            return []
+        plan=plan_from_metadata(dict(request.metadata or {}))
+        if plan is None or plan.as_dict()["project_mode"]!="standard":
+            return []
+        return [r["asset_id"] for r in plan.as_dict()["direct_references"]]
+
+    def _reference_scoped_project(self, project: ProjectRecord, template_id: str, direct_ids: list[str], state: dict) -> ProjectRecord:
+        scoped=project.model_copy(deep=True)
+        anchor=state.get("active_continuity_anchor") if state.get("state")=="active" else None
+        allowed=set(direct_ids) if self._reference_project_mode(project,template_id)=="standard" else set()
+        scoped.selected_output_refs=[]
+        if anchor:
+            # The versioned binding supersedes a prior historical unselect.
+            # History itself remains untouched on the persisted project.
+            scoped.selected_output_states = [
+                item.model_copy(update={"selection_state": ProjectOutputSelectionStateValue.SELECTED})
+                if item.output_id == anchor["output_id"] else item
+                for item in scoped.selected_output_states
+            ]
+            ref=OutputRef(output_ref_id=stable_id("output_ref",project.project_id,anchor["source_job_id"],anchor["output_id"]),
+                source_type="generated_output",selected_at=state.get("created_at", ""),
+                project_id=project.project_id,job_id=anchor["source_job_id"],output_id=anchor["output_id"],
+                candidate_id=anchor["source_candidate_id"],asset_id=anchor["source_asset_id"])
+            scoped.selected_output_refs=[ref]
+        scoped.reference_assets=[r for r in scoped.reference_assets if r.source_type==ProjectReferenceSourceType.UPLOADED
+            and (template_id==ECOMMERCE_TEMPLATE_ID or r.asset_ref_id in allowed)]
+        scoped.uploaded_asset_refs=[r for r in scoped.uploaded_asset_refs if template_id==ECOMMERCE_TEMPLATE_ID or r.get("asset_id") in allowed]
+        if self._reference_project_mode(project, template_id) == "standard":
+            for asset_id in dict.fromkeys(direct_ids):
+                self._upsert_project_reference(
+                    scoped, source_type=ProjectReferenceSourceType.UPLOADED,
+                    asset_ref_id=asset_id, now=_utc_now_iso(),
+                    use_policy=ProjectReferenceUsePolicy.GENERAL,
+                    metadata={"job_local_direct_reference": True},
+                )
+        return scoped
+
     def _project_asset_ids(self, project: ProjectRecord) -> list[str]:
         inactive_ids = {
             reference.asset_ref_id
@@ -14100,9 +14086,10 @@ class V3ProjectModeService:
             **self._metadata(),
             "project_outputs": project_output_items,
         }
-        metadata["project_source_library"] = public_project_source_library(
-            self._doc270_project_source_library(project)
-        )
+        metadata["continuity_anchor"] = self.get_continuity_anchor(project.project_id)
+        if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
+            metadata["ecommerce_product_truth_inputs"] = public_project_source_library(self._doc270_project_source_library(project))
+            metadata["project_source_library"] = metadata["ecommerce_product_truth_inputs"]
         # A current association-drift closure is bound to the active source
         # snapshot and must take precedence over stale planned-job progress.
         # It is rehydrated privately rather than trusted from project metadata.
@@ -14338,6 +14325,8 @@ class V3ProjectModeService:
     ) -> ProjectRecord:
         """Keep durable continuation plans out of browser project reads."""
 
+        project = self._reference_scoped_project(project, project.primary_template_id,
+            self._current_job_direct_reference_ids(project), self._continuity_state(project))
         public_metadata_keys = {
             "source",
             "project_mode",
@@ -14357,12 +14346,16 @@ class V3ProjectModeService:
             "doc281_used_source_disclosures",
         }
         public_metadata = self._public_metadata_projection(project.metadata, public_metadata_keys)
-        auto_anchor = self._doc73_auto_identity_anchor_public_projection(
-            project,
-            owner_user_id=owner_user_id,
-        )
-        if auto_anchor is not None:
-            public_metadata["doc73_auto_identity_anchor"] = auto_anchor
+        public_metadata["continuity_anchor"] = self.get_continuity_anchor(project.project_id)
+        mode = self._reference_project_mode(project)
+        public_metadata["current_job_reference_mode"] = {"standard":"standard_direct_reference",
+            "professional":"professional_asset_binding","ecommerce":"ecommerce_product_truth"}[mode]
+        direct_ids = self._current_job_direct_reference_ids(project) if mode == "standard" else []
+        public_metadata["current_job_reference_inputs"] = [
+            {"asset_id":asset.asset_id,"role":asset.role.value if hasattr(asset.role,"value") else asset.role,
+                "filename":asset.filename,"preview_url":f"/api/v3/creative-agent/uploads/{asset.asset_id}/content"}
+            for asset in self.product_service.asset_store.resolve_uploaded_assets(direct_ids)
+        ] if direct_ids else []
         visible_aliases = self._visible_output_aliases(visible_output_items or [])
         public_selected_refs = [
             self._public_output_ref(ref)
@@ -14475,6 +14468,7 @@ class V3ProjectModeService:
         if context is None:
             return None
         public_metadata_keys = {
+            "continuity_anchor", "current_job_reference_mode", "current_job_reference_summary",
             "source", "positive_context_from_selected_outputs_only", "unselected_candidates_excluded",
             "active_reference_count", "active_uploaded_reference_count", "active_generated_reference_count",
             "suppressed_generated_reference_count", "active_negative_feedback_count", "template_id",

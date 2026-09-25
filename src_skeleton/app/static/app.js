@@ -4801,7 +4801,8 @@ function v3EcommerceProjectReferenceGroups(project = v3State.currentProject) {
 }
 
 function v3ProjectSourceLibraryEntries(project = v3State.currentProject) {
-  const library = project?.metadata?.project_source_library;
+  if (project?.primary_template_id !== "ecommerce_template") return [];
+  const library = project?.metadata?.ecommerce_product_truth_inputs || project?.metadata?.project_source_library;
   if (!library || typeof library !== "object" || library.schema_version !== "doc270_project_source_library_public_v1") return [];
   return Array.isArray(library.entries)
     ? library.entries.filter((entry) => entry && typeof entry === "object" && entry.association_reference_id)
@@ -5507,7 +5508,10 @@ function renderV3ProjectOutputBoard() {
   }
   items.forEach((item, index) => {
     const urls = v3OutputImageCandidates(item);
-    const isSelected = v3IsOutputItemSelected(item, project);
+    const anchorState = project?.metadata?.continuity_anchor;
+    const isSelected = anchorState
+      ? anchorState.state === "active" && anchorState.active_continuity_anchor?.output_id === item.output_id
+      : v3IsOutputItemSelected(item, project);
     const title = isSelected ? `已选延续成片 ${index + 1}` : `项目图片 ${index + 1}`;
     const reason = v3ProjectOutputReason(item);
     const reviewNotice = v3ProjectOutputReviewNotice(item);
@@ -5521,13 +5525,13 @@ function renderV3ProjectOutputBoard() {
         <p>${escapeHtml(reason)}</p>
       </div>
       <div class="v3-result-meta">
-        <span>${isSelected ? "已用于延续方向" : "可设为延续方向"}</span>
+        <span>${isSelected ? "已用于延续方向" : "可设为主图"}</span>
         ${reviewNotice ? `<span>${escapeHtml(reviewNotice)}</span>` : ""}
         ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载</button>` : ""}
       </div>
       <div class="v3-output-actions">
         ${ecommerceProject ? "" : `<button type="button" data-v3-output-action="prompt" data-v3-output-index="${index}">提示词</button>`}
-        <button type="button" data-v3-output-action="select" data-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>${isSelected ? "已设为延续方向" : "设为延续方向"}</button>
+        <button type="button" data-v3-output-action="select" data-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>${isSelected ? "已设为主图" : "设为主图"}</button>
         <button type="button" data-v3-output-action="remove_from_project" data-v3-output-index="${index}">从项目成果移除</button>
       </div>
     `;
@@ -5613,6 +5617,18 @@ async function selectV3OutputItem(item) {
   }
   const selectedCandidateId = v3OutputItemCandidateId(item);
   const selectedAssetId = v3OutputItemAssetId(item);
+  const project = v3State.currentProject;
+  if (project?.metadata?.continuity_anchor && window.AlchemyContinuity) {
+    const outputId = String(item?.output_id || "");
+    if (!outputId || !jobId) return;
+    await window.AlchemyContinuity.bind({
+      project, request: (path, options) => request(`${v3ApiBase}${path}`, options),
+      refresh: () => refreshV3CurrentProject({silent: true}),
+      isCurrent: (id) => v3State.currentProject?.project_id === id,
+      notify: (text, tone) => updateV3Notice(text, tone),
+    }, {output_id: outputId, job_id: jobId});
+    return;
+  }
   try {
     setV3Busy(true, "正在设为后续参考...");
     const selected = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/select`, {
@@ -5637,7 +5653,7 @@ async function selectV3OutputItem(item) {
     if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
       openV3ProjectSubpage("compose");
     }
-    updateV3Notice("已设为延续方向。后续会沿用允许继承的画面方向，原始参考图和人物资产仍然优先。", "success");
+    updateV3Notice("已设为主图。后续会沿用允许继承的画面方向，原始参考图和人物资产仍然优先。", "success");
   } catch (error) {
     updateV3Notice(`选中失败：${friendlyError(error)}`, "error");
   } finally {
@@ -5943,6 +5959,12 @@ function renderV3EcommerceProjectViewReferences(project, ecommerceView) {
 function renderV3UsefulReferences() {
   if (!els.v3UsefulReferenceBoard) return;
   const project = v3State.currentProject;
+  if (window.AlchemyContinuity?.render(els.v3UsefulReferenceBoard, {
+      project, request: (path, options) => request(`${v3ApiBase}${path}`, options),
+      refresh: () => refreshV3CurrentProject({silent: true}),
+      isCurrent: (id) => v3State.currentProject?.project_id === id,
+      notify: (text, tone) => updateV3Notice(text, tone),
+    })) return;
   const ecommerceView = v3EcommerceProjectView(project);
   if (project && ecommerceView) {
     renderV3EcommerceProjectViewReferences(project, ecommerceView);
@@ -6003,7 +6025,7 @@ function renderV3UsefulReferences() {
     els.v3UsefulReferenceBoard.appendChild(group);
   }
   if (!referenceCount) {
-    els.v3UsefulReferenceBoard.textContent = "还没有原始参考图或已选延续方向。正式交付图可单独设为延续方向。";
+    els.v3UsefulReferenceBoard.textContent = "还没有原始参考图或已选延续方向。正式交付图可单独设为主图。";
     return;
   }
 
@@ -6454,7 +6476,7 @@ function renderV3WorkflowArtifacts() {
             (artifact.continuationReferenceCount
               ? "后续生成会保留原始参考图的事实，并沿用已选成片允许继承的方向。"
               : artifact.originalReferenceCount
-                ? "后续生成会优先保留原始参考图的事实；满意成片可单独设为延续方向。"
+                ? "后续生成会优先保留原始参考图的事实；满意成片可单独设为主图。"
                 : "在图片卡点“设为后续参考”后，一致性会明显更稳。"),
           110,
         ),
@@ -6503,7 +6525,7 @@ function renderV3ProductionEntry({ project, imageCount, originalCount, continuat
   const body = continuationCount
     ? `沿用 ${continuationCount} 个已选成片方向继续。`
     : originalCount
-      ? `保留 ${originalCount} 张原始参考图作为生成依据；满意成片可单独设为延续方向。`
+      ? `保留 ${originalCount} 张原始参考图作为生成依据；满意成片可单独设为主图。`
       : "先生成，再挑满意方向。";
   const imageLabel = imageCount ? `${imageCount} 张图片` : "还未出图";
   const avoidLabel = avoidCount ? `${avoidCount} 条避开方向` : "暂无避开方向";
@@ -9849,6 +9871,7 @@ async function maybePersistV3UploadedReferences(uploadedAssets = []) {
   const assets = Array.isArray(uploadedAssets) ? uploadedAssets.filter((asset) => asset?.asset_id) : [];
   if (!projectId || !assets.length) return;
   const isEcommerce = v3State.selectedScenario === "ecommerce";
+  if (!isEcommerce) return; // Standard references belong only to the explicit current task.
   const shouldPersist = isEcommerce || window.confirm("要把这次上传的参考图作为本项目后续参考吗？");
   if (!shouldPersist) return;
   for (const asset of assets) {

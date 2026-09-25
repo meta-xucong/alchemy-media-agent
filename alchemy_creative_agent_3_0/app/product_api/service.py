@@ -7,6 +7,8 @@ balance estimate instead of image-model controls.
 
 from __future__ import annotations
 
+from ..reference_input_plan import ReferenceInputPlan, PLAN_KEY, plan_from_metadata
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import base64
@@ -1532,9 +1534,11 @@ class V3ProductApiService:
         *,
         server_job_instance_id: str | None = None,
         doc73_auto_identity_anchor_transport: dict[str, Any] | None = None,
+        continuity_snapshot: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         return self._create_creative_job(
             request,
+            continuity_snapshot=continuity_snapshot,
             server_job_instance_id=server_job_instance_id,
             doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
         )
@@ -1546,6 +1550,7 @@ class V3ProductApiService:
         binding_service: ProjectVisualAssetBindingService,
         server_job_instance_id: str | None = None,
         doc73_auto_identity_anchor_transport: dict[str, Any] | None = None,
+        continuity_snapshot: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         """Internal Project Mode seam for an explicit library asset selection.
 
@@ -1556,6 +1561,7 @@ class V3ProductApiService:
 
         return self._create_creative_job(
             request,
+            continuity_snapshot=continuity_snapshot,
             project_visual_asset_binding_service=binding_service,
             server_job_instance_id=server_job_instance_id,
             doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
@@ -1570,11 +1576,13 @@ class V3ProductApiService:
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
         doc270_source_library_enabled: bool = False,
         trusted_doc270_ecommerce_view_activation: bool = False,
+        continuity_snapshot: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         """Internal Project Mode entry with a canonical product-reference pool."""
 
         return self._create_creative_job(
             request,
+            continuity_snapshot=continuity_snapshot,
             project_visual_asset_binding_service=binding_service,
             project_ecommerce_canonical_product_asset_ids=canonical_product_asset_ids,
             doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
@@ -1660,6 +1668,7 @@ class V3ProductApiService:
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
         doc270_source_library_enabled: bool = False,
         trusted_doc270_ecommerce_view_activation: bool = False,
+        continuity_snapshot: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         if generation_channel == "mcp" and not (
@@ -2000,6 +2009,7 @@ class V3ProductApiService:
             self._prepare_ecommerce_creative_context(create_request)
         except EcommerceProductInputNeedsAttention:
             return self._ecommerce_needs_input_status(create_request)
+        self._freeze_reference_input_plan(create_request, continuity_snapshot, professional_stage=trusted_professional_anchor_preparation or trusted_professional_character_card)
         runtime_result = self.scenario_runtime.plan_job(
             self._runtime_request_payload(
                 create_request,
@@ -2250,9 +2260,11 @@ class V3ProductApiService:
         *,
         server_job_instance_id: str | None = None,
         doc73_auto_identity_anchor_transport: dict[str, Any] | None = None,
+        continuity_snapshot: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         return self.create_creative_job(
             request,
+            continuity_snapshot=continuity_snapshot,
             server_job_instance_id=server_job_instance_id,
             doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
         )
@@ -3906,6 +3918,15 @@ class V3ProductApiService:
         record.balance_estimate = self._estimate_for_result(generation_result)
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
+        anchor_finalizer = getattr(self, "_continuity_anchor_finalizer", None)
+        project_id = str(record.request.metadata.get("project_id") or "")
+        if callable(anchor_finalizer) and project_id:
+            try:
+                anchor_finalizer(project_id, record.job_id)
+            except (ValueError, KeyError, OSError):
+                # Auxiliary anchor promotion cannot erase an already accepted image.
+                record.warnings.append("Continuity anchor was not updated; existing image delivery is unchanged.")
+                self.job_store.save(record)
         return self._status_from_record(record)
 
     @staticmethod
@@ -12587,6 +12608,8 @@ class V3ProductApiService:
         """
 
         hidden_keys = {
+            "reference_input_plan_receipt",
+            "reference_input_plan", "active_continuity_anchor", "continuity_snapshot",
             "retry_patch",
             "blocked_reason",
             "file_path",
@@ -15511,6 +15534,46 @@ class V3ProductApiService:
                 return message.strip()
         return value.strip()
 
+    def _freeze_reference_input_plan(self, request, continuity_snapshot=None, *, professional_stage=False):
+        """Freeze only current declared sources after ordinary service admission."""
+        metadata = dict(request.metadata or {})
+        uploads = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
+        if len(uploads) != len(set(request.uploaded_asset_ids)):
+            raise ValueError("reference_input_source_unavailable")
+        snapshot = metadata.get("frozen_visual_asset_binding_set")
+        bound = isinstance(snapshot, dict) and snapshot.get("state") == "valid"
+        template = str(metadata.get("template_id") or "")
+        ecommerce = template == "ecommerce_template" or (request.scenario_selection and request.scenario_selection.scenario_id == "ecommerce")
+        mode = "ecommerce" if ecommerce else "professional" if bound or professional_stage else "standard"
+        professional = None
+        commerce = None
+        if mode == "professional":
+            if uploads and not professional_stage:
+                raise ValueError("reference_input_professional_direct_upload_not_bound")
+            refs = metadata.get("professional_anchor_reference_assets") if professional_stage else metadata.get("visual_asset_library_reference_assets")
+            refs = list(refs or [])
+            # Initial asset preparation has no generated winner yet. These
+            # current uploads enter only through the existing trusted internal
+            # preparation seam, never a normal Professional project request.
+            if professional_stage and not refs:
+                refs = uploads
+            professional = snapshot if bound else {"state":"valid", "internal_stage_contract":metadata.get("professional_planning_metadata", {})}
+        elif mode == "ecommerce":
+            admitted_request = request.model_copy(update={"metadata":{k:v for k,v in metadata.items() if k != PLAN_KEY}})
+            refs = self._runtime_request_payload(admitted_request)["uploaded_assets"]
+            commerce = {"admission":metadata.get("professional_ecommerce_product_truth_admission"),
+                "creative_context":metadata.get("ecommerce_creative_context"),
+                "approved_product_asset_ids":list(request.uploaded_asset_ids),
+                "locked_identity_binding":snapshot if bound else None,
+                "locked_identity_asset_ids":[str(item.get("asset_id") or item.get("output_id"))
+                    for item in metadata.get("visual_asset_library_reference_assets", []) if isinstance(item,dict)]}
+        else:
+            refs = uploads
+        plan = ReferenceInputPlan.freeze(job_id=self._planned_job_id_for_request(request),
+            project_id=str(metadata.get("project_id") or ""), mode=mode, inputs=refs,
+            anchor_snapshot=continuity_snapshot, professional_binding=professional, ecommerce_contract=commerce)
+        request.metadata = {**metadata, PLAN_KEY:plan.as_dict(), "reference_input_summary":plan.facts()}
+
     def _runtime_request_payload(
         self,
         request: CreateCreativeJobRequest,
@@ -15606,6 +15669,13 @@ class V3ProductApiService:
             "metadata": metadata,
             "trusted_capability_plan_reuse": trusted_reuse,
         }
+        frozen_references = plan_from_metadata(metadata, job_id=self._planned_job_id_for_request(request))
+        if frozen_references is not None:
+            exact = frozen_references.references()
+            payload["uploaded_assets"] = [item for item in exact if item.get("reference_channel") != "continuity"]
+            metadata["reference_assets"] = exact
+            metadata["reference_input_summary"] = frozen_references.facts()
+            payload["metadata"] = metadata
         if body_refresh_analysis_context is not None:
             if not isinstance(body_refresh_analysis_context, BodyRefreshAnalysisContext):
                 raise ValueError("body_refresh_analysis_context_untrusted")
@@ -15679,6 +15749,7 @@ class V3ProductApiService:
 
     _SERVER_OWNED_RUNTIME_METADATA = frozenset(
         {
+            "reference_input_plan", "active_continuity_anchor", "continuity_snapshot", "reference_input_summary",
             "capability_activation_plan",
             "capability_activation_plan_id",
             "capability_catalog_version",

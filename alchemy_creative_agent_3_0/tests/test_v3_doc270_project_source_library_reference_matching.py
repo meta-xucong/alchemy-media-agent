@@ -359,8 +359,10 @@ def test_doc270_general_prompt_only_has_an_empty_library_but_no_ecommerce_receip
     assert record is not None
     assert "doc270_project_source_library" not in record.request.metadata
     assert "doc270_source_library_binding_receipts" not in record.request.metadata
-    library = handlers.get_project(general["project_id"])["metadata"]["project_source_library"]
-    assert library["entries"] == []
+    metadata = handlers.get_project(general["project_id"])["metadata"]
+    assert "project_source_library" not in metadata
+    assert "ecommerce_product_truth_inputs" not in metadata
+    assert record.request.metadata["reference_input_plan"]["direct_references"] == []
 
 
 def test_doc270_general_uploaded_original_is_cataloged_while_visual_assets_and_history_are_excluded(tmp_path) -> None:
@@ -406,30 +408,24 @@ def test_doc270_general_uploaded_original_is_cataloged_while_visual_assets_and_h
     )
     handlers.project_service.project_store.save_project(record)
 
-    library = handlers.get_project(general["project_id"])["metadata"]["project_source_library"]
-    assert [entry["association_reference_id"] for entry in library["entries"]] == [
-        _association_id(handlers, general["project_id"], upload_id)
-    ]
-    entry = library["entries"][0]
-    assert entry["availability_state"] == "ready_verified"
-    assert entry["automatic_use_eligible"] is True
-    assert entry["ecommerce_product_eligible"] is False
-    _assert_public_safe(library)
-    assert history.output_id not in str(library)
-    assert visual_asset_id not in str(library)
-
-    created = handlers.post_project_job(
-        general["project_id"],
-        {
-            "template_id": "general_template",
-            "user_input": general["user_goal"],
-            "uploaded_asset_ids": [upload_id],
-            "metadata": {},
-        },
-    )
-    job = handlers.service.get_job_record(created["job_id"])
-    assert job is not None
-    assert "doc270_source_library_binding_receipts" not in job.request.metadata
+    detail=handlers.get_project(general["project_id"])
+    assert "project_source_library" not in detail["metadata"]
+    assert "ecommerce_product_truth_inputs" not in detail["metadata"]
+    # Explicitly binding a Visual Asset activates Professional input semantics;
+    # a same-template historical upload must not be silently added to it.
+    with pytest.raises(ValueError, match="professional_direct_upload_not_bound"):
+        handlers.post_project_job(general["project_id"],{
+            "template_id":"general_template","user_input":general["user_goal"],
+            "uploaded_asset_ids":[upload_id],"metadata":{}})
+    created=handlers.post_project_job(general["project_id"],{
+        "template_id":"general_template","user_input":general["user_goal"],"uploaded_asset_ids":[],"metadata":{}})
+    job=handlers.service.get_job_record(created["job_id"])
+    plan=job.request.metadata["reference_input_plan"]
+    assert plan["project_mode"] == "professional"
+    assert plan["direct_references"] == []
+    assert plan["ecommerce_product_truth"] is None
+    assert upload_id not in [ref["asset_id"] for ref in plan["professional_binding_set"]["references"]]
+    assert history.output_id not in [ref["asset_id"] for ref in plan["professional_binding_set"]["references"]]
 
 
 def test_doc270_cross_project_or_browser_forged_asset_never_enters_current_catalog(tmp_path) -> None:
@@ -561,7 +557,8 @@ def test_doc270_general_and_inactive_photography_do_not_consume_ecommerce_matche
     record = handlers.service.get_job_record(created["job_id"])
     assert record is not None
     general_view = handlers.get_project(general["project_id"])
-    assert general_view["metadata"]["project_source_library"]["entries"] == []
+    assert "project_source_library" not in general_view["metadata"]
+    assert record.request.metadata["reference_input_plan"]["project_mode"] == "standard"
     assert "current_operation" not in general_view["metadata"]
     photography = handlers.project_service.template_registry.get_manifest("photographer_template")
     assert photography is not None
@@ -729,8 +726,8 @@ def test_doc270_general_catalog_is_read_only_and_does_not_create_ecommerce_recei
                 )
                 board = page.locator("#v3UsefulReferenceBoard")
                 state = page.evaluate("Boolean(v3State.currentProject.metadata.doc270_source_library_binding_receipts)")
-            assert "项目原始素材" in board.inner_text()
-            assert page.locator(".project_source_library").count() == 1
+            assert "项目原始素材" not in board.inner_text()
+            assert page.locator(".project_source_library").count() == 0
             assert "人物视觉资产" not in board.inner_text()
             assert state is False
             assert page.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0

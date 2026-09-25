@@ -1493,6 +1493,12 @@ class McpMaterializationHandoffStore:
             "body_refresh_source_mode",
         }
         safe = {key: value for key, value in raw.items() if key in allowed}
+        for key in ("reference_input_plan_digest", "reference_input_receipt_digest"):
+            if key in raw:
+                value = raw[key]
+                if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+                    raise McpMaterializationError("mcp_reference_input_plan_digest_invalid")
+                safe[key] = value
         expected_body_contract = body_silhouette_mcp_materialization_channel_contract()
         body_channel_present = (
             raw.get("body_silhouette_mcp_materialization_channel_contract") == expected_body_contract

@@ -623,6 +623,8 @@ def test_doc265_explicit_generated_selection_is_continuation_only(tmp_path) -> N
         _job_payload(uploaded_asset_ids=[], key="doc265-selection-source"),
     )
     output = _save_history_output(handlers, job_id=job["job_id"], index=11)
+    from alchemy_creative_agent_3_0.tests.doc322_test_support import certify_output
+    certify_output(handlers.service, output)
 
     selected = handlers.post_project_reference(
         project["project_id"],
@@ -681,6 +683,8 @@ def test_doc265_selected_output_is_revalidated_before_new_job(tmp_path, monkeypa
         _job_payload(uploaded_asset_ids=[], key=f"doc265-integrity-source-{mutation}"),
     )
     output = _save_history_output(handlers, job_id=source_job["job_id"], index=21)
+    from alchemy_creative_agent_3_0.tests.doc322_test_support import certify_output
+    certify_output(handlers.service, output)
     handlers.post_project_reference(
         project["project_id"],
         {
@@ -699,7 +703,7 @@ def test_doc265_selected_output_is_revalidated_before_new_job(tmp_path, monkeypa
 
     before_job_ids = handlers.get_project(project["project_id"])["project"]["job_ids"]
     calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
-    with pytest.raises(ValueError, match="continuation|reference|output"):
+    with pytest.raises(ValueError, match="continuity_anchor_integrity_mismatch"):
         handlers.post_project_job(
             project["project_id"],
             _job_payload(uploaded_asset_ids=[], key=f"doc265-integrity-reject-{mutation}"),
@@ -707,8 +711,9 @@ def test_doc265_selected_output_is_revalidated_before_new_job(tmp_path, monkeypa
 
     public = handlers.get_project(project["project_id"])
     assert public["project"]["job_ids"] == before_job_ids
-    operation = public["metadata"]["current_operation"]
-    assert operation == _doc265_reference_operation()
+    operation = public["project"]["metadata"]["continuity_anchor"]
+    assert operation["state"] == "invalid"
+    assert operation["active_continuity_anchor"] is None
     assert output.output_id not in json.dumps(operation, sort_keys=True)
     assert str(output_path) not in json.dumps(operation, sort_keys=True)
     assert calls == {"plan": 0, "dispatch": 0}
@@ -747,21 +752,17 @@ def test_doc265_persisted_cross_project_selected_output_is_revalidated_before_ne
     )
     handlers.project_service.project_store.save_project(target_record)
 
-    before_job_ids = handlers.get_project(target["project_id"])["project"]["job_ids"]
-    calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
-    with pytest.raises(ValueError, match="continuation|reference|output"):
-        handlers.post_project_job(
-            target["project_id"],
-            _job_payload(uploaded_asset_ids=[], key="doc265-persisted-cross-project-reject"),
-        )
-
-    public = handlers.get_project(target["project_id"])
-    assert public["project"]["job_ids"] == before_job_ids
-    operation = public["metadata"]["current_operation"]
-    assert operation == _doc265_reference_operation()
-    assert output.output_id not in json.dumps(operation, sort_keys=True)
-    assert source_job["job_id"] not in json.dumps(operation, sort_keys=True)
-    assert calls == {"plan": 0, "dispatch": 0}
+    state=handlers.project_service.get_continuity_anchor(target["project_id"])
+    assert state["active_continuity_anchor"] is None
+    with pytest.raises(ValueError,match="project_mismatch"):
+        handlers.project_service.bind_continuity_anchor(target["project_id"],{
+            "output_id":output.output_id,"expected_job_id":source_job["job_id"],
+            "expected_version":state["version"],"confirm_binding":True})
+    result=handlers.post_project_job(target["project_id"],_job_payload(uploaded_asset_ids=[],key="doc322-ignore-foreign-history"))
+    frozen=handlers.service.get_job_record(result["job_id"]).request.metadata["reference_input_plan"]
+    assert frozen["continuity_anchor"] is None
+    assert output.output_id not in json.dumps(frozen)
+    assert any(ref.asset_ref_id==output.output_id for ref in handlers.project_service.project_store.get_project(target["project_id"]).reference_assets)
 
 
 @pytest.mark.parametrize("selector_kind", ["unknown", "cross_project"])
@@ -908,6 +909,8 @@ def test_doc265_valid_generated_selection_clears_prior_recovery_state(tmp_path) 
     record.status = ProductJobStatusValue.GENERATED
     handlers.service.job_store.save(record)
     target_output = _save_history_output(handlers, job_id=target_job["job_id"], index=17)
+    from alchemy_creative_agent_3_0.tests.doc322_test_support import certify_output
+    certify_output(handlers.service, target_output)
     handlers.post_project_reference(
         target["project_id"],
         {

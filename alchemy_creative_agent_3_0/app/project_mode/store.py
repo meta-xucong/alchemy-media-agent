@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from threading import RLock
+import time
+from uuid import uuid4
 import os
 from pathlib import Path
 import re
@@ -27,6 +31,7 @@ _DOC270_PHASE4_PRIVATE_NAMESPACES = frozenset(
         "doc281_source_evidence_observations_v1",
         "doc281_general_resolution_receipts_v1",
         "doc73_auto_identity_anchor_controls_v1",
+        "doc322_continuity_anchor_bindings_v1",
     }
 )
 
@@ -35,6 +40,7 @@ class InMemoryProjectStore:
     """Deterministic store for Project Mode tests and local app sessions."""
 
     def __init__(self) -> None:
+        self._private_lock = RLock()
         self._projects: dict[str, ProjectRecord] = {}
         self._timeline: dict[str, list[ProjectTimelineItem]] = {}
         # Server-private append-only contracts, intentionally separate from
@@ -98,6 +104,16 @@ class InMemoryProjectStore:
             raise ValueError("private_record_namespace_invalid")
         return [_frozen_private_record(item) for item in self._private_records.get(project_id, {}).get(namespace, [])]
 
+    def compare_and_append_private_record(self, project_id: str, namespace: str, record: dict, *, expected_version: int) -> dict:
+        with self._private_lock:
+            return self._append_private_version(project_id, namespace, record, expected_version)
+
+    def _append_private_version(self, project_id: str, namespace: str, record: dict, expected_version: int) -> dict:
+        records = self._private_records.get(project_id, {}).get(namespace, [])
+        if type(expected_version) is not int or len(records) != expected_version or record.get("version") != expected_version + 1:
+            raise ValueError("continuity_anchor_conflict")
+        return InMemoryProjectStore.append_private_record(self, project_id, namespace, record)
+
     def delete_project(self, project_id: str) -> bool:
         project = self._projects.pop(project_id, None)
         timeline = self._timeline.pop(project_id, None)
@@ -136,12 +152,53 @@ class PersistentProjectStore(InMemoryProjectStore):
         namespace: str,
         record: dict[str, object],
     ) -> dict[str, object]:
-        self._load_private_records(project_id)
-        return super().append_private_record(project_id, namespace, record)
+        with self._private_transaction(project_id):
+            return super().append_private_record(project_id, namespace, record)
 
     def list_private_records(self, project_id: str, namespace: str) -> list[dict[str, object]]:
-        self._load_private_records(project_id)
-        return super().list_private_records(project_id, namespace)
+        with self._private_transaction(project_id):
+            return super().list_private_records(project_id, namespace)
+
+    def compare_and_append_private_record(self, project_id: str, namespace: str, record: dict, *, expected_version: int) -> dict:
+        with self._private_transaction(project_id):
+            return self._append_private_version(project_id, namespace, record, expected_version)
+
+    @contextmanager
+    def _private_transaction(self, project_id: str):
+        # All private appends share this lock so unrelated stale caches cannot
+        # overwrite an anchor event. No new registry or storage service.
+        if not _valid_project_id(project_id):
+            raise ValueError("private_record_project_invalid")
+        path = self.storage_root / project_id / ".private-records.lock"
+        with self._private_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a+b") as handle:
+                if path.stat().st_size == 0:
+                    handle.write(b"0"); handle.flush()
+                if os.name == "nt":
+                    import msvcrt
+                    deadline = time.monotonic() + 10
+                    while True:
+                        try:
+                            handle.seek(0); msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                            break
+                        except OSError:
+                            if time.monotonic() >= deadline:
+                                raise ValueError("continuity_anchor_busy")
+                            time.sleep(0.01)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    self._private_records.pop(project_id, None)
+                    self._load_private_records(project_id)
+                    yield
+                finally:
+                    if os.name == "nt":
+                        handle.seek(0); msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
 
     def list_projects(self, limit: int = 20) -> list[ProjectRecord]:
         self._load_all_projects()
@@ -200,19 +257,21 @@ class PersistentProjectStore(InMemoryProjectStore):
             return
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            self._private_records[project_id] = {}
-            return
+        except (OSError, ValueError) as exc:
+            raise ValueError("private_record_store_invalid") from exc
         if not isinstance(payload, dict):
-            self._private_records[project_id] = {}
-            return
+            raise ValueError("private_record_store_invalid")
         sanitized: dict[str, list[dict[str, object]]] = {}
         for namespace, records in payload.items():
+            if namespace == "doc322_continuity_anchor_bindings_v1" and not isinstance(records, list):
+                raise ValueError("continuity_anchor_history_invalid")
             if namespace not in _DOC270_PHASE4_PRIVATE_NAMESPACES or not isinstance(records, list):
                 continue
             try:
                 sanitized[namespace] = [_frozen_private_record(item) for item in records]
             except ValueError:
+                if namespace == "doc322_continuity_anchor_bindings_v1":
+                    raise
                 continue
         self._private_records[project_id] = sanitized
 
@@ -280,7 +339,7 @@ class PersistentProjectStore(InMemoryProjectStore):
 
 
 def _atomic_write_json(path: Path, payload: object) -> None:
-    temp = path.with_suffix(f"{path.suffix}.tmp")
+    temp = path.with_suffix(f"{path.suffix}.{uuid4().hex}.tmp")
     temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(path)
 

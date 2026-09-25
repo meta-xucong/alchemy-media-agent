@@ -340,7 +340,11 @@ def test_project_mutation_response_projects_nested_records(monkeypatch) -> None:
     payload = response.model_dump(mode="json")
 
     assert payload["feedback"]["metadata"] == {}
-    assert payload["project"]["metadata"] == {
+    assert set(payload["project"]["metadata"]) == {"source", "selected_template_id", "doc90_advanced_reference_controls", "continuity_anchor", "current_job_reference_mode", "current_job_reference_inputs"}
+    assert payload["project"]["metadata"]["continuity_anchor"]["active_continuity_anchor"] is None
+    assert payload["project"]["metadata"]["current_job_reference_mode"] == "standard_direct_reference"
+    assert payload["project"]["metadata"]["current_job_reference_inputs"] == []
+    assert {k:v for k,v in payload["project"]["metadata"].items() if k in {"source", "selected_template_id", "doc90_advanced_reference_controls"}} == {
         "source": "project_api",
         "selected_template_id": "general_template",
         "doc90_advanced_reference_controls": {"enabled": True},
@@ -362,15 +366,20 @@ def test_project_mutation_response_projects_nested_records(monkeypatch) -> None:
 def test_public_project_projection_keeps_owner_none_selection_but_scrubs_output_and_metadata() -> None:
     service = V3ProjectModeService(product_service=V3ProductApiService())
     project, _context = _public_boundary_fixture()
+    service.project_store.save_project(project)
 
     public = service._public_project_record(project)  # noqa: SLF001
     payload = public.model_dump(mode="json")
 
-    assert [ref["output_id"] for ref in payload["selected_output_refs"]] == ["output_public"]
-    assert payload["selected_output_refs"][0]["metadata"] == {
+    assert payload["selected_output_refs"] == []  # Unverified legacy reference is not a current anchor.
+    assert service._public_output_ref(project.selected_output_refs[0]).metadata == {
         "recommendation": "keep this user-facing suggestion"
     }
-    assert payload["metadata"] == {
+    assert set(payload["metadata"]) == {"source", "selected_template_id", "doc90_advanced_reference_controls", "continuity_anchor", "current_job_reference_mode", "current_job_reference_inputs"}
+    assert payload["metadata"]["continuity_anchor"]["active_continuity_anchor"] is None
+    assert payload["metadata"]["current_job_reference_mode"] == "standard_direct_reference"
+    assert payload["metadata"]["current_job_reference_inputs"] == []
+    assert {k:v for k,v in payload["metadata"].items() if k in {"source", "selected_template_id", "doc90_advanced_reference_controls"}} == {
         "source": "project_api",
         "selected_template_id": "general_template",
         "doc90_advanced_reference_controls": {"enabled": True},
@@ -381,6 +390,7 @@ def test_public_project_projection_keeps_owner_none_selection_but_scrubs_output_
 def test_selection_hold_projects_the_same_public_record_and_context(monkeypatch) -> None:
     service = V3ProjectModeService(product_service=V3ProductApiService())
     project, context = _public_boundary_fixture()
+    service.project_store.save_project(project)
     status = ProductJobStatus(
         job_id="job_public",
         status=ProductJobStatusValue.BLOCKED,
@@ -404,7 +414,7 @@ def test_selection_hold_projects_the_same_public_record_and_context(monkeypatch)
         message="hold",
     )
 
-    assert response["project"]["selected_output_refs"][0]["output_id"] == "output_public"
+    assert response["project"]["selected_output_refs"] == []
     assert response["context"]["selected_output_assets"][0]["output_id"] == "output_public"
     _assert_execution_secrets_are_absent(
         {"job_status": response["job_status"], "project": response["project"], "context": response["context"]}
