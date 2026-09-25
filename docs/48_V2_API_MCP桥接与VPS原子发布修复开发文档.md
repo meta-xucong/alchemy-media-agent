@@ -132,8 +132,10 @@ GitHub Actions 仅上传必要的迁移脚本，向 VPS 传入 checkout 的完�
 目录解压源码。
 
 迁移脚本同时安装候选 release 中的 `alchemy-media-agent.nginx.conf`，先执行
-`nginx -t` 再 reload，并把旧配置放入本次备份目录。该配置的公网 `/api/v2/*`
-继续进入 V1 8017；V1 再把请求转到本机 V2 8020 并注入 HMAC。V2 8020 只作为
+`nginx -t` 再 reload，并把旧配置放入本次备份目录。该配置通过精确 `/api/v2`
+和 `^~ /api/v2/` location 明确将公网 `/api/v2/*` 继续进入 V1 8017；`^~`
+用于压过历史正则 location，防止旧规则再次绕过网关。V1 再把请求转到本机 V2
+8020 并注入 HMAC。V2 8020 只作为
 本机后端，不作为 API Key 的公网入口。若后续步骤失败，Nginx 配置随 env、systemd
 单元和 release 一起恢复。
 

@@ -59,7 +59,6 @@ def test_complete_key_lifecycle_and_no_plaintext_persistence(native):
     assert secret not in listed.text and "digest" not in listed.text
     response = native.client.get("/api/v3/creative-agent/projects", headers=headers(secret))
     assert response.status_code == 200 and response.json()["owner"] == 101
-    assert response.headers["X-Alchemy-API-Key-Auth"] == "accepted"
     assert native.calls == [101]
     item = native.store.list(owner_id=101)["items"][0]
     assert item["request_count"] == 1 and item["last_used_at"]

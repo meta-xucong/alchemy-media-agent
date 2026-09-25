@@ -84,6 +84,7 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "install_v2_unit_contract" in activate
     assert "--verify" in activate
     migration = (root / "scripts" / "vps_migrate_release_layout.sh").read_text(encoding="utf-8")
+    nginx = (root / "alchemy-media-agent.nginx.conf").read_text(encoding="utf-8")
     assert "git -C \"${REPOSITORY_ROOT}\" worktree add --detach" in migration
     assert "v2_runtime_guard.py" in migration
     assert "__ALCHEMY_RELEASE_LINK__" in migration
@@ -108,6 +109,8 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "/etc/nginx/conf.d/alchemy-media-agent.conf" in migration
     assert "nginx_legacy_removed" in migration
     assert "report_nginx_route_summary" in migration
+    assert "location ^~ /api/v2/" in nginx
+    assert "location = /api/v2" in nginx
     assert "VPS_ALCHEMY_NGINX_ROUTES" in migration
     assert "assert_runtime_access_config" in migration
     assert "fingerprint_value" in migration

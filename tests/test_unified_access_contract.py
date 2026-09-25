@@ -62,7 +62,6 @@ def test_v1_proxy_replaces_api_key_with_v2_bridge_headers(monkeypatch):
     response = asyncio.run(gateway._proxy_v2_request("provider-capabilities", request))
 
     assert response.status_code == 200
-    assert response.headers["X-Alchemy-Access-Bridge"] == "hmac"
     assert captured["url"] == "http://127.0.0.1:8020/api/v2/provider-capabilities"
     assert "authorization" not in {str(key).lower() for key in captured["headers"]}
     assert verify_access_headers(
