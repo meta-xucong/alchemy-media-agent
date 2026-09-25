@@ -95,8 +95,8 @@ ensure_access_bridge_secret() {
       echo "openssl or python3 is required to initialize ALCHEMY_ACCESS_BRIDGE_SECRET." >&2
       exit 1
     fi
-    set_env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" "${bridge_secret}"
   fi
+  set_env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" "${bridge_secret}"
   set_env_value "${v2_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" "${bridge_secret}"
   bridge_env_changed=1
 }
@@ -126,6 +126,8 @@ ensure_veyra_auth_config() {
       echo "V1/V2 Veyra setting mismatch: ${key}; refusing deployment." >&2
       exit 1
     fi
+    set_env_value "${live_env}" "${key}" "${v1_value}"
+    set_env_value "${v2_env}" "${key}" "${v2_value}"
   done
 
   set_env_value "${live_env}" "VEYRA_AUTH_ENABLED" "true"
@@ -183,7 +185,7 @@ assert_runtime_access_config() {
   v1_file_fingerprint="$(docker exec "${V1_CONTAINER}" python -c 'from pathlib import Path; import hashlib; value=next((line.split("=", 1)[1].rstrip("\\r\\n") for line in Path("/app/.env").read_text(encoding="utf-8").splitlines(True) if line.startswith("ALCHEMY_ACCESS_BRIDGE_SECRET=")), ""); print(hashlib.sha256(value.encode()).hexdigest())')"
   v2_bridge_fingerprint="$(runtime_env_value "/proc/${api_pid}/environ" "ALCHEMY_ACCESS_BRIDGE_SECRET" | sha256sum | awk '{print $1}')"
   [[ -n "${expected_bridge_fingerprint}" && "${v1_bridge_fingerprint}" == "${expected_bridge_fingerprint}" && "${v2_bridge_fingerprint}" == "${expected_bridge_fingerprint}" ]] || {
-    echo "V1/V2 runtime bridge secret fingerprint mismatch: expected=${expected_bridge_fingerprint:0:16} v1=${v1_bridge_fingerprint:0:16} config=${v1_config_fingerprint:0:16} file=${v1_file_fingerprint:0:16} v2=${v2_bridge_fingerprint:0:16}" >&2
+    echo "V1/V2 runtime bridge secret fingerprints do not match the release env." >&2
     exit 1
   }
   [[ "$(docker exec "${V1_CONTAINER}" python -c 'import os; print((os.getenv("VEYRA_AUTH_ENABLED") or "").lower())')" == "true" ]] || {
