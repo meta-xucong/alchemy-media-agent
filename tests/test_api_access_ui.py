@@ -57,6 +57,13 @@ def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,wid
         assert page.locator("#manualCopy").input_value()==secret
         assert page.locator("#manualCopy").evaluate("e=>e.selectionEnd-e.selectionStart")==len(secret)
         page.locator("#secretDialog details summary").click()
+        page.click("#copyApi")
+        api_example=page.locator("#manualCopy").input_value()
+        assert "创建项目" in api_example
+        assert "/api/v3/creative-agent/projects" in api_example
+        assert "/jobs" in api_example
+        assert "auto_generate" in api_example
+        assert "/export" in api_example
         page.click("#copyMcp")
         config=json.loads(page.locator("#manualCopy").input_value())
         assert config["env"]["ALCHEMY_PRODUCT_SESSION_TOKEN"]==secret

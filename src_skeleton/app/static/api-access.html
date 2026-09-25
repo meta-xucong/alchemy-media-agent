@@ -39,7 +39,7 @@
     <div class="access-dialog-body"><span class="access-step">已创建</span><h2 id="secretTitle">保存好，这把钥匙只显示一次</h2><p>离开或关闭此窗口后无法找回。不要分享密钥、示例或包含它的配置。</p>
       <label for="newSecret">完整密钥</label><textarea id="newSecret" class="access-code" readonly rows="2" spellcheck="false"></textarea>
       <div class="access-actions"><button id="copySecret" class="access-button" type="button">选中密钥并复制</button></div>
-      <details class="access-help"><summary>用于脚本或 MCP</summary><div class="access-actions"><button id="copyApi" class="access-button secondary" type="button">复制 API 示例</button><button id="copyMcp" class="access-button secondary" type="button">复制 MCP 连接配置</button></div><p>API 示例只查询项目，不生成图片。MCP 配置用于已安装的 Alchemy 插件，不包含安装命令。</p></details>
+      <details class="access-help"><summary>接下来怎么用？</summary><p><strong>API：</strong>给脚本或自动化程序使用，可以创建项目、生成图片、查询状态和下载结果。</p><div class="access-actions"><button id="copyApi" class="access-button" type="button">复制 API 生图示例</button></div><p>示例会提交一次生图任务，运行后按账户原有规则计费。只想让 Codex 使用，请选择 MCP。</p><p><strong>MCP：</strong>让已安装的 Alchemy MCP 插件调用你的账户。</p><div class="access-actions"><button id="copyMcp" class="access-button secondary" type="button">复制 MCP 配置</button></div><p>复制的 MCP 配置不包含安装命令；尚未安装插件时，请先完成 MCP 安装。</p></details>
       <p id="secretFeedback" role="status" aria-live="polite"></p><textarea id="manualCopy" class="access-code" aria-label="请手动复制以下内容" readonly rows="5" hidden></textarea>
       <button id="closeSecret" class="access-button secondary access-wide" type="button">我已保存，关闭</button>
     </div>

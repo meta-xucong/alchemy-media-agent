@@ -126,6 +126,63 @@
     field.focus(); field.select();
     $("secretFeedback").textContent = "已选中内容。电脑按 Ctrl+C（Mac 按 ⌘C）；手机长按后选择复制。";
   }
+  function apiGenerationExample(origin, apiKey) {
+    return `// Node.js 18+。运行前请确认这次调用需要真实生图（会按账户规则计费）。
+const BASE_URL = ${JSON.stringify(origin)};
+const API_KEY = ${JSON.stringify(apiKey)};
+const PROMPT = "A clean studio product image of a red apple on a white ceramic plate";
+const headers = { Authorization: \`Bearer \${API_KEY}\`, "Content-Type": "application/json" };
+
+async function call(path, options = {}) {
+  const response = await fetch(BASE_URL + path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+  const data = await response.json();
+  if (!response.ok) throw new Error(JSON.stringify(data));
+  return data;
+}
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 1. 创建项目
+const projectResponse = await call("/api/v3/creative-agent/projects", {
+  method: "POST",
+  body: JSON.stringify({ user_goal: PROMPT, title: "API 生图示例", primary_template_id: "general_template" })
+});
+const projectId = projectResponse.project.project_id;
+// 2. 提交生图任务
+const accepted = await call(
+  \`/api/v3/creative-agent/projects/\${projectId}/jobs\`,
+  { method: "POST", body: JSON.stringify({
+      user_input: PROMPT,
+      template_id: "general_template",
+      metadata: { require_real_images: true, requested_image_count: 1, requested_image_size: "1024x1024" },
+      auto_generate: { quality_mode: "standard", metadata: { require_real_images: true, requested_image_count: 1, requested_image_size: "1024x1024" } }
+  }) }
+);
+console.log("已提交，项目 ID：", projectId, "操作 ID：", accepted.metadata?.current_operation?.operation_id || accepted.job_id);
+
+// 3. 查询任务并拿到导出地址
+let jobId = "";
+for (;;) {
+  const project = await call(
+    \`/api/v3/creative-agent/projects/\${projectId}\`,
+    { headers: { Authorization: \`Bearer \${API_KEY}\` } }
+  );
+  jobId = project.project?.job_ids?.at(-1) || "";
+  if (jobId) break;
+  await wait(5000);
+}
+for (;;) {
+  const job = await call(\`/api/v3/creative-agent/jobs/\${jobId}\`);
+  console.log("任务状态：", job.status);
+  if (["generated", "failed", "blocked", "cancelled"].includes(job.status)) {
+    if (job.status !== "generated") throw new Error(JSON.stringify(job));
+    const exported = await call(\`/api/v3/creative-agent/jobs/\${jobId}/export\`);
+    const downloadUrl = exported.manifest.generated_assets?.[0]?.download_url;
+    console.log("图片下载地址：", new URL(downloadUrl, BASE_URL).href);
+    break;
+  }
+  await wait(5000);
+}`;
+  }
   async function start() {
     const epoch = sessionEpoch;
     if (overview) {
@@ -166,7 +223,7 @@
     $("revokeDialog").addEventListener("close", () => { revokeTarget = null; });
     $("confirmRevoke").addEventListener("click", revoke);
     $("copySecret").addEventListener("click", () => selectForCopy(secret));
-    $("copyApi").addEventListener("click", () => { if (secret) selectForCopy(`curl '${location.origin}/api/v3/creative-agent/projects?view=summary&limit=1' -H 'Authorization: Bearer ${secret}'`); });
+    $("copyApi").addEventListener("click", () => { if (secret) selectForCopy(apiGenerationExample(location.origin, secret)); });
     $("copyMcp").addEventListener("click", () => { if (secret) selectForCopy(JSON.stringify({ env: { ALCHEMY_PRODUCT_API_BASE_URL: location.origin, ALCHEMY_PRODUCT_SESSION_TOKEN: secret } }, null, 2)); });
     $("copyAddress").addEventListener("click", () => { $("serviceAddress").focus(); $("serviceAddress").select(); notice("地址已选中，请使用系统复制操作。"); });
     window.addEventListener("pagehide", () => { sessionEpoch += 1; ready = false; clearSecret(); if ($("secretDialog").open) $("secretDialog").close(); });
