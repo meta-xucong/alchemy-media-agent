@@ -205,6 +205,58 @@ V1_MEDIA_STORAGE_DIR=${V1_MEDIA_STORAGE_DIR}
 EOF
 }
 
+set_env_value() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp_file
+
+  if grep -q "^${key}=" "${env_file}"; then
+    tmp_file="$(mktemp "${env_file}.XXXXXX")"
+    awk -v key="${key}" -v value="${value}" '
+      BEGIN { replaced = 0 }
+      index($0, key "=") == 1 {
+        if (!replaced) {
+          print key "=" value
+          replaced = 1
+        }
+        next
+      }
+      { print }
+    ' "${env_file}" > "${tmp_file}"
+    chmod --reference="${env_file}" "${tmp_file}" 2>/dev/null || chmod 600 "${tmp_file}"
+    chown --reference="${env_file}" "${tmp_file}" 2>/dev/null || true
+    mv "${tmp_file}" "${env_file}"
+    return
+  fi
+
+  printf '\n%s=%s\n' "${key}" "${value}" >> "${env_file}"
+}
+
+ensure_access_bridge_secret() {
+  local v1_env="${DEPLOY_DIR}/src_skeleton/.env"
+  local v2_env="/etc/alchemy/alchemy-v2.env"
+  local bridge_secret=""
+
+  [[ -f "${v1_env}" ]] || return
+  bridge_secret="$(sed -n 's/^ALCHEMY_ACCESS_BRIDGE_SECRET=//p' "${v1_env}" | head -n 1)"
+  if [[ -z "${bridge_secret}" ]]; then
+    if ensure_command openssl; then
+      bridge_secret="$(openssl rand -hex 32)"
+    elif ensure_command python3; then
+      bridge_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    else
+      echo "openssl or python3 is required to initialize ALCHEMY_ACCESS_BRIDGE_SECRET." >&2
+      exit 1
+    fi
+    set_env_value "${v1_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" "${bridge_secret}"
+  fi
+
+  if [[ -f "${v2_env}" ]]; then
+    set_env_value "${v2_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" "${bridge_secret}"
+  fi
+}
+
 ensure_v1_media_storage() {
   run_as_root mkdir -p "${V1_MEDIA_STORAGE_DIR}"
   local media_sources=()
@@ -449,6 +501,7 @@ install_docker_if_needed
 ensure_deploy_tools
 sync_repo
 write_env_file
+ensure_access_bridge_secret
 ensure_v2_runtime
 verify_v2_runtime_before_v1_start
 start_stack
