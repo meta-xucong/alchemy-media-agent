@@ -329,6 +329,17 @@ def _veyra_session_token_from_request(request: Request, authorization: str = "")
 
 def _veyra_user_id_from_request(request: Request, authorization: str = "") -> int:
     client_host = str(getattr(getattr(request, "client", None), "host", "") or "").lower()
+    bridge_header_present = any(
+        name in request.headers
+        for name in (
+            "x-alchemy-access-user",
+            "x-alchemy-access-surfaces",
+            "x-alchemy-access-request",
+            "x-alchemy-access-issued",
+            "x-alchemy-access-nonce",
+            "x-alchemy-access-signature",
+        )
+    )
     if client_host in {"127.0.0.1", "::1", "localhost"}:
         bridged = verify_access_headers(
             request.headers,
@@ -338,21 +349,16 @@ def _veyra_user_id_from_request(request: Request, authorization: str = "") -> in
         )
         if bridged and "v2" in set(bridged.get("surfaces") or ()):
             return int(bridged["user_id"])
-        if any(
-            name in request.headers
-            for name in (
-                "x-alchemy-access-user",
-                "x-alchemy-access-surfaces",
-                "x-alchemy-access-request",
-                "x-alchemy-access-issued",
-                "x-alchemy-access-nonce",
-                "x-alchemy-access-signature",
-            )
-        ):
+        if bridge_header_present:
             raise HTTPException(
                 status_code=401,
                 detail={"error_code": "access_bridge_invalid", "message": "Alchemy access bridge identity is invalid."},
             )
+    elif bridge_header_present:
+        raise HTTPException(
+            status_code=401,
+            detail={"error_code": "access_bridge_untrusted_source", "message": "Alchemy access bridge source is not trusted."},
+        )
     token = _veyra_session_token_from_request(request, authorization)
     if not token:
         raise HTTPException(status_code=401, detail={"error_code": "veyra_session_required", "message": "Veyra session is required."})
