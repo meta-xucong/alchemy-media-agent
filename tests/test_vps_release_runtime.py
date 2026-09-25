@@ -102,6 +102,11 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "VEYRA_SESSION_SECRET" in migration
     assert "VEYRA_BILLING_SETTINGS_URL" in migration
     assert "refusing deployment" in migration
+    assert "configure_nginx_for_active_gateway" in migration
+    assert "alchemy-media-agent.nginx.conf" in migration
+    assert "nginx -t" in migration
+    assert "assert_runtime_access_config" in migration
+    assert "/proc/${api_pid}/environ" in migration
     assert "V2 env file is missing" in migration
     assert 'APP_PORT="${APP_PORT:-8017}"' in migration
     assert 'active release link; use scripts/vps_migrate_release_layout.sh' in deploy

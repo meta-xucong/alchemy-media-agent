@@ -14,6 +14,7 @@
 4. 部署后具备 API/MCP 读操作闭环测试条件。
 5. 增加 V1 代理签名到 V2 验签的回归测试。
 6. 发布时同步并校验 V1/V2 的 Veyra 账户认证运行配置。
+7. 发布时收敛公网 Nginx 到 V1 网关，避免 `/api/v2/*` 绕过 API-Key 桥接。
 
 不包含：V2 生图业务逻辑重写、V1/V2 数据合并、API Key 存储重构、MCP 工具扩展、
 计费规则调整和真实生图任务。
@@ -48,6 +49,11 @@ Session 仍可用，但使用 Session 创建 API Key 返回 `503 account_login_n
 索引或 V2 业务处理错误。V1/V2 还必须共享 `VEYRA_SUB2API_BASE_URL`、
 `VEYRA_INTERNAL_TOKEN`、`VEYRA_SESSION_SECRET`，否则账户验证、session 和后续
 扣费链路可能在不同阶段失败。
+
+配置同步后，隔离 Cookie 的真实 API/MCP 验收又确认：V1、V3、Lab API Key
+均可用，但 V2 API/MCP 仍返回 `veyra_session_required`。这排除了 API Key
+签发和 V1/V3/Lab 授权问题，说明公网请求绕过了 V1 `/api/v2/*` 代理，直接到达
+V2 8020 端口。线上 Nginx 配置与仓库网关配置漂移，是本次第二个运行态根因。
 
 ## 3. 权威认证契约
 
@@ -124,6 +130,15 @@ V2 session/账户解析和扣费配置使用同一份生产认证契约。
 GitHub Actions 仅上传必要的迁移脚本，向 VPS 传入 checkout 的完整
 `GITHUB_SHA`，由 VPS 迁移脚本自行创建目标 worktree。工作流不再向稳定软链接
 目录解压源码。
+
+迁移脚本同时安装候选 release 中的 `alchemy-media-agent.nginx.conf`，先执行
+`nginx -t` 再 reload，并把旧配置放入本次备份目录。该配置的公网 `/api/v2/*`
+继续进入 V1 8017；V1 再把请求转到本机 V2 8020 并注入 HMAC。V2 8020 只作为
+本机后端，不作为 API Key 的公网入口。若后续步骤失败，Nginx 配置随 env、systemd
+单元和 release 一起恢复。
+
+重启后还检查 V1 容器和 V2 API 进程实际读取的桥接密钥 SHA256 指纹，以及两侧
+`VEYRA_AUTH_ENABLED=true`；只输出匹配状态，不输出密钥原文。
 
 ## 5. 验收矩阵
 

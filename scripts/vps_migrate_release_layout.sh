@@ -38,6 +38,11 @@ switched=0
 units_installed=0
 old_image=""
 bridge_env_changed=0
+nginx_changed=0
+nginx_target=""
+nginx_backup=""
+nginx_link=""
+nginx_link_created=0
 v2_env="/etc/alchemy/alchemy-v2.env"
 v1_env_backup="${backup_dir}/v1.env"
 v2_env_backup="${backup_dir}/v2.env"
@@ -131,6 +136,62 @@ ensure_veyra_auth_config() {
   fi
 }
 
+configure_nginx_for_active_gateway() {
+  local source_conf="${candidate}/alchemy-media-agent.nginx.conf"
+  local target_conf="/etc/nginx/conf.d/alchemy-media-agent.conf"
+
+  [[ -f "${source_conf}" ]] || return 0
+  command -v nginx >/dev/null 2>&1 || return 0
+  if [[ -d "/etc/nginx/sites-available" ]]; then
+    target_conf="/etc/nginx/sites-available/alchemy-media-agent"
+    nginx_link="/etc/nginx/sites-enabled/alchemy-media-agent"
+    if [[ -d "/etc/nginx/sites-enabled" && ! -e "${nginx_link}" ]]; then
+      ln -s "${target_conf}" "${nginx_link}"
+      nginx_link_created=1
+    fi
+  fi
+  nginx_target="${target_conf}"
+  nginx_backup="${backup_dir}/nginx.conf"
+  if [[ -e "${target_conf}" || -L "${target_conf}" ]]; then
+    cp -pL "${target_conf}" "${nginx_backup}"
+  fi
+  install -m 644 "${source_conf}" "${target_conf}"
+  nginx_changed=1
+  if ! nginx -t; then
+    echo "Nginx configuration validation failed; refusing deployment." >&2
+    exit 1
+  fi
+  systemctl reload nginx
+}
+
+runtime_env_value() {
+  local env_file="$1"
+  local key="$2"
+  tr '\0' '\n' < "${env_file}" | sed -n "s/^${key}=//p" | head -n 1
+}
+
+assert_runtime_access_config() {
+  local expected_bridge_fingerprint=""
+  local v1_bridge_fingerprint=""
+  local v2_bridge_fingerprint=""
+
+  expected_bridge_fingerprint="$(env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET" | sha256sum | awk '{print $1}')"
+  v1_bridge_fingerprint="$(docker exec "${V1_CONTAINER}" python -c 'import hashlib, os; print(hashlib.sha256((os.getenv("ALCHEMY_ACCESS_BRIDGE_SECRET") or "").encode()).hexdigest())')"
+  v2_bridge_fingerprint="$(runtime_env_value "/proc/${api_pid}/environ" "ALCHEMY_ACCESS_BRIDGE_SECRET" | sha256sum | awk '{print $1}')"
+  [[ -n "${expected_bridge_fingerprint}" && "${v1_bridge_fingerprint}" == "${expected_bridge_fingerprint}" && "${v2_bridge_fingerprint}" == "${expected_bridge_fingerprint}" ]] || {
+    echo "V1/V2 runtime bridge secret fingerprints do not match the release env." >&2
+    exit 1
+  }
+  [[ "$(docker exec "${V1_CONTAINER}" python -c 'import os; print((os.getenv("VEYRA_AUTH_ENABLED") or "").lower())')" == "true" ]] || {
+    echo "V1 runtime Veyra auth is not enabled." >&2
+    exit 1
+  }
+  [[ "$(runtime_env_value "/proc/${api_pid}/environ" "VEYRA_AUTH_ENABLED" | tr '[:upper:]' '[:lower:]')" == "true" ]] || {
+    echo "V2 runtime Veyra auth is not enabled." >&2
+    exit 1
+  }
+}
+
 wait_for_unit() {
   local unit="$1"
   for _ in $(seq 1 60); do
@@ -161,6 +222,17 @@ rollback() {
   if [[ "${bridge_env_changed}" == "1" ]]; then
     [[ -f "${v1_env_backup}" ]] && cp -p "${v1_env_backup}" "${live_env}" || true
     [[ -f "${v2_env_backup}" ]] && cp -p "${v2_env_backup}" "${v2_env}" || true
+  fi
+  if [[ "${nginx_changed}" == "1" && -n "${nginx_target}" ]]; then
+    if [[ -f "${nginx_backup}" ]]; then
+      cp -p "${nginx_backup}" "${nginx_target}" || true
+    else
+      rm -f "${nginx_target}" || true
+    fi
+    if [[ "${nginx_link_created}" == "1" && -n "${nginx_link}" ]]; then
+      rm -f "${nginx_link}" || true
+    fi
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
   fi
   [[ "${switched}" == "1" ]] || return 0
   echo "ROLLBACK: restoring ${old_release}" >&2
@@ -256,11 +328,13 @@ for unit in "${V2_UNITS[@]}"; do
 done
 wait_for_http "http://127.0.0.1:${APP_PORT}/healthz"
 wait_for_http http://127.0.0.1:8020/api/v2/health
+configure_nginx_for_active_gateway
 wait_for_http https://alchemy.aiself.vip/api/v2/health
 
 api_pid="$(systemctl show -p MainPID --value alchemy-v2-api.service)"
 test -n "${api_pid}" -a "${api_pid}" != "0"
 test "$(readlink -f "/proc/${api_pid}/cwd")" = "${candidate}/custom_media_agent_2_0"
+assert_runtime_access_config
 runuser -u "${RUNTIME_USER}" -- "${candidate}/custom_media_agent_2_0/.venv/bin/python" -c 'import httpcore; print("httpcore=" + httpcore.__version__)'
 body="$(mktemp)"
 status="$(curl -sS -o "${body}" -w '%{http_code}' --max-time 25 -X POST http://127.0.0.1:8020/api/v2/veyra/login -H 'Content-Type: application/json' --data '{"ticket":"codex-invalid-diagnostic-ticket"}')"
