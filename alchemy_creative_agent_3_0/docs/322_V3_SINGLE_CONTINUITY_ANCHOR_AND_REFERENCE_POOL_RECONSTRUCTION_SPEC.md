@@ -1,6 +1,6 @@
-# Doc322 - V3 Single Continuity Anchor And Reference Pool Reconstruction
+# Doc322 - V3 Single Continuity Anchor And Mode-Scoped Reference Input Reconstruction
 
-状态：设计冻结，待实现
+状态：设计冻结 v2，待实现
 
 范围：V3 Foundation reference/continuity layer
 
@@ -24,9 +24,9 @@
 2. 第一张正式通过、且符合自动锚点条件的生成图，可以成为项目的连续性主图。
 3. 用户手动绑定新的生成图时，新图原子替换旧主图；不能同时保留多个“当前主图”。
 4. 用户解绑后，项目进入无连续性主图状态；系统不能自动从历史记录中重新挑选一张图补回去。
-5. 用户上传的原图属于事实参考池 `fact_reference_pool`，负责人物/商品/Logo 等事实约束，不会因为“上传过”而成为连续性主图。
+5. 用户上传的原图不是全局通用的“项目事实参考池”。它必须按项目模式进入受限输入通道：Standard/General 默认只作为本次任务的直接上传参考，Professional 只在显式视觉资产绑定后进入资产绑定通道，E-Commerce 只在商品事实契约成立后进入商品事实通道。
 6. Provider 为识别事实生成的裁剪图、特征图或尺寸适配图属于临时派生证据，不属于项目参考图、历史生成图或连续性主图。
-7. Provider/MCP 只消费服务端冻结的 `ReferenceInputPlan`，不能自行从项目历史、浏览器状态、最近输出或路径字段推断参考图。
+7. Provider/MCP 只消费服务端冻结的、带 `reference_mode` 的 `ReferenceInputPlan`，不能自行从项目历史、浏览器状态、最近输出、项目原始素材池或路径字段推断参考图。
 
 这是一项 V3 Foundation 修复。它不增加 General Template 的行业交付角色，也不改变 E-Commerce、Photography、Brand、New Media 的交付包定义；它只统一跨场景的参考来源、绑定、物化和生命周期语义。
 
@@ -52,30 +52,53 @@ Doc45 已定义：前端应展示已选生成参考和上传参考，并支持�
 | --- | --- | --- |
 | 自动首图锚点 | Brain/Project Mode 私有连续性来源 | 统一写入 `active_continuity_anchor` |
 | 已选生成图 | Project selected output / continuation direction | 手动绑定后成为唯一主图；未绑定只留在历史 |
-| 上传原图 | 用户参考、商品真值、身份真值 | `fact_reference_pool`，不自动成为连续性主图 |
+| 上传原图 | 用户参考、商品真值、身份真值 | 按项目模式进入受限输入通道，不自动成为连续性主图 |
 | 裁剪/特征图 | Provider 参考输入派生物 | `derived_evidence`，仅在单次 Job 物化期间存在 |
 | 视觉资产绑定 | 人物资产/商品资产的项目绑定 | 保持独立；不得与生成图主图混用 |
 | Provider 输入 | 可能合并所有 reference_assets、uploaded_assets 与派生物 | 只能消费冻结的 `ReferenceInputPlan` |
 
 当前 VPS 问题中的 6 张参考图属于最后两层混淆：3 张上传原图被展开为原图加商品事实裁剪图。它们不是 6 张用户上传图，也不是历史生成图自动成为参考；但物理输入层不应无条件把同一事实来源的两种表示同时送给 Provider。
 
+### 2.3 本次诊断出的架构污染
+
+回顾现有实现与 Doc281 后，问题比单个 Provider 重复计数更早发生在“输入来源建模”层：
+
+1. Doc281 将项目级原始素材选择、来源快照和智能匹配抽象成 General 与 Professional 都可以使用的共享能力；这使专业版“原图素材池”的思路进入了普通项目的默认上下文。
+2. Project Context 对所有项目暴露 `project_source_library`，前端也按通用“项目原始素材”渲染；这会让普通项目看起来拥有一个持续参与生成的专业素材池。
+3. `selected_visual_references`、`uploaded_reference_assets`、`strong_reference_bindings` 在共享链路中被压平，再由 Provider 合并为 `reference_assets + uploaded_assets`；来源是不同的，但物理输入入口没有保留模式边界。
+4. Central Brain 将这些通用字段都当成“显式用户参考”，可能误以为连续性主图已经存在，从而抑制正确的自动首图锚点；反过来，Provider 又可能把一个事实源的原图和派生裁剪图同时物化。
+
+因此，本次修订不再把 `fact_reference_pool` 作为所有项目的基础层。连续性主图是共享 Foundation 能力；事实/资产/商品输入则必须由 Standard、Professional、E-Commerce 各自的模式契约拥有。兼容读取可以保留，默认语义必须收窄。
+
 ---
 
 ## 3. 权威模型
 
-### 3.1 三层参考模型
+### 3.1 连续性层与模式输入层
 
-V3 运行时必须把参考分为三层，禁止混用：
+V3 运行时必须把“连续性主图”与“当前任务输入”分开。当前任务输入不能再由一个跨模式的统一事实池承载：
 
 ```text
 Project state
 ├── active_continuity_anchor      # 最多一个，项目级当前连续性主图
-├── fact_reference_pool            # 用户上传/资产库事实，多条，不承担连续性主图语义
 └── historical_outputs             # 所有生成历史，不自动参与正向上下文
 
-Job-local materialization
-└── derived_evidence               # 单次 Provider/MCP 输入的临时派生表示，不写回项目参考池
+Job-local mode-scoped input
+├── standard_direct_reference      # Standard/General：本次明确上传的直接参考，默认不持久化为源池
+├── professional_asset_binding     # Professional：显式绑定的冻结视觉资产版本
+├── ecommerce_product_truth        # E-Commerce：商品事实契约允许的商品来源与表示
+└── derived_evidence               # 单次 Provider/MCP 输入的临时派生表示
 ```
+
+模式输入的硬边界：
+
+| 项目模式 | 默认输入 | 不得自动读取 |
+| --- | --- | --- |
+| Standard/General | 本次明确上传的直接参考 + 0/1 张 active anchor | Professional 视觉资产池、E-Commerce 商品事实、通用 `project_source_library`、语义匹配结果、未绑定历史图 |
+| Professional | 显式 active VisualAssetBindingSet 的冻结资产版本 + 0/1 张 active anchor | General 隐式源池、E-Commerce 商品事实、未绑定视觉资产 |
+| E-Commerce | Doc263/Doc269 商品事实契约批准的来源及其单一物理表示 + 0/1 张 active anchor | General/Professional 源池、未批准商品图、未绑定历史图 |
+
+历史 `fact_reference_pool` 字段只作为兼容投影名称保留，不再作为新的跨模式写入接口或 Provider 输入入口。
 
 ### 3.2 权威优先级
 
@@ -90,24 +113,25 @@ Job-local materialization
 
 自动选择器、最近输出排序、最大评分、最新创建时间和 Provider 返回顺序都不能覆盖用户显式绑定或解绑。
 
-对于“事实参考”：
+对于“当前任务输入”：
 
 ```text
-用户/服务端确认的上传原图或视觉资产版本
+当前项目模式的显式输入契约
   > 单次 Job 生成的派生证据
   > 生成历史图
 ```
 
-派生证据不能反向升级为事实参考；生成历史图不能因为存在于项目中而自动进入事实参考池。
+派生证据不能反向升级为项目输入；生成历史图不能因为存在于项目中而自动进入任何模式输入。
 
-### 3.3 连续性主图与事实参考可以同时存在，但不是同一类参考
+### 3.3 连续性主图与模式输入可以同时存在，但不是同一类参考
 
-当项目既有连续性主图又有上传原图时：
+当项目既有连续性主图又有当前任务输入时：
 
 - 连续性主图负责延续人物/主体的当前方向、已选构图倾向或用户确认的视觉方向；
-- 上传原图负责事实校验，例如脸部根事实、商品外观、Logo 和产品结构；
+- Standard/General 的直接上传只服务于本次任务，不会因为同一项目曾经上传过就进入后续任务；
+- Professional 资产和 E-Commerce 商品事实只能由各自契约显式开启；
 - 两者在内部计划中必须使用不同的 `reference_channel`；
-- “主图只有一张”不等于“Provider 在所有场景都只能收到一张图片”。Provider 是否需要事实图，由冻结的能力计划决定，但事实图不能被统计为多个连续性主图。
+- Provider 是否需要模式输入，由对应模式冻结计划决定，不能由共享 Provider 层自行扫描或追加。
 
 ---
 
@@ -248,7 +272,7 @@ active(anchor_A)
 - 后续 Job 不得使用该图作为 continuity input；
 - 图片仍保留在项目成果和历史记录；
 - 系统不得自动挑选最近一张图补回；
-- 上传事实参考池不受影响；
+- 当前 Job 的模式输入计划不受影响；
 - 已经冻结的旧 Job 不被回写修改。
 
 ### 5.5 绑定历史
@@ -291,18 +315,19 @@ active(anchor_A)
 }
 ```
 
-### 6.2 上传事实参考
+### 6.2 模式输入记录
 
-上传原图沿用现有资产记录，但必须保证它们可被识别为：
+上传原图沿用现有资产记录，但新计划必须先经过项目模式契约，不得直接写入跨模式事实池：
 
 ```text
 source_type = uploaded
-reference_channel = product_truth | person_identity | brand_truth | declared_scene_truth
+reference_channel = direct_reference | professional_asset | product_truth | person_identity | brand_truth | declared_scene_truth
+input_mode = standard_direct_reference | professional_asset_binding | ecommerce_product_truth
 project_owned = true
 content_sha256 = server-computed
 ```
 
-事实参考不能写入 `source_type=generated_first_formal`，也不能因为有 `created_from_output_id` 而自动成为连续性主图。
+Standard/General 的 `direct_reference` 默认只挂在当前 Job；Professional 的 `professional_asset` 必须带冻结的资产绑定版本；E-Commerce 的 `product_truth` 必须带商品事实契约版本。任何模式输入都不能写入 `source_type=generated_first_formal`，也不能因为有 `created_from_output_id` 而自动成为连续性主图。
 
 ### 6.3 临时派生证据
 
@@ -326,36 +351,47 @@ content_sha256 = server-computed
 
 ### 7.1 唯一输入入口
 
-Central Brain、Provider 和 MCP Materialization 必须消费同一份服务端冻结的 `ReferenceInputPlan`：
+Central Brain、Provider 和 MCP Materialization 必须消费同一份服务端冻结的、带模式的 `ReferenceInputPlan`。禁止再用一个跨模式 `fact_references` 数组承载所有项目的输入：
 
 ```json
 {
-  "schema_version": "v3_reference_input_plan_v2",
+  "schema_version": "v3_reference_input_plan_v3",
   "project_id": "project_xxx",
   "job_id": "job_xxx",
+  "project_mode": "standard|professional|ecommerce",
+  "reference_mode": "standard_direct_reference|professional_asset_binding|ecommerce_product_truth",
   "continuity_anchor": {
     "binding_id": "anchor_binding_xxx",
     "output_id": "v3_output_xxx",
     "required": true,
     "provider_input_mode": "reference_image"
   },
-  "fact_references": [
+  "direct_references": [
     {
       "asset_id": "uploaded_asset_xxx",
-      "reference_channel": "product_truth",
+      "reference_channel": "direct_reference",
       "required": true,
-      "selected_representation": "product_truth_crop"
+      "selected_representation": "original_full_frame"
     }
   ],
+  "professional_binding_set": null,
+  "ecommerce_product_truth": null,
   "derived_evidence": [],
-  "selection_policy": "single_continuity_anchor_plus_bounded_fact_sources",
+  "selection_policy": "mode_scoped_inputs_plus_single_continuity_anchor",
   "logical_continuity_reference_count": 1,
-  "logical_fact_reference_count": 3,
+  "logical_mode_input_count": 3,
   "physical_provider_reference_count": 3,
   "max_physical_provider_reference_count": 5,
   "plan_digest": "sha256:..."
 }
 ```
+
+字段使用约束：
+
+- `standard_direct_reference` 只能填写 `direct_references`；`professional_binding_set` 与 `ecommerce_product_truth` 必须为 `null`。
+- `professional_asset_binding` 只能填写经过显式绑定并冻结版本的 `professional_binding_set`；不能从项目历史或通用源库补齐。
+- `ecommerce_product_truth` 只能由 E-Commerce 商品事实契约生成；它的来源和表示由该契约决定。
+- `derived_evidence` 仍然是 Job-local 派生物，不属于任何模式的项目池。
 
 ### 7.2 单一连续性主图约束
 
@@ -368,26 +404,27 @@ Central Brain、Provider 和 MCP Materialization 必须消费同一份服务端�
 - retry 必须复用同一个 binding digest；
 - 新生成结果不会在当前 Job 内自动追加为第二个 continuity input。
 
-### 7.3 事实参考物化约束
+### 7.3 模式输入物化约束
 
-对每个事实源，Provider 默认只能选择一个物理表示：
+对每个模式输入源，Provider 默认只能选择一个物理表示，且选择必须在对应模式的服务端计划中完成：
 
 ```text
-product_truth_crop 优先，用于商品身份/细节
-original_full_frame 作为缺少裁剪图或明确要求构图/场景时的 fallback
+E-Commerce: product_truth_crop 优先，用于商品身份/细节
+E-Commerce: original_full_frame 作为缺少裁剪图或明确要求构图/场景时的 fallback
+Standard/General: original_full_frame 直接作为本次上传输入，不生成或读取 product_truth_crop
 ```
 
-只有在冻结能力计划明确要求“同一事实源同时提供细节和全幅构图”时，才允许同一来源的两个物理表示同时进入 Provider；这必须记录原因并计入上限。
+只有在冻结的 E-Commerce 商品事实计划明确要求“同一商品源同时提供细节和全幅构图”时，才允许同一来源的两个物理表示同时进入 Provider；这必须记录原因并计入上限。该双表示规则不得扩散到 Standard/General 或 Professional 默认路径。
 
-因此，3 张上传商品图不能因为内部存在 3 张 crop 就无条件变成 6 个 Provider 输入。默认行为应是：每个源选择一种最适合当前任务的表示，最多 3 个物理输入；如果确实需要 6 个，必须由能力计划显式说明并通过 Provider 上限检查。
+因此，Standard/General 用户上传 3 张图时，默认就是 3 个直接输入，不读取商品 crop；E-Commerce 3 张商品图即使内部存在 3 张 crop，也不能无条件变成 6 个 Provider 输入。默认行为应是每个源选择一种最适合当前任务的表示；如果确实需要 6 个，必须由 E-Commerce 能力计划显式说明并通过 Provider 上限检查。
 
 ### 7.4 Provider 与 MCP 对齐
 
 Provider 和 MCP 必须接收同一份逻辑计划：
 
-- 两者都只能使用 `active_continuity_anchor`；
-- 两者都不能自行解析浏览器选中的历史图；
-- 两者都不能把派生图写回项目事实池；
+- 两者都只能使用 `active_continuity_anchor` 和当前 `reference_mode` 允许的输入；
+- 两者都不能自行解析浏览器选中的历史图、通用项目源库或其他模式的池；
+- 两者都不能把派生图写回任何项目模式输入；
 - 两者的 physical input count、source order、digest 和 required/optional 标记必须一致；
 - MCP 只负责外部物化，不能改变锚点选择或绑定状态。
 
@@ -397,13 +434,29 @@ Provider 和 MCP 必须接收同一份逻辑计划：
 
 ```text
 logical_continuity_reference_count
-logical_fact_reference_count
+logical_mode_input_count
+reference_mode
 derived_evidence_count
 physical_provider_reference_count
 suppressed_reference_count
 ```
 
-不能只记录一个 `reference_asset_count`，否则用户的 3 张原图和 Provider 的 6 个物理文件会继续被误解为同一概念。
+不能只记录一个 `reference_asset_count`，否则用户的 3 张原图和 Provider 的 6 个物理文件会继续被误解为同一概念，也无法判断输入是否跨模式泄漏。
+
+### 7.6 Central Brain 的判定字段
+
+Central Brain 不得再用“是否存在任意参考字段”推断项目已经有连续性主图。必须拆分为以下独立判定：
+
+```text
+has_explicit_continuity_anchor   = active_continuity_anchor 是否 active
+has_direct_reference_inputs     = 本次 Job 是否有用户明确上传的 direct_references
+has_professional_binding         = 是否存在有效且冻结的 VisualAssetBindingSet
+has_ecommerce_product_truth      = 是否存在有效的 E-Commerce 商品事实契约
+```
+
+`selected_visual_references`、`uploaded_reference_assets`、`strong_reference_bindings`、`project_source_library` 等兼容字段不能单独证明 `has_explicit_continuity_anchor=true`。Standard/General 的 direct references 也不能因为数量大于 0 就抑制“第一张正式通过图成为后续连续性主图”的自动候选逻辑；是否允许自动候选只由 Doc73/本文件的 anchor eligibility 条件决定。
+
+如果旧字段无法映射到明确的 `reference_mode`，Brain 必须 fail closed：保留当前任务的直接输入或返回需要重新确认的状态，但不得猜测为 Professional 资产绑定、E-Commerce 商品事实或连续性主图。
 
 ---
 
@@ -422,31 +475,34 @@ suppressed_reference_count
     "binding_mode": "auto|manual",
     "preview_url": "safe project media route"
   },
-  "fact_reference_pool": [
-    {
-      "asset_id": "uploaded_asset_xxx",
-      "reference_channel": "product_truth",
-      "public_label": "商品原图"
-    }
-  ]
+  "current_job_reference_mode": "standard_direct_reference",
+  "current_job_reference_summary": {
+    "direct_reference_count": 3,
+    "professional_binding_active": false,
+    "ecommerce_product_truth_active": false
+  }
 }
 ```
 
-公开投影不能暴露 `source_content_sha256`、内部 binding digest、绝对路径、Provider/MCP 字段或私有 review evidence。
+Standard/General 的公开投影不得把 `project_source_library` 或全局 `fact_reference_pool` 作为项目默认资源返回。Professional 只有在绑定生效时返回绑定摘要；E-Commerce 只返回当前商品事实计划的安全摘要。公开投影不能暴露 `source_content_sha256`、内部 binding digest、绝对路径、Provider/MCP 字段或私有 review evidence。
 
 ### 8.2 前端项目参考板
 
-项目页只显示两个明确区域：
+项目页按项目模式显示明确区域：
 
 1. `当前连续性主图`
    - 只显示 0 或 1 张；
    - 显示“自动绑定”或“手动绑定”；
    - 操作：`更换主图`、`解除主图`。
 
-2. `事实参考图`
-   - 显示上传原图/已绑定视觉资产；
-   - 操作：`移除事实参考`；
-   - 不显示 Provider crop 作为额外用户参考图。
+2. `本次参考图`
+   - Standard/General 只显示当前 Job 明确上传的直接参考；
+   - 不显示跨 Job 的“项目原始素材池”；
+   - Provider crop/feature 派生图不作为用户参考卡片。
+
+3. `专业资产绑定`或`商品事实输入`
+   - 仅在 Professional 或 E-Commerce 对应契约已开启时显示；
+   - 不得在 Standard/General 页面出现为默认参考区。
 
 生成结果卡片上提供：
 
@@ -467,7 +523,7 @@ suppressed_reference_count
 解绑时提示：
 
 ```text
-解绑后，后续生成不会自动使用当前主图。上传的事实参考仍然保留；系统不会自动挑选历史图片替代它。
+解绑后，后续生成不会自动使用当前主图。本次任务明确上传的参考仍按当前 Job 计划处理；系统不会自动挑选历史图片替代它。
 ```
 
 ### 8.4 生成按钮语义
@@ -548,11 +604,18 @@ unbound
 
 ### 10.3 旧上传参考
 
-上传参考继续进入 `fact_reference_pool`。不因为兼容字段中出现 `created_from_output_id` 就改变其 `source_type=uploaded` 语义。
+旧上传参考继续可读，但迁移时必须根据项目模式投影到受限通道：
+
+- Standard/General 只在用户明确发起的新 Job 中作为 `standard_direct_reference` 使用，不建立新的全局源池；
+- Professional 只有存在有效 VisualAssetBindingSet 时才投影为 `professional_asset_binding`；
+- E-Commerce 只有通过商品事实契约的记录才投影为 `ecommerce_product_truth`；
+- 无法确定模式或绑定关系的旧 `fact_reference_pool` 记录只读保留，不得自动注入新 Job。
+
+不因为兼容字段中出现 `created_from_output_id` 就改变其 `source_type=uploaded` 语义，也不因此生成连续性主图。
 
 ### 10.4 旧派生图
 
-旧项目中的 crop/feature sidecar 可以继续用于已冻结 Job 的重试和审计，但不写入新的项目参考池，不在前端作为独立参考展示。
+旧项目中的 crop/feature sidecar 可以继续用于已冻结 Job 的重试和审计，但不写入新的模式输入，不在前端作为独立参考展示。
 
 ### 10.5 接口兼容
 
@@ -560,7 +623,7 @@ unbound
 
 - `POST /projects/{project_id}/jobs/{job_id}/select`：继续记录用户选择，但内部转发到 continuity anchor binding service；
 - `POST /projects/{project_id}/outputs/{output_id}/unselect`：如果该输出是 active anchor，转为 unbind；否则只更新历史选择状态；
-- `/references/{reference_id}/remove`：只处理事实参考或旧兼容引用，不得从历史扫描中自动生成新主图；
+- `/references/{reference_id}/remove`：只处理当前模式输入或旧兼容引用，不得从历史扫描中自动生成新主图；
 - `/visual-asset-bindings`：保持视觉资产库项目绑定语义，不与生成输出 anchor 复用表或状态。
 
 新代码禁止继续新增直接写 `reference_assets` 的旁路逻辑。
@@ -604,7 +667,9 @@ src_skeleton/app/static/styles.css
 - 不新增第二套项目级参考注册表；
 - 不把 `active_continuity_anchor` 复制成多个模块字段并分别决定；
 - 不用最近输出、最高分、最新时间替代用户绑定状态；
-- 不把 Provider crop 写回用户事实参考；
+- 不把 Provider crop 写回用户模式输入；
+- 不让 Standard/General 默认读取 `project_source_library`、Professional 资产池或 E-Commerce 商品事实；
+- 不用一个全局 `fact_reference_pool` 作为所有模式的 Provider 输入；
 - 不在 Provider 层根据“只要有路径”自动追加原图；
 - 不修改 General Template 的行业交付角色；
 - 不用 prompt 文案解决状态权威问题；
@@ -615,12 +680,13 @@ src_skeleton/app/static/styles.css
 
 1. 新增 anchor contract、当前索引和 append-only binding history。
 2. 把旧 Doc73/selected-output 兼容读取收敛到 binding service。
-3. 修改 Project Context 公共投影，区分 anchor/fact/history。
-4. 修改 Central Brain，只读取冻结 anchor，不自行追加历史输出。
-5. 修改 Provider/MCP reference materialization，消费 `ReferenceInputPlan`，按源选择单一表示并记录计数。
-6. 增加项目页绑定、替换、解绑 UI。
-7. 完成迁移、回放、retry、并发和失败关闭测试。
-8. 通过本地回归后再做一次受保护的 VPS 验证。
+3. 定义 `reference_mode` 与三种模式输入契约，先关闭 Standard/General 的默认全局源池注入。
+4. 修改 Project Context 公共投影，按模式区分 anchor、当前任务输入和历史兼容字段。
+5. 修改 Central Brain，只读取冻结 anchor 与当前模式输入，不把通用 `strong_reference_bindings` 当成连续性主图。
+6. 修改 Provider/MCP reference materialization，消费带模式的 `ReferenceInputPlan`，按源选择单一表示并记录计数。
+7. 增加项目页绑定、替换、解绑 UI，并隐藏 Standard/General 的专业源池投影。
+8. 完成迁移、回放、retry、并发、模式隔离和失败关闭测试。
+9. 通过本地回归后再做一次受保护的 VPS 验证。
 
 ---
 
@@ -654,18 +720,22 @@ src_skeleton/app/static/styles.css
 
 | 场景 | 预期 |
 | --- | --- |
-| 3 张上传原图，无 active anchor | fact pool=3，continuity=0，不产生历史生成参考 |
-| 3 张上传原图，有 1 张 active anchor | continuity=1，fact pool=3，按计划选择物理表示 |
-| 3 张商品图各有 crop | 默认每源选择一种表示，不无条件变成 6 个 Provider 输入 |
-| 明确要求 full-frame + detail 双表示 | 允许双表示，但记录原因并通过上限检查 |
+| Standard/General 3 张本次上传，无 active anchor | `reference_mode=standard_direct_reference`，direct inputs=3，continuity=0，不创建全局源池 |
+| Standard/General 3 张本次上传，有 1 张 active anchor | continuity=1，direct inputs=3；不读取 Professional/E-Commerce 源池 |
+| Professional 无 active VisualAssetBindingSet | 不得生成 `professional_asset_binding` 输入，不读取历史视觉资产 |
+| Professional 有冻结绑定版本 | 只使用绑定集合中的版本，不把普通上传或未绑定资产混入 |
+| E-Commerce 3 张商品图各有 crop | 由商品事实契约选择表示，不无条件变成 6 个 Provider 输入 |
+| E-Commerce 明确要求 full-frame + detail 双表示 | 仅在 E-Commerce 冻结计划中允许，记录原因并通过上限检查 |
 | 生成历史中有多张图片但未绑定 | 不进入 positive context |
 | retry | 复用同一个 frozen `ReferenceInputPlan` 和 anchor digest |
 
 ### 12.4 Provider/MCP parity
 
-- Provider 与 MCP 收到相同的 anchor binding、fact source IDs、顺序和 plan digest。
+- Provider 与 MCP 收到相同的 anchor binding、mode input IDs、顺序和 plan digest。
 - MCP 物化回写的输出必须走同一 OutputStore、review、winner 和 anchor eligibility 路径。
 - Provider/MCP 不能通过 URL/path/客户端 output ID 改变 anchor。
+- Standard/General 的 Provider/MCP 请求不能出现 `professional_binding_set` 或 `ecommerce_product_truth`。
+- Professional/E-Commerce 的模式输入不能泄漏到 Standard/General 请求。
 - public projection 不暴露私有 binding、digest 和派生证据路径。
 
 ### 12.5 前端验收
@@ -674,7 +744,7 @@ src_skeleton/app/static/styles.css
 - 可以从正式成果中绑定新主图。
 - 替换主图前有确认提示，替换失败时旧主图仍在。
 - 解绑后明确显示“未绑定”，不会自动补回历史图。
-- 上传事实参考与连续性主图分组展示。
+- 当前 Job 模式输入与连续性主图分组展示。
 - crop/feature 派生图不作为额外用户参考卡片展示。
 - “重新生成”不会把当前 Job 的所有输出自动追加为参考。
 
@@ -701,7 +771,7 @@ reference_representation_selection_failed
 - “当前主图已解绑，后续生成不会自动沿用历史图片。”
 - “这张图片还没有正式通过，暂时不能设为连续性主图。”
 - “参考素材过多，系统正在按任务需要收敛输入。”
-- “原图仍保留，但本次任务只选取必要的事实参考。”
+- “原图仍保留，但本次任务只选取当前模式需要的参考素材。”
 
 管理员诊断必须能看到：
 
@@ -729,13 +799,13 @@ provider/mcp operation
 1. 项目存在唯一可验证的 `active_continuity_anchor` 权威来源。
 2. 第一张正式通过图只能在满足冻结条件时自动成为主图。
 3. 手动绑定、替换、解绑均服务端持久化、可审计、可并发保护。
-4. 事实参考池与生成连续性主图在数据、UI、Provider 计划和日志中分离。
-5. Provider/MCP 不再通过历史扫描或旁路字段自动追加生成参考。
+4. 连续性主图与 Standard/General 直接输入、Professional 资产绑定、E-Commerce 商品事实在数据、UI、Provider 计划和日志中按模式分离。
+5. Provider/MCP 不再通过历史扫描、全局源池或旁路字段自动追加生成参考。
 6. 同一用户源的原图与派生图不会默认无条件同时发送。
 7. retry、refresh、service restart、MCP resume 不改变已冻结的 anchor 和 reference plan。
-8. 旧 Doc73、Doc97、Doc281、Doc287 记录可安全读取并按规则迁移。
-9. 通过正常、失败、边界、并发、回放和 Provider/MCP parity 测试。
-10. 受保护 VPS 验证确认 3 张上传图不会再因隐式双表示直接产生未解释的 6 张输入，也不会把历史生成图当成自动参考。
+8. 旧 Doc73、Doc97、Doc281、Doc287 记录可安全读取并按模式规则迁移；旧通用源池只读兼容，不再默认注入 Standard/General。
+9. 通过正常、失败、边界、并发、模式隔离、回放和 Provider/MCP parity 测试。
+10. 受保护 VPS 验证确认 3 张 Standard/General 上传图不会再因专业商品派生链路直接产生未解释的 6 张输入，也不会把历史生成图当成自动参考。
 
 ---
 
@@ -743,6 +813,6 @@ provider/mcp operation
 
 请开发按以下一句话理解本次修正：
 
-> 项目只维护一个当前连续性主图；第一张正式通过图只是可验证的自动候选，用户可以手动更换或解绑；上传原图是事实参考，Provider 裁剪图是临时派生证据，任何历史生成图都不能未经绑定自动进入后续生成。
+> 项目只维护一个当前连续性主图；第一张正式通过图只是可验证的自动候选，用户可以手动更换或解绑；Standard/General 的上传图只服务于当前任务，Professional 资产和 E-Commerce 商品事实必须经过各自契约，Provider 裁剪图是临时派生证据，任何历史生成图都不能未经绑定自动进入后续生成。
 
 本文件不要求立即删除旧字段或旧文件。第一阶段应先建立新的权威 binding service 和 frozen `ReferenceInputPlan`，再让旧接口通过适配层进入新模型；确认回归通过后，才允许逐步收窄旧旁路写入。
