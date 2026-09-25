@@ -2224,6 +2224,7 @@ async def _proxy_v2_request(path: str, request: Request) -> Response:
     headers = _v2_proxy_request_headers(request)
     api_user_id = getattr(getattr(request, "state", None), "alchemy_api_user_id", None)
     api_surfaces = getattr(getattr(request, "state", None), "alchemy_api_key_surfaces", None)
+    bridge_applied = False
     if type(api_user_id) is int and "v2" in set(api_surfaces or ()):
         bridge_secret = str(os.getenv("ALCHEMY_ACCESS_BRIDGE_SECRET") or "")
         if not bridge_secret:
@@ -2238,6 +2239,7 @@ async def _proxy_v2_request(path: str, request: Request) -> Response:
                 secret=bridge_secret,
             )
         )
+        bridge_applied = True
     body = await request.body()
     timeout = httpx.Timeout(settings.v2_api_proxy_timeout_seconds, connect=8.0)
     try:
@@ -2254,10 +2256,13 @@ async def _proxy_v2_request(path: str, request: Request) -> Response:
             status_code=502,
             detail={"code": "v2_proxy_unavailable", "message": "V2 local API is not reachable."},
         ) from exc
+    response_headers = _v2_proxy_response_headers(upstream.headers)
+    if bridge_applied:
+        response_headers["X-Alchemy-Access-Bridge"] = "hmac"
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
-        headers=_v2_proxy_response_headers(upstream.headers),
+        headers=response_headers,
         media_type=upstream.headers.get("content-type"),
     )
 
