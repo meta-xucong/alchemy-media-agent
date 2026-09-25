@@ -137,6 +137,10 @@ GitHub Actions 仅上传必要的迁移脚本，向 VPS 传入 checkout 的完�
 本机后端，不作为 API Key 的公网入口。若后续步骤失败，Nginx 配置随 env、systemd
 单元和 release 一起恢复。
 
+当系统同时存在 `sites-available` 和旧 `/etc/nginx/conf.d/alchemy-media-agent.conf`
+时，迁移会先备份并移除同名旧配置，避免两个 server block 并存导致旧的 V2 直连
+规则继续优先；回滚时恢复该旧文件。
+
 重启后还检查 V1 容器和 V2 API 进程实际读取的桥接密钥 SHA256 指纹，以及两侧
 `VEYRA_AUTH_ENABLED=true`；只输出匹配状态，不输出密钥原文。
 

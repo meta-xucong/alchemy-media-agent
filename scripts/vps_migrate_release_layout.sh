@@ -43,6 +43,9 @@ nginx_target=""
 nginx_backup=""
 nginx_link=""
 nginx_link_created=0
+nginx_legacy_conf="/etc/nginx/conf.d/alchemy-media-agent.conf"
+nginx_legacy_backup=""
+nginx_legacy_removed=0
 v2_env="/etc/alchemy/alchemy-v2.env"
 v1_env_backup="${backup_dir}/v1.env"
 v2_env_backup="${backup_dir}/v2.env"
@@ -151,6 +154,12 @@ configure_nginx_for_active_gateway() {
     if [[ -d "/etc/nginx/sites-enabled" && ! -e "${nginx_link}" ]]; then
       ln -s "${target_conf}" "${nginx_link}"
       nginx_link_created=1
+    fi
+    if [[ -f "${nginx_legacy_conf}" ]]; then
+      nginx_legacy_backup="${backup_dir}/nginx-conf.d.conf"
+      cp -p "${nginx_legacy_conf}" "${nginx_legacy_backup}"
+      rm -f "${nginx_legacy_conf}"
+      nginx_legacy_removed=1
     fi
   fi
   nginx_target="${target_conf}"
@@ -268,6 +277,9 @@ rollback() {
     fi
     if [[ "${nginx_link_created}" == "1" && -n "${nginx_link}" ]]; then
       rm -f "${nginx_link}" || true
+    fi
+    if [[ "${nginx_legacy_removed}" == "1" && -f "${nginx_legacy_backup}" ]]; then
+      install -m 644 "${nginx_legacy_backup}" "${nginx_legacy_conf}" || true
     fi
     nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
   fi
