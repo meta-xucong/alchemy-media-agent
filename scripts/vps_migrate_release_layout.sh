@@ -77,7 +77,7 @@ set_env_value() {
 env_value() {
   local env_file="$1"
   local key="$2"
-  sed -n "s/^${key}=//p" "${env_file}" | head -n 1
+  sed -n "s/^${key}=//p" "${env_file}" | tr -d '\r' | head -n 1
 }
 
 ensure_access_bridge_secret() {
@@ -85,7 +85,7 @@ ensure_access_bridge_secret() {
 
   [[ -f "${live_env}" ]] || { echo "V1 env file is missing: ${live_env}" >&2; exit 1; }
   [[ -f "${v2_env}" ]] || { echo "V2 env file is missing: ${v2_env}" >&2; exit 1; }
-  bridge_secret="$(sed -n 's/^ALCHEMY_ACCESS_BRIDGE_SECRET=//p' "${live_env}" | head -n 1)"
+  bridge_secret="$(env_value "${live_env}" "ALCHEMY_ACCESS_BRIDGE_SECRET")"
   if [[ -z "${bridge_secret}" ]]; then
     if command -v openssl >/dev/null 2>&1; then
       bridge_secret="$(openssl rand -hex 32)"
