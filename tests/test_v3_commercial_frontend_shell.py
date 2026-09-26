@@ -1444,6 +1444,7 @@ def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack(tmp_path, mo
         brain_provider=EcommerceRemoteBrainTestProvider(fault="unavailable"),
     )
     client = TestClient(app)
+    product_asset_id = _create_ready_v3_upload(client)
 
     low_level = client.post(
         "/api/v3/creative-agent/jobs",
@@ -1457,7 +1458,7 @@ def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack(tmp_path, mo
         json={
             "user_input": "传一张产品图，生成可直接用于电商的成熟套图",
             "scenario_selection": {"scenario_id": "ecommerce", "platform_profile": "amazon_us"},
-            "uploaded_asset_ids": ["product_reference"],
+            "uploaded_asset_ids": [product_asset_id],
             "product_profile": {"product_category": "desk lamp", "selling_points": ["Adjustable angle"]},
         },
     )

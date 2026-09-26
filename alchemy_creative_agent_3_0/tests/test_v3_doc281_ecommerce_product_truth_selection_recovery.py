@@ -70,36 +70,34 @@ def _request(adapter: V3LLMBrainAdapter):
     )
 
 
-def test_doc281_semantic_product_truth_failure_retries_the_same_request_with_safe_diagnostics() -> None:
+def test_doc281_semantic_product_truth_failure_is_not_retried_by_brain() -> None:
     provider = _SequencedProductTruthProvider(fault="role", recover=True)
     adapter = V3LLMBrainAdapter(provider=provider)
 
     result = adapter.run(_request(adapter))
 
-    assert result.audit["remote_semantic_contract_recovery_attempted"] is True
-    assert result.audit["remote_semantic_contract_recovery_succeeded"] is True
-    assert len(provider.requests) == 2
-    first, second = provider.requests
-    assert first["user_input"] == second["user_input"]
-    assert first["requested_image_count"] == second["requested_image_count"] == 1
-    diagnostics = second["metadata"]["remote_semantic_contract_recovery"]["validation_diagnostics"]
-    assert diagnostics["sections"]["image_set_plan"]["validation_error_types"] == ["selection_invalid"]
-    assert "not_a_product_truth_role" not in str(diagnostics)
-    assert "product_a" not in str(diagnostics)
+    # Brain validates the response shape only.  Semantic Product Truth
+    # decisions remain intact for ScenarioRuntime and are never auto-repaired
+    # or retried inside the adapter.
+    assert len(provider.requests) == 1
+    assert result.audit.get("remote_semantic_contract_recovery_attempted") is False
+    assert result.audit.get("remote_semantic_contract_recovery_succeeded") is False
+    assert result.llm_used is True
+    assert result.fallback_used is False
 
 
-def test_doc281_unknown_asset_and_capacity_are_rejected_before_runtime() -> None:
-    for fault, expected_type in (("unknown_asset", "selection_unknown_asset"), ("capacity", "selection_capacity_exceeded")):
+def test_doc281_semantic_unknown_asset_and_capacity_are_deferred_to_runtime() -> None:
+    for fault in ("unknown_asset", "capacity"):
         provider = _SequencedProductTruthProvider(fault=fault, recover=False)
         adapter = V3LLMBrainAdapter(provider=provider)
 
         result = adapter.run(_request(adapter))
 
-        assert len(provider.requests) == 2
-        assert result.audit["remote_contract_rejected_sections"] == ["image_set_plan"]
-        diagnostics = result.audit["remote_image_set_validation_audit"]
-        assert expected_type in diagnostics["validation_error_types"]
-        assert result.audit["remote_semantic_contract_recovery_succeeded"] is False
+        assert len(provider.requests) == 1
+        assert result.audit.get("remote_semantic_contract_recovery_attempted") is False
+        assert result.audit.get("remote_semantic_contract_recovery_succeeded") is False
+        assert result.llm_used is True
+        assert result.fallback_used is False
 
 
 def test_doc281_shared_contract_matches_the_runtime_semantics() -> None:
@@ -172,7 +170,8 @@ def test_doc281_runtime_blocks_after_bounded_invalid_recovery_before_image_provi
 
     assert result.status == ScenarioRuntimeStatus.BLOCKED
     assert result.generation_result is None
-    assert len(provider.requests) == 2
+    assert len(provider.requests) == 1
+    assert result.metadata["capability_activation_error_code"] == "ecommerce_product_truth_selection_invalid"
     assert image_provider.calls == 0
 
 
@@ -197,9 +196,12 @@ def test_doc281_context_snapshot_drift_and_missing_budget_are_rejected_before_ru
     budget_provider = _SequencedProductTruthProvider(fault="role", recover=False)
     budget_result = V3LLMBrainAdapter(provider=budget_provider).run(budget_request)
 
-    assert "selection_capacity_contract_missing" in budget_result.audit["remote_image_set_validation_audit"][
-        "validation_error_types"
-    ]
+    # Removing the budget without recomputing the frozen context digest is
+    # a pre-dispatch context-integrity failure; Brain must not be called.
+    assert len(budget_provider.requests) == 0
+    validation_audit = budget_result.audit["remote_image_set_validation_audit"]
+    assert "selection_context_digest_mismatch" in validation_audit["validation_error_types"]
+    assert budget_result.audit.get("remote_brain_call_count") == 0
 
 
 def test_doc281_context_digest_is_order_and_count_sensitive() -> None:
@@ -289,16 +291,19 @@ def test_doc281_local_context_is_blocked_without_brain_dispatch():
     assert result.audit["remote_semantic_contract_recovery_attempted"] is False
 
 
-def test_doc281_recovery_preserves_snapshot_when_provider_mutates_its_request():
+def test_doc281_brain_request_snapshot_is_preserved_without_retry():
     class MutatingProvider(_SequencedProductTruthProvider):
         def run(self, request):
             payload = super().run(request)
-            request.uploaded_assets.reverse(); request.user_input = "mutated by provider"
+            request.uploaded_assets.reverse()
+            request.user_input = "mutated by provider"
             return payload
+
     provider = MutatingProvider(fault="role", recover=True)
     request = _request(V3LLMBrainAdapter())
     before = request.model_dump(mode="json")
     result = V3LLMBrainAdapter(provider=provider).run(request)
-    assert result.audit["remote_semantic_contract_recovery_succeeded"] is True
+
+    assert result.audit.get("remote_semantic_contract_recovery_attempted") is False
+    assert len(provider.requests) == 1
     assert request.model_dump(mode="json") == before
-    assert provider.requests[0]["uploaded_assets"] == provider.requests[1]["uploaded_assets"]

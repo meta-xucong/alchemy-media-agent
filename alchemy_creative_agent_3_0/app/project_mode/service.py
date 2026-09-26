@@ -5502,6 +5502,11 @@ class V3ProjectModeService:
                 or ""
             ).strip()
         )
+        final_delivery_metadata = dict(current_status.metadata.get("final_delivery") or {})
+        allow_review_pending_reference = (
+            has_explicit_selector
+            and final_delivery_metadata.get("final_delivery_status") == "not_evaluated"
+        )
         if str(metadata.get("identity_anchor_action") or "").strip() == "bind":
             selected_id = str(payload.get("selected_output_id") or "").strip()
             state = self._continuity_state(project)
@@ -5542,16 +5547,20 @@ class V3ProjectModeService:
                 reason="single_continuity_anchor_required",
                 message="Select exactly one formally approved output as the continuity anchor.",
             )
-        try:
-            self._continuity_output(project.project_id, preflight_refs[0].output_id, job_id)
-        except (ValueError, KeyError, OSError):
-            # Do not perform old selection writes before proving that the
-            # chosen output can legally become the one active binding.
-            return self._selection_hold_response(
-                project, template_id=template_id, status=current_status,
-                reason="continuity_anchor_unverified",
-                message="This output does not yet have complete formal delivery evidence.",
-            )
+        if not allow_review_pending_reference:
+            try:
+                self._continuity_output(project.project_id, preflight_refs[0].output_id, job_id)
+            except (ValueError, KeyError, OSError):
+                # Do not perform old selection writes before proving that the
+                # chosen output can legally become the one active binding.
+                return self._selection_hold_response(
+                    project, template_id=template_id, status=current_status,
+                    reason="continuity_anchor_unverified",
+                    message="This output does not yet have complete formal delivery evidence.",
+                )
+        # An explicit user selection may identify a canonical candidate before
+        # review evidence is available. Keep it as a project reference, while
+        # leaving the continuity anchor unbound until formal delivery passes.
         has_explicit_output_selector = bool(
             self._selection_id_set(payload.get("selected_output_ids"))
             or str(payload.get("selected_output_id") or "").strip()
@@ -5613,7 +5622,7 @@ class V3ProjectModeService:
                 message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
                 unresolved_refs=unresolved_refs,
             )
-        if len(refs) == 1 and refs[0].output_id:
+        if len(refs) == 1 and refs[0].output_id and not allow_review_pending_reference:
             before = self._continuity_state(project)
             self._anchor_bindings().change(project.project_id, output_id=refs[0].output_id,
                 expected_job_id=refs[0].job_id,
@@ -12016,13 +12025,30 @@ class V3ProjectModeService:
                 state = self._output_state_for_record(state_map, record)
                 delivery_entry = delivery.get(identity, {})
                 review_projection = self._public_output_review_projection(job_status, record)
-                if not include_hidden and str(delivery_entry.get("delivery_state") or "final_delivery") != "final_delivery":
+                final_delivery = dict((job_status.metadata or {}).get("final_delivery") or {})
+                review_pending_selected = (
+                    state == ProjectOutputSelectionStateValue.SELECTED
+                    and final_delivery.get("final_delivery_status") == "not_evaluated"
+                )
+                # An explicitly selected candidate can remain a project
+                # reference while visual review evidence is pending. It is
+                # surfaced with its review-pending delivery annotation, never
+                # promoted to final delivery or a continuity anchor.
+                if (
+                    not include_hidden
+                    and str(delivery_entry.get("delivery_state") or "final_delivery") != "final_delivery"
+                    and not review_pending_selected
+                ):
                     continue
                 # Modern shared review applies a canonical final-delivery gate
                 # on the Job. A materialized PNG is not an ordinary Project
                 # delivery when that gate withholds it for review. Legacy
                 # output-only jobs remain readable.
-                if not include_hidden and not self._review_projection_allows_project_delivery(review_projection):
+                if (
+                    not include_hidden
+                    and not self._review_projection_allows_project_delivery(review_projection)
+                    and not review_pending_selected
+                ):
                     continue
                 if (
                     not include_hidden
@@ -13729,8 +13755,38 @@ class V3ProjectModeService:
                 project_id=project.project_id,job_id=anchor["source_job_id"],output_id=anchor["output_id"],
                 candidate_id=anchor["source_candidate_id"],asset_id=anchor["source_asset_id"])
             scoped.selected_output_refs=[ref]
-        scoped.reference_assets=[r for r in scoped.reference_assets if r.source_type==ProjectReferenceSourceType.UPLOADED
-            and (template_id==ECOMMERCE_TEMPLATE_ID or r.asset_ref_id in allowed)]
+        else:
+            # A user-selected output remains a current project reference even
+            # before it is eligible as a continuity anchor. The final-delivery
+            # projection still controls whether it is shown as deliverable.
+            selected_states = self._selected_output_state_map(project)
+            scoped.selected_output_refs = [
+                ref
+                for ref in project.selected_output_refs
+                if selected_states.get(ref.output_id, ProjectOutputSelectionStateValue.SELECTED)
+                == ProjectOutputSelectionStateValue.SELECTED
+            ]
+        selected_output_ids = {
+            ref.output_id
+            for ref in scoped.selected_output_refs
+            if ref.output_id
+        }
+        scoped.reference_assets = [
+            reference
+            for reference in scoped.reference_assets
+            if (
+                reference.source_type == ProjectReferenceSourceType.UPLOADED
+                and (template_id == ECOMMERCE_TEMPLATE_ID or reference.asset_ref_id in allowed)
+            )
+            or (
+                not anchor
+                and reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED
+                and (
+                    reference.created_from_output_id in selected_output_ids
+                    or reference.asset_ref_id in selected_output_ids
+                )
+            )
+        ]
         scoped.uploaded_asset_refs=[r for r in scoped.uploaded_asset_refs if template_id==ECOMMERCE_TEMPLATE_ID or r.get("asset_id") in allowed]
         if self._reference_project_mode(project, template_id) == "standard":
             for asset_id in dict.fromkeys(direct_ids):

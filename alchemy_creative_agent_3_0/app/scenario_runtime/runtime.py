@@ -7093,10 +7093,15 @@ class ScenarioRuntime:
     def _activation_blocked_result(self, request: ScenarioRuntimeRequest, resolution, exc: Exception) -> ScenarioRuntimeResult:
         remote_brain_outcome = getattr(exc, "remote_creative_brain_outcome", None)
         required_failures = self._required_capability_ids(request)
+        raw_error_code = str(exc).strip()
         error_code = (
-            "general_variation_suite_direction_not_active"
-            if str(exc).strip() == "general_variation_suite_direction_not_active"
-            else "capability_activation_error"
+            raw_error_code
+            if raw_error_code.startswith("ecommerce_product_truth_selection_")
+            else (
+                "general_variation_suite_direction_not_active"
+                if raw_error_code == "general_variation_suite_direction_not_active"
+                else "capability_activation_error"
+            )
         )
         capability_run = CapabilityRunResult(
             status=CapabilityRunStatus.FAILED,

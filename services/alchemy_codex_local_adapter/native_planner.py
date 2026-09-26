@@ -550,6 +550,20 @@ class CodexNativeImageGenPlanner:
             ecommerce_context["provider_reference_budget"] = self._brain_safe_provider_reference_budget(
                 provider_budget
             )
+            # The Brain and Runtime validate the same frozen product-truth
+            # snapshot. Native planning owns the local reference inputs, so it
+            # must project their typed IDs, channel, source type, and SHA into
+            # the Brain context before the first remote call.
+            ecommerce_context["product_truth_reference_pool"] = [
+                {
+                    "asset_id": item.asset_id,
+                    "reference_channel": "product_truth",
+                    "source_type": "uploaded",
+                    "content_sha256": item.source_sha256,
+                }
+                for item in request.reference_inputs
+                if item.channel == "product_truth"
+            ]
             pose_contract = self._professional_ecommerce_pose_contract_for_request(request)
             if pose_contract:
                 ecommerce_context["professional_ecommerce_pose_contract"] = pose_contract

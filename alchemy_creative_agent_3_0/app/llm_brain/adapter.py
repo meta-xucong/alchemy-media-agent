@@ -275,8 +275,13 @@ class V3LLMBrainAdapter:
         if product_truth_required:
             request = request.model_copy(deep=True)
             context_issues = _product_truth_context_issues_for_contract(request)
-            if context_issues:
-                diagnostic = ecommerce_product_truth_validation_audit(context_issues)
+            structural_context_issues = [
+                issue
+                for issue in context_issues
+                if issue != "selection_capacity_contract_missing"
+            ]
+            if structural_context_issues:
+                diagnostic = ecommerce_product_truth_validation_audit(structural_context_issues)
                 fallback.audit = {**fallback.audit, "remote_contract_partial_fallback": True, "remote_contract_rejected_sections": ["image_set_plan"], "remote_image_set_validation_audit": diagnostic, "remote_contract_validation_audit": _remote_contract_validation_audit_payload({"image_set_plan": diagnostic}), "remote_brain_call_count": 0, "remote_brain_request_started": False, "remote_brain_request_acceptance": "not_started", "remote_semantic_contract_recovery_attempted": False, "remote_semantic_contract_recovery_succeeded": False}
                 return fallback
             context = request.metadata["ecommerce_creative_context"]
@@ -1594,12 +1599,33 @@ class V3LLMBrainAdapter:
                     rejected_sections.append(key)
                     continue
                 if requires_product_truth_selection:
-                    product_truth_validation_audit = _product_truth_selection_contract_audit(
-                        remote_section,
-                        expected_count=fallback.image_set_plan.image_count,
-                        allowed_asset_ids=product_truth_asset_ids,
-                        max_source_refs=max_product_truth_source_refs,
-                        context_issues=product_truth_context_issues,
+                    raw_entries = remote_section.get("evidence_dimensions_by_output")
+                    shape_valid = (
+                        isinstance(raw_entries, list)
+                        and len(raw_entries) == fallback.image_set_plan.image_count
+                        and all(
+                            isinstance(entry, dict)
+                            and type(entry.get("output_index")) is int
+                            and bool(str(entry.get("product_truth_selection_role") or "").strip())
+                            and isinstance(entry.get("selected_product_truth_asset_ids"), list)
+                            and bool(entry.get("selected_product_truth_asset_ids"))
+                            for entry in raw_entries
+                        )
+                    )
+                    # Brain owns the response shape. Semantic choices such as
+                    # unknown/duplicate assets, unsupported roles, and the
+                    # two-source detail rule belong to Runtime so their exact
+                    # downstream error codes remain observable.
+                    product_truth_validation_audit = (
+                        _product_truth_selection_contract_audit(
+                            remote_section,
+                            expected_count=fallback.image_set_plan.image_count,
+                            allowed_asset_ids=None,
+                            max_source_refs=2,
+                            context_issues=[],
+                        )
+                        if not shape_valid
+                        else {}
                     )
                     if product_truth_validation_audit:
                         image_set_validation_audit = product_truth_validation_audit
@@ -2904,7 +2930,11 @@ def _max_product_truth_source_refs_for_contract(request: BrainRunRequest) -> int
     context = metadata.get("ecommerce_creative_context")
     budget = context.get("provider_reference_budget") if isinstance(context, dict) else None
     raw_value = budget.get("max_product_truth_source_refs_per_output") if isinstance(budget, dict) else None
-    return ecommerce_product_truth_reference_budget(raw_value) or 0
+    # An absent or malformed budget belongs to the downstream Planner
+    # contract. Do not coerce it to zero here, because that would make a
+    # valid Brain selection look like an image_set_plan violation and mask the
+    # precise provider-budget error.
+    return ecommerce_product_truth_reference_budget(raw_value)
 
 
 def _product_truth_selection_contract_audit(

@@ -11316,7 +11316,18 @@ class V3ProductApiService:
             )
 
         final_delivery, _eligible_output_ids, _eligible_asset_ids = self._public_final_delivery_projection(result)
-        if final_delivery["delivery_gate_applies"] and not final_delivery["automatic_delivery_available"]:
+        explicit_selection_requested = bool(
+            select_request.selected_candidate_ids or select_request.selected_asset_ids
+        )
+        allow_unreviewed_candidate_selection = (
+            final_delivery["final_delivery_status"] == "not_evaluated"
+            and explicit_selection_requested
+        )
+        if (
+            final_delivery["delivery_gate_applies"]
+            and not final_delivery["automatic_delivery_available"]
+            and not allow_unreviewed_candidate_selection
+        ):
             manual_confirmation_required = bool(final_delivery["manual_confirmation_required"])
             selected = SelectedResult(
                 metadata={
@@ -11546,7 +11557,31 @@ class V3ProductApiService:
             public_warnings.append(
                 "The image was generated, but no review-certified final delivery is available."
             )
-        visible_output_ids = eligible_output_ids if final_delivery["delivery_gate_applies"] else None
+        delivery_gate_applies = bool(final_delivery["delivery_gate_applies"])
+        candidate_projection_before_delivery = (
+            delivery_gate_applies
+            and not eligible_output_ids
+            and final_delivery["final_delivery_status"] == "not_evaluated"
+            and record.status in {
+                ProductJobStatusValue.GENERATED,
+                ProductJobStatusValue.SELECTED,
+            }
+        )
+        # A generated or explicitly selected job may have canonical candidate
+        # pixels before review evidence is available. Keep those candidates
+        # explainable in the public projection while final_delivery remains
+        # withheld; only a certified delivery whitelist is allowed to be marked
+        # final. Review failures and manual holds stay hidden.
+        visible_output_ids = (
+            None
+            if candidate_projection_before_delivery
+            else eligible_output_ids
+        ) if delivery_gate_applies else None
+        visible_asset_ids = (
+            None
+            if candidate_projection_before_delivery
+            else eligible_asset_ids
+        ) if delivery_gate_applies else None
         automatic_delivery_available = bool(final_delivery["automatic_delivery_available"])
         status = ProductJobStatus(
             job_id=record.job_id,
@@ -11565,21 +11600,28 @@ class V3ProductApiService:
                 result,
                 record.status,
                 visible_output_ids=visible_output_ids,
-                visible_asset_ids=eligible_asset_ids if final_delivery["delivery_gate_applies"] else None,
+                visible_asset_ids=visible_asset_ids,
             ),
             candidates=[]
             if delivery_settling
             else self._candidate_summaries(
                 result,
                 visible_output_ids=visible_output_ids,
-                visible_asset_ids=eligible_asset_ids if final_delivery["delivery_gate_applies"] else None,
+                visible_asset_ids=visible_asset_ids,
             ),
             style_continuation=self._style_continuation_summary(record, result),
             general_creative=self._general_creative_summary(record, result=result, final_delivery=final_delivery),
             ecommerce=self._ecommerce_summary(record),
             selected_result=(
                 record.selected_result
-                if not final_delivery["delivery_gate_applies"] or automatic_delivery_available
+                if (
+                    not final_delivery["delivery_gate_applies"]
+                    or automatic_delivery_available
+                    or (
+                        record.status == ProductJobStatusValue.SELECTED
+                        and final_delivery["final_delivery_status"] == "not_evaluated"
+                    )
+                )
                 else None
             ),
             balance_estimate=dict(record.balance_estimate),

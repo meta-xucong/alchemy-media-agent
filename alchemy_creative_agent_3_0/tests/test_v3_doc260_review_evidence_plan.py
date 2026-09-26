@@ -369,7 +369,11 @@ def test_doc260_public_review_projects_required_unavailable_without_source_ids(
         output_resolver=_StaticReadyResolver(resolution),
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
-    created = _create_general_job(service, uploaded_asset_ids=[source_id])
+    created = _create_general_job(service)
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.request.uploaded_asset_ids = [source_id]
+    service.job_store.save(record)
     _generate_with_trusted_controls(
         service,
         created.job_id,
@@ -1032,9 +1036,11 @@ def test_doc260_plan_and_channel_contracts_are_closed_and_frozen() -> None:
 
 def test_doc260_non_admitted_audit_emits_typed_unavailable_plan(tmp_path) -> None:
     service = _service(tmp_path)
-    created = _create_general_job(service, uploaded_asset_ids=["v3_asset_missing"])
+    created = _create_general_job(service)
     record = service.job_store.get(created.job_id)
     assert record is not None
+    record.request.uploaded_asset_ids = ["v3_asset_missing"]
+    service.job_store.save(record)
     resolution = _ready_resolution(tmp_path).model_copy(
         update={
             "metadata": {
@@ -1070,12 +1076,12 @@ def test_doc260_uploaded_file_digest_drift_is_invalid(tmp_path) -> None:
     asset_store = V3UploadedAssetStore(tmp_path / "uploads")
     service = _service(tmp_path, asset_store=asset_store)
     asset_id = _ready_uploaded_reference(service, filename="drift.png")
-    upload = asset_store.get_upload(asset_id)
-    assert upload is not None and upload.file_path
-    Path(upload.file_path).write_bytes(base64.b64decode(_png_base64(48, 48)))
     created = _create_general_job(service, uploaded_asset_ids=[asset_id])
     record = service.job_store.get(created.job_id)
     assert record is not None
+    upload = asset_store.get_upload(asset_id)
+    assert upload is not None and upload.file_path
+    Path(upload.file_path).write_bytes(base64.b64decode(_png_base64(48, 48)))
     resolution = _ready_resolution(tmp_path).model_copy(
         update={
             "metadata": {
@@ -1521,9 +1527,6 @@ def test_doc260_evidence_gate_without_provider_call_cannot_claim_real_pixel_revi
     provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
     service = _service(tmp_path, vision_inspector=VisionOutputInspector(vision_provider=provider))
     source_id = _ready_uploaded_reference(service, filename="gate-drift.png")
-    upload = service.asset_store.get_upload(source_id)
-    assert upload is not None and upload.file_path
-    Path(upload.file_path).write_bytes(base64.b64decode(_png_base64(48, 48)))
     resolution = _ready_resolution(tmp_path)
     resolution = resolution.model_copy(
         update={
@@ -1547,7 +1550,21 @@ def test_doc260_evidence_gate_without_provider_call_cannot_claim_real_pixel_revi
         created.job_id,
         {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model", "max_visual_retry_attempts": 0}},
     )
-    package = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    upload = service.asset_store.get_upload(source_id)
+    assert upload is not None and upload.file_path
+    Path(upload.file_path).write_bytes(base64.b64decode(_png_base64(48, 48)))
+    provider.calls.clear()
+
+    reviewed = service._attach_post_generation_review(  # noqa: SLF001
+        record,
+        record.generation_result,
+        GenerateJobRequest.model_validate(
+            {"quality_mode": "standard", "metadata": {"vision_inspection_mode": "vision_model"}}
+        ),
+    )
+    package = reviewed.metadata["post_generation_review_package"]
     assert provider.calls == []
     assert package["real_pixel_review"] is False
 

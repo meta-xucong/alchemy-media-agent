@@ -1925,7 +1925,6 @@ def test_professional_ecommerce_requires_provider_reference_budget_before_select
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
-
     assert result["status"] == "blocked"
     assert result["code"] == "codex_native_imagegen_planning_blocked"
     assert materializer_calls == 0

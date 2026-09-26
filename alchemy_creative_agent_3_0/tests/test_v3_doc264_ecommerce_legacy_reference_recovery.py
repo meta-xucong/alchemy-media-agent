@@ -17,7 +17,13 @@ from unittest.mock import ANY
 
 import pytest
 from PIL import Image
-from playwright.sync_api import Browser, Page, sync_playwright
+
+try:
+    from playwright.sync_api import Browser, Page, sync_playwright
+except ModuleNotFoundError:  # Browser-only tests remain explicit skips in lean CI images.
+    Browser = Page = object
+    sync_playwright = None
+    pytestmark = pytest.mark.skip(reason="Playwright is not installed in this test environment")
 
 from alchemy_creative_agent_3_0.app.product_api.contracts import (
     ProductJobStatusValue,
