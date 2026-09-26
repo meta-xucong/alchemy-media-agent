@@ -28,6 +28,9 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     ReviewEvidencePlan,
     VisionOutputInspector,
 )
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    VisionInspectionProviderError,
+)
 
 
 def _png_base64(width: int = 96, height: int = 72) -> str:
@@ -65,6 +68,20 @@ class _StaticVisionProvider:
         self.calls.append(resolution)
         self.metadata_calls.append(dict(metadata or {}))
         return dict(self.payload)
+
+
+class _FailingVisionProvider:
+    provider_name = "doc260_failing_vision"
+
+    def __init__(self) -> None:
+        self.calls: list[GeneratedOutputResolution] = []
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def inspect(self, resolution: GeneratedOutputResolution, *, metadata: dict | None = None) -> dict:
+        self.calls.append(resolution)
+        raise VisionInspectionProviderError("simulated provider failure")
 
 
 class _StaticReadyResolver:
@@ -345,6 +362,49 @@ def test_doc260_public_review_projects_safe_no_reference_real_pixel_facts(
     assert "evidence_ids" not in review
 
 
+def test_doc260_provider_error_marks_attempted_but_not_certified_and_withholds(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector.time.sleep",
+        lambda _seconds: None,
+    )
+    provider = _FailingVisionProvider()
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    generated = _generate_with_trusted_controls(
+        service,
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "vision_inspection_mode": "vision_model",
+                "vision_inspection_max_attempts": 1,
+                "max_visual_retry_attempts": 0,
+            },
+        },
+    )
+
+    assert len(provider.calls) == 1
+    package = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
+    inspection = package["inspections"][0]
+    assert inspection["status"] == "manual_review"
+    assert inspection["verification_state"] == "verification_failed"
+    assert inspection["evidence"]["provider_review_attempts"] == 1
+
+    public = service.get_job(created.job_id)
+    review = public.metadata["post_generation_review"]
+    assert review["real_pixel_review_attempted"] is True
+    assert review["real_pixel_review_certified"] is False
+    assert generated.metadata["final_delivery"]["automatic_delivery_available"] is False
+
+
 def test_doc260_public_review_projects_required_unavailable_without_source_ids(
     tmp_path,
 ) -> None:
@@ -426,7 +486,10 @@ def test_doc260_public_review_requires_all_ready_outputs_for_certified_pixels() 
                     "mode": "hybrid",
                     "status": "pass",
                     "verification_state": "verified",
-                    "evidence": {"provider_pixel_result_certified": True},
+                    "evidence": {
+                        "provider_pixel_result_certified": True,
+                        "provider_review_attempts": 1,
+                    },
                 },
                 {
                     "output_id": "output_doc260_b",

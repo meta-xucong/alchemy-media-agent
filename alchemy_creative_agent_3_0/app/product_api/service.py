@@ -11989,6 +11989,22 @@ class V3ProductApiService:
         }
 
     @staticmethod
+    def _review_provider_was_attempted(inspection: dict[str, Any]) -> bool:
+        """Return whether the Vision provider has a positive call receipt."""
+
+        if str(inspection.get("mode") or "").strip().lower() not in {"vision_model", "hybrid"}:
+            return False
+        evidence = inspection.get("evidence")
+        if not isinstance(evidence, dict):
+            return False
+        attempts = evidence.get("provider_review_attempts")
+        return (
+            isinstance(attempts, int)
+            and not isinstance(attempts, bool)
+            and attempts > 0
+        )
+
+    @staticmethod
     def _public_post_generation_review(value: Any) -> dict[str, Any]:
         """Expose review outcome without provider, prompt, path, or repair internals."""
 
@@ -12066,7 +12082,11 @@ class V3ProductApiService:
                 for item in raw_inspections
                 if isinstance(item, dict) and str(item.get("output_id") or "").strip()
             }
-        real_pixel_review_attempted = bool(certified_output_ids)
+        real_pixel_review_attempted = any(
+            V3ProductApiService._review_provider_was_attempted(item)
+            for item in raw_inspections
+            if isinstance(item, dict)
+        )
         real_pixel_review_certified = (
             receipt_status == "complete"
             and receipt_errors_clear
