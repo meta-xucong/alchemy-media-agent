@@ -51,6 +51,10 @@ jobs:
           OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL || 'gpt-image-2' }}
           DEFAULT_LLM_PROVIDER: ${{ vars.DEFAULT_LLM_PROVIDER || 'anthropic' }}
           KIMI_LLM_MODEL: ${{ vars.KIMI_LLM_MODEL || 'kimi-for-coding' }}
+          BACKUP_LLM_MODEL: ${{ vars.BACKUP_LLM_MODEL || 'gpt-5.6-terra' }}
+          OPENAI_LLM_MODEL: ${{ vars.OPENAI_LLM_MODEL || 'gpt-5.6-terra' }}
+          LAB_VISION_PROVIDER: ${{ vars.LAB_VISION_PROVIDER || 'openai' }}
+          V3_VISION_INSPECTION_PROTOCOL: ${{ vars.V3_VISION_INSPECTION_PROTOCOL || 'chat_completions' }}
           IMAGE_WORK_INTENSITY: ${{ vars.IMAGE_WORK_INTENSITY || 'atelier' }}
           V1_MEDIA_STORAGE_DIR: ${{ vars.V1_MEDIA_STORAGE_DIR || '/var/lib/alchemy/v1/media_storage' }}
         run: |
@@ -74,9 +78,11 @@ jobs:
           DEFAULT_LLM_PROVIDER=$DEFAULT_LLM_PROVIDER
           DEFAULT_LLM_MODEL=$KIMI_LLM_MODEL
           BACKUP_LLM_PROVIDER=openai
-          BACKUP_LLM_MODEL=gpt-5.5
-          OPENAI_LLM_MODEL=gpt-5.5
+          BACKUP_LLM_MODEL=$BACKUP_LLM_MODEL
+          OPENAI_LLM_MODEL=$OPENAI_LLM_MODEL
           KIMI_LLM_MODEL=$KIMI_LLM_MODEL
+          LAB_VISION_PROVIDER=$LAB_VISION_PROVIDER
+          V3_VISION_INSPECTION_PROTOCOL=$V3_VISION_INSPECTION_PROTOCOL
           LLM_PROMPT_PLANNING_ENABLED=true
           IMAGE_WORK_INTENSITY=$IMAGE_WORK_INTENSITY
 

@@ -127,7 +127,80 @@ jobs:
 
           normalized_env_digest() {
             local file="$1"
-            grep -v '^V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=' "$file" | sha256sum | awk '{print $1}'
+            grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL)=' "$file" | sha256sum | awk '{print $1}'
+          }
+
+          env_value() {
+            local file="$1"
+            local key="$2"
+            sed -n "s/^${key}=//p" "$file" | tr -d '\r' | head -n 1
+          }
+
+          set_env_value() {
+            local env_file="$1"
+            local key="$2"
+            local value="$3"
+            local tmp_file
+            if grep -q "^${key}=" "$env_file"; then
+              tmp_file="$(mktemp "${env_file}.XXXXXX")"
+              awk -v key="$key" -v value="$value" '
+                BEGIN { replaced = 0 }
+                index($0, key "=") == 1 {
+                  if (!replaced) { print key "=" value; replaced = 1 }
+                  next
+                }
+                { print }
+              ' "$env_file" > "$tmp_file"
+              chmod --reference="$env_file" "$tmp_file" 2>/dev/null || chmod 600 "$tmp_file"
+              chown --reference="$env_file" "$tmp_file" 2>/dev/null || true
+              mv "$tmp_file" "$env_file"
+              return
+            fi
+            printf '\n%s=%s\n' "$key" "$value" >> "$env_file"
+          }
+
+          migrate_candidate_model_defaults() {
+            local env_file="$1"
+            local key current_value vision_provider vision_protocol
+            for key in BACKUP_LLM_MODEL OPENAI_LLM_MODEL V3_VISION_INSPECTION_MODEL; do
+              current_value="$(env_value "$live_env" "$key")"
+              if [ "$current_value" = "gpt-5.5" ]; then
+                set_env_value "$env_file" "$key" "gpt-5.6-terra"
+              fi
+            done
+
+            vision_provider="$(env_value "$live_env" LAB_VISION_PROVIDER | tr '[:upper:]' '[:lower:]')"
+            vision_protocol="$(env_value "$live_env" V3_VISION_INSPECTION_PROTOCOL | tr '[:upper:]' '[:lower:]')"
+            if [[ "$vision_provider" == "openai" || "$vision_provider" == "openai_compatible" ]]; then
+              if [[ -z "$vision_protocol" || "$vision_protocol" == "auto" || "$vision_protocol" == "responses" ]]; then
+                set_env_value "$env_file" V3_VISION_INSPECTION_PROTOCOL chat_completions
+              fi
+            fi
+          }
+
+          assert_candidate_model_defaults() {
+            local env_file="$1"
+            local key live_value expected_value candidate_value vision_provider vision_protocol expected_protocol
+            for key in BACKUP_LLM_MODEL OPENAI_LLM_MODEL V3_VISION_INSPECTION_MODEL; do
+              live_value="$(env_value "$live_env" "$key")"
+              expected_value="$live_value"
+              if [ "$live_value" = "gpt-5.5" ]; then
+                expected_value="gpt-5.6-terra"
+              fi
+              candidate_value="$(env_value "$env_file" "$key")"
+              [ "$candidate_value" = "$expected_value" ] || stop "candidate_${key,,}_migration_invalid"
+            done
+
+            vision_provider="$(env_value "$live_env" LAB_VISION_PROVIDER | tr '[:upper:]' '[:lower:]')"
+            [ "$(env_value "$env_file" LAB_VISION_PROVIDER)" = "$(env_value "$live_env" LAB_VISION_PROVIDER)" ] || stop candidate_lab_vision_provider_changed
+            vision_protocol="$(env_value "$live_env" V3_VISION_INSPECTION_PROTOCOL | tr '[:upper:]' '[:lower:]')"
+            expected_protocol="$(env_value "$live_env" V3_VISION_INSPECTION_PROTOCOL)"
+            if [[ "$vision_provider" == "openai" || "$vision_provider" == "openai_compatible" ]]; then
+              if [[ -z "$vision_protocol" || "$vision_protocol" == "auto" || "$vision_protocol" == "responses" ]]; then
+                expected_protocol="chat_completions"
+              fi
+            fi
+            [ "$(env_value "$env_file" V3_VISION_INSPECTION_PROTOCOL)" = "$expected_protocol" ] || stop candidate_vision_protocol_migration_invalid
           }
 
           configure_candidate_env() {
@@ -135,6 +208,11 @@ jobs:
             local gate_count
             [ -f "$env_file" ] || stop candidate_env_missing
             [ "$(normalized_env_digest "$env_file")" = "$(normalized_env_digest "$live_env")" ] || stop candidate_env_drift
+
+            # Keep user-selected models and providers; migrate only stale GPT defaults.
+            migrate_candidate_model_defaults "$env_file"
+            assert_candidate_model_defaults "$env_file"
+
             gate_count="$(grep -c '^V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=' "$env_file" || true)"
             case "$gate_count" in
               0) printf '\nV3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=true\n' >> "$env_file" ;;
