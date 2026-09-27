@@ -42,6 +42,10 @@ class _BrainProtocolUnsupported(BrainProviderError):
     """The gateway does not expose the selected OpenAI-compatible protocol."""
 
 
+class BrainProtocolMismatchError(BrainProviderError):
+    """The selected endpoint returned a different OpenAI-compatible wire protocol."""
+
+
 class BrainTransportTimeoutError(BrainProviderError):
     """The remote Brain transport exceeded one bounded call window."""
 
@@ -913,6 +917,13 @@ class V3LLMBrainProvider:
         """
 
         timeout_seconds = self._effective_timeout_seconds(request)
+        if _brain_chat_nonstream_transport_enabled():
+            return self._run_openai_chat_completions_nonstream(
+                api_key=api_key,
+                base_url=base_url,
+                request=request,
+                json_recovery=json_recovery,
+            )
         started = time.perf_counter()
         try:
             record_stage_event(
@@ -953,6 +964,87 @@ class V3LLMBrainProvider:
             record_stage_event("brain_provider", "json_parse_completed", stage=request.stage)
             _mark_transport_event("json_parse_completed")
             return parsed
+        except BrainTransportTimeoutError:
+            raise
+        except BrainInvalidJsonResponse:
+            raise
+        except BrainProtocolMismatchError:
+            # A Chat route returning Responses events is a typed gateway
+            # contract failure. Preserve it so callers do not classify it as
+            # a generic timeout/provider failure or retry the wrong protocol.
+            raise
+        except Exception as exc:
+            _mark_transport_dispatch_from_exception(exc)
+            if _is_transport_timeout_exception(exc):
+                raise _transport_timeout_from_trace(
+                    _ACTIVE_TRANSPORT_TRACE.get() or {},
+                    timeout_seconds=timeout_seconds,
+                    elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
+                ) from exc
+            raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
+
+    def _run_openai_chat_completions_nonstream(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None,
+        request: BrainRunRequest,
+        json_recovery: bool = False,
+    ) -> dict[str, Any]:
+        """Run the Codex-compatible complete Chat Completions contract.
+
+        V3 Brain needs one complete structured JSON decision rather than a
+        user-visible token stream.  Keeping this path on the OpenAI SDK's
+        normal ``chat.completions.create`` call avoids gateway SSE framing,
+        first-semantic-token and partial-JSON compatibility differences.  It
+        remains fail-closed: a missing or malformed complete message is not a
+        local creative fallback.
+        """
+
+        timeout_seconds = self._effective_timeout_seconds(request)
+        started = time.perf_counter()
+        try:
+            from openai import OpenAI
+
+            _mark_transport_event("client_constructing")
+            kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url, max_retries=0)
+            client = OpenAI(**kwargs)
+            _mark_transport_event("client_constructed")
+            client_registration = _register_transport_close(client)
+            try:
+                _mark_transport_event("complete_response_call_entered")
+                _mark_transport_event("request_call_entered")
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": _system_prompt(request.stage, json_recovery=json_recovery),
+                        },
+                        {"role": "user", "content": build_remote_payload(request)},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0,
+                    timeout=timeout_seconds,
+                    max_tokens=self.max_tokens,
+                )
+                _mark_transport_event("request_dispatched")
+                _mark_transport_event("complete_response_started")
+                _mark_transport_event("complete_response_observed")
+                choices = getattr(response, "choices", None) or []
+                choice = choices[0] if choices else None
+                if _response_ended_at_output_limit(response, choice=choice):
+                    raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
+                message = getattr(choice, "message", None)
+                text = _chat_completion_message_text(message)
+                if text:
+                    _mark_transport_event("first_content_observed")
+                _mark_transport_event("json_parse_started")
+                parsed = _loads_json_object(text)
+                _mark_transport_event("json_parse_completed")
+                return parsed
+            finally:
+                _unregister_transport_close(client_registration)
         except BrainTransportTimeoutError:
             raise
         except BrainInvalidJsonResponse:
@@ -1926,6 +2018,13 @@ def _collect_openai_chat_completion_stream(
             item = json.loads(data)
         except json.JSONDecodeError:
             return
+        if _is_responses_stream_event(item):
+            # A Responses event on the Chat Completions route is a gateway or
+            # endpoint contract violation. Do not wait for a generic read
+            # timeout or reinterpret response.output_text.delta as Chat text.
+            raise BrainProtocolMismatchError(
+                "Chat Completions endpoint returned a Responses API stream event"
+            )
         choices = item.get("choices") if isinstance(item, dict) else None
         choice = choices[0] if isinstance(choices, list) and choices else None
         finish_reason = (
@@ -2079,6 +2178,54 @@ def _stream_delta_text(delta: Any, key: str) -> str:
             parts.append(item)
         elif isinstance(item, dict) and isinstance(item.get("text"), str):
             parts.append(item["text"])
+    return "".join(parts)
+
+
+def _is_responses_stream_event(item: Any) -> bool:
+    """Detect Responses API events arriving on the Chat stream route."""
+
+    if not isinstance(item, dict):
+        return False
+    event_type = item.get("type")
+    if isinstance(event_type, str) and event_type.startswith("response."):
+        return True
+    response = item.get("response")
+    return isinstance(response, dict) and response.get("object") == "response"
+
+
+def _brain_chat_nonstream_transport_enabled() -> bool:
+    """Return whether Chat Completions should wait for one complete reply."""
+
+    transport = (_env("V3_LLM_BRAIN_TRANSPORT") or "chat").strip().lower().replace("-", "_")
+    return transport in {
+        "complete",
+        "complete_response",
+        "chat_complete",
+        "chat_nonstream",
+        "chat_completions_nonstream",
+        "nonstream",
+        "non_stream",
+    }
+
+
+def _chat_completion_message_text(message: Any) -> str:
+    """Extract text from a complete Chat Completions message."""
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+        else:
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
     return "".join(parts)
 
 

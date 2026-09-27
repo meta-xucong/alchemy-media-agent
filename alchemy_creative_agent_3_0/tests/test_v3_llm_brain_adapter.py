@@ -14,6 +14,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainProviderUnavailable,
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
+    BrainProtocolMismatchError,
     V3LLMBrainProvider,
 )
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
@@ -1621,6 +1622,71 @@ def test_openai_brain_uses_portable_chat_transport_by_default(monkeypatch) -> No
 
     assert result == {"remote": True}
     assert calls == {"responses": 0, "chat": 1}
+
+
+def test_openai_brain_can_use_codex_compatible_complete_chat_transport(monkeypatch) -> None:
+    from app.config import settings
+
+    calls: list[dict[str, object]] = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"remote": true}'),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_nonstream")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.6-terra")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    result = V3LLMBrainProvider().run(
+        BrainRunRequest(user_input="Create one remote photography direction.")
+    )
+
+    assert result["remote"] is True
+    assert len(calls) == 1
+    payload = calls[0]
+    assert payload["model"] == "gpt-5.6-terra"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["temperature"] == 0
+    assert "stream" not in payload
+
+
+def test_openai_chat_protocol_mismatch_remains_typed_and_is_not_rewrapped(monkeypatch) -> None:
+    from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls = {"stream": 0}
+
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls["stream"] += 1
+        raise BrainProtocolMismatchError("Chat Completions endpoint returned a Responses API stream event")
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.delenv("V3_LLM_BRAIN_TRANSPORT", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "openai")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=object))
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
+
+    with pytest.raises(BrainProtocolMismatchError, match="Responses API stream event"):
+        V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one remote photography direction."))
+    assert calls["stream"] == 1
 
 
 def test_openai_brain_does_not_switch_protocol_on_auth_failure(monkeypatch) -> None:
