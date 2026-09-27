@@ -161,6 +161,20 @@ write_env_file() {
     exit 1
   fi
 
+  local existing_env_file="${DEPLOY_DIR}/src_skeleton/.env"
+  local existing_lab_vision_provider=""
+  local default_lab_vision_provider="openai"
+  if [[ -f "${existing_env_file}" ]]; then
+    existing_lab_vision_provider="$(sed -n 's/^LAB_VISION_PROVIDER=//p' "${existing_env_file}" | head -n 1)"
+    if [[ -n "${existing_lab_vision_provider}" ]]; then
+      default_lab_vision_provider="${existing_lab_vision_provider}"
+    else
+      # Older installations omitted this setting and therefore used the
+      # application default (Doubao). Preserve that effective route on update.
+      default_lab_vision_provider="doubao"
+    fi
+  fi
+
   umask 077
   cat > "${DEPLOY_DIR}/src_skeleton/.env" <<EOF
 MEDIA_AGENT_MODE=live
@@ -176,8 +190,8 @@ GEMINI_IMAGE_BASE_URL=${GEMINI_IMAGE_BASE_URL:-}
 DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-deepseek}
 DEFAULT_LLM_MODEL=${DEFAULT_LLM_MODEL:-deepseek-v4-pro-260425}
 BACKUP_LLM_PROVIDER=${BACKUP_LLM_PROVIDER:-openai}
-BACKUP_LLM_MODEL=${BACKUP_LLM_MODEL:-gpt-5.5}
-OPENAI_LLM_MODEL=${OPENAI_LLM_MODEL:-gpt-5.5}
+BACKUP_LLM_MODEL=${BACKUP_LLM_MODEL:-gpt-5.6-terra}
+OPENAI_LLM_MODEL=${OPENAI_LLM_MODEL:-gpt-5.6-terra}
 KIMI_LLM_MODEL=${KIMI_LLM_MODEL:-kimi-for-coding}
 DEEPSEEK_LLM_MODEL=${DEEPSEEK_LLM_MODEL:-deepseek-v4-pro-260425}
 LAB_DOUBAO_VISION_BASE_URL=${LAB_DOUBAO_VISION_BASE_URL:-https://aiself.vip/v1}
@@ -185,7 +199,8 @@ LAB_DOUBAO_VISION_MODEL=${LAB_DOUBAO_VISION_MODEL:-doubao-seed-2-0-lite-260428}
 DEEPSEEK_LLM_BASE_URL=${DEEPSEEK_LLM_BASE_URL:-${V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://aiself.vip}}}
 LAB_LLM_PROVIDER=${LAB_LLM_PROVIDER:-deepseek}
 LAB_LLM_MODEL=${LAB_LLM_MODEL:-deepseek-v4-pro-260425}
-LAB_VISION_PROVIDER=${LAB_VISION_PROVIDER:-doubao}
+LAB_VISION_PROVIDER=${LAB_VISION_PROVIDER:-${default_lab_vision_provider}}
+V3_VISION_INSPECTION_PROTOCOL=${V3_VISION_INSPECTION_PROTOCOL:-chat_completions}
 LLM_PROMPT_PLANNING_ENABLED=${LLM_PROMPT_PLANNING_ENABLED:-true}
 IMAGE_WORK_INTENSITY=${IMAGE_WORK_INTENSITY:-atelier}
 

@@ -9,7 +9,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_CLAUDE_CODE_FALLBACK_MODELS: tuple[str, ...] = (
-    "gpt-5.5",
+    "gpt-5.6-terra",
     "kimi-k2.6",
     "kimi-for-coding",
 )

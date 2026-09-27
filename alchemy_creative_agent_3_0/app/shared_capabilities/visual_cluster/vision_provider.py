@@ -197,6 +197,19 @@ class OpenAIVisionInspectionProvider:
         model = self._model(metadata)
         timeout = self._timeout(metadata)
         reference_data_urls = _inspection_reference_data_urls(metadata)
+        protocol = str(_env("V3_VISION_INSPECTION_PROTOCOL") or "auto").strip().lower()
+        if protocol not in {"auto", "responses", "chat_completions"}:
+            raise VisionInspectionProviderUnavailable("unsupported vision inspection protocol")
+        if protocol == "chat_completions":
+            return self._inspect_with_chat_completions(
+                client,
+                model=model,
+                prompt=prompt,
+                data_url=data_url,
+                reference_data_urls=reference_data_urls,
+                timeout=timeout,
+            )
+        allow_chat_fallback = protocol == "auto"
         response_content = [
             {"type": "input_text", "text": prompt},
             {"type": "input_image", "image_url": data_url},
@@ -220,6 +233,8 @@ class OpenAIVisionInspectionProvider:
                 try:
                     _loads_json_object(text)
                 except VisionInspectionProviderError:
+                    if not allow_chat_fallback:
+                        raise
                     # Some OpenAI-compatible gateways honor the Responses
                     # route but ignore its JSON mode.  Use the existing Chat
                     # compatibility route once for the same review contract;
@@ -232,8 +247,29 @@ class OpenAIVisionInspectionProvider:
             # A protocol fallback is useful for gateways that reject Responses,
             # but retrying the same timed-out request through Chat doubles the
             # blocking window without adding a new upstream route.
-            if _is_timeout_error(exc):
+            if _is_timeout_error(exc) or not allow_chat_fallback:
                 raise
+        if not allow_chat_fallback:
+            raise VisionInspectionProviderError("Responses API returned empty output")
+        return self._inspect_with_chat_completions(
+            client,
+            model=model,
+            prompt=prompt,
+            data_url=data_url,
+            reference_data_urls=reference_data_urls,
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _inspect_with_chat_completions(
+        client: Any,
+        *,
+        model: str,
+        prompt: str,
+        data_url: str,
+        reference_data_urls: list[str],
+        timeout: float,
+    ) -> str:
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -281,7 +317,7 @@ class OpenAIVisionInspectionProvider:
             or _lab_vision_setting("model")
             or _settings_value("openai_llm_model")
             or _settings_value("default_llm_model")
-            or "gpt-5.5"
+            or "gpt-5.6-terra"
         )
 
     def _timeout(self, metadata: dict[str, Any] | None = None) -> float:
@@ -327,6 +363,10 @@ def _lab_vision_setting(field: str) -> Any:
     provider = str(_settings_value("lab_vision_provider") or "").strip().lower()
     if provider in {"doubao", "byteplus", "volcengine"}:
         return _settings_value(f"lab_doubao_vision_{field}")
+    if provider in {"openai", "openai_compatible"}:
+        if field == "model":
+            return _settings_value("openai_llm_model")
+        return _settings_value(f"lab_openai_{field}")
     return None
 
 

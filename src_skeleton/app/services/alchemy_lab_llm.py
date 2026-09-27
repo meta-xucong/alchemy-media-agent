@@ -79,15 +79,16 @@ async def describe_lab_images(
 
 
 def lab_llm_status() -> dict[str, Any]:
+    vision_provider = _normalize_lab_provider(settings.lab_vision_provider)
     return {
         "enabled": bool(settings.lab_llm_enabled),
         "provider": _normalize_lab_provider(settings.lab_llm_provider),
         "model": _lab_model(_normalize_lab_provider(settings.lab_llm_provider)),
         "configured": bool(_lab_token(_normalize_lab_provider(settings.lab_llm_provider))),
         "vision_enabled": bool(settings.lab_vision_enabled),
-        "vision_provider": _normalize_lab_provider(settings.lab_vision_provider),
-        "vision_model": settings.lab_doubao_vision_model,
-        "vision_configured": bool(settings.lab_doubao_vision_api_key),
+        "vision_provider": vision_provider,
+        "vision_model": _lab_model(vision_provider),
+        "vision_configured": bool(_lab_token(vision_provider)),
     }
 
 

@@ -72,7 +72,7 @@ def fresh_client() -> TestClient:
         settings,
         "claude_orchestrator_fallback_models",
         (
-            "gpt-5.5",
+            "gpt-5.6-terra",
             "kimi-k2.6",
             "kimi-for-coding",
         ),
@@ -2480,7 +2480,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
             "claude_orchestrator_multimodal_model": "doubao-seed-2-0-lite-260428",
             "claude_orchestrator_fallback_model": "claude-haiku-test",
             "claude_orchestrator_fallback_models": [
-                "gpt-5.5",
+                "gpt-5.6-terra",
                 "kimi-k2.6",
                 "kimi-for-coding",
             ],
@@ -2500,7 +2500,7 @@ def test_runtime_model_settings_can_switch_v2_models() -> None:
     assert body["claude_orchestrator_model"] == "claude-sonnet-test"
     assert body["claude_orchestrator_multimodal_model"] == "doubao-seed-2-0-lite-260428"
     assert body["claude_orchestrator_fallback_models"][:3] == [
-        "gpt-5.5",
+        "gpt-5.6-terra",
         "kimi-k2.6",
         "kimi-for-coding",
     ]
@@ -5618,7 +5618,7 @@ def test_claude_code_fallback_model_queue_prioritizes_stronger_models() -> None:
 
     queue = claude_orchestrator_service._claude_code_model_fallback_queue()
 
-    assert queue[:3] == ["gpt-5.5", "kimi-k2.6", "kimi-for-coding"]
+    assert queue[:3] == ["gpt-5.6-terra", "kimi-k2.6", "kimi-for-coding"]
 
 
 def test_gpt_model_fallback_uses_openai_compatible_checkpoint_lane(monkeypatch, tmp_path: Path) -> None:
@@ -5626,7 +5626,7 @@ def test_gpt_model_fallback_uses_openai_compatible_checkpoint_lane(monkeypatch, 
     object.__setattr__(settings, "openai_api_key", "sk-test-openai")
     object.__setattr__(settings, "openai_base_url", "https://aiself.example.test/v1")
     object.__setattr__(settings, "claude_orchestrator_model", "deepseek-v4-pro-260425")
-    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("gpt-5.5", "kimi-for-coding"))
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("gpt-5.6-terra", "kimi-for-coding"))
     object.__setattr__(settings, "claude_orchestrator_fallback_max_models_per_stage", 2)
     captured: dict[str, object] = {}
 
@@ -5692,9 +5692,9 @@ def test_gpt_model_fallback_uses_openai_compatible_checkpoint_lane(monkeypatch, 
     assert result is not None
     assert result["stage"] == "intent"
     assert result["mode"] == "smart_enhance"
-    assert meta["model"] == "gpt-5.5"
+    assert meta["model"] == "gpt-5.6-terra"
     assert captured["url"] == "https://aiself.example.test/v1/chat/completions"
-    assert captured["payload"]["model"] == "gpt-5.5"
+    assert captured["payload"]["model"] == "gpt-5.6-terra"
     assert captured["payload"]["response_format"] == {"type": "json_object"}
     assert "sk-test-openai" not in json.dumps(captured["payload"])
 

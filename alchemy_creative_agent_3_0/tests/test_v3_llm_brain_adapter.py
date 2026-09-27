@@ -1575,7 +1575,7 @@ def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "openai")
-    monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.5")
+    monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.6-terra")
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
     monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 

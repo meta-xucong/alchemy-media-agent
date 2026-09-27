@@ -6,6 +6,8 @@ import sys
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
@@ -20,6 +22,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import Ge
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
     OpenAIVisionInspectionProvider,
     VisionInspectionProviderError,
+    VisionInspectionProviderUnavailable,
     _inspection_prompt,
     _is_timeout_error,
 )
@@ -127,11 +130,157 @@ def test_vision_provider_transport_disables_sdk_level_retries(tmp_path, monkeypa
     monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
     monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
     monkeypatch.setenv("V3_VISION_INSPECTION_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
 
     payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
 
     assert payload["status"] == "pass"
     assert captured["max_retries"] == 0
+
+
+def test_vision_provider_can_select_chat_completions_without_responses_probe(tmp_path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(base64.b64decode(_png_base64(width=32, height=32)))
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            raise AssertionError("explicit Chat Completions mode must not call Responses")
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"pass","confidence":0.95}'))]
+            )
+
+    class FakeChat:
+        completions = FakeChatCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured["client"] = kwargs
+            self.responses = FakeResponses()
+            self.chat = FakeChat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+    monkeypatch.setenv("V3_VISION_INSPECTION_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "chat_completions")
+
+    payload = OpenAIVisionInspectionProvider(timeout_seconds=23).inspect(
+        _ready_resolution(tmp_path),
+        metadata={"reference_assets": [{"file_path": str(reference_path)}]},
+    )
+
+    assert payload["status"] == "pass"
+    assert captured["model"] == "gpt-5.6-terra"
+    assert captured["timeout"] == 23
+    assert captured["client"]["max_retries"] == 0
+    assert captured["response_format"] == {"type": "json_object"}
+    assert captured["max_tokens"] == 1600
+    message_content = captured["messages"][0]["content"]
+    assert [item["type"] for item in message_content] == ["text", "image_url", "image_url"]
+    assert message_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert message_content[2]["image_url"]["url"].startswith("data:image/")
+    assert message_content[2]["image_url"]["url"] != message_content[1]["image_url"]["url"]
+
+
+def test_responses_protocol_can_be_pinned_without_chat_fallback(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("responses")
+            raise RuntimeError("Responses endpoint unavailable")
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("chat")
+            raise AssertionError("explicit Responses mode must not switch protocols")
+
+    class FakeChat:
+        completions = FakeChatCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+            self.chat = FakeChat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "responses")
+
+    with pytest.raises(VisionInspectionProviderError, match="Responses endpoint unavailable"):
+        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert calls == ["responses"]
+
+
+def test_responses_timeout_does_not_retry_same_review_through_chat(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("responses")
+            raise TimeoutError("Request timed out")
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("chat")
+            raise AssertionError("a timed-out review must not be sent again through another route")
+
+    class FakeChat:
+        completions = FakeChatCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+            self.chat = FakeChat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
+
+    with pytest.raises(VisionInspectionProviderError, match="Request timed out"):
+        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert calls == ["responses"]
+
+
+def test_vision_provider_rejects_unknown_protocol_before_upstream_request(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("responses")
+            raise AssertionError("unsupported protocol must fail before transport")
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("chat")
+            raise AssertionError("unsupported protocol must fail before transport")
+
+    class FakeChat:
+        completions = FakeChatCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+            self.chat = FakeChat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "unsupported")
+
+    with pytest.raises(VisionInspectionProviderUnavailable, match="unsupported vision inspection protocol"):
+        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert calls == []
 
 
 def test_vision_provider_uses_one_compatibility_route_for_invalid_json(tmp_path, monkeypatch) -> None:
@@ -202,6 +351,7 @@ def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
         monkeypatch.delenv("V3_VISION_INSPECTION_API_KEY", raising=False)
         monkeypatch.delenv("V3_VISION_INSPECTION_BASE_URL", raising=False)
         monkeypatch.delenv("V3_VISION_INSPECTION_MODEL", raising=False)
+        monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
         monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
         settings.lab_vision_enabled = True
         settings.lab_vision_provider = "doubao"
@@ -224,6 +374,55 @@ def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
     assert captured["client"]["api_key"] == "sk-lab-vision"
     assert str(captured["client"]["base_url"]) == "https://vision.example.test/v1"
     assert captured["request"]["model"] == "doubao-vision-test"
+
+
+def test_openai_lab_vision_route_uses_lab_credentials_and_openai_model(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    captured: dict[str, object] = {}
+    setting_names = (
+        "lab_vision_enabled",
+        "lab_vision_provider",
+        "lab_openai_api_key",
+        "lab_openai_base_url",
+        "openai_api_key",
+        "openai_base_url",
+        "openai_llm_model",
+    )
+    original = {name: getattr(settings, name) for name in setting_names}
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            captured["request"] = kwargs
+            return SimpleNamespace(output_text='{"status":"pass","confidence":0.95,"issue_codes":[]}')
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured["client"] = kwargs
+            self.responses = FakeResponses()
+
+    try:
+        for name in ("V3_VISION_INSPECTION_API_KEY", "V3_VISION_INSPECTION_BASE_URL", "V3_VISION_INSPECTION_MODEL"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "responses")
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+        settings.lab_vision_enabled = True
+        settings.lab_vision_provider = "openai"
+        settings.lab_openai_api_key = "sk-lab-openai"
+        settings.lab_openai_base_url = "https://lab-openai.example.test/v1"
+        settings.openai_api_key = "sk-generic-openai"
+        settings.openai_base_url = "https://generic-openai.example.test/v1"
+        settings.openai_llm_model = "gpt-5.6-terra"
+
+        payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+    finally:
+        for name, value in original.items():
+            setattr(settings, name, value)
+
+    assert payload["status"] == "pass"
+    assert captured["client"]["api_key"] == "sk-lab-openai"
+    assert str(captured["client"]["base_url"]) == "https://lab-openai.example.test/v1"
+    assert captured["request"]["model"] == "gpt-5.6-terra"
 
 
 def _openai_resolution_with_aigc_metadata(tmp_path: Path) -> GeneratedOutputResolution:

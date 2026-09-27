@@ -3997,6 +3997,18 @@ def test_lab_image_planner_never_routes_to_deepseek():
         settings.kimi_llm_model = original_kimi_model
 
 
+def test_lab_status_reports_the_selected_openai_vision_route(monkeypatch):
+    monkeypatch.setattr(settings, "lab_vision_provider", "openai")
+    monkeypatch.setattr(settings, "lab_openai_api_key", "sk-test-lab-openai")
+    monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.6-terra")
+
+    status = alchemy_lab_llm_module.lab_llm_status()
+
+    assert status["vision_provider"] == "openai"
+    assert status["vision_model"] == "gpt-5.6-terra"
+    assert status["vision_configured"] is True
+
+
 def test_runtime_provider_settings_apply_when_persistence_fails(monkeypatch):
     client = TestClient(app)
     original_intensity = settings.image_work_intensity

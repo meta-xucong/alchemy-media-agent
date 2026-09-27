@@ -93,6 +93,7 @@ def test_openai_vision_provider_uses_review_timeout_for_upstream_request(
     monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
     monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
     monkeypatch.setenv("V3_VISION_INSPECTION_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
 
     provider = OpenAIVisionInspectionProvider()
     payload = provider.inspect(

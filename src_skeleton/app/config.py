@@ -185,9 +185,9 @@ class Settings(BaseModel):
     backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "openai")
     backup_llm_model: str = os.getenv(
         "BACKUP_LLM_MODEL",
-        os.getenv("OPENAI_LLM_MODEL", "gpt-5.5"),
+        os.getenv("OPENAI_LLM_MODEL", "gpt-5.6-terra"),
     )
-    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-5.5")
+    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-5.6-terra")
     kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", "kimi-for-coding")
     deepseek_llm_model: str = os.getenv(
         "DEEPSEEK_LLM_MODEL",

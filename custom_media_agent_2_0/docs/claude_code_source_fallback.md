@@ -34,7 +34,7 @@ Current production intent:
 ```text
 text source: deepseek-v4-pro-260425
 multimodal source: doubao-seed-2-0-lite-260428
-fallback source: gpt-5.5 -> kimi-k2.6 -> kimi-for-coding
+fallback source: gpt-5.6-terra -> kimi-k2.6 -> kimi-for-coding
 ```
 
 DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. GPT is the preferred text fallback when the primary text source is unavailable, and Kimi remains the last conservative backup. DeepSeek is never used for required uploaded-image understanding because it is not a multimodal source.
@@ -50,7 +50,7 @@ V2_CLAUDE_ORCHESTRATOR_MODEL=deepseek-v4-pro-260425
 V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=doubao-seed-2-0-lite-260428
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN=<private fallback API key>
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.5,kimi-k2.6,kimi-for-coding
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.6-terra,kimi-k2.6,kimi-for-coding
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=1
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=120
 ```
@@ -206,7 +206,7 @@ Uploaded-image primary use:
 Successful fallback use:
 
 ```json
-{"provider":"claude-code-model-fallback","model":"gpt-5.5"}
+{"provider":"claude-code-model-fallback","model":"gpt-5.6-terra"}
 ```
 
 ## Security Rules

@@ -286,7 +286,7 @@ MAX_STRUCTURED_OUTPUT_RETRIES=1
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=3
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=25
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.5,kimi-k2.6,kimi-for-coding
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.6-terra,kimi-k2.6,kimi-for-coding
 ```
 
 The soft stage timeout is deliberately wider than the earliest 60-second recovery draft. Production traces show Kimi can complete simple stages in roughly 30-50 seconds, while valid non-error checkpoint stages may take 80-150 seconds. A 120-second soft boundary keeps Kimi as the primary Claude Code source during normal latency spikes while still allowing the hard timeout and backup model queue to recover genuinely stuck stages.
@@ -307,7 +307,7 @@ When the Claude Code route is available, it remains the primary creative brain t
 This keeps the external V2 framework unchanged: same Claude checkpoint prompts, same JSON schema, same visual grammar lock, same uploaded-asset fusion policy, same output caps, and same selected-template priority. Model order is deliberately strongest-first:
 
 ```text
-gpt-5.5
+gpt-5.6-terra
 kimi-k2.6
 kimi-for-coding
 ```

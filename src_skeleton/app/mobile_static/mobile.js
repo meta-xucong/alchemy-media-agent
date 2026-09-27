@@ -9155,7 +9155,7 @@ async function loadProviders() {
   els.openaiImageModelInput.value = runtime.openai_image_model || "gpt-image-2";
   els.doubaoImageModelInput.value = runtime.doubao_image_model || "doubao-seedream-4-0-250828";
   els.geminiImageModelInput.value = runtime.gemini_image_model || "gemini-3-pro-image-preview";
-  els.openaiLlmModelInput.value = runtime.openai_llm_model || "gpt-5.5";
+  els.openaiLlmModelInput.value = runtime.openai_llm_model || "gpt-5.6-terra";
   els.agentLlmModelInput.value = runtime.kimi_llm_model || "kimi-for-coding";
   if (els.deepseekLlmModelInput) els.deepseekLlmModelInput.value = runtime.deepseek_llm_model || "deepseek-v4-pro-260425";
   if (els.deepseekBaseUrlInput) els.deepseekBaseUrlInput.value = runtime.deepseek_llm_base_url || "https://aiself.vip";
@@ -9386,7 +9386,7 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
       gemini_image_base_url: els.geminiImageBaseUrlInput.value.trim(),
       default_llm_provider: state.selectedLlmProvider,
       default_llm_model: selectedThinkingModel(),
-      openai_llm_model: els.openaiLlmModelInput.value.trim() || "gpt-5.5",
+      openai_llm_model: els.openaiLlmModelInput.value.trim() || "gpt-5.6-terra",
       kimi_llm_model: els.agentLlmModelInput.value.trim() || "kimi-for-coding",
       deepseek_llm_model: els.deepseekLlmModelInput?.value.trim() || "deepseek-v4-pro-260425",
       deepseek_llm_base_url: els.deepseekBaseUrlInput?.value.trim() || "",
@@ -9454,7 +9454,7 @@ function selectedThinkingModel() {
   if (state.selectedLlmProvider === "deepseek") {
     return els.deepseekLlmModelInput?.value.trim() || "deepseek-v4-pro-260425";
   }
-  return els.openaiLlmModelInput.value.trim() || "gpt-5.5";
+  return els.openaiLlmModelInput.value.trim() || "gpt-5.6-terra";
 }
 
 function toggleProviderSaving(isSaving) {
@@ -9742,7 +9742,7 @@ function hydrateV2CaseIntelligenceModelHint() {
 function v2ClaudeFallbackModelQueue() {
   const primary = els.v2ClaudeModelInput?.value.trim() || "";
   const explicitFallback = els.v2ClaudeFallbackModelInput?.value.trim() || "";
-  return [explicitFallback, "gpt-5.5", "kimi-k2.6", "kimi-for-coding"]
+  return [explicitFallback, "gpt-5.6-terra", "kimi-k2.6", "kimi-for-coding"]
     .map((model) => model.trim())
     .filter((model, index, models) => model && model !== primary && models.indexOf(model) === index);
 }
