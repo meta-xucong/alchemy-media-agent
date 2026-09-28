@@ -163,9 +163,11 @@ write_env_file() {
 
   local existing_env_file="${DEPLOY_DIR}/src_skeleton/.env"
   local existing_lab_vision_provider=""
+  local existing_lab_doubao_vision_api_key=""
   local default_lab_vision_provider="openai"
   if [[ -f "${existing_env_file}" ]]; then
     existing_lab_vision_provider="$(sed -n 's/^LAB_VISION_PROVIDER=//p' "${existing_env_file}" | head -n 1)"
+    existing_lab_doubao_vision_api_key="$(sed -n 's/^LAB_DOUBAO_VISION_API_KEY=//p' "${existing_env_file}" | head -n 1)"
     if [[ -n "${existing_lab_vision_provider}" ]]; then
       default_lab_vision_provider="${existing_lab_vision_provider}"
     else
@@ -208,7 +210,11 @@ DEEPSEEK_LLM_BASE_URL=${DEEPSEEK_LLM_BASE_URL:-${V2_CLAUDE_ORCHESTRATOR_FALLBACK
 LAB_LLM_PROVIDER=${LAB_LLM_PROVIDER:-deepseek}
 LAB_LLM_MODEL=${LAB_LLM_MODEL:-deepseek-v4-pro-260425}
 LAB_VISION_PROVIDER=${LAB_VISION_PROVIDER:-${default_lab_vision_provider}}
+V3_VISION_INSPECTION_PROVIDER=${V3_VISION_INSPECTION_PROVIDER:-${LAB_VISION_PROVIDER:-${default_lab_vision_provider}}}
 V3_VISION_INSPECTION_PROTOCOL=${V3_VISION_INSPECTION_PROTOCOL:-chat_completions}
+V3_VISION_INSPECTION_TIMEOUT_SECONDS=${V3_VISION_INSPECTION_TIMEOUT_SECONDS:-120}
+V3_VISION_INSPECTION_BASE_URL=${V3_VISION_INSPECTION_BASE_URL:-}
+V3_VISION_INSPECTION_MODEL=${V3_VISION_INSPECTION_MODEL:-}
 LLM_PROMPT_PLANNING_ENABLED=${LLM_PROMPT_PLANNING_ENABLED:-true}
 IMAGE_WORK_INTENSITY=${IMAGE_WORK_INTENSITY:-atelier}
 
@@ -218,7 +224,7 @@ OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://aiself.vip/v1}
 ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
 ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
 ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://aiself.vip}
-LAB_DOUBAO_VISION_API_KEY=${LAB_DOUBAO_VISION_API_KEY:-}
+LAB_DOUBAO_VISION_API_KEY=${LAB_DOUBAO_VISION_API_KEY:-${existing_lab_doubao_vision_api_key}}
 LAB_DOUBAO_VISION_BASE_URL=${LAB_DOUBAO_VISION_BASE_URL}
 LAB_DOUBAO_VISION_MODEL=${LAB_DOUBAO_VISION_MODEL}
 DEEPSEEK_LLM_API_KEY=${DEEPSEEK_LLM_API_KEY:-${V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN:-${ANTHROPIC_AUTH_TOKEN:-${LAB_DOUBAO_VISION_API_KEY:-}}}}

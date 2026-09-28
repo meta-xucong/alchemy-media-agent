@@ -309,6 +309,9 @@ def test_vision_provider_uses_one_compatibility_route_for_invalid_json(tmp_path,
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
     monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
     monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+    # The local runtime .env pins Chat for production; this test explicitly
+    # exercises the automatic Responses -> Chat compatibility fallback.
+    monkeypatch.delenv("V3_VISION_INSPECTION_PROTOCOL", raising=False)
 
     payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
 

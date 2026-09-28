@@ -293,11 +293,11 @@ def _vision_provider_timeout_seconds(metadata: dict[str, Any]) -> float:
     if raw is None and str(metadata.get("professional_anchor_capture_scope") or "") == "character_card_face_identity":
         raw = os.getenv("V3_CHARACTER_CARD_VISION_TIMEOUT_SECONDS")
     if raw is None:
-        raw = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "90")
+        raw = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "120")
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        value = 90.0
+        value = 120.0
     return max(0.05, min(300.0, value))
 
 
@@ -321,9 +321,13 @@ def _inspect_with_timeout(
 
     def runner() -> None:
         try:
-            # Give supporting providers a shorter SDK request timeout. This is
-            # not cancellation or a guaranteed wall-clock worker deadline.
-            inner_timeout = min(60.0, timeout_seconds * 0.67)
+            # Give supporting providers a bounded SDK request timeout while
+            # leaving a small settle window for the outer worker.  Vision
+            # review is a real multimodal call; the old 60-second cap was too
+            # short for a long but valid contract on OpenAI-compatible
+            # gateways. This is not cancellation or a guaranteed wall-clock
+            # worker deadline.
+            inner_timeout = min(90.0, timeout_seconds * 0.75)
             result["payload"] = provider.inspect(
                 resolution,
                 metadata={**metadata, "_inner_timeout_seconds": inner_timeout},
@@ -1303,6 +1307,8 @@ def _issue_message(code: str) -> str:
         "file_missing": "Generated image file could not be found.",
         "file_unreadable": "Generated image file could not be read.",
         "vision_provider_unavailable": "Vision inspection provider is unavailable.",
+        "provider_timeout": "Automatic visual review timed out; image quality was not judged.",
+        "provider_error": "Automatic visual review was unavailable; image quality was not judged.",
         "metadata_only_non_certifying": "Metadata-only review cannot certify visual quality.",
         "hard_semantic_contract_unverified": "This result needs real pixel review before its hard visual requirements can be certified.",
         "feedback_direction_not_resolved": "The image may still follow a direction you marked as unwanted.",
@@ -1310,7 +1316,6 @@ def _issue_message(code: str) -> str:
         "feedback_or_similarity_not_verifiable": "The review could not verify feedback compliance or image distinction.",
         "low_confidence_review": "Review confidence is too low for automatic retry.",
         "policy_or_safety_block": "The image may need safety review.",
-        "provider_error": "Vision inspection provider failed.",
     }
     return messages.get(code, code.replace("_", " "))
 
