@@ -290,6 +290,7 @@ def _shell_asset_version_replacements() -> dict[str, str]:
         "__STATIC_BILLING_ADMIN_VERSION__": _shell_asset_version(STATIC_DIR / "billing-admin.js"),
         "__API_ACCESS_JS_VERSION__": _shell_asset_version(STATIC_DIR / "api-access.js"),
         "__API_ACCESS_CSS_VERSION__": _shell_asset_version(STATIC_DIR / "api-access.css"),
+        "__ACCOUNT_ACCESS_VERSION__": _shell_asset_version(STATIC_DIR / "account-access.js"),
         "__MOBILE_STYLES_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.css"),
         "__MOBILE_APP_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.js"),
     }

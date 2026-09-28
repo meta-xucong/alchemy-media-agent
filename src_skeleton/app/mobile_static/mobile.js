@@ -455,6 +455,7 @@ const els = {
   veyraAccountHistoryGrid: document.querySelector("#veyraAccountHistoryGrid"),
   veyraTemplateHistoryList: document.querySelector("#veyraTemplateHistoryList"),
   veyraUsageList: document.querySelector("#veyraUsageList"),
+  veyraAccountLoadNotice: document.querySelector("#veyraAccountLoadNotice"),
   providerState: document.querySelector("#providerState"),
   openaiApiKeyInput: document.querySelector("#openaiApiKeyInput"),
   openaiBaseUrlInput: document.querySelector("#openaiBaseUrlInput"),
@@ -2575,7 +2576,8 @@ function bindMobileEntryButtons(root = document) {
   root.querySelectorAll("[data-mobile-open]").forEach((button) => {
     if (button.dataset.mobileBound === "true") return;
     button.dataset.mobileBound = "true";
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      if (button.tagName === "A") event.preventDefault();
       openMobileSurface(button.dataset.mobileOpen, button);
     });
   });
@@ -12181,6 +12183,12 @@ function setVeyraAccountLoading(isLoading) {
   }
 }
 
+function setVeyraAccountLoadNotice(message = "") {
+  if (!els.veyraAccountLoadNotice) return;
+  els.veyraAccountLoadNotice.textContent = message;
+  els.veyraAccountLoadNotice.hidden = !message;
+}
+
 function renderVeyraSignedOut() {
   if (els.veyraAccountState) els.veyraAccountState.textContent = "未接入";
   if (els.veyraAccountEmail) els.veyraAccountEmail.textContent = "从 Veyra Agent 登录后显示";
@@ -12200,7 +12208,15 @@ function renderVeyraSignedOut() {
 function renderVeyraAccountSummary() {
   const user = veyraAccountUser();
   if (!user) {
-    renderVeyraSignedOut();
+    if (!getVeyraToken()) {
+      renderVeyraSignedOut();
+      return;
+    }
+    if (els.veyraAccountState) els.veyraAccountState.textContent = "暂时不可用";
+    if (els.veyraAccountEmail) els.veyraAccountEmail.textContent = "账户信息暂时无法读取";
+    if (els.veyraAccountBalance) els.veyraAccountBalance.textContent = "-";
+    if (els.veyraAccountStatus) els.veyraAccountStatus.textContent = "请稍后刷新";
+    if (els.veyraAccountUserId) els.veyraAccountUserId.textContent = "已保留当前登录状态";
     return;
   }
   const balance = Number(user.balance);
@@ -12518,24 +12534,57 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
   }
   if (veyraState.loading && !force) return veyraState.account;
   setVeyraAccountLoading(true);
+  setVeyraAccountLoadNotice("");
   try {
-    const [account, v1HistoryResponse, v2HistoryResponse, v1UsageResponse, v2UsageResponse] = await Promise.all([
+    const results = await Promise.allSettled([
       refreshVeyraAccount(),
       request(`/v1/image/history?limit=${historyFetchPageSize}&offset=0`),
       loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs, optional: true }),
       request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);
-    setVeyraAccount(account);
-    veyraState.history = mergeAccountHistory(v1HistoryResponse.items || [], v2HistoryResponse.items || []);
-    veyraState.usage = mergeVeyraUsage(v1UsageResponse.items || [], v2UsageResponse.items || []);
-    veyraState.usedTemplates = await buildVeyraTemplateHistory(v2HistoryResponse.items || []);
+    const [accountResult, v1HistoryResult, v2HistoryResult, v1UsageResult, v2UsageResult] = results;
+    const account = accountResult.status === "fulfilled" ? accountResult.value : null;
+    if (account) setVeyraAccount(account);
+    if (!getVeyraToken()) {
+      veyraState.account = null;
+      renderVeyraSignedOut();
+      return null;
+    }
+    if (veyraState.account) renderVeyraAccountSummary();
+    const v1HistoryResponse = v1HistoryResult.status === "fulfilled" ? v1HistoryResult.value : null;
+    const v2HistoryResponse = v2HistoryResult.status === "fulfilled" ? v2HistoryResult.value : null;
+    const v1UsageResponse = v1UsageResult.status === "fulfilled" ? v1UsageResult.value : null;
+    const v2UsageResponse = v2UsageResult.status === "fulfilled" ? v2UsageResult.value : null;
+    const failedSections = [];
+    if (v1HistoryResponse || v2HistoryResponse) {
+      veyraState.history = mergeAccountHistory(v1HistoryResponse?.items || [], v2HistoryResponse?.items || []);
+    } else {
+      failedSections.push("生成记录");
+    }
+    if (v1UsageResponse || v2UsageResponse) {
+      veyraState.usage = mergeVeyraUsage(v1UsageResponse?.items || [], v2UsageResponse?.items || []);
+    } else {
+      failedSections.push("资金流水");
+    }
+    if (v2HistoryResponse) {
+      try {
+        veyraState.usedTemplates = await buildVeyraTemplateHistory(v2HistoryResponse.items || []);
+      } catch (error) {
+        console.warn("Veyra template history unavailable", error);
+        failedSections.push("模板记录");
+      }
+    } else {
+      failedSections.push("模板记录");
+    }
     renderVeyraAccountSummary();
     renderVeyraAccountHistory(veyraState.history);
     renderVeyraTemplateHistory(veyraState.usedTemplates);
     renderVeyraUsageList(veyraState.usage);
+    if (!veyraState.account) failedSections.unshift("账户信息");
+    if (failedSections.length) setVeyraAccountLoadNotice(`${failedSections.join("、")}暂时无法完整读取，已加载的内容仍可查看；请稍后刷新。`);
     if (!silent) showGlobalToast("账户信息已刷新。");
-    return account;
+    return veyraState.account;
   } catch (error) {
     if (error?.status === 401) {
       setVeyraToken("");

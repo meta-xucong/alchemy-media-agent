@@ -69,7 +69,7 @@
         <div class="header-status">
           <a class="surface-switch-link" href="/h5" aria-label="打开手机版 H5">手机 H5</a>
           <button id="headerAccountBtn" class="surface-switch-link header-action-button" data-tab="account" type="button" aria-pressed="false">我的账户</button>
-          <a class="surface-switch-link" href="/api-access">API 与 MCP</a>
+          <a class="surface-switch-link" href="/api-access" data-account-open="access">API 与 MCP</a>
           <a id="headerAdminSettingsLink" class="surface-switch-link admin-settings-link" href="/admin/billing" hidden>管理员设置</a>
           <span id="providerState" class="state-pill">检查中</span>
           <span id="sessionLabel" class="session-code">Session</span>
@@ -1051,75 +1051,141 @@
           </div>
         </section>
 
-        <section id="accountTab" class="module-panel" data-panel="account" role="tabpanel" hidden>
-          <div class="module-stack account-module">
-            <section class="panel flow-section veyra-account-panel">
-              <div class="panel-head section-title">
-                <div>
-                  <p class="eyebrow">Veyra Account</p>
-                  <h3>我的账户</h3>
-                </div>
-                <div class="v2-status-actions">
-                  <span id="veyraAccountState" class="state-pill">未接入</span>
-                  <a class="button secondary" href="/api-access">创建 API 密钥</a>
-                  <button id="veyraRefreshAccountBtn" class="button secondary" type="button">刷新账户</button>
+        <section id="accountTab" class="module-panel account-center-overlay" data-panel="account" role="tabpanel" hidden>
+          <div class="account-center-backdrop" data-account-close></div>
+          <div class="account-center-dialog" role="dialog" aria-modal="true" aria-labelledby="accountCenterTitle">
+            <header class="account-center-head">
+              <div>
+                <p class="eyebrow">Account Center</p>
+                <h2 id="accountCenterTitle">我的账户</h2>
+                <p class="section-subcopy">账户、生成记录、API 和 MCP 都在这里管理。</p>
+              </div>
+              <button id="closeAccountCenterBtn" class="modal-close" type="button" aria-label="关闭账户中心" title="关闭">×</button>
+            </header>
+
+            <nav class="account-center-nav" aria-label="账户中心子页面" role="tablist">
+              <button class="account-center-nav-button active" data-account-view-target="overview" type="button" role="tab" aria-selected="true">账户概览</button>
+              <button class="account-center-nav-button" data-account-view-target="access" type="button" role="tab" aria-selected="false">API 与 MCP</button>
+            </nav>
+            <div id="veyraAccountLoadNotice" class="account-data-notice" role="status" aria-live="polite" hidden></div>
+
+            <div class="account-center-body">
+              <div id="accountOverviewPanel" class="account-center-view" data-account-view="overview">
+                <div class="module-stack account-module">
+                  <section class="panel flow-section veyra-account-panel">
+                    <div class="panel-head section-title">
+                      <div>
+                        <p class="eyebrow">Veyra Account</p>
+                        <h3>账户概览</h3>
+                      </div>
+                      <div class="v2-status-actions">
+                        <span id="veyraAccountState" class="state-pill">未接入</span>
+                        <button id="accountOpenAccessBtn" class="button secondary" data-account-view-target="access" type="button">管理 API 与 MCP</button>
+                        <button id="veyraRefreshAccountBtn" class="button secondary" type="button">刷新账户</button>
+                      </div>
+                    </div>
+
+                    <div class="account-summary-grid" aria-label="账户摘要">
+                      <article class="account-kpi">
+                        <span>账户</span>
+                        <strong id="veyraAccountEmail">从 Veyra Agent 登录后显示</strong>
+                        <small id="veyraAccountUserId">-</small>
+                      </article>
+                      <article class="account-kpi balance-kpi">
+                        <span>可用资金</span>
+                        <strong id="veyraAccountBalance">-</strong>
+                        <small id="veyraAccountStatus">等待登录</small>
+                      </article>
+                      <article class="account-kpi">
+                        <span>生图记录</span>
+                        <strong id="veyraAccountHistoryCount">0</strong>
+                        <small id="veyraAccountHistoryScope">当前账户与旧公共记录</small>
+                      </article>
+                      <article class="account-kpi">
+                        <span>累计消耗</span>
+                        <strong id="veyraAccountUsageTotal">-</strong>
+                        <small>来自资金流水</small>
+                      </article>
+                    </div>
+                  </section>
+
+                  <section class="panel flow-section account-record-section">
+                    <div class="panel-head section-title">
+                      <div>
+                        <p class="eyebrow">Images</p>
+                        <h3 id="veyraAccountHistoryTitle">我的生成记录</h3>
+                      </div>
+                    </div>
+                    <div id="veyraAccountHistoryGrid" class="account-history-grid" aria-live="polite"></div>
+                  </section>
+
+                  <section class="panel flow-section account-record-section">
+                    <div class="panel-head section-title">
+                      <div>
+                        <p class="eyebrow">Templates</p>
+                        <h3>历史使用模板</h3>
+                      </div>
+                    </div>
+                    <div id="veyraTemplateHistoryList" class="account-template-list" aria-live="polite"></div>
+                  </section>
+
+                  <section class="panel flow-section account-record-section">
+                    <div class="panel-head section-title">
+                      <div>
+                        <p class="eyebrow">Usage</p>
+                        <h3>资金消耗记录</h3>
+                      </div>
+                    </div>
+                    <div id="veyraUsageList" class="account-usage-list" aria-live="polite"></div>
+                  </section>
                 </div>
               </div>
 
-              <div class="account-summary-grid" aria-label="账户摘要">
-                <article class="account-kpi">
-                  <span>账户</span>
-                  <strong id="veyraAccountEmail">从 Veyra Agent 登录后显示</strong>
-                  <small id="veyraAccountUserId">-</small>
-                </article>
-                <article class="account-kpi balance-kpi">
-                  <span>可用资金</span>
-                  <strong id="veyraAccountBalance">-</strong>
-                  <small id="veyraAccountStatus">等待登录</small>
-                </article>
-                <article class="account-kpi">
-                  <span>生图记录</span>
-                  <strong id="veyraAccountHistoryCount">0</strong>
-                  <small id="veyraAccountHistoryScope">当前账户与旧公共记录</small>
-                </article>
-                <article class="account-kpi">
-                  <span>累计消耗</span>
-                  <strong id="veyraAccountUsageTotal">-</strong>
-                  <small>来自资金流水</small>
-                </article>
-              </div>
-            </section>
-
-            <section class="panel flow-section account-record-section">
-              <div class="panel-head section-title">
-                <div>
-                  <p class="eyebrow">Images</p>
-                  <h3 id="veyraAccountHistoryTitle">我的生成记录</h3>
+              <section id="accountAccessPanel" class="account-center-view account-access-panel" data-account-view="access" data-account-access hidden>
+                <div class="account-access-hero">
+                  <div>
+                    <p class="eyebrow">Developer Access</p>
+                    <h3>API 与 MCP</h3>
+                    <p>API 让脚本直接调用并生成图片；MCP 让 Codex、Claude 等工具通过同一个账户调用 Alchemy。</p>
+                  </div>
+                  <span id="accountAccessState" class="state-pill">正在验证</span>
                 </div>
-              </div>
-              <div id="veyraAccountHistoryGrid" class="account-history-grid" aria-live="polite"></div>
-            </section>
-
-            <section class="panel flow-section account-record-section">
-              <div class="panel-head section-title">
-                <div>
-                  <p class="eyebrow">Templates</p>
-                  <h3>历史使用模板</h3>
+                <div class="account-access-explain">
+                  <article><strong>API 直接调用</strong><span>适合你的脚本、网站或自动化程序，包含创建项目、提交生图和获取结果。</span></article>
+                  <article><strong>MCP 连接工具</strong><span>适合 Codex、Claude 等客户端，配置一次后可以用自然语言调用同一套能力。</span></article>
                 </div>
-              </div>
-              <div id="veyraTemplateHistoryList" class="account-template-list" aria-live="polite"></div>
-            </section>
-
-            <section class="panel flow-section account-record-section">
-              <div class="panel-head section-title">
-                <div>
-                  <p class="eyebrow">Usage</p>
-                  <h3>资金消耗记录</h3>
-                </div>
-              </div>
-              <div id="veyraUsageList" class="account-usage-list" aria-live="polite"></div>
-            </section>
+                <div id="accountAccessNotice" class="account-data-notice" role="status" aria-live="polite" hidden></div>
+                <section class="account-access-card">
+                  <div class="account-access-card-head">
+                    <div><h4>我的 API 密钥</h4><p>完整密钥只在创建成功时显示一次；列表只保留脱敏信息。</p></div>
+                    <button id="accountAccessRefreshBtn" class="button compact ghost" type="button">刷新</button>
+                  </div>
+                  <form id="accountAccessKeyForm" class="account-access-create-form">
+                    <label class="field"><span>名称（可选）</span><input id="accountAccessKeyName" maxlength="50" autocomplete="off" placeholder="例如：我的 Codex" /></label>
+                    <button id="accountAccessCreateBtn" class="button primary" type="submit">创建密钥</button>
+                  </form>
+                  <div id="accountAccessKeyList" class="account-access-key-list" aria-live="polite"></div>
+                </section>
+              </section>
+            </div>
           </div>
+
+          <dialog id="accountAccessSecretDialog" class="account-access-dialog" aria-labelledby="accountAccessSecretTitle">
+            <div class="account-access-dialog-head"><div><p class="eyebrow">One-time Secret</p><h3 id="accountAccessSecretTitle">密钥已创建</h3></div><button data-account-access-close-secret class="modal-close" type="button" aria-label="关闭">×</button></div>
+            <p>完整密钥只显示这一次。请先保存；关闭后无法从系统找回。</p>
+            <input id="accountAccessSecretInput" class="account-access-secret" readonly aria-label="新建 API 密钥" />
+            <div class="account-access-dialog-actions"><button data-account-access-copy-secret class="button secondary" type="button">选中密钥</button><button data-account-access-copy-api class="button secondary" type="button">选中 API 示例</button><button data-account-access-copy-mcp class="button secondary" type="button">选中 MCP 配置</button></div>
+            <textarea id="accountAccessManualCopy" class="account-access-manual-copy" hidden readonly></textarea>
+            <p id="accountAccessSecretFeedback" class="account-access-feedback" role="status" aria-live="polite"></p>
+            <button data-account-access-close-secret class="button primary" type="button">我已保存，关闭</button>
+          </dialog>
+
+          <dialog id="accountAccessRevokeDialog" class="account-access-dialog" aria-labelledby="accountAccessRevokeTitle">
+            <div class="account-access-dialog-head"><div><p class="eyebrow">Revoke Access</p><h3 id="accountAccessRevokeTitle">停用这把密钥？</h3></div><button data-account-access-cancel-revoke class="modal-close" type="button" aria-label="关闭">×</button></div>
+            <p id="accountAccessRevokeDescription"></p><p>停用后新的 API/MCP 请求会被拒绝，已经提交的任务不受影响。</p>
+            <p id="accountAccessRevokeFeedback" class="account-access-feedback" role="status" aria-live="polite"></p>
+            <div class="account-access-dialog-actions"><button data-account-access-cancel-revoke class="button secondary" type="button">取消</button><button id="accountAccessConfirmRevoke" class="button danger" type="button">确认停用</button></div>
+          </dialog>
         </section>
 
         <section id="labTab" class="module-panel" data-panel="lab" role="tabpanel" hidden>
@@ -2212,5 +2278,6 @@
 
     <script src="/static/continuity-anchor.js?v=__CONTINUITY_ANCHOR_VERSION__" defer></script>
     <script src="/static/app.js?v=__STATIC_APP_VERSION__" defer></script>
+    <script src="/static/account-access.js?v=__ACCOUNT_ACCESS_VERSION__" defer></script>
   </body>
 </html>
