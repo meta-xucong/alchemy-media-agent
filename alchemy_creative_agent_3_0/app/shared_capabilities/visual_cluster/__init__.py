@@ -149,6 +149,7 @@ from .vision_inspector import VisionOutputInspector
 from .vision_provider import (
     OpenAIVisionInspectionProvider,
     VisionInspectionProviderError,
+    VisionInspectionProviderMalformedJSON,
     VisionInspectionProviderUnavailable,
     create_default_vision_provider,
 )
@@ -288,6 +289,7 @@ __all__ = [
     "VisualInspectionReport",
     "VisionOutputInspector",
     "VisionInspectionProviderError",
+    "VisionInspectionProviderMalformedJSON",
     "VisionInspectionProviderUnavailable",
     "VisualQualityReviewReport",
     "VisualQualityReviewResult",

@@ -116,6 +116,18 @@ class VisionInspectionProviderError(RuntimeError):
     """Raised when a configured vision provider fails during inspection."""
 
 
+class VisionInspectionProviderMalformedJSON(VisionInspectionProviderError):
+    """Raised when the provider returned text that is not a JSON object.
+
+    This is deliberately distinct from transport, timeout, and availability
+    failures.  The shared inspector may issue one serialization-only recovery
+    request for this class, while still refusing to repair the model's text
+    locally or certify an image without a parsed provider verdict.
+    """
+
+    failure_kind = "malformed_json"
+
+
 class VisionInspectionProvider(Protocol):
     provider_name: str
 
@@ -190,6 +202,8 @@ class OpenAIVisionInspectionProvider:
             return _loads_json_object(response_payload)
         except VisionInspectionProviderUnavailable:
             raise
+        except VisionInspectionProviderError:
+            raise
         except Exception as exc:
             raise VisionInspectionProviderError(f"vision inspection provider failed: {str(exc)[:240]}") from exc
 
@@ -208,6 +222,7 @@ class OpenAIVisionInspectionProvider:
                 data_url=data_url,
                 reference_data_urls=reference_data_urls,
                 timeout=timeout,
+                metadata=metadata,
             )
         allow_chat_fallback = protocol == "auto"
         response_content = [
@@ -226,7 +241,7 @@ class OpenAIVisionInspectionProvider:
                 ],
                 text={"format": {"type": "json_object"}},
                 timeout=timeout,
-                max_output_tokens=1600,
+                max_output_tokens=_vision_output_token_limit(metadata),
             )
             text = getattr(response, "output_text", None) or _response_text_from_openai(response)
             if text:
@@ -258,6 +273,7 @@ class OpenAIVisionInspectionProvider:
             data_url=data_url,
             reference_data_urls=reference_data_urls,
             timeout=timeout,
+            metadata=metadata,
         )
 
     @staticmethod
@@ -269,6 +285,7 @@ class OpenAIVisionInspectionProvider:
         data_url: str,
         reference_data_urls: list[str],
         timeout: float,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         response = client.chat.completions.create(
             model=model,
@@ -287,7 +304,7 @@ class OpenAIVisionInspectionProvider:
             ],
             response_format={"type": "json_object"},
             timeout=timeout,
-            max_tokens=1600,
+            max_tokens=_vision_output_token_limit(metadata),
         )
         return str(response.choices[0].message.content or "")
 
@@ -342,6 +359,26 @@ def _is_timeout_error(exc: Exception) -> bool:
     name = type(exc).__name__.lower()
     text = str(exc).strip().lower()
     return "timeout" in name or "timed out" in text or "time-out" in text
+
+
+def _vision_output_token_limit(metadata: dict[str, Any] | None = None) -> int:
+    """Return a bounded output budget for the structured visual verdict.
+
+    The previous 1600-token cap was smaller than some enforced review shapes
+    (scores, attestations, evidence and summaries).  A length-truncated JSON
+    object is indistinguishable from malformed JSON at the transport boundary,
+    so give the provider enough room while keeping an operator override and a
+    hard upper bound.
+    """
+
+    metadata = metadata or {}
+    raw = metadata.get("vision_inspection_max_output_tokens")
+    if raw is None:
+        raw = os.getenv("V3_VISION_INSPECTION_MAX_OUTPUT_TOKENS", "3200")
+    try:
+        return max(800, min(8000, int(raw)))
+    except (TypeError, ValueError):
+        return 3200
 
 
 def create_default_vision_provider() -> VisionInspectionProvider:
@@ -480,7 +517,7 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
         review_contract,
     )
     if review_contract["enforced"]:
-        return _enforced_inspection_prompt(
+        prompt = _enforced_inspection_prompt(
             user_goal=user_goal,
             template_id=template_id,
             reference_policy=reference_policy,
@@ -493,8 +530,9 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             body_silhouette_review=body_silhouette_review,
             metadata=metadata,
         )
-    prompt = "\n".join(
-        [
+    else:
+        prompt = "\n".join(
+            [
             "You are V3's post-generation visual inspector.",
             "Inspect the attached generated image only after it exists.",
             (
@@ -567,9 +605,19 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             ),
             "Allowed issue_codes: visible_text_artifact, watermark_or_signature, faint_corner_watermark, ai_generated_badge_trace, signature_like_artifact, lower_right_mark_artifact, commercial_cleanliness_failure, collage_or_split_panel, identity_drift, bone_structure_drift, face_shape_drift, cheek_jaw_chin_drift, eye_shape_or_spacing_identity_drift, eyebrow_eye_relationship_drift, nose_mouth_relationship_identity_drift, lip_contour_identity_drift, styling_changed_face_geometry, archetype_overrode_reference_identity, same_type_not_same_person, identity_reference_underweighted, hair_or_outfit_drift, camera_distance_drift, identity_card_missing, identity_card_not_applied, identity_feature_drift, eyebrow_shape_drift, eye_shape_or_spacing_drift, nose_mouth_relationship_drift, jaw_chin_direction_drift, unflattering_feature_degradation, beautiful_realism_balance_failure, realism_made_subject_less_attractive, pretty_but_too_ai_filtered, real_but_unflattering, skin_texture_beauty_balance_failure, source_hair_overinherited, source_makeup_overinherited, source_wardrobe_overinherited, source_lighting_overinherited, source_color_temperature_overinherited, source_color_grade_overinherited, source_scene_overinherited, source_camera_overinherited, source_camera_mood_overinherited, source_whole_style_overinherited, reference_used_as_style_when_identity_only, prompt_owned_channel_ignored, selected_anchor_overrode_current_prompt, structured_appearance_lock_misapplied, lighting_mismatch, composition_mismatch, unrelated_object, unrelated_product, product_identity_drift, product_silhouette_drift, product_pattern_registration_drift, product_layer_topology_drift, product_construction_detail_drift, product_material_response_drift, product_drape_behavior_drift, product_label_drift, product_label_unreadable, product_logo_or_label_obscured, brand_asset_drift, deliverable_intent_mismatch, delivery_set_role_mismatch, delivery_evidence_dimension_mismatch, bad_hands_or_body, face_artifact, ai_face_render, plastic_skin, over_smoothed_skin, missing_skin_texture, over_retouching, poreless_beauty_surface, synthetic_fashion_face, weak_photographic_imperfection, synthetic_beauty_filter, doll_like_face, template_smile, over_perfect_symmetry, wax_skin_highlight, uncanny_eye_expression, same_ai_face_repetition, beauty_app_face, idol_photocard_polish, skin_blur_retouching, over_uniform_skin_tone, over_sharp_ai_detail, perfect_smile_repetition, face_slimming_filter, beautified_facial_geometry, generic_ai_beauty_identity, dull_complexion, muddy_skin_tone, underexposed_face, harsh_facial_shadow, overly_matte_documentary_look, tired_expression, unflattering_color_cast, complexion_direction_drift, unintended_skin_darkening, unintended_skin_lightening, unflattering_skin_color_cast, age_identity_drift, age_inappropriate_rendering, suppressed_fair_complexion, forced_tan_or_bronze_cast, gray_brown_skin_cast, head_body_proportion_distortion, oversized_head, compressed_neck_shoulders, unflattering_face_drift, flat_scene_lighting, airbrushed_background_texture, synthetic_material_response, frozen_centered_pose, doll_like_child_face, adultified_child_model, synthetic_child_skin, pageant_polish_child_face, frozen_child_smile, unreal_child_eyes, unreal_child_teeth, child_face_ai_render, same_expression_repetition, same_head_angle_repetition, same_pose_repetition, studio_only_when_lifestyle_requested, role_collapse, flat_catalog_lighting, weak_lifestyle_context, repeated_concept_or_prop, reference_guard_ignored, reference_evidence_unavailable, low_commercial_finish, weak_aesthetic_finish, generic_stock_photo_finish, flat_low_contrast_finish, overexposed_washout, underexposed_muddy_frame, unbalanced_color_grade, weak_subject_readability, weak_depth_and_material_separation, unstable_composition_balance, overprocessed_hdr_finish, uncanny_micro_detail, low_resolution_output, policy_or_safety_block, low_confidence_review.",
             _review_response_shape(review_contract, metadata=metadata),
-        ]
-    )
-    return _scope_inspection_prompt(prompt, metadata)
+            ]
+        )
+        prompt = _scope_inspection_prompt(prompt, metadata)
+    if metadata.get("_vision_json_recovery_attempt") is True:
+        prompt += (
+            "\nSERIALIZATION RECOVERY: The previous provider answer for this same image and frozen review "
+            "context was not parseable as a complete JSON object. Re-answer the same review now. Return exactly "
+            "one complete JSON object and nothing else: no markdown, code fences, prose, comments, trailing commas, "
+            "or partial output. Use only the keys, enum values, and issue codes in the frozen contract above. "
+            "Close every array and object before ending the response. Do not change the visual verdict merely to "
+            "make serialization easier."
+        )
+    return prompt
 
 
 def _review_response_shape(contract: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> str:
@@ -1749,17 +1797,29 @@ def _mime_from_path(path: Path) -> str:
 def _loads_json_object(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     if not raw:
-        raise VisionInspectionProviderError("vision inspection returned empty output")
+        raise VisionInspectionProviderMalformedJSON("vision inspection returned empty output")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
         start = raw.find("{")
         end = raw.rfind("}")
         if start < 0 or end <= start:
-            raise VisionInspectionProviderError("vision inspection returned non-json output")
-        parsed = json.loads(raw[start : end + 1])
+            if start >= 0:
+                raise VisionInspectionProviderMalformedJSON(
+                    "vision inspection returned malformed JSON"
+                )
+            raise VisionInspectionProviderMalformedJSON("vision inspection returned non-json output")
+        try:
+            parsed = json.loads(raw[start : end + 1])
+        except json.JSONDecodeError as exc:
+            # Do not expose the provider body.  The parse location is safe
+            # diagnostic data and lets the bounded recovery path distinguish
+            # serialization failure from transport or policy failure.
+            raise VisionInspectionProviderMalformedJSON(
+                f"vision inspection returned malformed JSON at character {exc.pos}"
+            ) from exc
     if not isinstance(parsed, dict):
-        raise VisionInspectionProviderError("vision inspection json output was not an object")
+        raise VisionInspectionProviderMalformedJSON("vision inspection json output was not an object")
     return parsed
 
 

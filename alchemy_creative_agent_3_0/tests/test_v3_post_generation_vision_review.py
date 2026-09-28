@@ -22,6 +22,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import Ge
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
     OpenAIVisionInspectionProvider,
     VisionInspectionProviderError,
+    VisionInspectionProviderMalformedJSON,
     VisionInspectionProviderUnavailable,
     _inspection_prompt,
     _is_timeout_error,
@@ -179,7 +180,7 @@ def test_vision_provider_can_select_chat_completions_without_responses_probe(tmp
     assert captured["timeout"] == 23
     assert captured["client"]["max_retries"] == 0
     assert captured["response_format"] == {"type": "json_object"}
-    assert captured["max_tokens"] == 1600
+    assert captured["max_tokens"] == 3200
     message_content = captured["messages"][0]["content"]
     assert [item["type"] for item in message_content] == ["text", "image_url", "image_url"]
     assert message_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
@@ -317,6 +318,97 @@ def test_vision_provider_uses_one_compatibility_route_for_invalid_json(tmp_path,
 
     assert payload["status"] == "pass"
     assert calls == ["responses", "chat"]
+
+
+def test_vision_provider_classifies_incomplete_json_without_local_repair(tmp_path, monkeypatch) -> None:
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            return SimpleNamespace(output_text='{"status":"pass",')
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "responses")
+
+    with pytest.raises(VisionInspectionProviderMalformedJSON, match="malformed JSON"):
+        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+
+def test_vision_inspector_recovers_malformed_json_with_same_frozen_context(tmp_path, monkeypatch) -> None:
+    class RecoveringVisionProvider:
+        provider_name = "recovering_vision"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.metadata_calls: list[dict] = []
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
+            self.calls += 1
+            self.metadata_calls.append(dict(metadata or {}))
+            if self.calls == 1:
+                raise VisionInspectionProviderMalformedJSON(
+                    "vision inspection returned malformed JSON at character 1808"
+                )
+            assert self.metadata_calls[1]["_vision_json_recovery_attempt"] is True
+            return {"status": "pass", "confidence": 0.96, "issue_codes": []}
+
+    monkeypatch.delenv("V3_VISION_INSPECTION_MAX_ATTEMPTS", raising=False)
+    monkeypatch.setattr(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector.time.sleep",
+        lambda _seconds: None,
+    )
+    provider = RecoveringVisionProvider()
+    report = VisionOutputInspector(vision_provider=provider).inspect(
+        _ready_resolution(tmp_path),
+        metadata={"vision_inspection_mode": "vision_model"},
+    )
+
+    assert provider.calls == 2
+    assert report.status == "pass"
+    assert report.verification_state == "verified"
+    assert report.evidence["provider_review_attempts"] == 2
+    assert report.evidence["provider_json_recovery_attempted"] is True
+    assert report.evidence["provider_json_recovery_succeeded"] is True
+
+
+def test_vision_inspector_keeps_malformed_json_fail_closed_after_recovery(tmp_path, monkeypatch) -> None:
+    class BrokenVisionProvider:
+        provider_name = "broken_vision"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
+            self.calls += 1
+            raise VisionInspectionProviderMalformedJSON("vision inspection returned malformed JSON at character 9")
+
+    monkeypatch.delenv("V3_VISION_INSPECTION_MAX_ATTEMPTS", raising=False)
+    monkeypatch.setattr(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector.time.sleep",
+        lambda _seconds: None,
+    )
+    provider = BrokenVisionProvider()
+    report = VisionOutputInspector(vision_provider=provider).inspect(
+        _ready_resolution(tmp_path),
+        metadata={"vision_inspection_mode": "vision_model"},
+    )
+
+    assert provider.calls == 2
+    assert report.status == "manual_review"
+    assert report.verification_state == "verification_failed"
+    assert report.evidence["provider_error_class"] == "malformed_json"
+    assert report.evidence["provider_json_recovery_attempted"] is True
+    assert report.evidence["provider_json_recovery_succeeded"] is False
 
 
 def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(

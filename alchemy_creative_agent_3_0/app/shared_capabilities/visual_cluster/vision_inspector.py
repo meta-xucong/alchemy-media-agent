@@ -19,6 +19,7 @@ from .review_evidence import review_plan_digest
 from .vision_provider import (
     VisionInspectionProvider,
     VisionInspectionProviderError,
+    VisionInspectionProviderMalformedJSON,
     VisionInspectionProviderUnavailable,
     create_default_vision_provider,
     active_review_contract,
@@ -277,6 +278,7 @@ MANUAL_REVIEW_ISSUE_CODES = {
     "vision_provider_unavailable",
     "low_confidence_review",
     "provider_error",
+    "provider_malformed_json",
     "face_integrity_unverified",
     "face_reference_comparison_unverified",
     "provider_timeout",
@@ -500,16 +502,25 @@ class VisionOutputInspector:
         provider_error: VisionInspectionProviderError | None = None
         provider_timeout_recovery_attempted = False
         provider_timeout_recovery_succeeded = False
+        provider_json_recovery_attempted = False
+        provider_json_recovery_succeeded = False
         for attempt in range(1, max_attempts + 1):
             try:
                 timeout_seconds = _vision_provider_timeout_seconds(metadata)
+                attempt_metadata = dict(metadata)
+                if provider_json_recovery_attempted:
+                    # Keep the image, frozen context and route identical. The
+                    # only change is an explicit serialization-recovery
+                    # instruction at the provider boundary.
+                    attempt_metadata["_vision_json_recovery_attempt"] = True
                 payload = _inspect_with_timeout(
                     provider,
                     resolution,
-                    metadata=metadata,
+                    metadata=attempt_metadata,
                     timeout_seconds=timeout_seconds,
                 )
                 provider_timeout_recovery_succeeded = provider_timeout_recovery_attempted
+                provider_json_recovery_succeeded = provider_json_recovery_attempted
                 break
             except TimeoutError as exc:
                 worker_stopped = getattr(exc, "worker_stopped", False) is True
@@ -535,19 +546,36 @@ class VisionOutputInspector:
                 )
             except VisionInspectionProviderUnavailable:
                 return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
+            except VisionInspectionProviderMalformedJSON as exc:
+                provider_error = exc
+                if attempt < max_attempts:
+                    provider_json_recovery_attempted = True
+                    time.sleep(float(attempt * 2))
             except VisionInspectionProviderError as exc:
                 provider_error = exc
                 if attempt < max_attempts:
                     time.sleep(float(attempt * 2))
         if payload is None:
+            failure_code = (
+                "provider_malformed_json"
+                if isinstance(provider_error, VisionInspectionProviderMalformedJSON)
+                else "provider_error"
+            )
             return self._manual_report(
                 resolution,
-                "provider_error",
+                failure_code,
                 metadata,
                 mode=mode,
                 evidence_extra={
                     "provider_error": str(provider_error)[:240] if provider_error is not None else "unknown",
                     "provider_review_attempts": max_attempts,
+                    "provider_error_class": (
+                        "malformed_json"
+                        if isinstance(provider_error, VisionInspectionProviderMalformedJSON)
+                        else "provider_error"
+                    ),
+                    "provider_json_recovery_attempted": provider_json_recovery_attempted,
+                    "provider_json_recovery_succeeded": False,
                 },
             )
         return self._from_provider_payload(
@@ -559,6 +587,8 @@ class VisionOutputInspector:
             provider_review_attempts=attempt,
             provider_timeout_recovery_attempted=provider_timeout_recovery_attempted,
             provider_timeout_recovery_succeeded=provider_timeout_recovery_succeeded,
+            provider_json_recovery_attempted=provider_json_recovery_attempted,
+            provider_json_recovery_succeeded=provider_json_recovery_succeeded,
         )
 
     def _from_provider_payload(
@@ -572,6 +602,8 @@ class VisionOutputInspector:
         provider_review_attempts: int = 1,
         provider_timeout_recovery_attempted: bool = False,
         provider_timeout_recovery_succeeded: bool = False,
+        provider_json_recovery_attempted: bool = False,
+        provider_json_recovery_succeeded: bool = False,
     ) -> VisualInspectionReport:
         # A historical provider payload may still carry a detailed Human
         # Realism label. Normalize it before the frozen review contract filters
@@ -697,6 +729,8 @@ class VisionOutputInspector:
                 "provider_status": payload.get("status"),
                 "provider_pixel_result_certified": True,
                 "provider_review_attempts": max(1, int(provider_review_attempts)),
+                "provider_json_recovery_attempted": bool(provider_json_recovery_attempted),
+                "provider_json_recovery_succeeded": bool(provider_json_recovery_succeeded),
                 "provider_timeout_recovery_attempted": bool(provider_timeout_recovery_attempted),
                 "provider_timeout_recovery_succeeded": bool(provider_timeout_recovery_succeeded),
                 "provider_issue_codes": issue_codes,
@@ -1069,7 +1103,7 @@ class VisionOutputInspector:
         # - verification_skipped: not attempted (skipped, mock generation)
         # - unavailable: provider not available or file issues
         # - unverified: fallback for uncategorized cases
-        if issue_code in {"provider_timeout", "provider_error"}:
+        if issue_code in {"provider_timeout", "provider_error", "provider_malformed_json"}:
             verification_state = "verification_failed"
         elif issue_code in {"hard_semantic_contract_unverified", "metadata_only_non_certifying"}:
             verification_state = "verification_skipped"
@@ -1097,7 +1131,7 @@ class VisionOutputInspector:
             _issue_payload(
                 code,
                 0.4,
-                retryable=(code in {"provider_timeout", "provider_error"})
+                retryable=(code in {"provider_timeout", "provider_error", "provider_malformed_json"})
             )
             for code in _dedupe(issue_codes)
         ]
@@ -1115,7 +1149,7 @@ class VisionOutputInspector:
             score_card=score_card,
             detected_issues=detected_issues,
             retryable=any(
-                code in {"provider_timeout", "provider_error"}
+                code in {"provider_timeout", "provider_error", "provider_malformed_json"}
                 for code in issue_codes
             ),
             evidence={
@@ -1309,6 +1343,7 @@ def _issue_message(code: str) -> str:
         "vision_provider_unavailable": "Vision inspection provider is unavailable.",
         "provider_timeout": "Automatic visual review timed out; image quality was not judged.",
         "provider_error": "Automatic visual review was unavailable; image quality was not judged.",
+        "provider_malformed_json": "Automatic visual review returned an invalid structured response; image quality was not judged.",
         "metadata_only_non_certifying": "Metadata-only review cannot certify visual quality.",
         "hard_semantic_contract_unverified": "This result needs real pixel review before its hard visual requirements can be certified.",
         "feedback_direction_not_resolved": "The image may still follow a direction you marked as unwanted.",
@@ -2035,13 +2070,16 @@ def _body_side_full_identity_geometry_advisory(metadata: dict[str, Any]) -> bool
 
 
 def _vision_provider_attempt_limit(metadata: dict[str, Any]) -> int:
-    identity_critical = _portrait_identity_metric_requested(metadata) and _truthy(metadata.get("require_real_images"))
     # A transient reviewer outage must not turn a hard frozen semantic
     # contract into a manual-only result after one attempt.  This is a bounded
     # retry of the same shared pixel inspection, never a second image
     # generation or a template-specific review path.
-    hard_semantic_contract = _hard_semantic_pixel_contract_requested(metadata)
-    default = 2 if identity_critical or hard_semantic_contract else 1
+    # A malformed JSON response is a serialization failure, not an image
+    # verdict. Every real review gets one bounded recovery opportunity by
+    # default so an otherwise usable output is not stranded by formatting
+    # drift. Operators may still explicitly lower this with the existing
+    # environment/metadata override.
+    default = 2
     raw = metadata.get("vision_inspection_max_attempts") or os.getenv("V3_VISION_INSPECTION_MAX_ATTEMPTS")
     if raw is None:
         return default
