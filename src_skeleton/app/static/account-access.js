@@ -199,14 +199,12 @@
       return;
     }
     try {
-      const me = await request("/api/access/me");
+      await request("/api/access/me");
       state.ready = true;
       setStateLabel("已接入");
       showNotice("");
       setControls();
       await loadKeys({ showErrors: true });
-      const identity = $("#accountAccessIdentity");
-      if (identity) identity.textContent = me.email || `账户 #${me.user_id || "-"}`;
     } catch (error) {
       renderSignedOut(error);
     }

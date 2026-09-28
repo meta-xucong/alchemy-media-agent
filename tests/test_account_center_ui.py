@@ -1,6 +1,7 @@
 """Account-center UI regression coverage for the desktop and H5 entry points."""
 
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -8,6 +9,8 @@ import pytest
 from playwright.sync_api import expect, sync_playwright
 
 from test_api_access_keys import native
+
+EVIDENCE = Path(os.environ.get("ACCOUNT_CENTER_TEST_EVIDENCE", ".pytest_cache/account-center-ui"))
 
 
 @pytest.fixture(scope="module")
@@ -56,11 +59,16 @@ def test_account_center_opens_and_contains_api_mcp(native, account_browser, mobi
         else:
             expect(page.locator("#accountCenterTitle")).to_be_visible()
             expect(page.locator("#accountOverviewPanel")).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        EVIDENCE.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(EVIDENCE / f"{'h5' if mobile else 'desktop'}-account-overview.png"), full_page=True)
 
         page.locator("#accountOpenAccessBtn").click()
         expect(page.locator("#accountAccessPanel")).to_be_visible()
         expect(page.locator("#accountAccessState")).to_have_text("已接入")
         expect(page.locator("#accountAccessCreateBtn")).to_be_enabled()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        page.screenshot(path=str(EVIDENCE / f"{'h5' if mobile else 'desktop'}-api-mcp.png"), full_page=True)
 
         page.locator("#accountAccessKeyForm").evaluate("form => form.requestSubmit()")
         expect(page.locator("#accountAccessSecretDialog")).to_be_visible()
@@ -79,5 +87,36 @@ def test_account_center_opens_and_contains_api_mcp(native, account_browser, mobi
         assert page.locator("#accountAccessSecretInput").input_value() == ""
         assert secret not in page.content()
         assert not errors, errors
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("mobile", [False, True])
+def test_api_mcp_header_entry_opens_account_subpage(native, account_browser, mobile):
+    page = account_browser.new_page(viewport={"width": 390 if mobile else 1280, "height": 900})
+    page.add_init_script("localStorage.setItem('alchemy_veyra_access_token','session-a');")
+
+    def route_handler(route):
+        request = route.request
+        parsed = urlsplit(request.url)
+        assert parsed.hostname == "ui.test"
+        path = parsed.path + ("?" + parsed.query if parsed.query else "")
+        if parsed.path.startswith("/api/v2/"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": [], "rules": []}))
+            return
+        result = native.client.request(request.method, path, headers=request.all_headers(), content=request.post_data)
+        route.fulfill(status=result.status_code, body=result.content, headers={key: value for key, value in result.headers.items() if key.lower() not in {"content-length", "content-encoding"}})
+
+    page.route("**/*", route_handler)
+    try:
+        page.goto("https://ui.test/h5" if mobile else "https://ui.test/?desktop=1")
+        page.locator("a[data-account-open='access']").click()
+        if mobile:
+            expect(page.locator('[data-mobile-view="account"]')).to_be_visible()
+        else:
+            expect(page.locator("#accountCenterTitle")).to_be_visible()
+        expect(page.locator("#accountAccessPanel")).to_be_visible()
+        expect(page.locator("#accountAccessState")).to_have_text("已接入")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
     finally:
         page.close()
