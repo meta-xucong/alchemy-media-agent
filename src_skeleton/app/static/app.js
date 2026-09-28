@@ -16613,6 +16613,10 @@ function getVeyraToken() {
   }
 }
 
+function hasVeyraClientSession() {
+  return Boolean(getVeyraToken() || veyraState.account);
+}
+
 function setVeyraToken(token) {
   const nextToken = String(token || "");
   const previousToken = getVeyraToken();
@@ -16659,7 +16663,7 @@ function isVeyraAdmin(account = veyraState.account) {
 
 function updateAdminSettingsEntry() {
   if (!els.headerAdminSettingsLink) return;
-  els.headerAdminSettingsLink.hidden = !getVeyraToken() || !isVeyraAdmin();
+  els.headerAdminSettingsLink.hidden = !hasVeyraClientSession() || !isVeyraAdmin();
 }
 
 async function openBillingAdmin(event) {
@@ -16952,7 +16956,7 @@ function renderVeyraSignedOut() {
 function renderVeyraAccountSummary() {
   const user = veyraAccountUser();
   if (!user) {
-    if (!getVeyraToken()) {
+    if (!hasVeyraClientSession()) {
       renderVeyraSignedOut();
       return;
     }
@@ -17008,7 +17012,7 @@ function renderAccountEmpty(container, message, actionLabel = "", onAction = nul
 function renderVeyraAccountHistory(items = []) {
   if (!els.veyraAccountHistoryGrid) return;
   els.veyraAccountHistoryGrid.innerHTML = "";
-  if (!getVeyraToken()) {
+  if (!hasVeyraClientSession()) {
     renderAccountEmpty(els.veyraAccountHistoryGrid, "登录后这里会按账户展示你自己的生图记录。");
     return;
   }
@@ -17113,7 +17117,7 @@ async function buildVeyraTemplateHistory(v2Items = []) {
 function renderVeyraTemplateHistory(items = []) {
   if (!els.veyraTemplateHistoryList) return;
   els.veyraTemplateHistoryList.innerHTML = "";
-  if (!getVeyraToken()) {
+  if (!hasVeyraClientSession()) {
     renderAccountEmpty(els.veyraTemplateHistoryList, "登录后这里会展示 V2.0 曾经使用过的模板。");
     return;
   }
@@ -17233,7 +17237,7 @@ function openAccountHistoryLightbox(item, index = 0) {
 function renderVeyraUsageList(items = []) {
   if (!els.veyraUsageList) return;
   els.veyraUsageList.innerHTML = "";
-  if (!getVeyraToken()) {
+  if (!hasVeyraClientSession()) {
     renderAccountEmpty(els.veyraUsageList, "登录后这里会展示 Alchemy 生图资金流水。");
     return;
   }
@@ -17263,7 +17267,7 @@ function renderVeyraUsageList(items = []) {
 }
 
 async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
-  if (!getVeyraToken()) {
+  if (!getVeyraToken() && !veyraState.account && !(await hasValidVeyraSession())) {
     veyraState.account = null;
     veyraState.history = [];
     veyraState.usage = [];
@@ -17285,7 +17289,7 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
     const [accountResult, v1HistoryResult, v2HistoryResult, v1UsageResult, v2UsageResult] = results;
     const account = accountResult.status === "fulfilled" ? accountResult.value : null;
     if (account) setVeyraAccount(account);
-    if (!getVeyraToken()) {
+    if (!account && !veyraState.account) {
       veyraState.account = null;
       renderVeyraSignedOut();
       return null;
@@ -17340,7 +17344,7 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
 }
 
 async function refreshVeyraAccountPanelAfterHistoryChange() {
-  if (!getVeyraToken() || !els.veyraAccountHistoryGrid) return;
+  if (!hasVeyraClientSession() || !els.veyraAccountHistoryGrid) return;
   try {
     await loadVeyraAccountPanel({ silent: true, force: true });
   } catch (error) {

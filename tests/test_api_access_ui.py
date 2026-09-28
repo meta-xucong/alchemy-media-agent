@@ -180,7 +180,7 @@ def test_admin_billing_page_contains_live_key_overview(native,browser):
 
 
 @pytest.mark.parametrize("mobile,width",[(True,320),(True,390),(False,1280)])
-def test_existing_header_entry_fits_without_loading_business_scripts(browser,mobile,width):
+def test_home_header_keeps_account_entry_without_legacy_api_link(browser,mobile,width):
     root=Path(__file__).resolve().parents[1]/"src_skeleton/app"
     folder=root/("mobile_static" if mobile else "static")
     html=(folder/"index.html").read_text(encoding="utf-8")
@@ -190,9 +190,10 @@ def test_existing_header_entry_fits_without_loading_business_scripts(browser,mob
     page.route("**/*",lambda route:route.abort())
     try:
         page.set_content('<html><head><meta charset="utf-8"><style>'+css+'</style></head><body><div class="app-shell">'+header+'</div></body></html>')
-        link=page.locator('a[href="/api-access"]')
-        expect(link).to_be_visible()
-        box=link.bounding_box()
+        assert page.locator('a[href="/api-access"]').count()==0
+        account_button=page.locator("#mobileHeaderAccountBtn" if mobile else "#headerAccountBtn")
+        expect(account_button).to_be_visible()
+        box=account_button.bounding_box()
         assert box["x"]>=0 and box["x"]+box["width"]<=width
         assert page.evaluate("document.documentElement.scrollWidth<=innerWidth+1")
     finally:page.close()

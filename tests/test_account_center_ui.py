@@ -92,7 +92,7 @@ def test_account_center_opens_and_contains_api_mcp(native, account_browser, mobi
 
 
 @pytest.mark.parametrize("mobile", [False, True])
-def test_api_mcp_header_entry_opens_account_subpage(native, account_browser, mobile):
+def test_home_only_exposes_account_center_api_mcp_entry(native, account_browser, mobile):
     page = account_browser.new_page(viewport={"width": 390 if mobile else 1280, "height": 900})
     page.add_init_script("localStorage.setItem('alchemy_veyra_access_token','session-a');")
 
@@ -110,7 +110,9 @@ def test_api_mcp_header_entry_opens_account_subpage(native, account_browser, mob
     page.route("**/*", route_handler)
     try:
         page.goto("https://ui.test/h5" if mobile else "https://ui.test/?desktop=1")
-        page.locator("a[data-account-open='access']").click()
+        expect(page.locator("a[data-account-open='access']")).to_have_count(0)
+        page.locator("#mobileHeaderAccountBtn" if mobile else "#headerAccountBtn").click()
+        page.locator("#accountOpenAccessBtn").click()
         if mobile:
             expect(page.locator('[data-mobile-view="account"]')).to_be_visible()
         else:
@@ -118,5 +120,32 @@ def test_api_mcp_header_entry_opens_account_subpage(native, account_browser, mob
         expect(page.locator("#accountAccessPanel")).to_be_visible()
         expect(page.locator("#accountAccessState")).to_have_text("已接入")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("mobile", [False, True])
+def test_account_access_accepts_existing_session_cookie(native, account_browser, mobile):
+    page = account_browser.new_page(viewport={"width": 390 if mobile else 1280, "height": 900})
+    page.context.add_cookies([{"name": "alchemy_veyra_session", "value": "session-a", "domain": "ui.test", "path": "/"}])
+
+    def route_handler(route):
+        request = route.request
+        parsed = urlsplit(request.url)
+        assert parsed.hostname == "ui.test"
+        path = parsed.path + ("?" + parsed.query if parsed.query else "")
+        if parsed.path.startswith("/api/v2/"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": [], "rules": []}))
+            return
+        result = native.client.request(request.method, path, headers=request.all_headers(), content=request.post_data)
+        route.fulfill(status=result.status_code, body=result.content, headers={key: value for key, value in result.headers.items() if key.lower() not in {"content-length", "content-encoding"}})
+
+    page.route("**/*", route_handler)
+    try:
+        page.goto("https://ui.test/h5" if mobile else "https://ui.test/?desktop=1")
+        page.locator("#mobileHeaderAccountBtn" if mobile else "#headerAccountBtn").click()
+        page.locator("#accountOpenAccessBtn").click()
+        expect(page.locator("#accountAccessState")).to_have_text("已接入")
+        expect(page.locator("#accountAccessCreateBtn")).to_be_enabled()
     finally:
         page.close()

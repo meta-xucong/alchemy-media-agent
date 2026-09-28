@@ -47,7 +47,6 @@
 
   async function request(path, options = {}) {
     const token = readToken();
-    if (!token) throw errorWithCode("session_login_required", 401);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 15000);
     const headers = { Accept: "application/json", ...(options.headers || {}) };
@@ -134,9 +133,10 @@
   function renderSignedOut(error = null) {
     state.ready = false;
     state.activeCount = 0;
-    setStateLabel(error?.status === 403 ? "访问受限" : "未登录");
+    const connectionFailed = Boolean(error?.unknown && !error?.status);
+    setStateLabel(connectionFailed ? "连接失败" : error?.status === 403 ? "访问受限" : "未登录");
     const list = $("#accountAccessKeyList");
-    if (list) list.replaceChildren(text("p", "登录后才能查看和创建 API 密钥。", "account-access-empty"));
+    if (list) list.replaceChildren(text("p", connectionFailed ? "账户信息暂时无法读取，请刷新后重试。" : "登录后才能查看和创建 API 密钥。", "account-access-empty"));
     showNotice(error ? friendly(error) : "请先登录 Alchemy 账户，再管理 API 和 MCP。");
     setControls();
   }
@@ -194,10 +194,6 @@
     state.epoch += 1;
     clearSecret();
     if ($("#accountAccessSecretDialog")?.open) $("#accountAccessSecretDialog").close();
-    if (!readToken()) {
-      renderSignedOut();
-      return;
-    }
     try {
       await request("/api/access/me");
       state.ready = true;
@@ -309,6 +305,8 @@ for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${proje
   }
 
   function bind() {
+    const serviceAddress = $("#accountAccessServiceAddress");
+    if (serviceAddress) serviceAddress.value = location.origin;
     $("#accountAccessKeyForm")?.addEventListener("submit", createKey);
     $("#accountAccessRefreshBtn")?.addEventListener("click", () => refresh());
     $("#accountAccessConfirmRevoke")?.addEventListener("click", revoke);
@@ -320,6 +318,7 @@ for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${proje
     $("[data-account-access-copy-secret]")?.addEventListener("click", () => selectForCopy(state.secret));
     $("[data-account-access-copy-api]")?.addEventListener("click", () => selectForCopy(apiGenerationExample(location.origin, state.secret)));
     $("[data-account-access-copy-mcp]")?.addEventListener("click", () => selectForCopy(mcpConfig(location.origin, state.secret)));
+    $("[data-account-access-copy-address]")?.addEventListener("click", () => selectForCopy(location.origin, "已选中服务地址。电脑按 Ctrl+C（Mac 按 ⌘C）；手机长按后选择复制。"));
     document.addEventListener("click", (event) => {
       const viewButton = event.target.closest("[data-account-view-target]");
       if (viewButton && accountShell().contains(viewButton)) {

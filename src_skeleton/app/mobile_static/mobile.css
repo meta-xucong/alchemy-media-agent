@@ -216,6 +216,11 @@ p {
   gap: 8px;
 }
 
+.header-status #providerState,
+.header-status #sessionLabel {
+  display: none;
+}
+
 body.h5-simplified .header-status {
   display: none;
 }
@@ -1052,6 +1057,44 @@ body.h5-simplified .hero-gallery-lane .case-slide div strong {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255, 255, 252, 0.62);
+}
+
+.account-access-endpoint {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(247, 243, 232, 0.48);
+}
+
+.account-access-endpoint > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.account-access-endpoint strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.account-access-endpoint span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.account-access-endpoint-actions {
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.account-access-endpoint-actions input {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .account-access-explain strong,

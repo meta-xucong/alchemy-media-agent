@@ -69,7 +69,6 @@
         <div class="header-status">
           <a class="surface-switch-link" href="/h5" aria-label="打开手机版 H5">手机 H5</a>
           <button id="headerAccountBtn" class="surface-switch-link header-action-button" data-tab="account" type="button" aria-pressed="false">我的账户</button>
-          <a class="surface-switch-link" href="/api-access" data-account-open="access">API 与 MCP</a>
           <a id="headerAdminSettingsLink" class="surface-switch-link admin-settings-link" href="/admin/billing" hidden>管理员设置</a>
           <span id="providerState" class="state-pill">检查中</span>
           <span id="sessionLabel" class="session-code">Session</span>
@@ -1155,6 +1154,10 @@
                   <article><strong>MCP 连接工具</strong><span>适合 Codex、Claude 等客户端，配置一次后可以用自然语言调用同一套能力。</span></article>
                 </div>
                 <div id="accountAccessNotice" class="account-data-notice" role="status" aria-live="polite" hidden></div>
+                <section class="account-access-endpoint" aria-label="Alchemy 服务地址">
+                  <div><strong>服务地址</strong><span>API 和 MCP 都使用这个地址；密钥只在本账户下生效。</span></div>
+                  <div class="account-access-endpoint-actions"><input id="accountAccessServiceAddress" readonly aria-label="Alchemy 服务地址" /><button data-account-access-copy-address class="button compact secondary" type="button">选中地址</button></div>
+                </section>
                 <section class="account-access-card">
                   <div class="account-access-card-head">
                     <div><h4>我的 API 密钥</h4><p>完整密钥只在创建成功时显示一次；列表只保留脱敏信息。</p></div>

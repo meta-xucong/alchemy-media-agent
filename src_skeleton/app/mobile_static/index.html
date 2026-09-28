@@ -21,7 +21,6 @@
           </div>
           <div class="mobile-header-actions">
             <button id="mobileHeaderAccountBtn" class="surface-switch-link header-action-button" data-mobile-open="account" type="button">我的账户</button>
-            <a class="surface-switch-link" href="/api-access" data-mobile-open="account" data-account-open="access">API 与 MCP</a>
             <a class="surface-switch-link" href="/?desktop=1" aria-label="返回桌面版">桌面版</a>
           </div>
         </div>
@@ -1660,6 +1659,7 @@
             <div class="account-access-hero"><div><p class="eyebrow">Developer Access</p><h3>API 与 MCP</h3><p>API 供脚本直接生图；MCP 供 Codex、Claude 等客户端调用同一套能力。</p></div><span id="accountAccessState" class="state-pill">正在验证</span></div>
             <div class="account-access-explain"><article><strong>API 直接调用</strong><span>适合脚本、网站或自动化程序，包含创建项目、提交生图和获取结果。</span></article><article><strong>MCP 连接工具</strong><span>适合 Codex、Claude 等客户端，用自然语言调用 Alchemy。</span></article></div>
             <div id="accountAccessNotice" class="account-data-notice" role="status" aria-live="polite" hidden></div>
+            <section class="account-access-endpoint" aria-label="Alchemy 服务地址"><div><strong>服务地址</strong><span>API 和 MCP 都使用这个地址；密钥只在本账户下生效。</span></div><div class="account-access-endpoint-actions"><input id="accountAccessServiceAddress" readonly aria-label="Alchemy 服务地址" /><button data-account-access-copy-address class="button compact secondary" type="button">选中地址</button></div></section>
             <section class="account-access-card"><div class="account-access-card-head"><div><h4>我的 API 密钥</h4><p>完整密钥只在创建成功时显示一次；列表只保留脱敏信息。</p></div><button id="accountAccessRefreshBtn" class="button compact ghost" type="button">刷新</button></div>
               <form id="accountAccessKeyForm" class="account-access-create-form"><label class="field"><span>名称（可选）</span><input id="accountAccessKeyName" maxlength="50" autocomplete="off" placeholder="例如：我的 Codex" /></label><button id="accountAccessCreateBtn" class="button primary" type="submit">创建密钥</button></form>
               <div id="accountAccessKeyList" class="account-access-key-list" aria-live="polite"></div>
