@@ -1425,8 +1425,10 @@ def test_required_remote_schema_validation_failure_is_not_serialization_failure(
 
 
 def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None:
-    monkeypatch.delenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", raising=False)
+    # The local runtime .env carries explicit production values. Empty keeps
+    # this default-contract test independent from that operator configuration.
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "")
 
     provider = V3LLMBrainProvider()
 
@@ -1449,11 +1451,11 @@ def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monk
 
     from app.config import settings
 
-    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "default_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")

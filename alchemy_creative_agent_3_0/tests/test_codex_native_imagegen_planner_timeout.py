@@ -74,8 +74,10 @@ def test_codex_native_planner_defaults_cover_two_stage_brain_preparation() -> No
 
 
 def test_brain_transport_schema_and_provider_defaults_share_finite_budget(monkeypatch) -> None:
-    monkeypatch.delenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", raising=False)
+    # The local runtime .env carries explicit production values. Empty keeps
+    # this default-contract test independent from that operator configuration.
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "")
     provider = V3LLMBrainProvider()
 
     assert provider.timeout == 300.0
