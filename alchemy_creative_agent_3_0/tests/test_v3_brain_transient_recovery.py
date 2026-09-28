@@ -8,6 +8,7 @@ import pytest
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    _ACTIVE_EXECUTION_BUDGET,
     BrainExecutionBudgetExceeded,
     BrainOutputTruncated,
     BrainProviderError,
@@ -22,6 +23,7 @@ def _configure_brain(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "deepseek-test")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
     monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "20")
     monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "7")
 
@@ -204,24 +206,32 @@ def test_pre_dispatch_serialization_failure_keeps_request_started_false(monkeypa
     assert all("unsafe.example" not in warning for warning in result.warnings)
 
 
-def test_initial_budget_exhaustion_has_bounded_stage_receipt(monkeypatch) -> None:
-    """Budget preflight failures still carry a valid zero-attempt receipt."""
+def test_local_preparation_time_does_not_exhaust_remote_brain_budget(monkeypatch) -> None:
+    """The remote deadline starts at the first Brain call, not scope entry."""
 
     _configure_brain(monkeypatch)
-    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
-
-    clock = iter((0.0, 21.0))
-    monkeypatch.setattr(brain_providers.time, "perf_counter", lambda: next(clock))
     provider = V3LLMBrainProvider()
-    with pytest.raises(BrainExecutionBudgetExceeded) as failure:
-        with provider.execution_scope():
-            provider.run(BrainRunRequest(user_input="Create one natural portrait.", stage="plan"))
+    calls = 0
 
-    receipt = transport_failure_receipt(failure.value)
-    assert receipt["schema_version"] == "v3_brain_transport_attempt_v1"
-    assert receipt["stage"] == "plan"
-    assert receipt["attempts"] == 0
-    assert receipt["request_dispatched"] is False
+    def successful_call(request, *, json_recovery=False):  # noqa: ANN001
+        nonlocal calls
+        calls += 1
+        assert not json_recovery
+        return {"remote": True}
+
+    provider._run_openai_compatible = successful_call
+    with provider.execution_scope():
+        budget = _ACTIVE_EXECUTION_BUDGET.get()
+        assert budget is not None
+        object.__setattr__(budget, "started_at", budget.started_at - 21.0)
+        result = provider.run(
+            BrainRunRequest(user_input="Create one natural portrait.", stage="plan")
+        )
+
+    assert result["remote"] is True
+    assert calls == 1
+    assert budget.remote_started_at is not None
+    assert budget.remaining_seconds() > 19.0
 
 
 def test_failed_serialization_recovery_preserves_bounded_attempt_receipt(monkeypatch) -> None:

@@ -262,14 +262,31 @@ class _BrainExecutionBudget:
     It is intentionally held in a context variable rather than request metadata:
     a deadline is transport control, never creative evidence, Brain input, or
     persisted job provenance.
+
+    ``started_at`` is reset to the first actual remote Brain transport. Local
+    capability preparation can be substantial and is not a transport call;
+    charging it against the Brain window can leave a valid plan request with
+    only a fraction of its permitted timeout. The shared remote clock starts
+    lazily on the first provider call and then remains common to the later
+    canonical finalizer calls. ``remote_started_at`` is an internal marker so
+    compatibility tests and diagnostics can distinguish the two phases.
     """
 
     total_seconds: float
     started_at: float
+    remote_started_at: float | None = None
 
     @property
     def deadline(self) -> float:
         return self.started_at + self.total_seconds
+
+    def start_remote_clock(self) -> None:
+        """Start the shared clock exactly once at the first remote call."""
+
+        if self.remote_started_at is None:
+            now = time.perf_counter()
+            object.__setattr__(self, "remote_started_at", now)
+            object.__setattr__(self, "started_at", now)
 
     def remaining_seconds(self) -> float:
         return max(0.0, self.deadline - time.perf_counter())
@@ -712,6 +729,8 @@ class V3LLMBrainProvider:
 
     def _ensure_budget_available(self) -> None:
         budget = _ACTIVE_EXECUTION_BUDGET.get()
+        if budget is not None:
+            budget.start_remote_clock()
         if budget is not None and budget.remaining_seconds() <= 0.0:
             raise BrainExecutionBudgetExceeded(
                 "remote Brain logical execution budget exhausted before a complete prompt could be signed"
