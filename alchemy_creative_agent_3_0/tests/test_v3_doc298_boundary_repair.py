@@ -1127,6 +1127,13 @@ def test_project_mode_output_selector_stays_exact_and_skips_product_selector_con
         output_id="v3_output_00000000000000000012",
         projection={},
     )
+    for output in (first, second):
+        updated = store.update_metadata(
+            output.output_id,
+            {"project_id": "project_doc298_output_selector"},
+        )
+        assert updated is not None
+    store.save_job_closure(job_id, _closure(job_id, [first, second]))
     product_service = V3ProductApiService(output_store=store)
     status = ProductJobStatus(
         job_id=job_id,

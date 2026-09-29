@@ -2525,7 +2525,7 @@ function v3ScenarioWorkspaceCopy(scenarioId = "general_creative") {
       pendingResult: "摄影任务正在准备，稍后会显示图片。",
       createLabel: "生成摄影作品",
       generateLabel: "继续生成",
-      selectLabel: "设为后续参考",
+      selectLabel: "设为延续方向",
       busyLabel: "生成摄影作品中…",
       readyNotice: "当前是摄影师工作区。",
       planningNotice: "V3 正在规划拍摄方向。",
@@ -2555,7 +2555,7 @@ function v3ScenarioWorkspaceCopy(scenarioId = "general_creative") {
       pendingResult: "图片正在准备，稍后会显示最终交付。",
       createLabel: "生成新电商图",
       generateLabel: "继续生成",
-      selectLabel: "设为后续参考",
+      selectLabel: "设为延续方向",
       busyLabel: "正在准备生成...",
       readyNotice: "当前是电商特调 Agent。",
       planningNotice: "V3 正在沿用项目风格生成电商图。",
@@ -2583,7 +2583,7 @@ function v3ScenarioWorkspaceCopy(scenarioId = "general_creative") {
     pendingResult: "图片正在准备，稍后会显示结果。",
     createLabel: "生成新图片",
     generateLabel: "继续生成",
-    selectLabel: "设为后续参考",
+    selectLabel: "设为延续方向",
     busyLabel: "生成图片中...",
     readyNotice: "当前是通用创意 Agent。",
     planningNotice: "V3 正在沿用项目风格生成图片。",
@@ -4025,7 +4025,7 @@ function renderV3Projects() {
     card.dataset.v3ProjectId = item.project_id;
     card.innerHTML = `
       <div class="v3-project-thumb-wrap">
-        ${thumbnails.length ? `<img class="v3-project-thumb" alt="" src="${escapeHtml(v3MediaUrl(thumbnails[0]))}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-project-thumb-placeholder" aria-hidden="true"></span>`}
+        ${thumbnails.length ? `<img class="v3-project-thumb" alt="" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-project-thumb-placeholder" aria-hidden="true"></span>`}
       </div>
       <div class="v3-project-goal-slot" title="${escapeHtml(projectGoal)}">
         <p>${escapeHtml(projectGoal)}</p>
@@ -4041,6 +4041,8 @@ function renderV3Projects() {
       </div>
     `;
     els.v3ProjectList.appendChild(card);
+    const projectImage = card.querySelector(".v3-project-thumb");
+    if (projectImage) bindImageWithFallback(projectImage, [v3MediaUrl(thumbnails[0])], { emptyAlt: "项目封面暂不可用" });
   });
   if (v3State.projectsHasMore || items.length > v3State.projectRenderLimit) {
     const loadMore = document.createElement("article");
@@ -4094,7 +4096,7 @@ function renderV3History() {
         <span class="v3-history-stack" aria-hidden="true">
           ${Array.from({ length: stackCount }, () => "<span></span>").join("")}
         </span>
-        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" src="${escapeHtml(previewUrl)}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-history-empty-thumb">${escapeHtml(emptyImageLabel)}</span>`}
+        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-history-empty-thumb">${escapeHtml(emptyImageLabel)}</span>`}
       </button>
       <div class="v3-history-body">
         <strong>${escapeHtml(v3ShortText(groupTitle, 32))}</strong>
@@ -4110,6 +4112,8 @@ function renderV3History() {
       </div>
     `;
     els.v3HistoryList.appendChild(card);
+    const image = card.querySelector("img");
+    if (image) bindImageWithFallback(image, [previewUrl], { emptyAlt: emptyImageLabel });
   });
   if (v3State.projectsHasMore || groups.length > visibleGroups.length) {
     const loadMore = document.createElement("article");
@@ -4474,7 +4478,7 @@ function renderV3ProjectHistoryGrid(group) {
     card.className = "v3-project-history-image-card";
     card.innerHTML = `
       <button class="v3-project-history-image" type="button" data-v3-history-image="${index}" aria-label="查看项目图片">
-        ${previewUrl ? `<img alt="${escapeHtml(v3ReadableText(group.title, "V3 项目图片"))}" src="${escapeHtml(previewUrl)}" loading="lazy" decoding="async" />` : "<span>图片准备中</span>"}
+        ${previewUrl ? `<img alt="${escapeHtml(v3ReadableText(group.title, "V3 项目图片"))}" loading="lazy" decoding="async" />` : "<span>图片准备中</span>"}
       </button>
       <div class="v3-project-history-image-meta">
         <strong>${escapeHtml(v3ShortText(imageTitle, 24))}</strong>
@@ -4660,7 +4664,7 @@ function v3ProjectNextSuggestion(project = v3State.currentProject) {
   const hasImages = Boolean(v3AllProjectImageItems(project).length);
   const hasContinuation = v3ProjectReferenceGroups(project).continuation_outputs.length > 0;
   if (!hasImages) return v3State.selectedScenario === "ecommerce" ? "打开制作页，填写需求后生成商品图片" : "打开制作页，生成第一张图片";
-  if (!hasContinuation) return "挑一张满意的图，设为后续参考";
+  if (!hasContinuation) return "挑一张满意的图，设为延续方向";
   return "点击“继续生成”，沿着当前方向再做一张";
 }
 
@@ -5651,7 +5655,7 @@ async function selectV3OutputItem(item) {
     return;
   }
   try {
-    setV3Busy(true, "正在设为后续参考...");
+    setV3Busy(true, "正在设为延续方向...");
     const selected = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/select`, {
       method: "POST",
       body: {
@@ -6498,7 +6502,7 @@ function renderV3WorkflowArtifacts() {
               ? "后续生成会保留原始参考图的事实，并沿用已选成片允许继承的方向。"
               : artifact.originalReferenceCount
                 ? "后续生成会优先保留原始参考图的事实；满意成片可单独设为主图。"
-                : "在图片卡点“设为后续参考”后，一致性会明显更稳。"),
+                : "在图片卡点“设为延续方向”后，一致性会明显更稳。"),
           110,
         ),
       )}</p>
@@ -6605,7 +6609,7 @@ function v3ProjectSubpageCopy(stepKey = "compose") {
     },
     select: {
       eyebrow: "选定方向",
-      title: "把满意结果设为后续参考",
+      title: "把满意结果设为延续方向",
       intro: "选中后，后续生成会优先沿用这张图的感觉。",
     },
     continue: {
@@ -6694,7 +6698,7 @@ function renderV3ReviewScene() {
     {
       label: "图片",
       value: images.length ? `${images.length} 张可查看` : "还没有生成图片",
-      hint: images.length ? "下方可以放大、下载，也可以直接设为后续参考。" : "先回到“写需求”生成第一组图片。",
+    hint: images.length ? "下方可以放大、下载，也可以直接设为延续方向。" : "先回到“写需求”生成第一组图片。",
     },
     {
       label: "判断",
@@ -6720,7 +6724,7 @@ function renderV3SelectScene() {
     {
       label: "可选",
       value: `${images.length} 张图片`,
-      hint: images.length ? "在下方图片卡点击“设为后续参考”。" : "这个项目还没有可选图片。",
+    hint: images.length ? "在下方图片卡点击“设为延续方向”。" : "这个项目还没有可选图片。",
     },
     {
       label: "已选",
@@ -6739,7 +6743,7 @@ function renderV3ContinueScene() {
     {
       label: "续作依据",
       value: continueRefs.length ? `${continueRefs.length} 个已确认方向` : "还缺少确认方向",
-      hint: continueRefs.length ? "后续会优先读取原始参考图，并沿用已选延续方向允许继承的画面感觉。" : "先把满意图片设为后续参考，再继续生成会更稳。",
+    hint: continueRefs.length ? "后续会优先读取原始参考图，并沿用已选延续方向允许继承的画面感觉。" : "先把满意图片设为延续方向，再继续生成会更稳。",
     },
     {
       label: "长期风格",
@@ -8185,7 +8189,7 @@ function renderV3CharacterCardWorkspace() {
         const preview = v3CharacterCardSlotPreview(card, slotKey);
         const state = String(slot.state || "empty");
         const media = preview
-          ? `<button class="v3-character-card-slot-media" type="button" data-v3-character-card-action="preview" data-v3-character-card-slot="${slotKey}" aria-label="查看${label}"><img src="${escapeHtml(v3MediaUrl(preview))}" alt="${escapeHtml(label)}" loading="lazy" /></button>`
+          ? `<button class="v3-character-card-slot-media" type="button" data-v3-character-card-action="preview" data-v3-character-card-slot="${slotKey}" aria-label="查看${label}"><img data-v3-character-card-media="${escapeHtml(v3MediaUrl(preview))}" alt="${escapeHtml(label)}" loading="lazy" /></button>`
           : `<div class="v3-character-card-slot-placeholder"><span>${state === "preparing" ? "正在生成" : state === "blocked" ? "可从断点继续" : "空位"}</span></div>`;
         return `<article class="v3-character-card-slot" data-state="${escapeHtml(state)}">
           ${media}
@@ -8205,6 +8209,9 @@ function renderV3CharacterCardWorkspace() {
         </div>
       </section>`;
     }).join("");
+    els.v3CharacterCardModules.querySelectorAll("img[data-v3-character-card-media]").forEach((image) => {
+      bindImageWithFallback(image, [image.dataset.v3CharacterCardMedia], { emptyAlt: image.alt || "角色卡图片暂不可用" });
+    });
   }
   const bodyReady = v3CharacterCardStagePrerequisite(card, "body_silhouette").allowed;
   if (els.v3CharacterCardBodyControls) els.v3CharacterCardBodyControls.hidden = !bodyReady || activeCount === 3;
@@ -8775,7 +8782,7 @@ function renderV3VisualAssetSourceFiles() {
     row.className = "v3-asset-row v3-visual-asset-source-row";
     row.innerHTML = `
       ${previewUrl
-        ? `<img class="v3-visual-asset-source-preview" src="${escapeHtml(previewUrl)}" alt="人物源图预览" />`
+        ? `<img class="v3-visual-asset-source-preview" alt="人物源图预览" />`
         : `<span class="v3-visual-asset-source-preview v3-visual-asset-source-preview-placeholder" aria-hidden="true">图</span>`}
       <span class="v3-asset-file-copy">
         <strong>${escapeHtml(file.name || `人物源图 ${index + 1}`)}</strong>
@@ -8786,6 +8793,8 @@ function renderV3VisualAssetSourceFiles() {
         <button type="button" data-v3-visual-asset-source-action="remove" data-v3-visual-asset-source-index="${index}" aria-label="移除这张人物源图">移除</button>
       </span>
     `;
+    const sourceImage = row.querySelector("img");
+    if (sourceImage) bindImageWithFallback(sourceImage, [previewUrl], { emptyAlt: "人物源图预览" });
     els.v3VisualAssetSourceList.appendChild(row);
   });
   renderV3VisualAssetCreateReadiness();
@@ -11762,7 +11771,7 @@ function renderV3ResultBoard(job) {
         ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载</button>` : ""}
       </div>
       <div class="v3-output-actions">
-        <button type="button" data-v3-result-action="select" data-v3-result-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
+        <button type="button" data-v3-result-action="select" data-v3-result-index="${index}" ${isSelected ? "disabled" : ""}>设为延续方向</button>
         <button type="button" data-v3-result-action="remove_from_project" data-v3-result-index="${index}">从项目成果移除</button>
       </div>
     `;
@@ -12552,7 +12561,7 @@ function renderLabBoard(board) {
     article.className = `lab-result-card ${labResultCardClass(card.status)}`;
     const styleName = group.style_name || group.style_preset_id || "Rare Style";
     const imageHtml = card.image_url
-      ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(styleName)}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img src="${escapeHtml(card.thumbnail_url || card.image_url)}" alt="${escapeHtml(styleName)}" loading="lazy" decoding="async" /></button>`
+      ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(styleName)}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img alt="${escapeHtml(styleName)}" loading="lazy" decoding="async" /></button>`
       : `<div class="lab-error-tile">${escapeHtml(labPlaceholderText(card))}</div>`;
     const imageActions = card.image_url
       ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载原图</a>`
@@ -12582,6 +12591,8 @@ function renderLabBoard(board) {
       </details>
     `;
     els.labComparisonGrid.appendChild(article);
+    const labImage = article.querySelector("img");
+    if (labImage) bindImageWithFallback(labImage, [card.thumbnail_url, card.image_url], { emptyAlt: styleName });
   });
 }
 
@@ -14895,14 +14906,14 @@ function renderV2Templates(templates) {
       preview.type = "button";
       const fullImageUrl = v2CasePreviewUrl(template.preview_url, template.index_version);
       const image = document.createElement("img");
-      image.src = v2CaseThumbnailUrl(template.preview_url, "grid", template.index_version) || fullImageUrl;
+      const thumbnailImageUrl = v2CaseThumbnailUrl(template.preview_url, "grid", template.index_version) || fullImageUrl;
       image.alt = template.title || "案例预览";
       image.width = 720;
       image.height = 900;
       image.loading = index < v2TemplateEagerImageCount ? "eager" : "lazy";
       image.decoding = "async";
       image.fetchPriority = index < v2TemplateEagerImageCount ? "high" : "low";
-      image.addEventListener("error", () => fallbackV2CaseImageToPreview(image, fullImageUrl, preview));
+      bindImageWithFallback(image, [thumbnailImageUrl, fullImageUrl], { emptyAlt: "案例预览暂不可用" });
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2CasePreview(template, fullImageUrl));
     } else {
@@ -15115,8 +15126,8 @@ function fallbackV2CaseImageToPreview(image, fullImageUrl, preview) {
     return;
   }
   image.dataset.caseFallbackApplied = "1";
-  if (fullImageUrl && image.src !== fullImageUrl) {
-    image.src = fullImageUrl;
+  if (fullImageUrl) {
+    bindImageWithFallback(image, [fullImageUrl], { emptyAlt: "案例预览暂不可用" });
     return;
   }
   if (preview) {
@@ -16477,9 +16488,58 @@ function v2HistoryPreviewCandidates(item) {
   ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
 }
 
+function mediaUrlNeedsAuthenticatedFetch(url) {
+  const value = String(url || "").trim();
+  if (!value) return false;
+  let parsed;
+  try {
+    parsed = new URL(value, window.location.href);
+  } catch {
+    return false;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return false;
+  if (!/^\/(?:api|v1)(?:\/|$)/.test(parsed.pathname)) return false;
+  const allowedOrigins = new Set([window.location.origin]);
+  for (const base of [v2ApiBase, v3ApiBase, v2MediaDisplayBase]) {
+    try {
+      allowedOrigins.add(new URL(base, window.location.href).origin);
+    } catch {
+      // Ignore an optional external base that is not a valid URL.
+    }
+  }
+  return allowedOrigins.has(parsed.origin);
+}
+
+async function resolveAuthenticatedMediaSource(url) {
+  const value = String(url || "").trim();
+  if (!mediaUrlNeedsAuthenticatedFetch(value)) return { url: value, objectUrl: false };
+  const token = getVeyraToken();
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+  const response = await fetch(value, { credentials: "include", headers });
+  if (!response.ok) {
+    const error = new Error(`Media request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+  const blob = await response.blob();
+  if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) {
+    throw new Error("Media response did not contain an image.");
+  }
+  return { url: URL.createObjectURL(blob), objectUrl: true };
+}
+
+function releaseImageObjectUrl(image) {
+  const objectUrl = image?.dataset?.authenticatedObjectUrl || "";
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  if (image?.dataset) delete image.dataset.authenticatedObjectUrl;
+}
+
 function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用", onExhausted = null } = {}) {
   if (!image) return;
   const urls = uniqueNonEmpty(candidates || []);
+  const loadToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  image.dataset.mediaLoadToken = loadToken;
+  releaseImageObjectUrl(image);
   image.dataset.fallbackIndex = "0";
   if (!urls.length) {
     image.removeAttribute("src");
@@ -16490,27 +16550,48 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
   }
   image.classList.remove("image-load-missing", "image-load-failed");
   image.dataset.fallbackUrls = JSON.stringify(urls);
-  image.onerror = () => {
-    let fallbackUrls = [];
-    try {
-      fallbackUrls = JSON.parse(image.dataset.fallbackUrls || "[]");
-    } catch {
-      fallbackUrls = [];
-    }
-    const nextIndex = Number(image.dataset.fallbackIndex || 0) + 1;
-    if (fallbackUrls[nextIndex]) {
-      image.dataset.fallbackIndex = String(nextIndex);
-      image.src = fallbackUrls[nextIndex];
-      return;
-    }
-    image.onerror = null;
-    image.classList.add("image-load-failed");
-    onExhausted?.();
-  };
   image.onload = () => {
     image.classList.remove("image-load-failed", "image-load-missing");
   };
-  image.src = urls[0];
+  const fail = () => {
+    if (image.dataset.mediaLoadToken !== loadToken) return;
+    image.onerror = null;
+    releaseImageObjectUrl(image);
+    image.classList.add("image-load-failed");
+    onExhausted?.();
+  };
+  const loadCandidate = async (index) => {
+    if (image.dataset.mediaLoadToken !== loadToken) return;
+    const candidate = urls[index];
+    if (!candidate) {
+      fail();
+      return;
+    }
+    image.dataset.fallbackIndex = String(index);
+    try {
+      const resolved = await resolveAuthenticatedMediaSource(candidate);
+      if (image.dataset.mediaLoadToken !== loadToken) {
+        if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
+        return;
+      }
+      releaseImageObjectUrl(image);
+      if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
+      image.src = resolved.url;
+    } catch {
+      await loadCandidate(index + 1);
+    }
+  };
+  image.onerror = () => { void loadCandidate(Number(image.dataset.fallbackIndex || 0) + 1); };
+  // Keep public/static media available in the same synchronous first paint
+  // path as the legacy renderer. Protected API media must still wait for the
+  // authenticated Blob resolver so a raw protected URL never leaks into the
+  // DOM. The error handler above continues the bounded fallback chain for a
+  // public candidate that later fails to load.
+  if (!mediaUrlNeedsAuthenticatedFetch(urls[0])) {
+    image.src = urls[0];
+    return;
+  }
+  void loadCandidate(0);
 }
 
 function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "", emptyAlt = "图片暂不可用" } = {}) {
@@ -16528,17 +16609,29 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
   image.classList.add("is-loading-full");
   const preloader = new Image();
   preloader.decoding = "async";
-  preloader.onload = () => {
-    if (image.dataset.lightboxLoadToken !== token) return;
-    image.classList.remove("is-loading-full");
-    image.src = display;
-  };
-  preloader.onerror = () => {
-    if (image.dataset.lightboxLoadToken === token) {
-      image.classList.remove("is-loading-full");
+  void resolveAuthenticatedMediaSource(display).then((resolved) => {
+    if (image.dataset.lightboxLoadToken !== token) {
+      if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
+      return;
     }
-  };
-  preloader.src = display;
+    preloader.onload = () => {
+      if (image.dataset.lightboxLoadToken !== token) {
+        if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
+        return;
+      }
+      releaseImageObjectUrl(image);
+      if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
+      image.classList.remove("is-loading-full");
+      image.src = resolved.url;
+    };
+    preloader.onerror = () => {
+      if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
+      if (image.dataset.lightboxLoadToken === token) image.classList.remove("is-loading-full");
+    };
+    preloader.src = resolved.url;
+  }).catch(() => {
+    if (image.dataset.lightboxLoadToken === token) image.classList.remove("is-loading-full");
+  });
 }
 
 function bindProgressiveGridImage(image, { thumbnailUrl = "", previewUrl = "", emptyAlt = "图片暂不可用" } = {}) {
@@ -16552,17 +16645,29 @@ function bindProgressiveGridImage(image, { thumbnailUrl = "", previewUrl = "", e
   image.classList.add("is-loading-full");
   const preloader = new Image();
   preloader.decoding = "async";
-  preloader.onload = () => {
-    if (image.dataset.progressiveGridToken !== token) return;
-    image.classList.remove("is-loading-full");
-    image.src = preview;
-  };
-  preloader.onerror = () => {
-    if (image.dataset.progressiveGridToken === token) {
-      image.classList.remove("is-loading-full");
+  void resolveAuthenticatedMediaSource(preview).then((resolved) => {
+    if (image.dataset.progressiveGridToken !== token) {
+      if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
+      return;
     }
-  };
-  preloader.src = preview;
+    preloader.onload = () => {
+      if (image.dataset.progressiveGridToken !== token) {
+        if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
+        return;
+      }
+      releaseImageObjectUrl(image);
+      if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
+      image.classList.remove("is-loading-full");
+      image.src = resolved.url;
+    };
+    preloader.onerror = () => {
+      if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
+      if (image.dataset.progressiveGridToken === token) image.classList.remove("is-loading-full");
+    };
+    preloader.src = resolved.url;
+  }).catch(() => {
+    if (image.dataset.progressiveGridToken === token) image.classList.remove("is-loading-full");
+  });
 }
 
 function v2ReviewLabel(decision) {
@@ -17134,7 +17239,7 @@ function renderVeyraTemplateHistory(items = []) {
     if (previewUrl) {
       preview.type = "button";
       const image = document.createElement("img");
-      image.src = previewUrl;
+    bindImageWithFallback(image, [previewUrl], { emptyAlt: "模板预览暂不可用" });
       image.alt = item.title || `历史使用模板 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
@@ -18159,7 +18264,7 @@ function renderGallery(outputs) {
     const link = node.querySelector(".download-link");
     const footer = node.querySelector(".output-meta");
     preview.dataset.label = `${output.format.toUpperCase()} · ${index + 1}`;
-    preview.innerHTML = `<img class="output-image" alt="生成结果 ${index + 1}" src="${output.thumbnail_url || output.url}" loading="lazy" decoding="async" />`;
+    preview.innerHTML = `<img class="output-image" alt="生成结果 ${index + 1}" loading="lazy" decoding="async" />`;
     id.textContent = output.id;
     const provider = document.createElement("span");
     provider.className = "output-provider";
@@ -18190,6 +18295,11 @@ function renderGallery(outputs) {
       });
     });
     els.gallery.appendChild(node);
+    bindImageWithFallback(
+      preview.querySelector("img"),
+      uniqueNonEmpty([output.thumbnail_url, output.preview_url, output.url]),
+      { emptyAlt: `生成结果 ${index + 1}` },
+    );
   });
 }
 
@@ -18312,8 +18422,8 @@ function renderHistory(items) {
     image.alt = `历史图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
-    image.src = item.thumbnail_url || item.url;
     preview.appendChild(image);
+    bindImageWithFallback(image, [item.thumbnail_url, item.url], { emptyAlt: image.alt });
 
     const meta = document.createElement("div");
     meta.className = "history-meta";
@@ -18463,11 +18573,11 @@ function renderFavoritePicker() {
     const preview = document.createElement("span");
     preview.className = "favorite-picker-preview";
     const image = document.createElement("img");
-    image.src = item.thumbnail_url || item.url;
     image.alt = `星标图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
     preview.appendChild(image);
+    bindImageWithFallback(image, [item.thumbnail_url, item.url], { emptyAlt: image.alt });
     const meta = document.createElement("div");
     meta.className = "favorite-picker-meta";
     const title = document.createElement("strong");
@@ -18549,11 +18659,11 @@ function renderRevisionSelection() {
     preview.innerHTML = "";
     if (selected?.imageUrl) {
       const image = document.createElement("img");
-      image.src = selected.imageUrl;
       image.alt = selected.title || "继续修改参考图";
       image.loading = "lazy";
       image.decoding = "async";
       preview.appendChild(image);
+      bindImageWithFallback(image, [selected.imageUrl], { emptyAlt: image.alt });
     } else {
       const empty = document.createElement("span");
       empty.textContent = "未选";
@@ -18867,6 +18977,7 @@ function closeImageLightbox() {
     els.imageLightbox.close();
   }
   els.imageLightbox.hidden = true;
+  releaseImageObjectUrl(els.lightboxImage);
   els.lightboxImage.removeAttribute("src");
   els.lightboxImage.removeAttribute("data-full-url");
   els.lightboxImage.removeAttribute("data-lightbox-load-token");

@@ -804,8 +804,11 @@ class _CapturingRuntimeBrainAdapter:
         )
         return self.last_request
 
-    def run(self, _request: BrainRunRequest) -> SimpleNamespace:
-        return SimpleNamespace()
+    def run(self, request: BrainRunRequest):
+        # Runtime's adapter contract is a typed BrainRunResult.  The test only
+        # inspects the sanitized request, so a deterministic contract-shaped
+        # result keeps the double faithful without adding creative behavior.
+        return build_fallback_result(request)
 
 
 @pytest.mark.parametrize("activation_mode", ["legacy", "shadow"])

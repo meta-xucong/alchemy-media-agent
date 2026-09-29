@@ -223,7 +223,7 @@ def test_metadata_only_photography_review_withholds_terminal_delivery(monkeypatc
                 "state": "blocked",
                 "review_mode": "metadata_only",
                 "review_status": "manual_review",
-                "verification_state": "unverified",
+                "verification_state": "verification_skipped",
             }
         ],
     }

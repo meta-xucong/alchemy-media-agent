@@ -12,7 +12,10 @@ from alchemy_creative_agent_3_0.app.product_api import (
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioSelection
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
-from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
+    EcommerceRemoteBrainTestProvider,
+    _EcommerceContractAssetStore,
+)
 
 
 def _brand_service(tmp_path) -> BrandProfileService:
@@ -64,7 +67,10 @@ def test_scenario_runtime_runs_ecommerce_and_enriches_metadata(tmp_path) -> None
 
 
 def test_product_api_accepts_general_scenario_selection_and_keeps_simple_response(tmp_path) -> None:
-    service = V3ProductApiService(brand_profile_service=_brand_service(tmp_path))
+    service = V3ProductApiService(
+        brand_profile_service=_brand_service(tmp_path),
+        asset_store=_EcommerceContractAssetStore(),
+    )
 
     created = service.create_job(
         {
@@ -123,8 +129,10 @@ def test_product_api_freezes_official_image_options_and_rejects_raw_runtime_over
 
 
 def test_product_api_runs_ecommerce_scenario_and_keeps_job_retrievable(tmp_path) -> None:
+    asset_store = _EcommerceContractAssetStore()
     service = V3ProductApiService(
         brand_profile_service=_brand_service(tmp_path),
+        asset_store=asset_store,
         scenario_runtime=ScenarioRuntime(
             brand_profile_service=_brand_service(tmp_path),
             llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider()),
@@ -141,7 +149,10 @@ def test_product_api_runs_ecommerce_scenario_and_keeps_job_retrievable(tmp_path)
     )
     fetched = service.get_job(created.job_id)
     generated = service.generate_job(created.job_id)
-    selected = service.select_result(created.job_id)
+    selected = service.select_result(
+        created.job_id,
+        {"selected_asset_ids": [generated.asset_series[0].asset_id]},
+    )
 
     assert created.status == ProductJobStatusValue.PLANNED
     assert fetched.status == ProductJobStatusValue.PLANNED

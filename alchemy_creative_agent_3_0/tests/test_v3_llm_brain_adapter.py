@@ -50,6 +50,52 @@ def _write_reference(path: Path) -> Path:
     return path
 
 
+def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:
+    """Create the closure receipt required before a result becomes a reference."""
+
+    envelope = {
+        "execution_fingerprint": f"fingerprint_{output.output_id}",
+        "envelope_id": f"envelope_{output.output_id}",
+        "resolved_constraint_ledger": {
+            "ledger_id": f"ledger_{output.output_id}",
+            "provider_projection": {"capability_projection": {}},
+        },
+    }
+    updated = handlers.service.output_store.update_metadata(
+        output.output_id,
+        {
+            "project_id": project_id,
+            "capability_execution_envelope": envelope,
+            "output_index": 1,
+        },
+    )
+    assert updated is not None
+    handlers.service.output_store.save_job_closure(
+        output.job_id,
+        {
+            "schema_version": "v3_output_delivery_closure_v1",
+            "job_id": output.job_id,
+            "status": "complete",
+            "review_evidence_receipt_status": "complete",
+            "final_delivery_status": "ready",
+            "automatic_delivery_available": True,
+            "eligible_output_ids": [output.output_id],
+            "execution_fingerprint": envelope["execution_fingerprint"],
+            "envelope_id": envelope["envelope_id"],
+            "ledger_id": envelope["resolved_constraint_ledger"]["ledger_id"],
+            "outputs": [
+                {
+                    "output_id": output.output_id,
+                    "job_id": output.job_id,
+                    "asset_id": output.asset_id,
+                    "candidate_id": output.candidate_id,
+                    "content_sha256": updated.metadata["content_sha256"],
+                }
+            ],
+        },
+    )
+
+
 def test_general_runtime_runs_v3_brain_before_prompt_compilation(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
     runtime = ScenarioRuntime()
@@ -1497,7 +1543,7 @@ def test_remote_brain_does_not_reuse_unrelated_anthropic_credential_for_deepseek
 
 
 def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypatch) -> None:
-    """DeepSeek uses the direct streamed Chat Completions transport."""
+    """DeepSeek can exercise the legacy streamed Chat Completions transport."""
 
     from app.config import settings
     from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
@@ -1512,6 +1558,10 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    # The production path is configured non-streaming.  This test covers the
+    # retained legacy collector explicitly and must not inherit the developer
+    # .env transport selection.
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
@@ -1746,6 +1796,7 @@ def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monk
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
@@ -1840,6 +1891,7 @@ def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(
     monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_MAX_TOKENS", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
@@ -2066,6 +2118,7 @@ def test_selected_generated_output_context_keeps_public_identity_without_file_pa
         mime_type="image/png",
         output_format="png",
     )
+    _mark_output_formally_delivered(handlers, project_id=project["project_id"], output=record)
     restarted = V3ProductRouteHandlers(
         service=V3ProductApiService(output_store=output_store),
         project_store=PersistentProjectStore(tmp_path / "v3_projects"),
@@ -2115,6 +2168,11 @@ def test_project_can_select_a_persisted_partial_output_while_the_job_record_rema
         mime_type="image/png",
         output_format="png",
     )
+    # The completed partial output is independently deliverable even though
+    # the later role left the append-only Job blocked.  Persist that closure
+    # so selection tests the partial-recovery contract, not an unverified
+    # output masquerading as a continuation anchor.
+    _mark_output_formally_delivered(handlers, project_id=project["project_id"], output=output)
 
     selected = handlers.post_project_job_select(
         project["project_id"],

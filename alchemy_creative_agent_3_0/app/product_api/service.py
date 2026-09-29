@@ -11998,11 +11998,18 @@ class V3ProductApiService:
         if not isinstance(evidence, dict):
             return False
         attempts = evidence.get("provider_review_attempts")
-        return (
+        if (
             isinstance(attempts, int)
             and not isinstance(attempts, bool)
             and attempts > 0
-        )
+        ):
+            return True
+        # Older hybrid review receipts did not persist an explicit attempt
+        # counter.  A positive provider-pixel certificate is itself evidence
+        # that the Vision/Provider path was reached; it must not be confused
+        # with certification of the whole review package, which remains
+        # governed by the receipt-status/error checks below.
+        return evidence.get("provider_pixel_result_certified") is True
 
     @staticmethod
     def _public_post_generation_review(value: Any) -> dict[str, Any]:
@@ -13090,8 +13097,16 @@ class V3ProductApiService:
                         "owner": "v3_product_api_runtime",
                         "failure_family": "remote_creative_brain",
                         "failure_category": (
-                            "brain_timeout" if safe_remote_outcome.get("remote_error_class") == "timeout"
-                            else "provider_unavailable" if safe_remote_outcome.get("remote_provider_available") is False
+                            # A shared-budget exhaustion is a Brain-side
+                            # time-boundary failure.  It must win over a
+                            # stale/ambiguous availability projection from a
+                            # previous preflight; no image Provider request
+                            # was attempted in this branch.
+                            "brain_timeout"
+                            if safe_remote_outcome.get("remote_error_class")
+                            in {"timeout", "execution_budget_exhausted"}
+                            else "provider_unavailable"
+                            if safe_remote_outcome.get("remote_provider_available") is False
                             or safe_remote_outcome.get("outcome_class") == "remote_provider_unavailable"
                             else "brain_provider_error"
                         ),
@@ -15614,10 +15629,25 @@ class V3ProductApiService:
                 raise ValueError("reference_input_professional_direct_upload_not_bound")
             refs = metadata.get("professional_anchor_reference_assets") if professional_stage else metadata.get("visual_asset_library_reference_assets")
             refs = list(refs or [])
+            # The serial anchor contract keeps the immutable root upload on
+            # the current request binding and stores only reviewed winners in
+            # ``professional_anchor_reference_assets``.  Freeze both paths in
+            # their server-defined order so the final Provider plan remains
+            # ``root + reviewed winners`` (2/3/5 evidence), rather than
+            # silently dropping the root as soon as a winner exists.  This is
+            # intentionally scoped to the serial anchor strategy; Character
+            # Card and ordinary Professional bindings keep their own source
+            # contracts and must not inherit a root upload implicitly.
+            if (
+                professional_stage
+                and metadata.get("professional_identity_reference_strategy")
+                == "serial_anchor_pack_root_reuse_v1"
+            ):
+                refs = [*uploads, *refs]
             # Initial asset preparation has no generated winner yet. These
             # current uploads enter only through the existing trusted internal
             # preparation seam, never a normal Professional project request.
-            if professional_stage and not refs:
+            elif professional_stage and not refs:
                 refs = uploads
             professional = snapshot if bound else {"state":"valid", "internal_stage_contract":metadata.get("professional_planning_metadata", {})}
         elif mode == "ecommerce":

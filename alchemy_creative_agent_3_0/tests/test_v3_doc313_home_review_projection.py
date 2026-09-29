@@ -80,6 +80,8 @@ def test_home_preview_skips_exact_counts_when_job_state_budget_is_exceeded() -> 
     service.project_store = SimpleNamespace(
         list_all_projects=lambda: [project],
         list_projects=lambda limit: [project],
+        list_private_records=lambda *_args, **_kwargs: [],
+        compare_and_append_private_record=lambda *_args, **_kwargs: None,
     )
     service.product_service = SimpleNamespace(
         output_store=SimpleNamespace(
@@ -133,6 +135,8 @@ def test_home_history_adapter_is_bounded_and_count_stays_unknown_over_budget() -
     service.project_store = SimpleNamespace(
         list_all_projects=lambda: [project],
         list_projects=lambda limit: [project],
+        list_private_records=lambda *_args, **_kwargs: [],
+        compare_and_append_private_record=lambda *_args, **_kwargs: None,
     )
     service.product_service = SimpleNamespace(
         output_store=SimpleNamespace(
@@ -180,6 +184,7 @@ def test_home_output_only_history_is_bounded_and_count_stays_unknown_over_budget
         project_id=project.project_id,
         job_ids=list(update["job_ids"]),
         selected_output_states=[],
+        selected_output_refs=[],
     )
     records = [
         SimpleNamespace(
@@ -195,6 +200,8 @@ def test_home_output_only_history_is_bounded_and_count_stays_unknown_over_budget
     service.project_store = SimpleNamespace(
         list_all_projects=lambda: [project],
         list_projects=lambda limit: [project],
+        list_private_records=lambda *_args, **_kwargs: [],
+        compare_and_append_private_record=lambda *_args, **_kwargs: None,
     )
     service.product_service = SimpleNamespace(
         output_store=SimpleNamespace(
@@ -230,11 +237,13 @@ def test_home_omits_count_maps_when_a_candidate_job_read_fails() -> None:
         status="active",
         job_ids=["job-unavailable"],
         selected_output_states=[],
+        selected_output_refs=[],
     )
     project.model_copy = lambda *, update, deep=False: SimpleNamespace(
         project_id=project.project_id,
         job_ids=list(update["job_ids"]),
         selected_output_states=[],
+        selected_output_refs=[],
     )
     record = SimpleNamespace(
         output_id="output-unavailable",
@@ -245,6 +254,8 @@ def test_home_omits_count_maps_when_a_candidate_job_read_fails() -> None:
     service.project_store = SimpleNamespace(
         list_all_projects=lambda: [project],
         list_projects=lambda limit: [project],
+        list_private_records=lambda *_args, **_kwargs: [],
+        compare_and_append_private_record=lambda *_args, **_kwargs: None,
     )
 
     def unavailable_job(_job_id):
@@ -301,6 +312,8 @@ def test_home_preview_falls_back_to_declared_job_outputs_when_project_link_is_mi
     service.project_store = SimpleNamespace(
         list_all_projects=lambda: [project],
         list_projects=lambda limit: [project],
+        list_private_records=lambda *_args, **_kwargs: [],
+        compare_and_append_private_record=lambda *_args, **_kwargs: None,
     )
     service.product_service = SimpleNamespace(
         output_store=SimpleNamespace(

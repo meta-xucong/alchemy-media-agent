@@ -4234,16 +4234,21 @@ class V3ProjectModeService:
         project = self._require_project(project_id)
         continuity_snapshot = self._continuity_state(project)
         job_request = self._coerce_create_project_job_request(request)
-        # Doc270 Phase 1 fields are server-owned compatibility evidence.  A
-        # browser may not author them for any template, including General or
-        # Photography; trusted E-Commerce code adds its own internal snapshot
-        # and receipt after canonical admission.
+        # Doc270 source-library and Phase 3 activation fields are
+        # server-owned compatibility evidence.  A browser may not author
+        # them for any template, including General or Photography; trusted
+        # server seams add their own internal snapshot/receipt only after
+        # canonical admission.  Strip the full client-owned surface before
+        # either the template branch or the persisted Job metadata can see it.
+        ignored_doc270_client_metadata = (
+            _DOC270_IGNORED_CLIENT_METADATA | _DOC270_PHASE3_IGNORED_CLIENT_METADATA
+        )
         job_request = job_request.model_copy(
             update={
                 "metadata": {
                     key: value
                     for key, value in dict(job_request.metadata or {}).items()
-                    if key not in _DOC270_IGNORED_CLIENT_METADATA
+                    if key not in ignored_doc270_client_metadata
                 }
             }
         )
@@ -4529,6 +4534,7 @@ class V3ProjectModeService:
             generation_overrides=context_generation_overrides,
             direct_reference_ids=uploaded_asset_ids,
             continuity_snapshot=continuity_snapshot,
+            generation_scope=True,
         )
         context_snapshot = context.model_dump(mode="json")
         scenario_selection = self._scenario_selection_for_template(
@@ -9727,6 +9733,7 @@ class V3ProjectModeService:
         generation_overrides: dict[str, Any] | None = None,
         direct_reference_ids: list[str] | None = None,
         continuity_snapshot: dict[str, Any] | None = None,
+        generation_scope: bool = False,
     ) -> ProjectContextPackage:
         now = _utc_now_iso()
         effective_template_id = template_id or project.primary_template_id or GENERAL_TEMPLATE_ID
@@ -9734,7 +9741,21 @@ class V3ProjectModeService:
         direct_reference_ids = (list(direct_reference_ids) if direct_reference_ids is not None
             else self._current_job_direct_reference_ids(project))
         original_project = project
-        project = self._reference_scoped_project(project, effective_template_id, direct_reference_ids, continuity_snapshot)
+        project = (
+            self._generation_reference_scoped_project(
+                project,
+                effective_template_id,
+                direct_reference_ids,
+                continuity_snapshot,
+            )
+            if generation_scope
+            else self._reference_scoped_project(
+                project,
+                effective_template_id,
+                direct_reference_ids,
+                continuity_snapshot,
+            )
+        )
         effective_commerce_profile = (commerce_profile or project.commerce_profile) if effective_template_id == ECOMMERCE_TEMPLATE_ID else None
         timeline_ids = list(project.timeline_refs)
         state_map = self._selected_output_state_map(project)
@@ -10008,6 +10029,8 @@ class V3ProjectModeService:
         metadata["batch_identity_diversity_review_id"] = batch_identity_diversity_review.get("review_id")
         metadata["template_consistency_policy"] = template_policy
         metadata["continuity_anchor"] = ContinuityAnchorBindingService.public(continuity_snapshot)
+        if generation_scope:
+            metadata["reference_scope"] = "generation_job_strict"
         reference_mode = self._reference_project_mode(original_project, effective_template_id)
         metadata["current_job_reference_mode"] = {"standard":"standard_direct_reference",
             "professional":"professional_asset_binding", "ecommerce":"ecommerce_product_truth"}[reference_mode]
@@ -13737,7 +13760,15 @@ class V3ProjectModeService:
             return []
         return [r["asset_id"] for r in plan.as_dict()["direct_references"]]
 
-    def _reference_scoped_project(self, project: ProjectRecord, template_id: str, direct_ids: list[str], state: dict) -> ProjectRecord:
+    def _reference_scoped_project(
+        self,
+        project: ProjectRecord,
+        template_id: str,
+        direct_ids: list[str],
+        state: dict,
+        *,
+        strict_uploaded_scope: bool = False,
+    ) -> ProjectRecord:
         scoped=project.model_copy(deep=True)
         anchor=state.get("active_continuity_anchor") if state.get("state")=="active" else None
         allowed=set(direct_ids) if self._reference_project_mode(project,template_id)=="standard" else set()
@@ -13776,10 +13807,14 @@ class V3ProjectModeService:
             for reference in scoped.reference_assets
             if (
                 reference.source_type == ProjectReferenceSourceType.UPLOADED
-                and (template_id == ECOMMERCE_TEMPLATE_ID or reference.asset_ref_id in allowed)
+                and (
+                    not strict_uploaded_scope
+                    or template_id == ECOMMERCE_TEMPLATE_ID
+                    or reference.asset_ref_id in allowed
+                )
             )
             or (
-                not anchor
+                (not strict_uploaded_scope or not anchor)
                 and reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED
                 and (
                     reference.created_from_output_id in selected_output_ids
@@ -13787,7 +13822,15 @@ class V3ProjectModeService:
                 )
             )
         ]
-        scoped.uploaded_asset_refs=[r for r in scoped.uploaded_asset_refs if template_id==ECOMMERCE_TEMPLATE_ID or r.get("asset_id") in allowed]
+        scoped.uploaded_asset_refs = [
+            r
+            for r in scoped.uploaded_asset_refs
+            if (
+                not strict_uploaded_scope
+                or template_id == ECOMMERCE_TEMPLATE_ID
+                or r.get("asset_id") in allowed
+            )
+        ]
         if self._reference_project_mode(project, template_id) == "standard":
             for asset_id in dict.fromkeys(direct_ids):
                 self._upsert_project_reference(
@@ -13796,6 +13839,58 @@ class V3ProjectModeService:
                     use_policy=ProjectReferenceUsePolicy.GENERAL,
                     metadata={"job_local_direct_reference": True},
                 )
+        return scoped
+
+    def _generation_reference_scoped_project(
+        self,
+        project: ProjectRecord,
+        template_id: str,
+        direct_ids: list[str],
+        state: dict,
+    ) -> ProjectRecord:
+        """Build a Job-local reference view without rewriting project history.
+
+        Public project reads retain the legacy selected-output projection.  A
+        new generation Job, however, must not turn that historical projection
+        into Provider input unless the output has been promoted through the
+        versioned continuity-anchor ledger.  Specialized Professional and
+        E-Commerce flows keep their existing admission owners; Standard and
+        General use the narrow direct-input-plus-single-anchor contract.
+        """
+
+        scoped = self._reference_scoped_project(
+            project,
+            template_id,
+            direct_ids,
+            state,
+            strict_uploaded_scope=True,
+        )
+        if self._reference_project_mode(project, template_id) != "standard":
+            return scoped
+
+        anchor = state.get("active_continuity_anchor") if state.get("state") == "active" else None
+        if anchor is not None:
+            # The base scope has already reduced this to the one validated
+            # anchor.  Do not add a second generated reference here.
+            return scoped
+
+        # Keep selected_output_refs and GENERATED_SELECTED assets in the
+        # persisted project for history and old clients, but remove them from
+        # this in-memory generation view.  Direct uploads remain the only
+        # Standard/General inputs for this Job.
+        scoped.selected_output_refs = []
+        direct_ids_set = set(direct_ids)
+        scoped.reference_assets = [
+            reference
+            for reference in scoped.reference_assets
+            if reference.source_type == ProjectReferenceSourceType.UPLOADED
+            and reference.asset_ref_id in direct_ids_set
+        ]
+        scoped.uploaded_asset_refs = [
+            item
+            for item in scoped.uploaded_asset_refs
+            if str(item.get("asset_id") or "") in direct_ids_set
+        ]
         return scoped
 
     def _project_asset_ids(self, project: ProjectRecord) -> list[str]:

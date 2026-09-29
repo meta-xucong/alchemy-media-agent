@@ -8,13 +8,16 @@ contract-shaped substitute.
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 import hashlib
+from pathlib import Path
+import tempfile
 from typing import Any
 
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import build_brain_source_projection_receipt
-from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService, V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.physical_renderer_reference_plan import (
     DOC269_MAX_REFERENCE_IMAGES,
@@ -28,11 +31,66 @@ from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projectio
     build_product_truth_admission,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import VariationExecutionContract
+from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
 from services.alchemy_codex_local_adapter.ecommerce_authority import (
     _LEGACY_TEST_AUTHORITY_CAPABILITY,
     NativeEcommerceAuthority,
     NativeEcommerceAuthorityPreflight,
 )
+
+
+_ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+class _EcommerceContractAssetStore(V3UploadedAssetStore):
+    """Give logical E-Commerce test IDs a real, test-only source file.
+
+    The production store must reject unresolved upload IDs.  These contract
+    tests intentionally focus on Brain/template semantics and historically
+    used symbolic product IDs, so the helper materializes a tiny valid PNG
+    only when the caller has not supplied an explicit asset store.
+    """
+
+    def __init__(self) -> None:
+        self._temporary_root = tempfile.TemporaryDirectory(prefix="alchemy-ecommerce-contract-")
+        super().__init__(storage_root=Path(self._temporary_root.name))
+
+    def resolve_uploaded_assets(self, asset_ids: list[str]) -> list[UploadedAssetInfo]:
+        resolved = super().resolve_uploaded_assets(asset_ids)
+        output: list[UploadedAssetInfo] = []
+        for item in resolved:
+            if item.file_path:
+                output.append(item)
+                continue
+            asset_id = str(item.asset_id or "").strip()
+            if not asset_id:
+                output.append(item)
+                continue
+            safe_dir = self.storage_root / "synthetic" / hashlib.sha256(asset_id.encode("utf-8")).hexdigest()[:16]
+            path = safe_dir / "reference.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_bytes(_ONE_PIXEL_PNG)
+            digest = hashlib.sha256(_ONE_PIXEL_PNG).hexdigest()
+            output.append(
+                item.model_copy(
+                    update={
+                        "role": AssetRole.PRODUCT_REFERENCE,
+                        "file_path": str(path),
+                        "filename": f"{asset_id}.png",
+                        "mime_type": "image/png",
+                        "metadata": {
+                            **dict(item.metadata or {}),
+                            "asset_lookup_status": "synthetic_contract_fixture",
+                            "content_sha256": digest,
+                            "source_integrity_id": digest,
+                        },
+                    }
+                )
+            )
+        return output
 
 
 def _resolve_ecommerce_test_authority(
@@ -1014,4 +1072,5 @@ def ecommerce_test_service(
     runtime = ScenarioRuntime(
         llm_brain_adapter=V3LLMBrainAdapter(provider=brain_provider or EcommerceRemoteBrainTestProvider())
     )
+    service_kwargs.setdefault("asset_store", _EcommerceContractAssetStore())
     return V3ProductApiService(scenario_runtime=runtime, **service_kwargs)

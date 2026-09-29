@@ -33,6 +33,8 @@ from typing import Any
 import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain.adapter import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import CapabilityActivationError
@@ -504,10 +506,20 @@ class _CapturingBrainAdapter:
 
     def build_request(self, *, metadata, scenario_id, **_kwargs):
         self.request_metadata = metadata
-        return SimpleNamespace(metadata=metadata, scenario_id=scenario_id)
+        return SimpleNamespace(
+            metadata=metadata,
+            scenario_id=scenario_id,
+            brand_visual_context={},
+        )
 
     def run(self, _request):
-        return object()
+        return build_remote_required_result(
+            BrainRunRequest(
+                user_input="Body proportion evidence forwarding test",
+                stage="plan",
+            ),
+            "test_adapter_contract_only",
+        )
 
 
 def test_runtime_body_owner_call_site_consumes_admitted_refs_through_injected_provider() -> None:
@@ -592,6 +604,7 @@ def test_runtime_run_llm_brain_forwards_injected_profile_into_brain_request(monk
     request.metadata = _reference_assisted_metadata()
     request.body_source_analysis_assets = _trusted_internal_source_analysis_assets()
     request.user_input = "Build a Body Silhouette request."
+    request.optional_brand_id = None
     request.product_profile = {}
     request.uploaded_assets = []
     request.uploaded_asset_ids = []

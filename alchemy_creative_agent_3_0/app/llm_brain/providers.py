@@ -1214,11 +1214,16 @@ def _required_finalizer_reserve_seconds(request: BrainRunRequest) -> float:
     Ordinary compatibility planning may still use the complete remaining
     budget.  Real-image plan and generate preparation calls are different: the
     runtime will not send a provider operation until the remote Brain signs
-    the canonical prompt, so either pre-finalizer call must not consume the
-    only bounded window in which that sign-off can complete.
+    the canonical prompt, so every pre-finalizer call must not consume the
+    only bounded window in which that sign-off can complete.  The runtime's
+    operation labels are not the Brain stage contract; project planning and
+    continuation paths may use a descriptive stage name.  Identify the
+    finalizer by its reserved prefix and treat every other real-image Brain
+    stage as a pre-finalizer stage.
     """
 
-    if str(getattr(request, "stage", "") or "").strip() not in {"plan", "generate"}:
+    stage = str(getattr(request, "stage", "") or "").strip().lower()
+    if stage.startswith("provider_prompt_"):
         return 0.0
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     policy = getattr(request, "template_capability_policy", None)

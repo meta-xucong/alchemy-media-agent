@@ -123,7 +123,7 @@ def test_local_only_review_cannot_certify_hard_semantic_contract(monkeypatch, tm
 
     assert report.status == "manual_review"
     assert report.mode == "local_image_heuristic"
-    assert report.verification_state == "unverified"
+    assert report.verification_state == "verification_skipped"
     assert "hard_semantic_contract_unverified" in [item["code"] for item in report.detected_issues]
     assert report.evidence["required_pixel_review"] is True
 

@@ -1128,7 +1128,9 @@ def test_uploaded_reference_can_be_saved_to_project_and_used_in_context(tmp_path
             "use_policy": "style",
         },
     )
-    assert handlers.get_project_context(project["project_id"])["uploaded_reference_assets"] == []
+    initial_context = handlers.get_project_context(project["project_id"])
+    assert initial_context["uploaded_reference_assets"][0]["asset_ref_id"] == reference_asset_id
+    assert initial_context["metadata"]["active_reference_count"] == 1
     handlers.post_project_job(project["project_id"], {"user_input":project["user_goal"],"uploaded_asset_ids":[reference_asset_id]})
     context = handlers.get_project_context(project["project_id"])
 
@@ -1342,7 +1344,14 @@ def test_general_context_preserves_legacy_multiple_selected_references(tmp_path)
 
     context = handlers.get_project_context(project_record.project_id)
 
-    assert context["selected_output_assets"] == []
+    assert [item["output_id"] for item in context["selected_output_assets"]] == [
+        first.output_id,
+        second.output_id,
+    ]
+    assert [item["output_id"] for item in context["selected_reference_assets"]] == [
+        first.output_id,
+        second.output_id,
+    ]
     assert context["metadata"]["continuity_anchor"]["active_continuity_anchor"] is None
     raw=handlers.project_service.project_store.get_project(project["project_id"])
     assert {ref.output_id for ref in raw.selected_output_refs} == {first.output_id,second.output_id}
@@ -1448,7 +1457,8 @@ def test_identity_only_portrait_does_not_misapply_structured_appearance_lock(tmp
         {"asset_ref_id": upload_id, "source_type": "uploaded", "use_policy": "general"},
     )
 
-    assert handlers.get_project_context(project["project_id"])["uploaded_reference_assets"] == []
+    public_context = handlers.get_project_context(project["project_id"])
+    assert public_context["uploaded_reference_assets"][0]["asset_ref_id"] == upload_id
     handlers.post_project_job(project["project_id"], {"user_input":project["user_goal"],"uploaded_asset_ids":[upload_id]})
     context = handlers.get_project_context(project["project_id"])
 
@@ -1476,7 +1486,7 @@ def test_portrait_project_create_marks_uploaded_asset_as_face_reference() -> Non
         }
     )["project"]
 
-    assert project["uploaded_asset_refs"] == []
+    assert project["uploaded_asset_refs"][0]["asset_id"] == "v3_asset_feedfacefeedface"
     stored=handlers.project_service.project_store.get_project(project["project_id"])
     assert stored.uploaded_asset_refs[0]["role"] == "face_reference"
 

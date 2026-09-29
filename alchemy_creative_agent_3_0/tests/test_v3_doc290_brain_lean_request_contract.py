@@ -75,10 +75,12 @@ GATE_A_BASELINE = {
     },
     "general_multi": {
         "plan": (21480, 14997, 40889, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
-        # DOC323 remeasured the current per-output variation receipt schema:
-        # the frozen contract digest and semantic axes/purpose are asserted
-        # below. Historical Gate A byte measurements remain unchanged.
-        "provider_prompt_finalize": (5359, 65281, 88469, "7eef15ecc60258514b352223f12cc6b0f0014c7fb6a28ffd1242d531ca3c09f0"),
+        # DOC323 remeasured the current per-output variation receipt schema.
+        # Later source-projection and variation-contract closures changed the
+        # deterministic schema shape; keep the current digest as the Gate A
+        # comparison point while the semantic axes/purpose remain asserted
+        # below.
+        "provider_prompt_finalize": (5359, 65281, 88469, "b6f511dfdca41066785c33d8fdc45b2bfd93eb7fc4af362d12189ce3804568d2"),
     },
     "professional_ecommerce": {
         "plan": (21480, 21210, 47495, "5c485b5493ae3538fe006292cf296adde4e1a3d464fd01d0964c7dab33badd5b"),
@@ -361,7 +363,11 @@ def test_doc290_normal_entry_dispatch_baseline(captured_entry):
     if state.case == "professional_ecommerce":
         assert state.image_capture.requests == []
     if state.case == "general_multi":
-        assert state.source_calls == {"brain": 1}
+        # Doc322 retired the implicit project-wide source matcher. Existing
+        # project references remain readable history, but a new Standard /
+        # General Job may only use explicit current uploads or a validated
+        # continuity anchor.
+        assert state.source_calls == {}
         receipt_schema = finalizer["return_schema"]["canonical_provider_prompts"][0]["variation_execution_receipt"]
         assert set(receipt_schema) == {
             "contract_digest", "contract_version", "output_index", "owner",
@@ -431,22 +437,10 @@ def test_doc290_bound_contracts_survive_both_stages(captured_entry):
                 "semantic_output_purpose": output.output_purpose,
                 "semantic_variation_axes": list(output.variation_axes),
             }
-        projection = metadata["doc270_general_original_source_projection"]
-        assert [item["asset_id"] for item in projection["sources"]] == state.source_ids
-        assert metadata["doc270_general_source_activation_receipts"][0]["state"] == "activated_resolved"
-        assert metadata["doc270_general_command_identity"]
-        assert len(metadata["doc281_general_output_source_bindings_v1"]) == count
-        output_bindings = metadata["doc281_general_output_source_bindings_v1"]
-        assert [item["output_index"] for item in output_bindings] == list(range(1, count + 1))
-        assert len({item["output_nonce"] for item in output_bindings}) == count
-        assert all(len(item["output_binding_digest"]) == 64 for item in output_bindings)
-        source = projection["sources"][0]
-        original_source = next(item for item in state.source_snapshot["entries"] if item["asset_id"] == state.source_ids[0])
-        assert source["content_sha256"] == original_source["content_sha256"]
-        assert source["reference_id"] == original_source["reference_id"]
-        assert metadata["doc270_general_source_activation_receipts"][0]["source_library_snapshot_digest"] == state.source_snapshot["snapshot_digest"]
-        assert [item["asset_id"] for item in plan["uploaded_assets"]] == state.source_ids
-        assert [item["asset_id"] for item in context["reference_bindings"]] == state.source_ids
+        assert "doc270_general_source_activation_receipts" not in metadata
+        assert "doc270_general_original_source_projection" not in metadata
+        assert "doc270_general_command_identity" not in metadata
+        assert "doc281_general_output_source_bindings_v1" not in metadata
     else:
         assert "variation_execution_receipt" not in schema
         assert "variation_execution_contract" not in plan

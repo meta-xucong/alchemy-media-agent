@@ -1,6 +1,13 @@
+import base64
+
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
-from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService, V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.shared_capabilities import VISUAL_CAPABILITY_CLUSTER_ID
+
+
+_ONE_PIXEL_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def _plan(monkeypatch, payload):
@@ -112,15 +119,29 @@ def test_non_human_illustration_uses_universal_base_only(monkeypatch) -> None:
     assert {"visual_grammar", "universal_visual_quality"} <= active
 
 
-def test_product_api_reuses_one_frozen_plan_for_generate(monkeypatch) -> None:
+def test_product_api_reuses_one_frozen_plan_for_generate(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
-    service = V3ProductApiService()
+    asset_store = V3UploadedAssetStore(storage_root=tmp_path / "assets")
+    upload = asset_store.create_upload(
+        {
+            "filename": "face.png",
+            "mime_type": "image/png",
+            "size_bytes": len(base64.b64decode(_ONE_PIXEL_PNG)),
+            "role": "face_reference",
+        }
+    )
+    asset_store.store_content(
+        upload.asset_id,
+        {"content_base64": _ONE_PIXEL_PNG, "mime_type": "image/png"},
+    )
+    assert asset_store.complete_upload(upload.asset_id) is not None
+    service = V3ProductApiService(asset_store=asset_store)
     created = service.create_job(
         {
             "user_input": "Create a real woman portrait",
             "scenario_selection": {"scenario_id": "general_creative"},
-            "uploaded_asset_ids": ["face"],
+            "uploaded_asset_ids": [upload.asset_id],
             "metadata": {"requested_image_count": 1},
         }
     )

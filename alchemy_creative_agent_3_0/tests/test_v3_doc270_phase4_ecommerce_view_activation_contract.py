@@ -1357,6 +1357,15 @@ def test_doc270_phase4_keeps_generated_continuation_separate_and_no_product_prom
     handlers, _catalog, project, product_ids = _fixture(tmp_path)
     initial = handlers.post_project_job(project["project_id"], _payload(product_ids, key="phase4-history"))
     output = _save_history_output(handlers, job_id=initial["job_id"], index=41)
+    # The continuation contract accepts only a formally delivered canonical
+    # output.  This fixture creates the output-store row directly, so close
+    # it with the same immutable delivery receipt used by the recovery tests
+    # before exercising generated_selected reference binding.
+    from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_phase1 import (
+        _mark_output_formally_delivered,
+    )
+
+    _mark_output_formally_delivered(handlers, project_id=project["project_id"], output=output)
     selected = handlers.post_project_reference(
         project["project_id"],
         {

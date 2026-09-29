@@ -371,7 +371,11 @@ def test_public_project_projection_keeps_owner_none_selection_but_scrubs_output_
     public = service._public_project_record(project)  # noqa: SLF001
     payload = public.model_dump(mode="json")
 
-    assert payload["selected_output_refs"] == []  # Unverified legacy reference is not a current anchor.
+    # Public project/history reads preserve legacy selection records. The
+    # generation-only reference adapter suppresses this unverified record from
+    # physical continuation inputs; hiding it here would break old history
+    # and selection surfaces.
+    assert payload["selected_output_refs"][0]["output_id"] == project.selected_output_refs[0].output_id
     assert service._public_output_ref(project.selected_output_refs[0]).metadata == {
         "recommendation": "keep this user-facing suggestion"
     }
@@ -414,7 +418,7 @@ def test_selection_hold_projects_the_same_public_record_and_context(monkeypatch)
         message="hold",
     )
 
-    assert response["project"]["selected_output_refs"] == []
+    assert response["project"]["selected_output_refs"][0]["output_id"] == "output_public"
     assert response["context"]["selected_output_assets"][0]["output_id"] == "output_public"
     _assert_execution_secrets_are_absent(
         {"job_status": response["job_status"], "project": response["project"], "context": response["context"]}

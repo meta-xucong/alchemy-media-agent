@@ -303,6 +303,14 @@ class V3GeneratedOutputStore:
                 return records if limit is None else records[: max(1, int(limit or 1))]
         by_job, _by_project = self._scoped_output_paths()
         records = self._read_scoped_records(by_job.get(target, ()), job_id=target)
+        # An out-of-band edit can move an existing record to another job while
+        # leaving the output directory revision unchanged. If the cached
+        # candidate paths produced no exact match, rebuild the locator once so
+        # the new authoritative job_id can be discovered. Normal repeated
+        # reads still stay on the cached path map and avoid a second scan.
+        if not records:
+            by_job, _by_project = self._scoped_output_paths(force_rescan=True)
+            records = self._read_scoped_records(by_job.get(target, ()), job_id=target)
         return records if limit is None else records[: max(1, int(limit or 1))]
 
     def list_by_project(self, project_id: str, limit: int = 256) -> list[V3GeneratedOutputRecord]:
@@ -315,6 +323,12 @@ class V3GeneratedOutputStore:
                 return list(self._records_by_project_cache.get(target, []))[: max(1, int(limit or 256))]
         _by_job, by_project = self._scoped_output_paths()
         records = self._read_scoped_records(by_project.get(target, ()), project_id=target)
+        # Match list_by_job: an in-place output.json edit may change the
+        # authoritative project_id without changing the directory revision.
+        # Rebuild only when the cached candidates produce no exact match.
+        if not records:
+            _by_job, by_project = self._scoped_output_paths(force_rescan=True)
+            records = self._read_scoped_records(by_project.get(target, ()), project_id=target)
         return records[: max(1, int(limit or 256))]
 
     def file_for_variant(self, output_id: str, variant: str) -> tuple[Path, str, str] | None:
@@ -574,7 +588,11 @@ class V3GeneratedOutputStore:
             signature_items.append((str(path), int(stat.st_mtime_ns), int(stat.st_size)))
         return tuple(paths), tuple(signature_items)
 
-    def _scoped_output_paths(self) -> tuple[dict[str, tuple[Path, ...]], dict[str, tuple[Path, ...]]]:
+    def _scoped_output_paths(
+        self,
+        *,
+        force_rescan: bool = False,
+    ) -> tuple[dict[str, tuple[Path, ...]], dict[str, tuple[Path, ...]]]:
         """Locate scoped records without deserializing the full output history.
 
         Project pages normally need only a small subset of output records. The
@@ -586,8 +604,20 @@ class V3GeneratedOutputStore:
         fields before returning it.
         """
 
+        storage_revision = self._storage_revision()
+        if not force_rescan:
+            with self._cache_lock:
+                cached_revision = self._scoped_index_revision
+                if (
+                    cached_revision is not None
+                    and cached_revision[0] == storage_revision
+                    and self._scoped_paths_by_job is not None
+                    and self._scoped_paths_by_project is not None
+                ):
+                    return dict(self._scoped_paths_by_job), dict(self._scoped_paths_by_project)
+
         paths, signature = self._record_paths_signature()
-        revision = (self._storage_revision(), signature)
+        revision = (storage_revision, signature)
         with self._cache_lock:
             if (
                 revision == self._scoped_index_revision

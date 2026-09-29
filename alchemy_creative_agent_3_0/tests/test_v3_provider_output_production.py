@@ -64,11 +64,13 @@ def test_public_candidate_recommendation_uses_final_delivery_review() -> None:
         output_id="v3_output_final",
         visible_output_ids={"v3_output_final"},
     ) == "accept"
+    # A report for an output outside the caller's final-delivery projection is
+    # not public evidence; do not leak a stale reject/accept recommendation.
     assert V3ProductApiService._public_candidate_recommendation(  # noqa: SLF001
         report,
         output_id="v3_output_hidden",
         visible_output_ids=set(),
-    ) == "reject"
+    ) is None
 
 
 def _generation_request(reference_path: Path | None = None) -> GenerationRequest:

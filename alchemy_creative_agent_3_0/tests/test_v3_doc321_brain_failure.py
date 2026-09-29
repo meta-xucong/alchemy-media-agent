@@ -7,6 +7,7 @@ from alchemy_creative_agent_3_0.tests.test_v3_product_api_minimal_ux import _rem
 
 @pytest.mark.parametrize("error,available,expected", [
     ("timeout", True, "brain_timeout"),
+    ("execution_budget_exhausted", True, "brain_timeout"),
     ("provider_unavailable", False, "provider_unavailable"),
     ("provider_error", True, "brain_provider_error"),
 ])

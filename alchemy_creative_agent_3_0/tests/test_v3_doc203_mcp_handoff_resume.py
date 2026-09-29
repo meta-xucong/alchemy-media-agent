@@ -2879,7 +2879,11 @@ def test_doc228_exact_body_handoff_resume_reenters_runtime_despite_stale_failed_
     class _RuntimeProbe:
         def __init__(self) -> None:
             self.calls: list[dict] = []
-            self.scenario_registry = ScenarioRuntime().scenario_registry
+            self._base_runtime = ScenarioRuntime()
+            self.scenario_registry = self._base_runtime.scenario_registry
+
+        def _runtime_job_id(self, request, resolution):  # noqa: ANN001, ANN201
+            return self._base_runtime._runtime_job_id(request, resolution)  # noqa: SLF001
 
         def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
             self.calls.append(dict(payload.get("metadata") or {}))
@@ -6521,11 +6525,25 @@ def test_doc203_character_card_plan_result_is_durable_at_stage_creation_boundary
     planning = _minimal_planning_result(job_id)
     base_runtime = ScenarioRuntime()
     resolution = base_runtime.scenario_registry.resolve({"scenario_id": "general_creative"})
+    reference_paths = {
+        asset_id: tmp_path / f"{asset_id}.png"
+        for asset_id in (
+            "face_reference_fixture",
+            "face_reference_front_fixture",
+            "face_reference_side_fixture",
+            "face_reference_rear_fixture",
+        )
+    }
+    for path in reference_paths.values():
+        path.write_bytes(_png_bytes())
 
     class _PlannedRuntime:
         def __init__(self) -> None:
             self.scenario_registry = base_runtime.scenario_registry
             self.plan_calls = 0
+
+        def _runtime_job_id(self, request, resolution):  # noqa: ANN001, ANN201
+            return base_runtime._runtime_job_id(request, resolution)  # noqa: SLF001
 
         def plan_job(self, _payload):  # noqa: ANN001, ANN201
             self.plan_calls += 1
@@ -6538,7 +6556,13 @@ def test_doc203_character_card_plan_result_is_durable_at_stage_creation_boundary
     monkeypatch.setattr(
         V3ProductApiService,
         "_professional_character_card_reference_assets",
-        lambda _self, _ids: [{"asset_id": "face_reference_fixture", "role": "face_reference"}],
+        lambda _self, _ids: [
+            {
+                "asset_id": "face_reference_fixture",
+                "role": "face_reference",
+                "file_path": str(reference_paths["face_reference_fixture"]),
+            }
+        ],
     )
     monkeypatch.setattr(
         V3ProductApiService,

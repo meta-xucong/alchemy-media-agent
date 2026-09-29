@@ -16,6 +16,7 @@ import pytest
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import VisionOutputInspector
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
     EcommerceRemoteBrainTestProvider,
     ecommerce_test_service,
@@ -27,9 +28,27 @@ APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
 
 
+class _PassingVisionProvider:
+    provider_name = "doc132_ecommerce_visual_review_fixture"
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def inspect(self, _resolution, *, metadata=None) -> dict:
+        return {
+            "status": "pass",
+            "confidence": 0.96,
+            "issue_codes": [],
+            "scores": {"artifact_safety": 0.96, "composition": 0.95, "commercial_finish": 0.95, "overall": 0.95},
+        }
+
+
 def _handlers(tmp_path: Path, *, provider: EcommerceRemoteBrainTestProvider | None = None) -> V3ProductRouteHandlers:
     return V3ProductRouteHandlers(
-        service=ecommerce_test_service(brain_provider=provider),
+        service=ecommerce_test_service(
+            brain_provider=provider,
+            vision_inspector=VisionOutputInspector(vision_provider=_PassingVisionProvider()),
+        ),
         project_store=PersistentProjectStore(tmp_path / "projects"),
     )
 

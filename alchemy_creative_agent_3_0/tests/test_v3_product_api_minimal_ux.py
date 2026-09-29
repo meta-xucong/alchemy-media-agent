@@ -518,8 +518,12 @@ class _LocalCapabilityActivationFailureRuntime:
 
 class _ProductApiRuntimeError:
     def __init__(self, base_runtime: object, on_call=None) -> None:  # noqa: ANN001
+        self._base_runtime = base_runtime
         self.scenario_registry = base_runtime.scenario_registry
         self._on_call = on_call
+
+    def _runtime_job_id(self, request, resolution):  # noqa: ANN001, ANN201
+        return self._base_runtime._runtime_job_id(request, resolution)  # noqa: SLF001
 
     def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
         if self._on_call is not None:
@@ -529,7 +533,11 @@ class _ProductApiRuntimeError:
 
 class _KeyboardInterruptRuntime:
     def __init__(self, base_runtime: object) -> None:
+        self._base_runtime = base_runtime
         self.scenario_registry = base_runtime.scenario_registry
+
+    def _runtime_job_id(self, request, resolution):  # noqa: ANN001, ANN201
+        return self._base_runtime._runtime_job_id(request, resolution)  # noqa: SLF001
 
     def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
         raise KeyboardInterrupt()

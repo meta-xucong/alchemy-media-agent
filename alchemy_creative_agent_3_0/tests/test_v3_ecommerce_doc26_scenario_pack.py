@@ -10,6 +10,7 @@ from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry, 
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import EcommerceScenarioPackPlanner
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
+    _EcommerceContractAssetStore,
     EcommerceRemoteBrainTestProvider,
     ecommerce_test_service,
 )
@@ -74,7 +75,11 @@ def test_production_service_fails_closed_when_remote_brain_is_not_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
-    status = V3ProductApiService().create_job(_request())
+    # ReferenceInputPlan freezes physical source integrity before the Brain
+    # seam.  Use the shared contract asset store so this test isolates the
+    # intended remote-Brain-unavailable outcome instead of relying on the
+    # pre-Doc322 symbolic product ID fixture.
+    status = V3ProductApiService(asset_store=_EcommerceContractAssetStore()).create_job(_request())
 
     assert status.status == "blocked"
     assert "remote_creative_brain_required_for_template" in " ".join(status.warnings)

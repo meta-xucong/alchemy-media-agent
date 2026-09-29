@@ -1146,9 +1146,9 @@ def test_real_image_provider_run_keeps_budget_when_shared_deadline_is_exhausted(
     assert isinstance(failure.value.__cause__, BrainTransportTimeoutError)
 
 
-@pytest.mark.parametrize("stage", ["plan", "generate"])
+@pytest.mark.parametrize("stage", ["plan", "generate", "doc277_project_planning"])
 def test_real_image_pre_finalizer_progress_ceiling_is_handoff_bounded(monkeypatch, stage) -> None:
-    """The outer worker deadline must receive the narrowed plan ceiling."""
+    """Every real-image pre-finalizer stage receives the narrowed ceiling."""
 
     import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
 
@@ -1212,6 +1212,10 @@ def test_finalizer_receives_the_remaining_budget_without_plan_reservation() -> N
 
 
 def test_openai_chat_transport_timeout_is_normalized(monkeypatch) -> None:
+    # This regression exercises the retained SSE collector.  Production V3
+    # uses complete Chat Completions, so pin the legacy transport explicitly
+    # before installing the synthetic httpx module.
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
     _install_timeout_httpx(monkeypatch)
     provider = object.__new__(V3LLMBrainProvider)
     provider.model = "test-brain"

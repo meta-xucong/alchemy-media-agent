@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.schemas import BrandProfile, IndustryCategory
@@ -10,11 +12,27 @@ from alchemy_creative_agent_3_0.app.shared_capabilities import (
     CapabilityStatus,
     CapabilityWarning,
 )
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import _EcommerceContractAssetStore
+
+
+@pytest.fixture(autouse=True)
+def _isolate_general_productization_from_remote_brain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this local-summary contract suite independent of developer .env."""
+
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "0")
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
 
 
 def _service(tmp_path) -> V3ProductApiService:
     brand_service = BrandProfileService(BrandProfileStore(tmp_path / "brand_memory"))
-    return V3ProductApiService(brand_profile_service=brand_service)
+    # The Doc322 plan freezes physical source integrity before planning.  The
+    # old productization fixture used a symbolic upload ID; use the shared
+    # contract store so this suite exercises General semantics rather than an
+    # unavailable-file branch.
+    return V3ProductApiService(
+        brand_profile_service=brand_service,
+        asset_store=_EcommerceContractAssetStore(),
+    )
 
 
 def _summary_text(payload: dict) -> str:

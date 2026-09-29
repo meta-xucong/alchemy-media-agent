@@ -123,6 +123,52 @@ def _save_output(
     )
 
 
+def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:
+    """Build the immutable output-store receipt required for continuation tests."""
+
+    envelope = {
+        "execution_fingerprint": f"fingerprint_{output.output_id}",
+        "envelope_id": f"envelope_{output.output_id}",
+        "resolved_constraint_ledger": {
+            "ledger_id": f"ledger_{output.output_id}",
+            "provider_projection": {"capability_projection": {}},
+        },
+    }
+    updated = handlers.service.output_store.update_metadata(
+        output.output_id,
+        {
+            "project_id": project_id,
+            "capability_execution_envelope": envelope,
+            "output_index": 1,
+        },
+    )
+    assert updated is not None
+    handlers.service.output_store.save_job_closure(
+        output.job_id,
+        {
+            "schema_version": "v3_output_delivery_closure_v1",
+            "job_id": output.job_id,
+            "status": "complete",
+            "review_evidence_receipt_status": "complete",
+            "final_delivery_status": "ready",
+            "automatic_delivery_available": True,
+            "eligible_output_ids": [output.output_id],
+            "execution_fingerprint": envelope["execution_fingerprint"],
+            "envelope_id": envelope["envelope_id"],
+            "ledger_id": envelope["resolved_constraint_ledger"]["ledger_id"],
+            "outputs": [
+                {
+                    "output_id": output.output_id,
+                    "job_id": output.job_id,
+                    "asset_id": output.asset_id,
+                    "candidate_id": output.candidate_id,
+                    "content_sha256": updated.metadata["content_sha256"],
+                }
+            ],
+        },
+    )
+
+
 def _delivery_status(base, *, output_id: str, ready: bool):
     return base.model_copy(
         update={
@@ -179,6 +225,7 @@ def test_doc263_ecommerce_project_view_keeps_four_groups_separate_and_never_prom
         name="selected_direction",
         color=(90, 130, 180),
     )
+    _mark_output_formally_delivered(handlers, project_id=project_id, output=output)
     generated_reference = handlers.post_project_reference(
         project_id,
         {

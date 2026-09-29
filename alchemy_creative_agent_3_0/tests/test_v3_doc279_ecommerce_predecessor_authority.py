@@ -938,6 +938,14 @@ def test_doc279_selected_continuation_change_fails_open_without_replaying_histor
         _browser_repeat_payload(product_ids, key="doc279-continuation-seed"),
     )
     seed_output = _save_history_output(handlers, job_id=seed["job_id"], index=279)
+    # Generated-selected continuation is intentionally limited to a
+    # canonical, formally delivered output.  This fixture writes the output
+    # row directly, so add the immutable delivery closure before binding it.
+    from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_phase1 import (
+        _mark_output_formally_delivered,
+    )
+
+    _mark_output_formally_delivered(handlers, project_id=project["project_id"], output=seed_output)
     handlers.get_project(project["project_id"])
     continuation = handlers.post_project_reference(
         project["project_id"],

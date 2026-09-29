@@ -372,7 +372,7 @@ def test_doc164_serial_anchor_vision_distinguishes_root_from_reviewed_winner(
     assert "Image 2 is the immutable root portrait" in prompt
     assert "previously reviewed anchor winners" in prompt
     assert "same_person_identity_plus_neutral_anchor_capture_continuity" in prompt
-    assert '"reviewed_prior_anchor_image_indexes": [3]' in prompt
+    assert '"reviewed_prior_anchor_image_indexes":[3]' in prompt
 
 
 def test_doc164_ordinary_identity_review_does_not_gain_anchor_continuity(tmp_path) -> None:

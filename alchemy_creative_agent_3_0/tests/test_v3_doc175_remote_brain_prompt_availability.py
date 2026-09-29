@@ -476,6 +476,11 @@ def test_doc175_semantic_transport_attempt_reaches_blocked_outcome_safely(
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "520")
     monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "7")
+    # The repository .env selects the production-compatible non-stream
+    # transport. This regression intentionally exercises the legacy stream
+    # collector and must pin its protocol explicitly instead of inheriting
+    # the local runtime setting.
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
 
     def failed_stream(**_kwargs):  # noqa: ANN003
         providers_module._mark_transport_event("request_dispatched")  # noqa: SLF001
