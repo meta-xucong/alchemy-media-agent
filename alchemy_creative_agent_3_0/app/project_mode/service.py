@@ -4565,11 +4565,27 @@ class V3ProjectModeService:
                 and self._reference_project_mode(project, template_manifest.template_id) == "standard"
             )
             if standard_general_mode:
+                tombstoned_explicit_ids = (
+                    set(uploaded_asset_ids)
+                    & self._standard_project_source_tombstones(project)
+                )
+                if tombstoned_explicit_ids:
+                    return self._standard_source_migration_blocked_status(
+                        project.project_id,
+                        "v3_standard_source_tombstone_requires_new_upload",
+                    )
                 # Doc323: a General/Standard project's explicit original
                 # uploads become project-scoped source references. Reuse
                 # only those references on later Jobs; never scan a global
                 # source library or generated history.
-                persisted_source_ids = self._standard_project_source_reference_ids(project, [])
+                persisted_source_ids, promotion_error = (
+                    self._promote_legacy_standard_project_sources(project)
+                )
+                if promotion_error:
+                    return self._standard_source_migration_blocked_status(
+                        project.project_id,
+                        promotion_error,
+                    )
                 if (
                     not persisted_source_ids
                     and not self._has_standard_project_source_reference_history(project)
@@ -6945,7 +6961,8 @@ class V3ProjectModeService:
         active_uploaded_reference_ids = {
             reference.reference_id
             for reference in project.reference_assets
-            if reference.status == ProjectReferenceStatus.ACTIVE
+            if reference.project_id == project.project_id
+            and reference.status == ProjectReferenceStatus.ACTIVE
             and reference.source_type == ProjectReferenceSourceType.UPLOADED
         }
         legacy_ids: list[str] = []
@@ -6992,6 +7009,8 @@ class V3ProjectModeService:
         reference: ProjectReferenceAsset,
     ) -> bool:
         if (
+            reference.project_id != project.project_id
+            or
             reference.status != ProjectReferenceStatus.ACTIVE
             or reference.source_type != ProjectReferenceSourceType.UPLOADED
             or reference.use_policy != ProjectReferenceUsePolicy.PRODUCT
@@ -13922,8 +13941,13 @@ class V3ProjectModeService:
         return [r["asset_id"] for r in plan.as_dict()["direct_references"]]
 
     @staticmethod
-    def _is_standard_project_source_reference(reference: ProjectReferenceAsset) -> bool:
+    def _is_standard_project_source_reference(
+        project: ProjectRecord,
+        reference: ProjectReferenceAsset,
+    ) -> bool:
         if (
+            reference.project_id != project.project_id
+            or
             reference.status != ProjectReferenceStatus.ACTIVE
             or reference.source_type != ProjectReferenceSourceType.UPLOADED
         ):
@@ -13934,6 +13958,20 @@ class V3ProjectModeService:
             and metadata.get("project_source_reference") is True
             and metadata.get("persisted_from_project_job") is True
         )
+
+    @staticmethod
+    def _standard_project_source_tombstones(project: ProjectRecord) -> set[str]:
+        tombstoned_ids = {
+            str(item.get("asset_id") or "").strip()
+            for item in project.uploaded_asset_refs
+            if str(item.get("status") or "").strip().lower() == ProjectReferenceStatus.INACTIVE.value
+        }
+        tombstoned_ids.update(
+            str(reference.asset_ref_id or "").strip()
+            for reference in project.reference_assets
+            if reference.status == ProjectReferenceStatus.INACTIVE
+        )
+        return tombstoned_ids
 
     def _standard_project_source_reference_ids(
         self,
@@ -13958,19 +13996,99 @@ class V3ProjectModeService:
 
         for asset_id in explicit_ids:
             add(asset_id)
+        tombstoned_ids = self._standard_project_source_tombstones(project)
         for reference in project.reference_assets:
-            if self._is_standard_project_source_reference(reference):
+            if (
+                self._is_standard_project_source_reference(project, reference)
+                and reference.asset_ref_id not in tombstoned_ids
+            ):
                 add(reference.asset_ref_id)
         return resolved
 
     def _has_standard_project_source_reference_history(self, project: ProjectRecord) -> bool:
         return any(
-            reference.source_type == ProjectReferenceSourceType.UPLOADED
+            reference.project_id == project.project_id
+            and reference.source_type == ProjectReferenceSourceType.UPLOADED
             and str(reference.metadata.get("template_id") or "").strip() == GENERAL_TEMPLATE_ID
             and reference.metadata.get("project_source_reference") is True
             and reference.metadata.get("persisted_from_project_job") is True
             for reference in project.reference_assets
         )
+
+    def _promote_legacy_standard_project_sources(
+        self,
+        project: ProjectRecord,
+    ) -> tuple[list[str], str | None]:
+        """Promote trusted pre-Doc323 uploaded project refs once.
+
+        Older releases persisted General uploads with the server-owned
+        ``persisted_from_project_job`` marker but did not have the newer
+        ``project_source_reference`` marker.  They are eligible for a one-time
+        compatibility promotion only when the record is an uploaded, active,
+        same-project General reference and its current upload digest still
+        matches the stored digest.  Public/client-created references do not
+        carry the server marker and therefore cannot enter this path.
+        """
+
+        tombstoned_ids = self._standard_project_source_tombstones(project)
+        candidates = [
+            reference
+            for reference in project.reference_assets
+            if (
+                reference.project_id == project.project_id
+                and reference.asset_ref_id not in tombstoned_ids
+                and reference.status == ProjectReferenceStatus.ACTIVE
+                and reference.source_type == ProjectReferenceSourceType.UPLOADED
+                and str(reference.metadata.get("template_id") or "").strip()
+                == GENERAL_TEMPLATE_ID
+                and reference.metadata.get("persisted_from_project_job") is True
+                and reference.metadata.get("project_source_reference") is not True
+            )
+        ]
+        if not candidates:
+            return self._standard_project_source_reference_ids(project, []), None
+
+        validated: list[tuple[ProjectReferenceAsset, str]] = []
+        for reference in candidates:
+            try:
+                upload = self._require_ready_uploaded_reference(
+                    reference.asset_ref_id,
+                    ProjectReferenceUsePolicy.GENERAL,
+                )
+            except ValueError:
+                return [], "v3_standard_source_migration_asset_unavailable"
+            expected_digest = str(reference.metadata.get("content_sha256") or "").strip().lower()
+            upload_digest = str(
+                upload.content_sha256
+                or (upload.metadata or {}).get("content_sha256")
+                or ""
+            ).strip().lower()
+            path = Path(str(upload.file_path or ""))
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+                or not re.fullmatch(r"[0-9a-f]{64}", upload_digest)
+                or not path.is_file()
+            ):
+                return [], "v3_standard_source_migration_integrity_unverified"
+            try:
+                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                return [], "v3_standard_source_migration_integrity_unverified"
+            if actual_digest != expected_digest or actual_digest != upload_digest:
+                return [], "v3_standard_source_migration_integrity_mismatch"
+            validated.append((reference, actual_digest))
+
+        for reference, actual_digest in validated:
+            reference.metadata.update(
+                {
+                    "project_source_reference": True,
+                    "doc323_legacy_source_migrated": True,
+                    "content_sha256": actual_digest,
+                }
+            )
+            self._ensure_legacy_uploaded_ref(project, reference)
+        self.project_store.save_project(project)
+        return self._standard_project_source_reference_ids(project, []), None
 
     def _legacy_standard_project_source_reference_ids(
         self,
@@ -14004,11 +14122,7 @@ class V3ProjectModeService:
                 ]
             except (KeyError, OSError, ValueError):
                 return job_id, [], "v3_standard_source_migration_plan_unavailable"
-            tombstoned_ids = {
-                str(item.get("asset_id") or "").strip()
-                for item in project.uploaded_asset_refs
-                if str(item.get("status") or "").strip().lower() == ProjectReferenceStatus.INACTIVE.value
-            }
+            tombstoned_ids = self._standard_project_source_tombstones(project)
             direct_ids = [asset_id for asset_id in direct_ids if asset_id not in tombstoned_ids]
             if direct_ids:
                 return job_id, list(dict.fromkeys(direct_ids)), None

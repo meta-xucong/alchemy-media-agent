@@ -1,5 +1,6 @@
 """Doc323: project-bound source reuse without a global source pool."""
 from copy import deepcopy
+from pathlib import Path
 from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectReferenceUsePolicy
 from alchemy_creative_agent_3_0.app.reference_input_plan import PLAN_KEY
 from alchemy_creative_agent_3_0.tests.test_v3_doc281_unified_source_library_smart_matching_phase0 import _general_project, _selection_registry
@@ -190,6 +191,287 @@ def test_standard_legacy_migration_merges_with_a_new_explicit_upload(tmp_path, m
     assert captured[0]["uploaded_asset_ids"] == ids
 
 
+def test_standard_promotes_legacy_server_project_sources_before_plan_recovery(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.metadata.pop("project_source_reference", None)
+        reference.metadata["persisted_from_project_job"] = True
+    handlers.project_service.project_store.save_project(stored)
+
+    captured = []
+    original = handlers.service.scenario_runtime.plan_job
+
+    def plan(request):
+        captured.append(deepcopy(request))
+        return original(request)
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", plan)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue with the old server-saved sources.", "uploaded_asset_ids": []},
+    )
+    assert captured[0]["uploaded_asset_ids"] == ids
+    promoted = handlers.project_service._require_project(project["project_id"])
+    assert all(
+        reference.metadata.get("project_source_reference") is True
+        for reference in promoted.reference_assets
+        if reference.asset_ref_id in ids
+    )
+
+
+def test_standard_legacy_promotion_requires_persisted_and_current_digest(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.metadata.pop("project_source_reference", None)
+        reference.metadata.pop("content_sha256", None)
+    handlers.project_service.project_store.save_project(stored)
+
+    def fail_if_planned(_request):
+        raise AssertionError("unverified legacy source must stop before Brain planning")
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", fail_if_planned)
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue only if every source is integrity-verified.", "uploaded_asset_ids": []},
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["failure_code"] == "v3_standard_source_migration_integrity_unverified"
+
+
+def test_standard_legacy_promotion_rejects_missing_file_before_mutation(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.metadata.pop("project_source_reference", None)
+    handlers.project_service.project_store.save_project(stored)
+    upload = handlers.service.get_uploaded_asset(ids[0])
+    assert upload is not None
+    handlers.service.asset_store._save_record(
+        upload.model_copy(update={"file_path": str(tmp_path / "missing-doc323-source.png")})
+    )
+
+    def fail_if_planned(_request):
+        raise AssertionError("missing legacy source must stop before Brain planning")
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", fail_if_planned)
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue only if every source is present.", "uploaded_asset_ids": []},
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["failure_code"] == "v3_standard_source_migration_integrity_unverified"
+
+
+def test_standard_legacy_promotion_rejects_digest_mismatch_without_mutation(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.metadata.pop("project_source_reference", None)
+    stored.reference_assets[0].metadata["content_sha256"] = "0" * 64
+    before_references = deepcopy([item.model_dump(mode="python") for item in stored.reference_assets])
+    before_legacy_refs = deepcopy(stored.uploaded_asset_refs)
+    handlers.project_service.project_store.save_project(stored)
+
+    def fail_if_planned(_request):
+        raise AssertionError("digest mismatch must stop before Brain planning")
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", fail_if_planned)
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue only if every source digest matches.", "uploaded_asset_ids": []},
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["failure_code"] == "v3_standard_source_migration_integrity_mismatch"
+    after = handlers.project_service._require_project(project["project_id"])
+    assert [item.model_dump(mode="python") for item in after.reference_assets] == before_references
+    assert after.uploaded_asset_refs == before_legacy_refs
+
+
+def test_standard_legacy_promotion_rejects_changed_file_bytes(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.metadata.pop("project_source_reference", None)
+    handlers.project_service.project_store.save_project(stored)
+    upload = handlers.service.get_uploaded_asset(ids[0])
+    assert upload is not None and upload.file_path
+    Path(upload.file_path).write_bytes(b"doc323-integrity-drift")
+
+    def fail_if_planned(_request):
+        raise AssertionError("changed legacy source bytes must stop before Brain planning")
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", fail_if_planned)
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue only if the source bytes are unchanged.", "uploaded_asset_ids": []},
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["failure_code"] == "v3_standard_source_migration_integrity_mismatch"
+
+
+def test_standard_legacy_promotion_merges_with_current_explicit_upload(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.metadata.pop("project_source_reference", None)
+    handlers.project_service.project_store.save_project(stored)
+
+    captured = []
+    original = handlers.service.scenario_runtime.plan_job
+
+    def plan(request):
+        captured.append(deepcopy(request))
+        return original(request)
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", plan)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue with one explicitly reselected original.", "uploaded_asset_ids": [ids[0]]},
+    )
+    assert captured[0]["uploaded_asset_ids"] == ids
+    assert len(captured[0]["uploaded_asset_ids"]) == len(set(captured[0]["uploaded_asset_ids"]))
+
+
+def test_standard_legacy_promotion_does_not_revive_inactive_tombstones(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.metadata.pop("project_source_reference", None)
+    for item in stored.uploaded_asset_refs:
+        item["status"] = "inactive"
+    handlers.project_service.project_store.save_project(stored)
+
+    captured = []
+    original = handlers.service.scenario_runtime.plan_job
+
+    def plan(request):
+        captured.append(deepcopy(request))
+        return original(request)
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", plan)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue without reviving removed sources.", "uploaded_asset_ids": []},
+    )
+    assert captured[0]["uploaded_asset_ids"] == []
+    after = handlers.project_service._require_project(project["project_id"])
+    assert all(item.get("status") == "inactive" for item in after.uploaded_asset_refs)
+    assert all(
+        reference.metadata.get("project_source_reference") is not True
+        for reference in after.reference_assets
+    )
+
+
+def test_standard_source_resolution_honors_legacy_tombstone_even_if_canonical_ref_is_active(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for item in stored.uploaded_asset_refs:
+        item["status"] = "inactive"
+    handlers.project_service.project_store.save_project(stored)
+
+    captured = []
+    original = handlers.service.scenario_runtime.plan_job
+
+    def plan(request):
+        captured.append(deepcopy(request))
+        return original(request)
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", plan)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue without reviving legacy-unbound sources.", "uploaded_asset_ids": []},
+    )
+    assert captured[0]["uploaded_asset_ids"] == []
+    after = handlers.project_service._require_project(project["project_id"])
+    assert all(item.get("status") == "inactive" for item in after.uploaded_asset_refs)
+
+
+def test_standard_source_resolution_rejects_reference_from_another_project(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for reference in stored.reference_assets:
+        reference.project_id = "project_elsewhere"
+    handlers.project_service.project_store.save_project(stored)
+
+    captured = []
+    original = handlers.service.scenario_runtime.plan_job
+
+    def plan(request):
+        captured.append(deepcopy(request))
+        return original(request)
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", plan)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue without cross-project sources.", "uploaded_asset_ids": []},
+    )
+    assert captured[0]["uploaded_asset_ids"] == []
+
+
+def test_standard_explicit_tombstone_requires_a_new_upload(tmp_path, monkeypatch):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Persist these server-owned originals.", "uploaded_asset_ids": ids},
+    )
+    stored = handlers.project_service._require_project(project["project_id"])
+    for item in stored.uploaded_asset_refs:
+        if item.get("asset_id") == ids[0]:
+            item["status"] = "inactive"
+    handlers.project_service.project_store.save_project(stored)
+
+    def fail_if_planned(_request):
+        raise AssertionError("an explicitly submitted tombstone must stop before Brain planning")
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", fail_if_planned)
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Rebind only with a newly uploaded source.", "uploaded_asset_ids": [ids[0]]},
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["failure_code"] == "v3_standard_source_tombstone_requires_new_upload"
+    after = handlers.project_service._require_project(project["project_id"])
+    assert next(item for item in after.uploaded_asset_refs if item.get("asset_id") == ids[0])["status"] == "inactive"
+
+
 def test_standard_legacy_migration_blocks_before_planning_when_plan_is_invalid(tmp_path, monkeypatch):
     handlers, project, ids, _snapshot = _general_project(tmp_path)
     first = handlers.post_project_job(
@@ -231,6 +513,17 @@ def test_general_source_provenance_cannot_enter_ecommerce_product_truth(tmp_path
     assert handlers.project_service._project_product_reference_candidates(stored) == []
 
 
+def test_ecommerce_product_reference_requires_current_project_ownership(tmp_path):
+    handlers, project, ids, _snapshot = _general_project(tmp_path)
+    stored = handlers.project_service._require_project(project["project_id"])
+    stored.primary_template_id = "ecommerce_template"
+    for reference in stored.reference_assets:
+        reference.project_id = "project_elsewhere"
+        reference.use_policy = ProjectReferenceUsePolicy.PRODUCT
+        reference.metadata["template_id"] = "ecommerce_template"
+    assert handlers.project_service._project_product_reference_candidates(stored) == []
+
+
 def test_client_metadata_cannot_promote_an_uploaded_reference_to_project_source(tmp_path):
     handlers, project, ids, _snapshot = _general_project(tmp_path)
     handlers.project_service.add_project_reference(
@@ -247,7 +540,7 @@ def test_client_metadata_cannot_promote_an_uploaded_reference_to_project_source(
     )
     stored = handlers.project_service._require_project(project["project_id"])
     reference = next(item for item in stored.reference_assets if item.asset_ref_id == ids[0])
-    assert handlers.project_service._is_standard_project_source_reference(reference) is False
+    assert handlers.project_service._is_standard_project_source_reference(stored, reference) is False
 
 
 def test_standard_explicit_three_inputs_stay_three_even_when_legacy_registry_declines(tmp_path, monkeypatch):
