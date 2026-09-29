@@ -158,6 +158,23 @@ _GENERAL_VARIATION_MODE_ALIASES = GENERAL_VARIATION_MODE_ALIASES
 _HOME_PREVIEW_MAX_JOB_STATES = 64
 _HOME_PREVIEW_MAX_INDEX_RECORDS = 4096
 _HOME_PREVIEW_MAX_OUTPUTS_PER_JOB = 128
+_PROJECT_SOURCE_PROVENANCE_KEYS = frozenset(
+    {
+        "project_source_reference",
+        "persisted_from_project_job",
+        "persisted_after_generation",
+        "job_local_direct_reference",
+        "source_job_id",
+    }
+)
+
+
+def _untrusted_reference_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in dict(metadata or {}).items()
+        if key not in _PROJECT_SOURCE_PROVENANCE_KEYS
+    }
 
 
 def _project_listing_key(project: ProjectRecord) -> tuple[str, str, str]:
@@ -3116,6 +3133,40 @@ class V3ProjectModeService:
                     snapshot["records_by_job"].setdefault(job_id, [])
         return snapshot
 
+    @staticmethod
+    def _standard_source_migration_blocked_status(
+        project_id: str,
+        reason_code: str,
+    ) -> ProductJobStatus:
+        """Stop before planning when an old Standard source cannot be verified.
+
+        A project with no historical source candidate may still use the normal
+        text-to-image path.  This status is only emitted after the compatibility
+        reader found a prior project-owned source contract that could not be
+        safely restored, so silently falling back to a text-only render would
+        change the user's requested subject.
+        """
+
+        return ProductJobStatus(
+            job_id="",
+            status=ProductJobStatusValue.BLOCKED,
+            api_namespace=API_NAMESPACE,
+            ui_entry_route=f"{API_NAMESPACE}/projects/{project_id}",
+            warnings=[reason_code],
+            metadata={
+                "failure_code": reason_code,
+                "current_operation": {
+                    "state": "needs_input",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [
+                        {"id": "review_project_sources"},
+                        {"id": "reupload_source_images"},
+                    ],
+                },
+            },
+        )
+
     def create_project(self, request: CreateProjectRequest | dict[str, Any]) -> ProjectResponse:
         create_request = self._coerce_create_project_request(request)
         template_manifest = self._ensure_active_template(create_request.primary_template_id)
@@ -3136,17 +3187,23 @@ class V3ProjectModeService:
             user_goal=create_request.user_goal,
             short_summary=self._short_text(create_request.user_goal, 72),
             uploaded_asset_refs=[
-                {"asset_id": asset_id, "source": "project_create", "role": initial_asset_role}
+                {
+                    "asset_id": asset_id,
+                    "source": "project_create",
+                    "role": initial_asset_role,
+                    "template_id": template_manifest.template_id,
+                }
                 for asset_id in create_request.uploaded_asset_ids
             ],
             created_at=now,
             updated_at=now,
-            metadata={
-                **{
-                    key: value
-                    for key, value in dict(create_request.metadata or {}).items()
-                    if not str(key).startswith("doc277_")
-                },
+                metadata={
+                    **{
+                        key: value
+                        for key, value in dict(create_request.metadata or {}).items()
+                        if not str(key).startswith("doc277_")
+                        and key not in _PROJECT_SOURCE_PROVENANCE_KEYS
+                    },
                 "source": PROJECT_API_SOURCE,
                 "project_mode": True,
                 "imports_v1_v2_runtime": False,
@@ -3155,6 +3212,14 @@ class V3ProjectModeService:
                 "scenario_pack_id": template_manifest.scenario_pack_id,
             },
         )
+
+        if template_manifest.template_id == GENERAL_TEMPLATE_ID and create_request.uploaded_asset_ids:
+            self._persist_job_uploaded_references(
+                project,
+                list(create_request.uploaded_asset_ids),
+                template_id=template_manifest.template_id,
+                user_input=create_request.user_goal,
+            )
         self.project_store.save_project(project)
         self._append_timeline(
             project.project_id,
@@ -3773,7 +3838,7 @@ class V3ProjectModeService:
             reference.status = update_request.status
         if update_request.use_policy is not None:
             reference.use_policy = update_request.use_policy
-        reference.metadata.update(update_request.metadata)
+        reference.metadata.update(_untrusted_reference_metadata(update_request.metadata))
         context = self._refresh_project_context(project)
         self._append_timeline(
             project.project_id,
@@ -4249,6 +4314,7 @@ class V3ProjectModeService:
                     key: value
                     for key, value in dict(job_request.metadata or {}).items()
                     if key not in ignored_doc270_client_metadata
+                    and key not in _PROJECT_SOURCE_PROVENANCE_KEYS
                 }
             }
         )
@@ -4494,6 +4560,52 @@ class V3ProjectModeService:
             uploaded_asset_ids = list(
                 dict.fromkeys(job_request.uploaded_asset_ids)
             )
+            standard_general_mode = (
+                template_manifest.template_id == GENERAL_TEMPLATE_ID
+                and self._reference_project_mode(project, template_manifest.template_id) == "standard"
+            )
+            if standard_general_mode:
+                # Doc323: a General/Standard project's explicit original
+                # uploads become project-scoped source references. Reuse
+                # only those references on later Jobs; never scan a global
+                # source library or generated history.
+                persisted_source_ids = self._standard_project_source_reference_ids(project, [])
+                if (
+                    not persisted_source_ids
+                    and not self._has_standard_project_source_reference_history(project)
+                ):
+                    legacy_source_job_id, legacy_source_ids, migration_error = (
+                        self._legacy_standard_project_source_reference_ids(project)
+                    )
+                    if migration_error:
+                        return self._standard_source_migration_blocked_status(
+                            project.project_id,
+                            migration_error,
+                        )
+                    if legacy_source_ids:
+                        try:
+                            self._persist_job_uploaded_references(
+                                project,
+                                legacy_source_ids,
+                                template_id=template_manifest.template_id,
+                                user_input="Doc323 compatibility recovery from frozen project Job",
+                                source_job_id=legacy_source_job_id,
+                                strict=True,
+                            )
+                        except ValueError:
+                            return self._standard_source_migration_blocked_status(
+                                project.project_id,
+                                "v3_standard_source_migration_asset_unavailable",
+                            )
+                        persisted_source_ids = self._standard_project_source_reference_ids(project, [])
+                self._persist_job_uploaded_references(
+                    project,
+                    uploaded_asset_ids,
+                    template_id=template_manifest.template_id,
+                    user_input=str(job_request.user_input or project.user_goal or "").strip(),
+                )
+                persisted_source_ids = self._standard_project_source_reference_ids(project, [])
+                uploaded_asset_ids = list(dict.fromkeys([*uploaded_asset_ids, *persisted_source_ids]))
             current_reference_binding_digest = ""
             idempotency_key = ""
             supersedes_job_id = None
@@ -6824,9 +6936,7 @@ class V3ProjectModeService:
         active_product_references = [
             reference
             for reference in project.reference_assets
-            if reference.status == ProjectReferenceStatus.ACTIVE
-            and reference.source_type == ProjectReferenceSourceType.UPLOADED
-            and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
+            if self._is_ecommerce_product_reference(project, reference)
         ]
         candidate_ids = [reference.asset_ref_id for reference in active_product_references]
         active_product_reference_ids = {
@@ -6845,6 +6955,12 @@ class V3ProjectModeService:
                 not asset_id
                 or str(item.get("role") or "").strip() not in PROJECT_PRODUCT_REFERENCE_ROLES
                 or str(item.get("status") or "").strip().lower() == ProjectReferenceStatus.INACTIVE.value
+                or str(
+                    item.get("template_id")
+                    or (project.metadata or {}).get("template_manifest_id")
+                    or ""
+                ).strip()
+                != ECOMMERCE_TEMPLATE_ID
             ):
                 continue
             reference_id = str(item.get("reference_id") or "").strip()
@@ -6869,6 +6985,26 @@ class V3ProjectModeService:
         return self._dedupe_uploaded_asset_ids_by_content(
             [asset_id for asset_id in dict.fromkeys([*candidate_ids, *legacy_ids]) if asset_id]
         )
+
+    @staticmethod
+    def _is_ecommerce_product_reference(
+        project: ProjectRecord,
+        reference: ProjectReferenceAsset,
+    ) -> bool:
+        if (
+            reference.status != ProjectReferenceStatus.ACTIVE
+            or reference.source_type != ProjectReferenceSourceType.UPLOADED
+            or reference.use_policy != ProjectReferenceUsePolicy.PRODUCT
+        ):
+            return False
+        metadata = dict(reference.metadata or {})
+        source_template = str(
+            metadata.get("template_id")
+            or (project.metadata or {}).get("template_manifest_id")
+            or project.primary_template_id
+            or ""
+        ).strip()
+        return source_template == ECOMMERCE_TEMPLATE_ID
 
     def _ensure_project_product_reference_integrity(self, project: ProjectRecord) -> None:
         changed = self._soft_suppress_duplicate_product_references(
@@ -9137,6 +9273,7 @@ class V3ProjectModeService:
         created_from_output_id: str | None = None,
         preview_url: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trusted_provenance: bool = False,
     ) -> ProjectReferenceAsset:
         reference_id = stable_id(
             "project_reference",
@@ -9151,7 +9288,11 @@ class V3ProjectModeService:
             if source_type == ProjectReferenceSourceType.UPLOADED
             else None
         )
-        reference_metadata = dict(metadata or {})
+        reference_metadata = (
+            dict(metadata or {})
+            if trusted_provenance
+            else _untrusted_reference_metadata(metadata)
+        )
         if source_type == ProjectReferenceSourceType.UPLOADED:
             reference_metadata.setdefault("v3_upload_lookup", "ready")
             use_policy = self._effective_uploaded_reference_use_policy(
@@ -9195,6 +9336,7 @@ class V3ProjectModeService:
                             **reference_metadata,
                             "duplicate_product_reference_reused_asset_ref_id": asset_ref_id,
                         },
+                        trusted_provenance=trusted_provenance,
                     )
         existing = next((item for item in project.reference_assets if item.reference_id == reference_id), None)
         if existing is None:
@@ -9271,8 +9413,19 @@ class V3ProjectModeService:
         *,
         template_id: str,
         user_input: str,
+        source_job_id: str | None = None,
+        strict: bool = False,
     ) -> None:
         now = _utc_now_iso()
+        if strict:
+            requested_policy = (
+                ProjectReferenceUsePolicy.PRODUCT
+                if template_id == ECOMMERCE_TEMPLATE_ID
+                else ProjectReferenceUsePolicy.GENERAL
+            )
+            for asset_id in dict.fromkeys(str(item or "").strip() for item in uploaded_asset_ids):
+                if asset_id:
+                    self._require_ready_uploaded_reference(asset_id, requested_policy)
         seen: set[str] = set()
         for asset_id in uploaded_asset_ids:
             clean_id = str(asset_id or "").strip()
@@ -9284,6 +9437,14 @@ class V3ProjectModeService:
                 if template_id == ECOMMERCE_TEMPLATE_ID
                 else ProjectReferenceUsePolicy.GENERAL
             )
+            reference_metadata = {
+                "persisted_from_project_job": True,
+                "template_id": template_id,
+                "user_input_preview": self._short_text(user_input, 120),
+                **({"source_job_id": source_job_id} if source_job_id else {}),
+            }
+            if template_id == GENERAL_TEMPLATE_ID:
+                reference_metadata["project_source_reference"] = True
             try:
                 self._upsert_project_reference(
                     project,
@@ -9293,16 +9454,14 @@ class V3ProjectModeService:
                     label="Job uploaded reference",
                     user_note="Uploaded for this project job and kept as project context.",
                     use_policy=requested_policy,
-                    metadata={
-                        "persisted_from_project_job": True,
-                        "template_id": template_id,
-                        "user_input_preview": self._short_text(user_input, 120),
-                    },
+                    metadata=reference_metadata,
+                    trusted_provenance=True,
                 )
             except ValueError:
-                if template_id != ECOMMERCE_TEMPLATE_ID:
+                if template_id != ECOMMERCE_TEMPLATE_ID and not strict:
                     continue
                 raise
+        self.project_store.save_project(project)
 
     def _effective_uploaded_reference_use_policy(
         self,
@@ -9368,6 +9527,7 @@ class V3ProjectModeService:
                     "role": reference.use_policy.value,
                     "reference_id": reference.reference_id,
                     "status": ProjectReferenceStatus.ACTIVE.value,
+                    "template_id": reference.metadata.get("template_id"),
                 }
             )
             if digest:
@@ -9379,6 +9539,7 @@ class V3ProjectModeService:
             "role": reference.use_policy.value,
             "reference_id": reference.reference_id,
             "status": ProjectReferenceStatus.ACTIVE.value,
+            "template_id": reference.metadata.get("template_id"),
         }
         if digest:
             payload["content_sha256"] = digest
@@ -13760,6 +13921,99 @@ class V3ProjectModeService:
             return []
         return [r["asset_id"] for r in plan.as_dict()["direct_references"]]
 
+    @staticmethod
+    def _is_standard_project_source_reference(reference: ProjectReferenceAsset) -> bool:
+        if (
+            reference.status != ProjectReferenceStatus.ACTIVE
+            or reference.source_type != ProjectReferenceSourceType.UPLOADED
+        ):
+            return False
+        metadata = dict(reference.metadata or {})
+        return (
+            str(metadata.get("template_id") or "").strip() == GENERAL_TEMPLATE_ID
+            and metadata.get("project_source_reference") is True
+            and metadata.get("persisted_from_project_job") is True
+        )
+
+    def _standard_project_source_reference_ids(
+        self,
+        project: ProjectRecord,
+        explicit_ids: list[str],
+    ) -> list[str]:
+        """Resolve only project-bound uploaded sources for General/Standard.
+
+        Explicit uploads for the current Job are followed by active uploaded
+        references that were persisted by this project. Generated outputs,
+        other projects, and global source-library matches are not candidates.
+        """
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+
+        def add(asset_id: object) -> None:
+            clean_id = str(asset_id or "").strip()
+            if clean_id and clean_id not in seen:
+                seen.add(clean_id)
+                resolved.append(clean_id)
+
+        for asset_id in explicit_ids:
+            add(asset_id)
+        for reference in project.reference_assets:
+            if self._is_standard_project_source_reference(reference):
+                add(reference.asset_ref_id)
+        return resolved
+
+    def _has_standard_project_source_reference_history(self, project: ProjectRecord) -> bool:
+        return any(
+            reference.source_type == ProjectReferenceSourceType.UPLOADED
+            and str(reference.metadata.get("template_id") or "").strip() == GENERAL_TEMPLATE_ID
+            and reference.metadata.get("project_source_reference") is True
+            and reference.metadata.get("persisted_from_project_job") is True
+            for reference in project.reference_assets
+        )
+
+    def _legacy_standard_project_source_reference_ids(
+        self,
+        project: ProjectRecord,
+    ) -> tuple[str, list[str], str | None]:
+        """Recover pre-Doc323 sources from this project's frozen Job only."""
+
+        for job_id in project.job_ids:
+            job = self.product_service.get_job_record(job_id)
+            request = getattr(job, "request", None)
+            if request is None:
+                continue
+            raw_plan = dict(request.metadata or {}).get(PLAN_KEY)
+            if not isinstance(raw_plan, dict) or raw_plan.get("project_mode") != "standard":
+                continue
+            try:
+                plan = plan_from_metadata(
+                    dict(request.metadata or {}),
+                    job_id=job_id,
+                )
+                if plan is None or plan.as_dict()["project_mode"] != "standard":
+                    continue
+                payload = plan.as_dict()
+                if payload.get("project_id") and payload["project_id"] != project.project_id:
+                    continue
+                plan.references()
+                direct_ids = [
+                    str(item.get("asset_id") or "").strip()
+                    for item in payload["direct_references"]
+                    if isinstance(item, dict) and str(item.get("asset_id") or "").strip()
+                ]
+            except (KeyError, OSError, ValueError):
+                return job_id, [], "v3_standard_source_migration_plan_unavailable"
+            tombstoned_ids = {
+                str(item.get("asset_id") or "").strip()
+                for item in project.uploaded_asset_refs
+                if str(item.get("status") or "").strip().lower() == ProjectReferenceStatus.INACTIVE.value
+            }
+            direct_ids = [asset_id for asset_id in direct_ids if asset_id not in tombstoned_ids]
+            if direct_ids:
+                return job_id, list(dict.fromkeys(direct_ids)), None
+        return "", [], None
+
     def _reference_scoped_project(
         self,
         project: ProjectRecord,
@@ -13876,8 +14130,9 @@ class V3ProjectModeService:
 
         # Keep selected_output_refs and GENERATED_SELECTED assets in the
         # persisted project for history and old clients, but remove them from
-        # this in-memory generation view.  Direct uploads remain the only
-        # Standard/General inputs for this Job.
+        # this in-memory generation view. Current uploads plus explicitly
+        # persisted project source references remain the only Standard/General
+        # inputs for this Job.
         scoped.selected_output_refs = []
         direct_ids_set = set(direct_ids)
         scoped.reference_assets = [

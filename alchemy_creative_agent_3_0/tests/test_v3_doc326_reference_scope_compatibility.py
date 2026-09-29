@@ -178,3 +178,22 @@ def test_project_job_freezes_zero_implicit_general_sources(tmp_path) -> None:
     assert record.request.metadata["project_context_snapshot"]["metadata"]["reference_scope"] == (
         "generation_job_strict"
     )
+
+
+def test_general_project_creation_uploads_are_reused_by_first_job(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    asset_id = _ready_upload(handlers, tmp_path, role="style_reference")
+    project = handlers.post_projects(
+        {
+            "user_goal": "A project created with an original source image",
+            "uploaded_asset_ids": [asset_id],
+        }
+    )["project"]
+
+    created = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Continue using the original project source."},
+    )
+    record = handlers.service.get_job_record(created["job_id"])
+    plan = record.request.metadata[PLAN_KEY]
+    assert [item["asset_id"] for item in plan["direct_references"]] == [asset_id]

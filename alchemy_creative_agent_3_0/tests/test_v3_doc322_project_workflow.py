@@ -75,7 +75,7 @@ def test_three_uploads_plus_one_anchor_freeze_four_sources_and_retry_does_not_re
     next_job=handlers.post_project_job(project["project_id"],{"user_input":"A new shot without uploads.","metadata":{"requested_image_count":1}})
     newplan=handlers.service.get_job_record(next_job["job_id"]).request.metadata[PLAN_KEY]
     assert newplan["continuity_anchor"] is None
-    assert newplan["direct_references"]==[]
+    assert [item["asset_id"] for item in newplan["direct_references"]] == ids
 
 
 def test_manual_replace_has_one_active_source_and_history_is_preserved(tmp_path):
