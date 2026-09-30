@@ -109,7 +109,7 @@ def test_thread_start_failure_returns_semaphore_slot(monkeypatch):
 
 
 def test_concurrency_limit_and_failure_states_are_contract_values():
-    assert vision_inspector._VISION_INSPECTION_CONCURRENCY_LIMIT == 2
+    assert vision_inspector._VISION_INSPECTION_CONCURRENCY_LIMIT == 1
     for state in ("verification_failed", "verification_skipped"):
         report = VisualInspectionReport(
             inspection_id=f"state-{state}",

@@ -3083,11 +3083,13 @@ class V3ProductApiService:
         background_timeout_owner: str | None = None,
         background_runtime_id: str | None = None,
     ) -> ProductJobStatus:
-        """Persist the public pre-render state before a background worker starts.
+        """Persist the public generating state when a background worker claims.
 
         A generated output file is not a user delivery while shared review and
-        bounded retry are still running.  Persisting this state before the
-        worker is submitted prevents project polling from treating a partially
+        bounded retry are still running.  The web layer keeps executor-queued
+        work in ``planned``; persisting this state at the worker boundary
+        prevents queue wait time from consuming the Provider watchdog budget
+        while still preventing project polling from treating a partially
         written output store as a completed job.
         """
 

@@ -1101,6 +1101,9 @@ def test_v3_background_worker_uses_clean_payload_and_bound_typed_continuation(mo
     calls: list[tuple[str, str, dict, GenerateContinuation | None]] = []
 
     class CaptureHandler:
+        def mark_project_job_generating(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return {}
+
         def post_project_job_generate(
             self,
             project_id: str,
@@ -1309,7 +1312,7 @@ def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(mo
     ) == (None, None)
 
 
-def test_v3_direct_provider_background_watchdog_is_persisted(tmp_path, monkeypatch) -> None:
+def test_v3_direct_provider_background_queue_does_not_start_watchdog_before_worker(tmp_path, monkeypatch) -> None:
     handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch)
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", False)
     monkeypatch.setattr(app_main.settings, "default_image_provider", "openai_gpt_image")
@@ -1339,10 +1342,8 @@ def test_v3_direct_provider_background_watchdog_is_persisted(tmp_path, monkeypat
             },
         ) is True
         current = client.get(f"/api/v3/creative-agent/jobs/{job_id}").json()
-        watchdog = current["metadata"]["background_generation_watchdog"]
-        assert watchdog["enabled"] is True
-        assert watchdog["timeout_seconds"] == 255
-        assert watchdog["timeout_owner"] == "direct_provider"
+        assert current["status"] == "planned"
+        assert "background_generation_watchdog" not in current["metadata"]
     finally:
         with app_main._v3_background_generation_jobs_lock:
             app_main._v3_background_generation_jobs.pop(key, None)

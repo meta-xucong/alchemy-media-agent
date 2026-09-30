@@ -64,6 +64,9 @@ class _BackgroundGenerationHandlerDouble:
     def post_project_job_generate(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
         raise self.failure
 
+    def mark_project_job_generating(self, project_id, job_id, **kwargs):  # noqa: ANN001, ANN003
+        return self.handlers.mark_project_job_generating(project_id, job_id, **kwargs)
+
     def mark_project_job_generation_worker_failed(self, project_id, job_id, *, background_attempt_id, failure_code):  # noqa: ANN001
         self.failure_codes.append(failure_code)
         return self.handlers.mark_project_job_generation_worker_failed(

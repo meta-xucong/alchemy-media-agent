@@ -9,7 +9,22 @@ import time
 from typing import Any
 
 # Bound global provider concurrency; retry safety also requires worker exit.
-_VISION_INSPECTION_CONCURRENCY_LIMIT = 2
+# One active multimodal request is the safe default for the small VPS. Keep a
+# hard ceiling of two so a local operator cannot accidentally turn review into
+# an unbounded image-memory fan-out; higher throughput belongs in a larger
+# deployment rather than in this process-wide guard.
+
+
+def _vision_inspection_concurrency_limit() -> int:
+    raw_value = os.getenv("V3_VISION_INSPECTION_CONCURRENCY", "1")
+    try:
+        value = int(raw_value.strip() or "1")
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(2, value))
+
+
+_VISION_INSPECTION_CONCURRENCY_LIMIT = _vision_inspection_concurrency_limit()
 _vision_inspection_semaphore = threading.Semaphore(_VISION_INSPECTION_CONCURRENCY_LIMIT)
 
 from ...creative_core.rules import stable_id

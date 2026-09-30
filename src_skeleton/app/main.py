@@ -109,12 +109,32 @@ from app.runtime_paths import (
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 logger = logging.getLogger(__name__)
+
+
+def _positive_worker_count(name: str, *, default: int, maximum: int | None = None) -> int:
+    """Read a bounded worker count without making startup fail closed on bad env."""
+    raw_value = os.getenv(name, "")
+    try:
+        value = int(raw_value) if raw_value.strip() else default
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default=%s", name, raw_value, default)
+        value = default
+    value = max(1, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+_V3_BACKGROUND_GENERATION_WORKERS = _positive_worker_count(
+    "V3_BACKGROUND_GENERATION_WORKERS",
+    default=1,
+)
 _v3_generation_executor = ThreadPoolExecutor(
-    max_workers=max(1, int(os.getenv("V3_BACKGROUND_GENERATION_WORKERS", "2"))),
+    max_workers=_V3_BACKGROUND_GENERATION_WORKERS,
     thread_name_prefix="v3-generation",
 )
 _v3_planning_executor = ThreadPoolExecutor(
-    max_workers=max(1, int(os.getenv("V3_BACKGROUND_PLANNING_WORKERS", "1"))),
+    max_workers=_positive_worker_count("V3_BACKGROUND_PLANNING_WORKERS", default=1),
     thread_name_prefix="v3-planning",
 )
 _v3_background_planning_operations: dict[str, str] = {}
@@ -879,6 +899,8 @@ def _run_v3_project_generation_background(
     payload: dict,
     background_attempt_id: str,
     continuation: GenerateContinuation | None = None,
+    timeout_seconds: float | None = None,
+    timeout_owner: str | None = None,
 ):
     key = f"{project_id}:{job_id}"
     try:
@@ -897,6 +919,25 @@ def _run_v3_project_generation_background(
             raise ValueError("background_generation_continuation_binding_invalid")
         else:
             generation_payload = dict(payload or {})
+        # The executor queue is intentionally not part of the Provider
+        # deadline.  A queued job remains PLANNED until this worker actually
+        # claims it; only then does the lifecycle become GENERATING and its
+        # watchdog begin counting down.
+        _run_v3_handler(
+            v3_route_handlers.mark_project_job_generating,
+            project_id,
+            job_id,
+            background_attempt_id=background_attempt_id,
+            background_timeout_seconds=timeout_seconds,
+            background_timeout_owner=timeout_owner,
+            background_runtime_id=_v3_background_generation_runtime_id,
+        )
+        _start_v3_project_generation_watchdog(
+            project_id,
+            job_id,
+            background_attempt_id,
+            timeout_seconds,
+        )
         _run_v3_handler(
             v3_route_handlers.post_project_job_generate,
             project_id,
@@ -1111,6 +1152,28 @@ def _timeout_v3_project_generation_background(
                 _v3_background_generation_watchdogs.pop(key, None)
 
 
+def _start_v3_project_generation_watchdog(
+    project_id: str,
+    job_id: str,
+    background_attempt_id: str,
+    timeout_seconds: float | None,
+) -> None:
+    if timeout_seconds is None:
+        return
+    watchdog = threading.Timer(
+        timeout_seconds,
+        _timeout_v3_project_generation_background,
+        args=(project_id, job_id, background_attempt_id, timeout_seconds),
+    )
+    watchdog.daemon = True
+    key = f"{project_id}:{job_id}"
+    with _v3_background_generation_jobs_lock:
+        if _v3_background_generation_jobs.get(key) != background_attempt_id:
+            return
+        _v3_background_generation_watchdogs[key] = watchdog
+        watchdog.start()
+
+
 def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
     key = f"{project_id}:{job_id}"
     background_attempt_id = uuid4().hex
@@ -1125,33 +1188,6 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             return False
         _v3_background_generation_jobs[key] = background_attempt_id
     try:
-        _run_v3_handler(
-            v3_route_handlers.mark_project_job_generating,
-            project_id,
-            job_id,
-            background_attempt_id=background_attempt_id,
-            background_timeout_seconds=timeout_seconds,
-            background_timeout_owner=timeout_owner,
-            background_runtime_id=_v3_background_generation_runtime_id,
-        )
-    except Exception:
-        with _v3_background_generation_jobs_lock:
-            if _v3_background_generation_jobs.get(key) == background_attempt_id:
-                _v3_background_generation_jobs.pop(key, None)
-        raise
-    watchdog = None
-    if timeout_seconds is not None:
-        watchdog = threading.Timer(
-            timeout_seconds,
-            _timeout_v3_project_generation_background,
-            args=(project_id, job_id, background_attempt_id, timeout_seconds),
-        )
-        watchdog.daemon = True
-        with _v3_background_generation_jobs_lock:
-            if _v3_background_generation_jobs.get(key) == background_attempt_id:
-                _v3_background_generation_watchdogs[key] = watchdog
-                watchdog.start()
-    try:
         _v3_generation_executor.submit(
             _run_v3_project_generation_background,
             project_id,
@@ -1159,6 +1195,8 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             worker_payload,
             background_attempt_id,
             continuation,
+            timeout_seconds,
+            timeout_owner,
         )
     except Exception:
         with _v3_background_generation_jobs_lock:
@@ -1172,6 +1210,18 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             registered_watchdog.cancel()
         if attempt_is_current:
             try:
+                # Submission failed before a worker could claim the job. Use
+                # the existing terminal worker-failure contract, but first
+                # persist the claim so the attempt remains auditable.
+                _run_v3_handler(
+                    v3_route_handlers.mark_project_job_generating,
+                    project_id,
+                    job_id,
+                    background_attempt_id=background_attempt_id,
+                    background_timeout_seconds=timeout_seconds,
+                    background_timeout_owner=timeout_owner,
+                    background_runtime_id=_v3_background_generation_runtime_id,
+                )
                 _run_v3_handler(
                     v3_route_handlers.mark_project_job_generation_worker_failed,
                     project_id,
