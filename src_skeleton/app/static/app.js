@@ -14189,6 +14189,7 @@ function applyV2HistoryResponse(historyResponse = {}) {
 }
 
 async function initV2({ silent = true, force = false } = {}) {
+  if (v2State.loading) return;
   if (!force && v2State.loaded) {
     renderV2ProviderInheritance();
     renderV2AssetPanel();

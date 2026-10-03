@@ -62,3 +62,18 @@ def test_v2_generation_entry_is_an_alchemy_bootstrap_not_a_sub2api_redirect(monk
     assert 'fetch("/api/v2/veyra/login"' in entry_script.text
     assert 'if (!response.ok)' in entry_script.text
     assert 'Veyra 登录失败' in entry_script.text
+
+
+def test_v2_initialization_is_not_started_twice_while_ticket_entry_boots(monkeypatch) -> None:
+    from app import main as app_main
+
+    client = TestClient(app_main.app)
+    app_script = client.get("/static/app.js").text
+    init_start = app_script.index("async function initV2(")
+    init_end = app_script.index("function renderV2ModelSettings()", init_start)
+    init_source = app_script[init_start:init_end]
+
+    loading_guard = "if (v2State.loading) return;"
+    loading_assignment = "v2State.loading = true;"
+    assert loading_guard in init_source
+    assert init_source.index(loading_guard) < init_source.index(loading_assignment)
