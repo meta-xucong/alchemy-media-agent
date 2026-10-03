@@ -51,7 +51,7 @@ def test_v2_generation_entry_is_an_alchemy_bootstrap_not_a_sub2api_redirect(monk
     assert "/dashboard" not in response.text
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["content-security-policy"] == (
-        "default-src 'none'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+        "default-src 'none'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
     )
 
     entry_script = client.get("/static/v2-entry.js")

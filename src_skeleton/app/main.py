@@ -358,7 +358,7 @@ def v2_generation_entry():
         headers={
             "Cache-Control": "no-store",
             "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "default-src 'none'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "Content-Security-Policy": "default-src 'none'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
             "X-Content-Type-Options": "nosniff",
         },
     )
