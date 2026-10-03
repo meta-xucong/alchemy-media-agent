@@ -58,3 +58,7 @@ def test_v2_generation_entry_is_an_alchemy_bootstrap_not_a_sub2api_redirect(monk
     assert entry_script.status_code == 200
     assert 'sessionStorage.setItem(pendingModuleRouteKey, "v2")' in entry_script.text
     assert '"/h5?tab=v2" : "/?tab=v2"' in entry_script.text
+    assert 'new URLSearchParams(window.location.search).get("ticket")' in entry_script.text
+    assert 'fetch("/api/v2/veyra/login"' in entry_script.text
+    assert 'if (!response.ok)' in entry_script.text
+    assert 'Veyra 登录失败' in entry_script.text
