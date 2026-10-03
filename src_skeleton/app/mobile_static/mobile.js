@@ -59,6 +59,7 @@ const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v
 const v2MediaDisplayBase = window.ALCHEMY_V2_MEDIA_BASE || (isLocalAlchemyHost() ? "http://127.0.0.1:8020/api/v2" : v2ApiBase);
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const veyraAccountStorageKey = "alchemy_veyra_account";
+const pendingModuleRouteStorageKey = "alchemy_pending_module_route_v1";
 const defaultVeyraLoginBaseUrl = "https://aiself.vip";
 
 function isLocalAlchemyHost() {
@@ -588,13 +589,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindControls();
   setupH5AdvancedPanels();
   setupMobileV3Adapter();
-  restoreInitialModuleRoute();
   const hadVeyraTicket = new URLSearchParams(window.location.search).has("ticket");
   try {
     const ticketAccepted = await handleVeyraTicketFromUrl();
     if (hadVeyraTicket && !ticketAccepted) return;
     if (await enforceVeyraUiAuth({ target: "alchemy-mobile" })) return;
     await syncVeyraSessionCookie();
+    restoreInitialModuleRoute();
     updateMobileAccountSummary();
     await Promise.all([createSession({ announce: false }), loadProviders()]);
     scheduleInitialBackgroundLoads({ hadVeyraTicket });
@@ -1246,7 +1247,13 @@ function normalizeModuleRouteToken(value) {
 
 function initialModuleRoute() {
   const params = new URLSearchParams(window.location.search);
-  return normalizeModuleRouteToken(params.get("module") || params.get("tab") || window.location.hash);
+  const directRoute = normalizeModuleRouteToken(params.get("module") || params.get("tab") || window.location.hash);
+  if (directRoute) return directRoute;
+  try {
+    return normalizeModuleRouteToken(window.sessionStorage.getItem(pendingModuleRouteStorageKey));
+  } catch {
+    return "";
+  }
 }
 
 function panelExists(tabName) {
@@ -1255,6 +1262,11 @@ function panelExists(tabName) {
 
 function restoreInitialModuleRoute() {
   const route = initialModuleRoute();
+  try {
+    window.sessionStorage.removeItem(pendingModuleRouteStorageKey);
+  } catch {
+    // Ignore storage failures; direct URL routing remains available.
+  }
   if (route === "rare-style-explorer") {
     openLabModule("rare-style-explorer");
     return;
@@ -12131,12 +12143,24 @@ async function enforceVeyraUiAuth({ target = "alchemy-mobile" } = {}) {
   const policy = await loadVeyraAuthPolicy();
   if (!policy.enabled || !policy.require_ui_auth) return false;
   if (await hasValidVeyraSession()) return false;
+  persistPendingModuleRouteForLogin();
   window.location.replace(veyraLoginUrl(target));
   return true;
 }
 
 function redirectToVeyraLogin(target = "alchemy-mobile") {
+  persistPendingModuleRouteForLogin();
   window.location.replace(veyraLoginUrl(target));
+}
+
+function persistPendingModuleRouteForLogin() {
+  const requestedRoute = initialModuleRoute() || activeTabName;
+  if (normalizeModuleRouteToken(requestedRoute) !== "v2") return;
+  try {
+    window.sessionStorage.setItem(pendingModuleRouteStorageKey, "v2");
+  } catch {
+    // Keep login usable even when browser storage is unavailable.
+  }
 }
 
 async function handleVeyraUnauthorized() {

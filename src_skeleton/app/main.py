@@ -336,6 +336,34 @@ def frontend_app(request: Request):
     return _asset_versioned_shell_response(STATIC_DIR / "index.html")
 
 
+@app.get("/go/v2", include_in_schema=False)
+def v2_generation_entry():
+    asset_version = _shell_asset_version(STATIC_DIR / "v2-entry.js")
+    html = f"""<!doctype html>
+<html lang=\"zh-CN\">
+  <head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <meta name=\"robots\" content=\"noindex, nofollow\" />
+    <title>正在打开 Alchemy V2 生图</title>
+  </head>
+  <body>
+    <p>正在进入 Alchemy V2 生图页面……</p>
+    <script src=\"/static/v2-entry.js?v={asset_version}\" defer></script>
+    <noscript><a href=\"/?tab=v2\">进入 Alchemy V2 生图</a></noscript>
+  </body>
+</html>"""
+    return HTMLResponse(
+        html,
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'none'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @app.get("/h5")
 @app.get("/mobile")
 def mobile_frontend_app(request: Request):

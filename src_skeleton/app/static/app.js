@@ -79,6 +79,7 @@ const v3ProjectStorageKey = "alchemy_v3_project_history_v1";
 const v3HistoryStorageKey = "alchemy_v3_job_history_v1";
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
 const veyraAccountStorageKey = "alchemy_veyra_account";
+const pendingModuleRouteStorageKey = "alchemy_pending_module_route_v1";
 const defaultVeyraLoginBaseUrl = "https://aiself.vip";
 
 function isLocalAlchemyHost() {
@@ -1763,7 +1764,13 @@ function initialModuleRoute() {
   const pathToken = window.location.pathname.replace(/^\/+/, "").replace(/\/+$/, "").toLowerCase();
   if (pathToken === "creative-agent-v3" || pathToken.startsWith("creative-agent-v3/")) return "v3";
   const params = new URLSearchParams(window.location.search);
-  return normalizeModuleRouteToken(params.get("module") || params.get("tab") || window.location.hash);
+  const directRoute = normalizeModuleRouteToken(params.get("module") || params.get("tab") || window.location.hash);
+  if (directRoute) return directRoute;
+  try {
+    return normalizeModuleRouteToken(window.sessionStorage.getItem(pendingModuleRouteStorageKey));
+  } catch {
+    return "";
+  }
 }
 
 function initialV3ScenarioFromPath() {
@@ -1869,6 +1876,11 @@ function panelExists(tabName) {
 
 function restoreInitialModuleRoute() {
   const route = initialModuleRoute();
+  try {
+    window.sessionStorage.removeItem(pendingModuleRouteStorageKey);
+  } catch {
+    // Ignore storage failures; direct URL routing remains available.
+  }
   if (route === "rare-style-explorer") {
     openLabModule("rare-style-explorer");
     setLabNavOpen(false);
@@ -16936,12 +16948,24 @@ async function enforceVeyraUiAuth({ target = "alchemy" } = {}) {
   const policy = await loadVeyraAuthPolicy();
   if (!policy.enabled || !policy.require_ui_auth) return false;
   if (await hasValidVeyraSession()) return false;
+  persistPendingModuleRouteForLogin();
   window.location.replace(veyraLoginUrl(target));
   return true;
 }
 
 function redirectToVeyraLogin(target = "alchemy") {
+  persistPendingModuleRouteForLogin();
   window.location.replace(veyraLoginUrl(target));
+}
+
+function persistPendingModuleRouteForLogin() {
+  const requestedRoute = initialModuleRoute() || activeTabName;
+  if (normalizeModuleRouteToken(requestedRoute) !== "v2") return;
+  try {
+    window.sessionStorage.setItem(pendingModuleRouteStorageKey, "v2");
+  } catch {
+    // Keep login usable even when browser storage is unavailable.
+  }
 }
 
 async function handleVeyraUnauthorized() {
