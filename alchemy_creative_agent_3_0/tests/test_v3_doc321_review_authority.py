@@ -282,6 +282,32 @@ def test_asset_series_cannot_leak_held_candidate_through_shared_asset_id():
         visible_output_ids={"good"}, visible_asset_ids={"same_asset"}) == []
 
 
+def test_candidate_summaries_require_exact_certified_output_asset_binding():
+    packaged = SimpleNamespace(
+        asset_id="stale_asset",
+        uri="/stale.png",
+        platform="generic_social",
+        metadata={
+            "selected_candidate_id": "stale_candidate",
+            "candidate_metadata": {"output_id": "good", "output_index": 1},
+        },
+    )
+    result = SimpleNamespace(
+        metadata={"post_generation_review_package": {"inspections": [inspection("good")]}},
+        evaluation_reports=[],
+        series_plan=SimpleNamespace(assets=[]),
+        asset_pack=SimpleNamespace(asset_pack_id="pack", assets=[packaged]),
+    )
+    service = V3ProductApiService.__new__(V3ProductApiService)
+    service._project_candidate_metadata_from_result = lambda result, metadata, **kw: metadata
+
+    assert service._candidate_summaries(
+        result,
+        visible_output_ids={"good"},
+        visible_asset_ids={"asset_good"},
+    ) == []
+
+
 def test_explicit_pixel_certification_denial_is_respected_by_classifier():
     row = inspection("candidate")
     outcome = classify_review_outcome(row, provider_pixel_certified=False)

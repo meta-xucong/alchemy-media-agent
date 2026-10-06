@@ -5260,8 +5260,18 @@ function v3JobHasRecoverablePartialDelivery(job = v3State.currentJob, expectedCo
   const expectedVisibleCount = v3ExpectedImageCountForJob(job, expectedCount);
   if (visibleCount >= expectedVisibleCount) return false;
   const metadata = job?.metadata || {};
+  const finalDelivery = v3FinalDeliveryProjection(job);
+  const finalDeliveryOutputCount = Number(finalDelivery?.final_delivery_output_count || 0);
+  const formallyPartial = Boolean(
+    finalDelivery?.partial_delivery === true
+      && finalDelivery?.automatic_delivery_available === true
+      && Number.isFinite(finalDeliveryOutputCount)
+      && finalDeliveryOutputCount > 0,
+  );
   const partialRecovery = metadata.partial_generation_recovery;
   return Boolean(
+    formallyPartial
+    ||
     (partialRecovery && typeof partialRecovery === "object" && partialRecovery.status === "partial_output_preserved")
     || metadata.restored_from_output_store
     || metadata.recovered_from_project_outputs
@@ -10542,6 +10552,11 @@ async function completeV3GeneratedJob(
   syncV3ProjectOutputsFromPayload(generated);
   const partialRecovery = v3JobHasRecoverablePartialDelivery(generated);
   const deliveryWithheld = v3JobDeliveryWithheld(generated);
+  const finalDelivery = v3FinalDeliveryProjection(generated);
+  const formalPartialDelivery = partialRecovery && finalDelivery?.partial_delivery === true;
+  const partialDeliveryNotice = formalPartialDelivery
+    ? `已交付 ${Number(finalDelivery.final_delivery_output_count)} 张合格图片；其余图片未通过审核或需要人工确认。`
+    : "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。";
   const hasExpectedDelivery = v3JobHasExpectedVisibleImages(generated, expectedCount);
   const terminalFailure = ["blocked", "failed", "not_found"].includes(
     String(generated?.status || "").trim().toLowerCase()
@@ -10562,7 +10577,7 @@ async function completeV3GeneratedJob(
       : deliveryWithheld
         ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
-        ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
+        ? partialDeliveryNotice
         : "后台已完成出图，正在刷新项目图片。",
     failedWithoutPartialDelivery || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
@@ -10593,7 +10608,7 @@ async function completeV3GeneratedJob(
       : deliveryWithheld
         ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
-        ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
+        ? partialDeliveryNotice
         : copy.generatedNotice,
     failedWithoutPartialDelivery || deliveryWithheld || partialRecovery ? "warning" : "success"
   );

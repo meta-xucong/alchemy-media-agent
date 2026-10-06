@@ -35,6 +35,7 @@ from alchemy_creative_agent_3_0.app.scenario_packs.photography import (
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
 from alchemy_creative_agent_3_0.app.schemas import CandidateResult, ProviderStrategy
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import VisionOutputInspector
 from alchemy_creative_agent_3_0.tests.photography_test_support import photography_test_runtime, photography_test_service
 
 
@@ -318,8 +319,145 @@ def test_single_hero_retry_rebinds_the_frozen_role_to_the_certified_retry_winner
     assert record.generation_result is not None
     execution_role = record.generation_result.metadata["specialized_role_execution"]["roles"][0]
     assert set(execution_role["previous_candidate_ids"]) == {"candidate_hero_photograph_1"}
+    winner_ids = set(record.generation_result.metadata["reviewed_delivery_preference"]["preferred_output_ids"])
+    review_package = record.generation_result.metadata["post_generation_review_package"]
+    winner_inspections = [item for item in review_package["inspections"] if item.get("output_id") in winner_ids]
+    assert review_package["review_evidence_receipt_status"] == "complete"
+    assert review_package["review_evidence_receipt_errors"] == []
+    assert {item["output_id"] for item in winner_inspections} == winner_ids
+    assert {item["status"] for item in winner_inspections} == {"pass"}
+    resolutions = {item["output_id"]: item for item in review_package["resolutions"]}
+    assert set(resolutions) == winner_ids
+    assert set(review_package["review_evidence_plans"]) == winner_ids
+    assert set(review_package["review_evidence_plan_digests"]) == winner_ids
+    inspection_by_candidate = {item["candidate_id"]: item for item in winner_inspections}
+    for role in record.request.metadata["specialized_execution_summary"]["roles"]:
+        inspection = inspection_by_candidate[role["candidate_id"]]
+        resolution = resolutions[inspection["output_id"]]
+        assert resolution["candidate_id"] == role["candidate_id"]
+        assert resolution["asset_id"] == inspection["asset_id"]
+        assert resolution["status"] == "ready"
+    project_output_ids = {
+        item["output_id"]
+        for item in handlers.get_project_outputs(project_id=project["project_id"])["items"]
+        if item.get("job_id") == root["job_id"] and item.get("output_id")
+    }
+    assert project_output_ids == winner_ids
     assert generated["metadata"]["final_delivery"]["automatic_delivery_available"] is True
     assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 1
+
+
+def test_professional_set_mixed_retry_winners_keep_role_candidate_and_review_binding(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(tmp_path)
+
+    class MixedRetryVisionProvider:
+        provider_name = "mixed_retry_photography_vision_fixture"
+
+        def __init__(self) -> None:
+            self.payloads = [
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.50}},
+                {
+                    "status": "fail_retryable",
+                    "confidence": 0.98,
+                    "issue_codes": ["visible_text_artifact"],
+                    "scores": {"overall": 0.10},
+                },
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.95}},
+                {
+                    "status": "fail_retryable",
+                    "confidence": 0.98,
+                    "issue_codes": ["visible_text_artifact"],
+                    "scores": {"overall": 0.10},
+                },
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.90}},
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.90}},
+            ]
+            self.calls = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def inspect(self, _resolution, *, metadata=None) -> dict:
+            payload = self.payloads[self.calls]
+            self.calls += 1
+            return {
+                **payload,
+                "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
+            }
+
+    vision_provider = MixedRetryVisionProvider()
+    handlers.service.vision_inspector = VisionOutputInspector(vision_provider=vision_provider)
+    project, root = _project_and_root(handlers, require_real_images=True)
+
+    generated = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(
+            job_id=root["job_id"],
+            max_visual_retry_attempts=1,
+        ),
+    )
+
+    assert len(provider.requests) == 6
+    assert vision_provider.calls == 6
+    assert generated["status"] == "generated"
+    assert generated["metadata"]["review_certification"]["state"] == "certified"
+    assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 3
+    record = handlers.service.get_job_record(root["job_id"])
+    assert record is not None
+    role_winners = {
+        item["role_key"]: item["candidate_id"]
+        for item in record.request.metadata["specialized_execution_summary"]["roles"]
+    }
+    assert role_winners == {
+        "session_hero": "candidate_session_hero_1",
+        "environmental_context": "candidate_environmental_context_5",
+        "detail_or_moment": "candidate_detail_or_moment_3",
+    }
+    assert all(
+        item["certification_state"] == "certified"
+        for item in record.request.metadata["specialized_execution_summary"]["roles"]
+    )
+    review_package = record.generation_result.metadata["post_generation_review_package"]
+    winner_output_ids = set(record.generation_result.metadata["reviewed_delivery_preference"]["preferred_output_ids"])
+    winner_inspections = [item for item in review_package["inspections"] if item.get("output_id") in winner_output_ids]
+    assert review_package["review_evidence_receipt_status"] == "complete"
+    assert review_package["review_evidence_receipt_errors"] == []
+    assert {item["output_id"] for item in winner_inspections} == winner_output_ids
+    assert {item["status"] for item in winner_inspections} == {"pass"}
+    assert len(winner_inspections) == 3
+    winner_inspection_by_candidate = {item["candidate_id"]: item for item in winner_inspections}
+    assert set(winner_inspection_by_candidate) == set(role_winners.values())
+    resolutions = {item["output_id"]: item for item in review_package["resolutions"]}
+    assert set(resolutions) == winner_output_ids
+    assert set(review_package["review_evidence_plans"]) == winner_output_ids
+    assert set(review_package["review_evidence_plan_digests"]) == winner_output_ids
+    for role_key, candidate_id in role_winners.items():
+        inspection = winner_inspection_by_candidate[candidate_id]
+        resolution = resolutions[inspection["output_id"]]
+        assert resolution["candidate_id"] == candidate_id
+        assert resolution["asset_id"] == inspection["asset_id"]
+        assert resolution["status"] == "ready"
+        assert review_package["review_evidence_plans"][inspection["output_id"]]["output_id"] == inspection["output_id"]
+        assert (
+            review_package["review_evidence_plan_digests"][inspection["output_id"]]
+            == review_package["review_evidence_plans"][inspection["output_id"]]["review_plan_digest"]
+        )
+        summary_role = next(
+            item for item in record.request.metadata["specialized_execution_summary"]["roles"]
+            if item["role_key"] == role_key
+        )
+        assert summary_role["candidate_id"] == inspection["candidate_id"]
+    generated_output_ids = {item["output_id"] for item in generated["asset_series"] if item.get("output_id")}
+    project_output_ids = {
+        item["output_id"]
+        for item in handlers.get_project_outputs(project_id=project["project_id"])["items"]
+        if item.get("job_id") == root["job_id"] and item.get("output_id")
+    }
+    assert generated_output_ids == winner_output_ids, (generated_output_ids, winner_output_ids, project_output_ids)
+    assert project_output_ids == winner_output_ids, (project_output_ids, winner_output_ids)
 
 
 def test_professional_set_role_failure_is_explicit_and_never_reconciles_as_a_single_delivery(monkeypatch, tmp_path) -> None:

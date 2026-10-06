@@ -5305,6 +5305,32 @@ class V3ProductApiService:
             for item in inspections
             if isinstance(item, dict) and str(item.get("candidate_id") or "").strip()
         } if isinstance(inspections, list) else {}
+        preference = generation_result.metadata.get("reviewed_delivery_preference")
+        preferred_output_ids = set(
+            self._dedupe_strings(preference.get("preferred_output_ids"))
+            if isinstance(preference, dict)
+            else []
+        )
+        preferred_inspections_by_asset: dict[str, list[dict[str, Any]]] = {}
+        if preferred_output_ids and isinstance(inspections, list):
+            for inspection in inspections:
+                if not isinstance(inspection, dict):
+                    continue
+                output_id = str(inspection.get("output_id") or "").strip()
+                asset_id = str(inspection.get("asset_id") or "").strip()
+                if output_id in preferred_output_ids and asset_id:
+                    preferred_inspections_by_asset.setdefault(asset_id, []).append(dict(inspection))
+        reviewed_winner_by_asset = {
+            asset_id: matches[0]
+            for asset_id, matches in preferred_inspections_by_asset.items()
+            if len(matches) == 1
+        }
+        preferred_inspections_by_candidate: dict[str, list[dict[str, Any]]] = {}
+        for inspection in preferred_inspections_by_asset.values():
+            for preferred_inspection in inspection:
+                candidate_id = str(preferred_inspection.get("candidate_id") or "").strip()
+                if candidate_id:
+                    preferred_inspections_by_candidate.setdefault(candidate_id, []).append(preferred_inspection)
         requires_real_pixel_review = bool(execution_metadata.get("requires_real_pixel_review"))
 
         roles: list[dict[str, Any]] = []
@@ -5315,7 +5341,33 @@ class V3ProductApiService:
             status = str(item.get("status") or "missing").strip().lower()
             if status != "generated":
                 missing_role_keys.append(role_key)
-            inspection = inspections_by_candidate.get(str(item.get("candidate_id") or "").strip())
+            role_asset_id = str(item.get("asset_id") or "").strip()
+            role_candidate_ids = self._dedupe_strings(
+                [
+                    item.get("candidate_id"),
+                    *self._string_list(item.get("previous_candidate_ids")),
+                ]
+            )
+            candidate_matches = [
+                inspection
+                for candidate_id in role_candidate_ids
+                for inspection in preferred_inspections_by_candidate.get(candidate_id, [])
+            ]
+            winning_inspection = (
+                candidate_matches[0]
+                if len(candidate_matches) == 1
+                else reviewed_winner_by_asset.get(role_asset_id)
+                if not role_candidate_ids
+                else None
+            )
+            if winning_inspection is not None:
+                winning_candidate_id = str(winning_inspection.get("candidate_id") or "").strip()
+                if winning_candidate_id:
+                    item["candidate_id"] = winning_candidate_id
+                item["asset_id"] = str(winning_inspection.get("asset_id") or role_asset_id).strip()
+                inspection = winning_inspection
+            else:
+                inspection = inspections_by_candidate.get(str(item.get("candidate_id") or "").strip())
             review_mode = str(inspection.get("mode") or "").strip().lower() if inspection else ""
             review_status = str(inspection.get("status") or "").strip().lower() if inspection else ""
             verification_state = str(inspection.get("verification_state") or "").strip().lower() if inspection else ""
@@ -10747,17 +10799,42 @@ class V3ProductApiService:
             return result
 
         ranked: list[dict[str, Any]] = []
+        attempts_by_key: dict[tuple[int, str], dict[str, Any]] = {}
+        inspection_output_counts: dict[str, int] = {}
+        role_keys_by_candidate_id: dict[str, set[str]] = {}
+        specialized_execution = result.metadata.get("specialized_role_execution")
+        specialized_roles = specialized_execution.get("roles") if isinstance(specialized_execution, dict) else []
+        if isinstance(specialized_roles, list):
+            for role in specialized_roles:
+                if not isinstance(role, dict):
+                    continue
+                role_key = str(role.get("role_key") or "").strip()
+                if not role_key:
+                    continue
+                for candidate_id in self._dedupe_strings(
+                    [role.get("candidate_id"), *self._string_list(role.get("previous_candidate_ids"))]
+                ):
+                    role_keys_by_candidate_id.setdefault(candidate_id, set()).add(role_key)
         for attempt in attempts:
             if not isinstance(attempt, dict):
                 continue
             output_ids = self._dedupe_strings(attempt.get("output_ids"))
             if not output_ids:
                 continue
+            attempt_index = self._safe_int(attempt.get("attempt_index"), default=0) or 0
+            stage = str(attempt.get("stage") or "review")
+            attempts_by_key[(attempt_index, stage)] = attempt
+            for inspection in attempt.get("inspections", []) if isinstance(attempt.get("inspections"), list) else []:
+                if not isinstance(inspection, dict):
+                    continue
+                inspected_output_id = str(inspection.get("output_id") or "").strip()
+                if inspected_output_id:
+                    inspection_output_counts[inspected_output_id] = inspection_output_counts.get(inspected_output_id, 0) + 1
             score, hard_gate_passed = self._review_attempt_delivery_score(attempt)
             ranked.append(
                 {
-                    "attempt_index": self._safe_int(attempt.get("attempt_index"), default=0) or 0,
-                    "stage": str(attempt.get("stage") or "review"),
+                    "attempt_index": attempt_index,
+                    "stage": stage,
                     "output_ids": output_ids,
                     "score": score,
                     "hard_gate_passed": hard_gate_passed,
@@ -10770,17 +10847,7 @@ class V3ProductApiService:
 
         ranked_outputs: list[dict[str, Any]] = []
         for attempt_summary in ranked:
-            attempt = next(
-                (
-                    item
-                    for item in attempts
-                    if isinstance(item, dict)
-                    and (self._safe_int(item.get("attempt_index"), default=0) or 0)
-                    == attempt_summary["attempt_index"]
-                    and str(item.get("stage") or "review") == attempt_summary["stage"]
-                ),
-                {},
-            )
+            attempt = attempts_by_key.get((attempt_summary["attempt_index"], attempt_summary["stage"]), {})
             inspections = [item for item in attempt.get("inspections", []) if isinstance(item, dict)]
             inspections_by_output = {
                 str(item.get("output_id")): item
@@ -10797,23 +10864,48 @@ class V3ProductApiService:
                 asset_id = ""
                 score_card: dict[str, Any] = {}
                 review_unavailable = False
+                delivery_eligible = False
+                reviewed_evidence: dict[str, Any] | None = None
                 if inspection is not None:
                     score, hard_gate_passed, hard_gate_failures = self._review_inspection_delivery_score(inspection)
                     asset_id = str(inspection.get("asset_id") or "").strip()
                     score_card = dict(inspection.get("score_card") or {})
                     review_unavailable = "review_unavailable" in hard_gate_failures
+                    reviewed_evidence = self._reviewed_attempt_output_evidence(
+                        attempt,
+                        inspection,
+                        job_id=str(result.creative_job.job_id or "").strip(),
+                    )
+                    delivery_eligible = bool(
+                        output_id
+                        and inspection_output_counts.get(output_id) == 1
+                        and reviewed_evidence is not None
+                        and str(inspection.get("status") or "").strip().lower() in {"pass", "warning"}
+                        and self._is_verified_real_pixel_inspection(inspection)
+                        and self._doc276_face_integrity_delivery_certified(
+                            inspection,
+                            required=bool(reviewed_evidence["doc276_required"]),
+                        )
+                        and hard_gate_passed
+                    )
+                candidate_id = str(inspection.get("candidate_id") or "").strip() if inspection is not None else ""
+                if not candidate_id and reviewed_evidence is not None:
+                    candidate_id = str(reviewed_evidence["resolution"].get("candidate_id") or "").strip()
+                candidate_role_keys = role_keys_by_candidate_id.get(candidate_id, set())
+                stable_role_key = next(iter(candidate_role_keys)) if len(candidate_role_keys) == 1 else ""
                 output_record = self.output_store.get_output(output_id)
                 output_metadata = dict(output_record.metadata or {}) if output_record is not None else {}
                 ranked_outputs.append(
                     {
                         "output_id": output_id,
                         "asset_id": asset_id,
-                        "role_key": asset_id or f"position:{position}",
+                        "role_key": stable_role_key or asset_id or f"position:{position}",
                         "attempt_index": attempt_summary["attempt_index"],
                         "stage": attempt_summary["stage"],
                         "score": score,
                         "hard_gate_passed": hard_gate_passed,
                         "hard_gate_failures": hard_gate_failures,
+                        "delivery_eligible": delivery_eligible,
                         "identity_score": self._normalized_review_score(
                             score_card.get("same_person_readability", score_card.get("identity_consistency"))
                         ),
@@ -10855,11 +10947,20 @@ class V3ProductApiService:
                 reviewed_group = [item for item in accepted_group if not item.get("review_unavailable")]
                 if reviewed_group:
                     accepted_group = reviewed_group
-                eligible = [item for item in accepted_group if item["hard_gate_passed"]] or accepted_group
-                winners.append(max(eligible, key=lambda item: (item["score"], -item["attempt_index"])))
+                eligible = [
+                    item for item in accepted_group
+                    if item["delivery_eligible"] and item["hard_gate_passed"]
+                ] or [item for item in accepted_group if item["hard_gate_passed"]] or accepted_group
+                winners.append(max(eligible, key=lambda item: (item["score"], item["attempt_index"])))
         else:
-            eligible = [item for item in ranked if item["hard_gate_passed"]] or ranked
-            attempt_winner = max(eligible, key=lambda item: (item["score"], -item["attempt_index"]))
+            delivery_eligible_attempts = {
+                item["attempt_index"]
+                for item in ranked_outputs
+                if item["delivery_eligible"] and item["hard_gate_passed"]
+            }
+            eligible = [item for item in ranked if item["attempt_index"] in delivery_eligible_attempts]
+            eligible = eligible or [item for item in ranked if item["hard_gate_passed"]] or ranked
+            attempt_winner = max(eligible, key=lambda item: (item["score"], item["attempt_index"]))
             winners = [
                 item
                 for item in ranked_outputs
@@ -10944,6 +11045,75 @@ class V3ProductApiService:
             }
         )
 
+    def _reviewed_attempt_output_evidence(
+        self,
+        attempt: dict[str, Any],
+        inspection: dict[str, Any],
+        *,
+        job_id: str,
+    ) -> dict[str, Any] | None:
+        errors = attempt.get("review_evidence_receipt_errors")
+        if (
+            str(attempt.get("review_evidence_receipt_status") or "").strip().lower() != "complete"
+            or not isinstance(errors, (list, tuple))
+            or bool(errors)
+        ):
+            return None
+        resolutions = attempt.get("resolutions")
+        plans = attempt.get("review_evidence_plans")
+        digests = attempt.get("review_evidence_plan_digests")
+        inspections = attempt.get("inspections")
+        if not (
+            isinstance(resolutions, list)
+            and isinstance(plans, dict)
+            and isinstance(digests, dict)
+            and isinstance(inspections, list)
+        ):
+            return None
+        output_id = str(inspection.get("output_id") or "").strip()
+        asset_id = str(inspection.get("asset_id") or "").strip()
+        if not output_id or not asset_id or output_id not in set(self._dedupe_strings(attempt.get("output_ids"))):
+            return None
+        matching_resolutions = [
+            item for item in resolutions
+            if isinstance(item, dict) and str(item.get("output_id") or "").strip() == output_id
+        ]
+        if len(matching_resolutions) != 1:
+            return None
+        resolution = matching_resolutions[0]
+        if (
+            str(resolution.get("job_id") or "").strip() != job_id
+            or str(resolution.get("asset_id") or "").strip() != asset_id
+            or str(resolution.get("status") or "").strip().lower() != "ready"
+            or (
+                inspection.get("candidate_id")
+                and resolution.get("candidate_id")
+                and str(inspection.get("candidate_id")).strip() != str(resolution.get("candidate_id")).strip()
+            )
+        ):
+            return None
+        try:
+            plan = ReviewEvidencePlan.model_validate(plans.get(output_id))
+        except (ValidationError, TypeError, ValueError):
+            return None
+        digest = str(digests.get(output_id) or "").strip()
+        if (
+            plan.job_id != job_id
+            or plan.output_id != output_id
+            or not digest
+            or digest != plan.review_plan_digest
+            or plan.review_plan_digest != review_plan_digest(plan.model_dump(mode="json"))
+        ):
+            return None
+        required_output_ids = set(self._dedupe_strings(attempt.get("doc276_face_integrity_required_output_ids")))
+        return {
+            "inspection": dict(inspection),
+            "resolution": dict(resolution),
+            "plan": plan.model_dump(mode="json"),
+            "digest": digest,
+            "doc276_required": output_id in required_output_ids,
+        }
+
     def _reviewed_winner_review_package(
         self,
         package: dict[str, Any],
@@ -10965,78 +11135,17 @@ class V3ProductApiService:
         for attempt in attempts:
             if not isinstance(attempt, dict):
                 continue
-            errors = attempt.get("review_evidence_receipt_errors")
-            if (
-                str(attempt.get("review_evidence_receipt_status") or "").strip().lower() != "complete"
-                or not isinstance(errors, (list, tuple))
-                or bool(errors)
-            ):
-                continue
-            resolutions = attempt.get("resolutions")
-            plans = attempt.get("review_evidence_plans")
-            digests = attempt.get("review_evidence_plan_digests")
             inspections = attempt.get("inspections")
-            if not (
-                isinstance(resolutions, list)
-                and isinstance(plans, dict)
-                and isinstance(digests, dict)
-                and isinstance(inspections, list)
-            ):
+            if not isinstance(inspections, list):
                 continue
-            output_ids = set(self._dedupe_strings(attempt.get("output_ids")))
-            required_output_ids = set(
-                self._dedupe_strings(attempt.get("doc276_face_integrity_required_output_ids"))
-            )
             for inspection in inspections:
                 if not isinstance(inspection, dict):
                     continue
                 output_id = str(inspection.get("output_id") or "").strip()
-                asset_id = str(inspection.get("asset_id") or "").strip()
-                if not output_id or not asset_id or output_id not in output_ids:
+                evidence = self._reviewed_attempt_output_evidence(attempt, inspection, job_id=job_id)
+                if evidence is None:
                     continue
-                matching_resolutions = [
-                    item for item in resolutions
-                    if isinstance(item, dict)
-                    and str(item.get("output_id") or "").strip() == output_id
-                ]
-                if len(matching_resolutions) != 1:
-                    continue
-                resolution = matching_resolutions[0]
-                if (
-                    str(resolution.get("job_id") or "").strip() != job_id
-                    or str(resolution.get("asset_id") or "").strip() != asset_id
-                    or str(resolution.get("status") or "").strip().lower() != "ready"
-                    or (
-                        inspection.get("candidate_id")
-                        and resolution.get("candidate_id")
-                        and str(inspection.get("candidate_id")).strip()
-                        != str(resolution.get("candidate_id")).strip()
-                    )
-                ):
-                    continue
-                raw_plan = plans.get(output_id)
-                digest = str(digests.get(output_id) or "").strip()
-                try:
-                    plan = ReviewEvidencePlan.model_validate(raw_plan)
-                except (ValidationError, TypeError, ValueError):
-                    continue
-                if (
-                    plan.job_id != job_id
-                    or plan.output_id != output_id
-                    or not digest
-                    or digest != plan.review_plan_digest
-                    or plan.review_plan_digest != review_plan_digest(plan.model_dump(mode="json"))
-                ):
-                    continue
-                by_output_id.setdefault(output_id, []).append(
-                    {
-                        "inspection": dict(inspection),
-                        "resolution": dict(resolution),
-                        "plan": plan.model_dump(mode="json"),
-                        "digest": digest,
-                        "doc276_required": output_id in required_output_ids,
-                    }
-                )
+                by_output_id.setdefault(output_id, []).append(evidence)
 
         selected: list[dict[str, Any]] = []
         for output_id in self._dedupe_strings(preferred_output_ids):
@@ -11696,7 +11805,7 @@ class V3ProductApiService:
             if asset.metadata.get("selected_candidate_id")
         ]
         selected_asset_ids = [asset.asset_id for asset in selected_assets]
-        update = self._memory_update_for_selection(
+        update = None if allow_unreviewed_candidate_selection else self._memory_update_for_selection(
             result.asset_pack.brand_memory_update,
             selected_asset_ids,
             {
@@ -14873,7 +14982,56 @@ class V3ProductApiService:
     ) -> list[AssetSeriesItem]:
         packaged_by_id = {asset.asset_id: asset for asset in result.asset_pack.assets}
         items: list[AssetSeriesItem] = []
-        for asset in result.series_plan.assets:
+        series_assets = list(result.series_plan.assets)
+        if visible_output_ids is not None:
+            # The series plan records the first-attempt asset IDs. A retry may
+            # win with a different asset ID, so final delivery must be joined
+            # from the certified output -> asset binding, then mapped back to
+            # its stable role for display metadata.
+            result_metadata = getattr(result, "metadata", {})
+            package = result_metadata.get("post_generation_review_package") if isinstance(result_metadata, dict) else None
+            inspections = package.get("inspections") if isinstance(package, dict) else []
+            eligible_asset_by_output = {
+                str(inspection.get("output_id") or "").strip(): str(inspection.get("asset_id") or "").strip()
+                for inspection in inspections or []
+                if isinstance(inspection, dict)
+                and str(inspection.get("output_id") or "").strip() in visible_output_ids
+                and str(inspection.get("asset_id") or "").strip()
+            }
+            spec_by_role = {
+                str(spec.metadata.get("mode_role_key") or "").strip(): spec
+                for spec in result.series_plan.assets
+                if isinstance(spec.metadata, dict) and str(spec.metadata.get("mode_role_key") or "").strip()
+            }
+            delivered_assets: list[tuple[Any, Any]] = []
+            for packaged_asset in result.asset_pack.assets:
+                raw_candidate_metadata = packaged_asset.metadata.get("candidate_metadata", {})
+                candidate_metadata = raw_candidate_metadata if isinstance(raw_candidate_metadata, dict) else {}
+                output_id = str(candidate_metadata.get("output_id") or "").strip()
+                asset_id = str(packaged_asset.asset_id or "").strip()
+                if (
+                    output_id not in visible_output_ids
+                    or eligible_asset_by_output.get(output_id) != asset_id
+                    or (visible_asset_ids is not None and asset_id not in visible_asset_ids)
+                ):
+                    continue
+                role_key = str(
+                    candidate_metadata.get("mode_role_key")
+                    or packaged_asset.metadata.get("mode_role_key")
+                    or ""
+                ).strip()
+                asset_spec = spec_by_role.get(role_key)
+                if asset_spec is None:
+                    # Non-role outputs retain the old exact asset-ID join.
+                    asset_spec = next(
+                        (spec for spec in result.series_plan.assets if spec.asset_id == asset_id),
+                        None,
+                    )
+                if asset_spec is not None:
+                    delivered_assets.append((asset_spec, packaged_asset))
+            series_assets = [spec for spec, _packaged in delivered_assets]
+            packaged_by_id = {spec.asset_id: packaged for spec, packaged in delivered_assets}
+        for asset in series_assets:
             packaged = packaged_by_id.get(asset.asset_id)
             render_manifest = packaged.metadata.get("render_manifest") if packaged else None
             selected_candidate_id = packaged.metadata.get("selected_candidate_id") if packaged else None
@@ -14895,7 +15053,7 @@ class V3ProductApiService:
                 item_status = "selected"
             items.append(
                 AssetSeriesItem(
-                    asset_id=asset.asset_id,
+                    asset_id=packaged.asset_id if packaged else asset.asset_id,
                     asset_type=asset.asset_type.value,
                     platform=asset.platform,
                     aspect_ratio=asset.aspect_ratio,
@@ -14937,6 +15095,26 @@ class V3ProductApiService:
             for asset in result.asset_pack.assets
             if asset.metadata.get("selected_candidate_id")
         }
+        certified_asset_by_output: dict[str, str] = {}
+        if visible_output_ids is not None:
+            package = result.metadata.get("post_generation_review_package")
+            inspections = package.get("inspections") if isinstance(package, dict) else []
+            inspected_assets_by_output: dict[str, set[str]] = {}
+            inspection_count_by_output: dict[str, int] = {}
+            for inspection in inspections or []:
+                if not isinstance(inspection, dict):
+                    continue
+                output_id = str(inspection.get("output_id") or "").strip()
+                asset_id = str(inspection.get("asset_id") or "").strip()
+                if output_id not in visible_output_ids or not asset_id:
+                    continue
+                inspection_count_by_output[output_id] = inspection_count_by_output.get(output_id, 0) + 1
+                inspected_assets_by_output.setdefault(output_id, set()).add(asset_id)
+            certified_asset_by_output = {
+                output_id: next(iter(asset_ids))
+                for output_id, asset_ids in inspected_assets_by_output.items()
+                if inspection_count_by_output.get(output_id) == 1 and len(asset_ids) == 1
+            }
         for ordinal, asset in enumerate(result.asset_pack.assets, 1):
             candidate_id = asset.metadata.get("selected_candidate_id")
             if not candidate_id:
@@ -14983,6 +15161,14 @@ class V3ProductApiService:
             if (
                 visible_output_ids is not None
                 and output_id not in visible_output_ids
+            ):
+                continue
+            if visible_output_ids is not None and (
+                certified_asset_by_output.get(output_id) != str(asset.asset_id or "").strip()
+                or (
+                    visible_asset_ids is not None
+                    and str(asset.asset_id or "").strip() not in visible_asset_ids
+                )
             ):
                 continue
             asset_metadata = self._public_metadata_projection(

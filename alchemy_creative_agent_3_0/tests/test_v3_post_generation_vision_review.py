@@ -17,7 +17,7 @@ from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetSto
 from alchemy_creative_agent_3_0.app.product_api.output_resolver import GeneratedOutputResolver
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
-from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Platform
+from alchemy_creative_agent_3_0.app.schemas import AssetType, MemoryUpdate, PackagedAsset, Platform, ReferenceAsset
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import GeneratedOutputResolution, VisionOutputInspector
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import ReviewEvidencePlan
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_evidence import review_plan_digest
@@ -2123,6 +2123,187 @@ def test_doc96_unreviewed_retry_cannot_replace_reviewed_initial_output(tmp_path)
     retry = next(item for item in preference["ranked_outputs"] if item["output_id"] == "unreviewed_retry")
     assert retry["review_unavailable"] is True
     assert "review_unavailable" in retry["hard_gate_failures"]
+    delivery, eligible_output_ids, _eligible_asset_ids = service._public_final_delivery_projection(preferred)  # noqa: SLF001
+    assert eligible_output_ids == set()
+    assert delivery["automatic_delivery_available"] is False
+    assert delivery["final_delivery_output_count"] == 0
+
+
+@pytest.mark.parametrize("retry_status", ["manual_review", "fail_retryable"])
+def test_delivery_eligible_initial_role_beats_pending_retry_with_new_asset_ids(tmp_path, retry_status: str) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+
+    def inspection(output_id: str, asset_id: str, candidate_id: str, status: str, score: float) -> dict:
+        return {
+            "inspection_id": f"inspection_{output_id}",
+            "output_id": output_id,
+            "asset_id": asset_id,
+            "candidate_id": candidate_id,
+            "mode": "vision_model",
+            "verification_state": "verified",
+            "evidence": {"provider_pixel_result_certified": True},
+            "status": status,
+            "detected_issues": ([{"code": "visible_text_artifact"}] if status == "fail_retryable" else []),
+            "score_card": {"overall": score},
+        }
+
+    def attempt(stage: str, attempt_index: int, outputs: list[tuple[str, str, str, str, float]]) -> dict:
+        rows = [inspection(*output) for output in outputs]
+        plans: dict[str, dict] = {}
+        digests: dict[str, str] = {}
+        for row in rows:
+            output_id = row["output_id"]
+            plan = ReviewEvidencePlan.model_validate(
+                {
+                    "contract_version": "review_evidence_plan_v1",
+                    "plan_id": f"plan_{output_id}",
+                    "job_id": created.job_id,
+                    "output_id": output_id,
+                    "review_mode": "real_pixel",
+                    "channels": {
+                        "product_truth": {"applicability": "not_applicable", "evidence_state": "not_applicable"},
+                        "person_identity": {"applicability": "not_applicable", "evidence_state": "not_applicable"},
+                        "prompt_semantics": {
+                            "applicability": "required",
+                            "evidence_state": "available",
+                            "evidence_ids": ["prompt_contract"],
+                            "source_type": "prompt_contract",
+                        },
+                        "selected_output": {
+                            "applicability": "required",
+                            "evidence_state": "available",
+                            "evidence_ids": [output_id],
+                        },
+                    },
+                    "source_binding_digest": f"binding_{output_id}",
+                    "review_plan_digest": "pending",
+                }
+            ).model_dump(mode="json")
+            plan["review_plan_digest"] = review_plan_digest(plan)
+            plans[output_id] = plan
+            digests[output_id] = plan["review_plan_digest"]
+        return {
+            "stage": stage,
+            "attempt_index": attempt_index,
+            "output_ids": [row["output_id"] for row in rows],
+            "statuses": [row["status"] for row in rows],
+            "issue_codes": sorted({issue["code"] for row in rows for issue in row["detected_issues"]}),
+            "review_evidence_receipt_status": "complete",
+            "review_evidence_receipt_errors": [],
+            "resolutions": [
+                {
+                    "resolution_id": f"resolution_{row['output_id']}",
+                    "job_id": created.job_id,
+                    "output_id": row["output_id"],
+                    "asset_id": row["asset_id"],
+                    "candidate_id": row["candidate_id"],
+                    "status": "ready",
+                }
+                for row in rows
+            ],
+            "review_evidence_plans": plans,
+            "review_evidence_plan_digests": digests,
+            "doc276_face_integrity_required_output_ids": [],
+            "inspections": rows,
+        }
+
+    package = {
+        "review_attempts": [
+            attempt(
+                "initial",
+                0,
+                [
+                    ("deliverable_initial", "hero_asset_old", "candidate_hero_old", "pass", 0.10),
+                    ("failed_sibling", "context_asset_old", "candidate_context_old", "fail_retryable", 0.10),
+                ],
+            ),
+            attempt(
+                "final_retry",
+                1,
+                [
+                    ("pending_retry", "hero_asset_new", "candidate_hero_new", retry_status, 1.0),
+                    ("new_sibling", "context_asset_new", "candidate_context_new", "pass", 1.0),
+                ],
+            ),
+        ]
+    }
+    candidate = record.generation_result.model_copy(
+        update={
+            "metadata": {
+                **dict(record.generation_result.metadata),
+                "post_generation_review_package": package,
+                "specialized_role_execution": {
+                    "roles": [
+                        {
+                            "role_key": "hero",
+                            "candidate_id": "candidate_hero_new",
+                            "previous_candidate_ids": ["candidate_hero_old"],
+                        },
+                        {
+                            "role_key": "context",
+                            "candidate_id": "candidate_context_new",
+                            "previous_candidate_ids": ["candidate_context_old"],
+                        },
+                    ]
+                },
+            }
+        }
+    )
+
+    preferred = service._apply_reviewed_delivery_preference(candidate)  # noqa: SLF001 - preference regression
+
+    assert set(preferred.metadata["reviewed_delivery_preference"]["preferred_output_ids"]) == {
+        "deliverable_initial",
+        "new_sibling",
+    }
+
+
+def test_unreviewed_browse_selection_does_not_apply_brand_memory(tmp_path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    asset = record.generation_result.asset_pack.assets[0]
+    candidate_id = asset.metadata["selected_candidate_id"]
+    result = record.generation_result.model_copy(deep=True)
+    result.asset_pack.brand_memory_update = MemoryUpdate(
+        memory_update_id="memory_unreviewed_browse",
+        brand_id="brand_unreviewed_browse",
+        action="propose",
+        accepted_asset_ids=[asset.asset_id],
+        new_reference_assets=[
+            ReferenceAsset(
+                asset_id="ref_unreviewed_browse",
+                asset_type="accepted_generated_candidate",
+                source="v3_generation_loop",
+                metadata={"candidate_id": candidate_id, "asset_id": asset.asset_id},
+            )
+        ],
+    )
+    record.generation_result = result
+    service.job_store.save(record)
+    applied: list[MemoryUpdate] = []
+    monkeypatch.setattr(
+        service.brand_profile_service,
+        "apply_memory_update",
+        lambda update: applied.append(update) or object(),
+    )
+
+    response = service.select_result(
+        created.job_id,
+        {"selected_candidate_ids": [candidate_id], "apply_memory_update": True},
+    )
+
+    assert response.selected_result.metadata["selection_status"] == "selected"
+    assert response.job_status.metadata["final_delivery"]["final_delivery_status"] == "not_evaluated"
+    assert response.selected_result.memory_update_applied is False
+    assert response.selected_result.memory_update_id is None
+    assert applied == []
 
 
 def test_product_api_provider_unavailable_does_not_retry(tmp_path) -> None:
