@@ -1,6 +1,6 @@
 # Doc337 — V3 Result Consistency Post-Deployment Audit Follow-up
 
-Status: **A1 follow-up corrections implemented and independently audited PASS; exact integrated-main acceptance passes. GitHub push and VPS release remain pending.**
+Status: **A1 follow-up corrections implemented and independently audited PASS; exact integrated-main acceptance passes and is pushed to GitHub. VPS release is waiting for local SSH key unlock.**
 
 Baseline: `fb2dae1943f3e95402e94b006f65b079b6edec0a` (`main`, equal to `origin/main`).
 Prior user files and other active worktrees are preserved.
@@ -179,7 +179,9 @@ The accepted feature commit `80ad30a08ab5a2de4e20fec414c57b29c1235033` was fast-
 - VPS release runtime guards: **7 passed**.
 - `git diff --check` passed.
 
-All code and test files match the A1-audited manifest. The main checkout also contains one pre-existing untracked user document, preserved untouched. The next action is to confirm `origin/main` has not advanced, then push this accepted main revision and continue the already-authorized guarded VPS release.
+All code and test files match the A1-audited manifest. `origin/main` was confirmed at baseline `fb2dae1`, then pushed through integrated-main commit `75d605776be1b9b74205859d10f0d5398f2153d3`; local `HEAD` and `origin/main` matched afterward. The main checkout's pre-existing untracked user document remains untouched.
+
+VPS release preflight is currently held before remote execution. The required encrypted SSH key passphrase was not available in the current or user-level `POLYMARKET_SSH_PASSPHRASE` environment, so the wrapper could not authenticate. No remote command ran and no VPS state changed. Resume the governed release script only after the passphrase is made available locally; do not send the secret in chat. The release must target the then-current exact `origin/main` SHA, including this acceptance record.
 
 Frozen A1 candidate manifest (SHA-256):
 
