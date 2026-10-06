@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -27,13 +28,13 @@ from alchemy_creative_agent_3_0.app.product_api import (
 )
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore
+from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, ProductJobRecord
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import (
     ScenarioRuntimeResult,
     ScenarioRuntimeStatus,
 )
-from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation, V3JobHistoryItem
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, MemoryUpdate, Platform, ReferenceAsset
 
@@ -1610,6 +1611,115 @@ def test_persistent_job_store_refreshes_a_cached_lifecycle_after_background_term
     refreshed = polling_service.get_job(created.job_id)
     assert refreshed.status == ProductJobStatusValue.BLOCKED
     assert refreshed.metadata["generation_lifecycle_failure"]["failure_code"] == "background_generation_worker_error"
+
+
+def test_persistent_job_store_recent_reads_only_the_requested_page(tmp_path, monkeypatch) -> None:
+    store = PersistentProductJobStore(tmp_path / "jobs")
+    for index in range(12):
+        job_id = f"job_history_page_{index:02d}"
+        store._write_record(  # noqa: SLF001
+            ProductJobRecord(
+                request=CreateCreativeJobRequest(user_input=f"history {index}"),
+                status=ProductJobStatusValue.GENERATED,
+                job_id_value=job_id,
+                created_at=f"2026-01-{index + 1:02d}T00:00:00+00:00",
+                updated_at=f"2026-01-{index + 1:02d}T00:00:00+00:00",
+            )
+        )
+        os.utime(
+            store.storage_root / f"{job_id}.json",
+            ns=((index + 1) * 1_000_000_000, (index + 1) * 1_000_000_000),
+        )
+
+    reads: list[str] = []
+    original_read = store._read_record  # noqa: SLF001
+
+    def tracked_read(job_id: str):
+        reads.append(job_id)
+        return original_read(job_id)
+
+    monkeypatch.setattr(store, "_read_record", tracked_read)
+
+    recent = store.list_recent(3)
+
+    assert [record.job_id for record in recent] == [
+        "job_history_page_11",
+        "job_history_page_10",
+        "job_history_page_09",
+    ]
+    assert len(reads) == 3
+    assert store._records == {}  # noqa: SLF001
+
+
+def test_persistent_job_store_can_stream_all_records_without_caching_the_catalog(tmp_path) -> None:
+    store = PersistentProductJobStore(tmp_path / "jobs")
+    for index in range(7):
+        store._write_record(  # noqa: SLF001
+            ProductJobRecord(
+                request=CreateCreativeJobRequest(user_input=f"stream {index}"),
+                status=ProductJobStatusValue.GENERATED,
+                job_id_value=f"job_stream_{index}",
+            )
+        )
+
+    iterator = store.iter_all_records()
+
+    first = next(iterator)
+    assert first.job_id.startswith("job_stream_")
+    assert store._records == {}  # noqa: SLF001
+    rest = list(iterator)
+    assert len(rest) == 6
+    assert store._records == {}  # noqa: SLF001
+
+
+def test_history_loads_only_enough_owner_scoped_records_for_requested_page(tmp_path, monkeypatch) -> None:
+    store = PersistentProductJobStore(tmp_path / "jobs")
+    for index in range(10):
+        job_id = f"job_owner_history_{index:02d}"
+        owner_id = 202 if index >= 5 else 101
+        store._write_record(  # noqa: SLF001
+            ProductJobRecord(
+                request=CreateCreativeJobRequest(
+                    user_input=f"history {index}",
+                    metadata={"veyra_user_id": owner_id},
+                ),
+                status=ProductJobStatusValue.GENERATED,
+                job_id_value=job_id,
+            )
+        )
+        os.utime(
+            store.storage_root / f"{job_id}.json",
+            ns=((index + 1) * 1_000_000_000, (index + 1) * 1_000_000_000),
+        )
+
+    reads: list[str] = []
+    original_read = store._read_record  # noqa: SLF001
+
+    def tracked_read(job_id: str):
+        reads.append(job_id)
+        return original_read(job_id)
+
+    monkeypatch.setattr(store, "_read_record", tracked_read)
+    service = object.__new__(V3ProductApiService)
+    service.job_store = store
+    service._history_item_from_record = lambda record: V3JobHistoryItem(  # type: ignore[method-assign]
+        job_id=record.job_id,
+        status=record.status,
+        user_input=record.request.user_input,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        route="/api/v3/creative-agent/history",
+    )
+    service._history_items_from_output_store = lambda *_args, **_kwargs: []  # type: ignore[method-assign]
+
+    history = service.list_history(limit=2, owner_user_id=101)
+
+    assert [item.job_id for item in history.items] == [
+        "job_owner_history_04",
+        "job_owner_history_03",
+    ]
+    assert len(reads) == 7
+    assert store._records == {}  # noqa: SLF001
 
 
 def test_persistent_job_store_retries_a_transient_windows_replace_lock(monkeypatch) -> None:

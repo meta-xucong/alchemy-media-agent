@@ -7,9 +7,17 @@ from fastapi.testclient import TestClient
 
 from alchemy_creative_agent_3_0.app.project_mode.store import InMemoryProjectStore, PersistentProjectStore
 from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V3UploadedAssetStore
-from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
+from alchemy_creative_agent_3_0.app.product_api.contracts import (
+    CreateCreativeJobRequest,
+    GenerateContinuation,
+    ProductJobStatusValue,
+)
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-from alchemy_creative_agent_3_0.app.product_api.service import InMemoryProductJobStore
+from alchemy_creative_agent_3_0.app.product_api.service import (
+    InMemoryProductJobStore,
+    PersistentProductJobStore,
+    ProductJobRecord,
+)
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
     DisabledEcommerceViewActivationIssuer,
@@ -1436,6 +1444,51 @@ def test_v3_restart_recovery_closes_only_abandoned_background_jobs_without_repla
     ]
     assert len(blocked_items) == 1
     assert blocked_items[0]["metadata"]["failure_code"] == "background_generation_process_restarted"
+
+
+def test_v3_restart_recovery_streams_old_jobs_beyond_the_history_window(tmp_path, monkeypatch) -> None:
+    handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch)
+    client = TestClient(app)
+    project_id = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "recover abandoned generation"},
+    ).json()["project"]["project_id"]
+    abandoned_job_id = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs",
+        json={"template_id": "general_template", "user_input": "recover abandoned generation"},
+    ).json()["job_id"]
+    handlers.mark_project_job_generating(
+        project_id,
+        abandoned_job_id,
+        background_attempt_id="streamed_abandoned_attempt",
+        background_timeout_seconds=675,
+        background_runtime_id="previous_runtime",
+    )
+    store = PersistentProductJobStore(tmp_path / "v3_jobs")
+    active_job = handlers.service.job_store.get(abandoned_job_id)
+    assert active_job is not None
+    store.save(active_job)
+    for index in range(105):
+        store.save(
+            ProductJobRecord(
+                request=CreateCreativeJobRequest(user_input=f"historical job {index}"),
+                status=ProductJobStatusValue.GENERATED,
+                job_id_value=f"job_streamed_history_{index:03d}",
+            )
+        )
+    store._records.clear()  # noqa: SLF001 - model a fresh process before startup recovery
+    store._record_revisions.clear()  # noqa: SLF001
+    handlers.service.job_store = store
+
+    assert app_main._recover_v3_interrupted_background_generations() == 1
+
+    recovered = store.get(abandoned_job_id)
+    assert recovered is not None
+    assert recovered.status == ProductJobStatusValue.BLOCKED
+    assert recovered.request.metadata["generation_lifecycle_failure"]["failure_code"] == (
+        "background_generation_process_restarted"
+    )
+    assert not any(job_id.startswith("job_streamed_history_") for job_id in store._records)
 
 
 def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack(tmp_path, monkeypatch) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from ..reference_input_plan import ReferenceInputPlan, PLAN_KEY, plan_from_metadata
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import base64
@@ -1022,8 +1023,50 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         return None
 
     def list_recent(self, limit: int = 20) -> list[ProductJobRecord]:
-        self._load_all_records()
-        return super().list_recent(limit)
+        bounded_limit = max(1, min(int(limit or 20), 100))
+        records: list[ProductJobRecord] = []
+        for record in self.iter_recent_records():
+            records.append(record)
+            if len(records) >= bounded_limit:
+                break
+        return sorted(records, key=lambda record: record.updated_at, reverse=True)
+
+    def iter_recent_records(self) -> Iterator[ProductJobRecord]:
+        """Yield durable jobs from newest files without caching the catalog.
+
+        Atomic writes update each job file's modification time, so it provides
+        a cheap ordering hint for page reads. The loaded records are sorted by
+        their durable ``updated_at`` value before ``list_recent`` returns.
+        """
+
+        for path in self._job_record_paths(newest_first=True):
+            restored = self._read_record(path.stem)
+            if restored is not None:
+                yield restored
+
+    def iter_all_records(self) -> Iterator[ProductJobRecord]:
+        """Stream persisted jobs one at a time without retaining history in memory."""
+
+        for path in self._job_record_paths(newest_first=False):
+            restored = self._read_record(path.stem)
+            if restored is not None:
+                yield restored
+
+    def _job_record_paths(self, *, newest_first: bool) -> list[Path]:
+        if not self.storage_root.exists():
+            return []
+        revisions: list[tuple[int, Path]] = []
+        for path in self.storage_root.glob("job_*.json"):
+            if not _valid_product_job_id(path.stem):
+                continue
+            try:
+                modified_ns = int(path.stat().st_mtime_ns)
+            except OSError:
+                continue
+            revisions.append((modified_ns, path))
+        if newest_first:
+            revisions.sort(key=lambda item: item[0], reverse=True)
+        return [path for _, path in revisions]
 
     def get_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
         operation = str(operation_id or "").strip()
@@ -3466,17 +3509,26 @@ class V3ProductApiService:
         owner_user_id: int | None = None,
     ) -> V3JobHistoryResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
-        records = self.job_store.list_recent(100)
-        records = [
-            record
-            for record in records
-            if self._history_owner_matches(
+        iter_recent_records = getattr(self.job_store, "iter_recent_records", None)
+        recent_records = (
+            iter_recent_records()
+            if callable(iter_recent_records)
+            else iter(self.job_store.list_recent(100))
+        )
+        records: list[ProductJobRecord] = []
+        expired_job_ids: set[str] = set()
+        for record in recent_records:
+            if not self._history_owner_matches(
                 dict(record.request.metadata or {}),
                 owner_user_id,
-            )
-        ]
-        expired_job_ids = {record.job_id for record in records if _failed_artifact_expired(record)}
-        records = [record for record in records if record.job_id not in expired_job_ids][:bounded_limit]
+            ):
+                continue
+            if _failed_artifact_expired(record):
+                expired_job_ids.add(record.job_id)
+                continue
+            records.append(record)
+            if len(records) >= bounded_limit:
+                break
         record_items = [self._history_item_from_record(record) for record in records]
         known_job_ids = {item.job_id for item in record_items}
         restored_items = [

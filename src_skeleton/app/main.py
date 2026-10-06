@@ -1280,43 +1280,48 @@ def _recover_v3_interrupted_background_generations() -> int:
     in-process executor contract.
     """
 
+    job_store = v3_route_handlers.service.job_store
+    iter_all_records = getattr(job_store, "iter_all_records", None)
     try:
-        records = v3_route_handlers.service.job_store.list_recent(limit=100)
+        records = iter_all_records() if callable(iter_all_records) else job_store.list_recent(limit=100)
     except Exception:
         logger.exception("V3 background restart recovery could not list persisted jobs")
         return 0
 
     recovered = 0
-    for record in records:
-        if record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
-            continue
-        metadata = dict(record.request.metadata)
-        watchdog = metadata.get("background_generation_watchdog")
-        if not isinstance(watchdog, dict) or not watchdog.get("enabled"):
-            continue
-        attempt_id = str(watchdog.get("background_attempt_id") or "")
-        project_id = str(metadata.get("project_id") or "")
-        prior_runtime_id = str(watchdog.get("runtime_id") or "")
-        if not attempt_id or not project_id or prior_runtime_id == _v3_background_generation_runtime_id:
-            continue
-        try:
-            status = _run_v3_handler(
-                v3_route_handlers.mark_project_job_generation_worker_failed,
-                project_id,
-                record.job_id,
-                background_attempt_id=attempt_id,
-                failure_code="background_generation_process_restarted",
-            )
-        except Exception:
-            logger.exception(
-                "V3 background restart recovery could not close project=%s job=%s",
-                project_id,
-                record.job_id,
-            )
-            continue
-        failure = status.get("metadata", {}).get("generation_lifecycle_failure", {}) if isinstance(status, dict) else {}
-        if isinstance(failure, dict) and failure.get("failure_code") == "background_generation_process_restarted":
-            recovered += 1
+    try:
+        for record in records:
+            if record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+                continue
+            metadata = dict(record.request.metadata)
+            watchdog = metadata.get("background_generation_watchdog")
+            if not isinstance(watchdog, dict) or not watchdog.get("enabled"):
+                continue
+            attempt_id = str(watchdog.get("background_attempt_id") or "")
+            project_id = str(metadata.get("project_id") or "")
+            prior_runtime_id = str(watchdog.get("runtime_id") or "")
+            if not attempt_id or not project_id or prior_runtime_id == _v3_background_generation_runtime_id:
+                continue
+            try:
+                status = _run_v3_handler(
+                    v3_route_handlers.mark_project_job_generation_worker_failed,
+                    project_id,
+                    record.job_id,
+                    background_attempt_id=attempt_id,
+                    failure_code="background_generation_process_restarted",
+                )
+            except Exception:
+                logger.exception(
+                    "V3 background restart recovery could not close project=%s job=%s",
+                    project_id,
+                    record.job_id,
+                )
+                continue
+            failure = status.get("metadata", {}).get("generation_lifecycle_failure", {}) if isinstance(status, dict) else {}
+            if isinstance(failure, dict) and failure.get("failure_code") == "background_generation_process_restarted":
+                recovered += 1
+    except Exception:
+        logger.exception("V3 background restart recovery stopped while streaming persisted jobs")
     return recovered
 
 
