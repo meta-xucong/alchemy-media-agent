@@ -12,6 +12,10 @@ on:
         default: "8017"
         required: true
 
+concurrency:
+  group: deploy-vps-${{ inputs.deploy_dir }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -59,10 +63,21 @@ jobs:
           V1_MEDIA_STORAGE_DIR: ${{ vars.V1_MEDIA_STORAGE_DIR || '/var/lib/alchemy/v1/media_storage' }}
         run: |
           REMOTE="${VPS_USER:-root}@${VPS_HOST}"
-          if ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "test -s '$DEPLOY_DIR/src_skeleton/.env'"; then
-            echo "Existing runtime env found; preserving VPS production settings."
-            exit 0
-          fi
+          runtime_env_state="$(ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "if [ -s '$DEPLOY_DIR/src_skeleton/.env' ]; then printf PRESENT; elif [ ! -e '$DEPLOY_DIR/src_skeleton/.env' ]; then printf MISSING; else printf EMPTY; fi")"
+          case "$runtime_env_state" in
+            PRESENT)
+              echo "Existing runtime env found; preserving VPS production settings."
+              exit 0
+              ;;
+            MISSING)
+              echo "Runtime env is absent; preparing initial configuration."
+              ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "mkdir -p '$DEPLOY_DIR/src_skeleton'"
+              ;;
+            *)
+              echo "Unable to verify remote runtime env state; refusing to overwrite." >&2
+              exit 1
+              ;;
+          esac
           umask 077
           cat > /tmp/alchemy-media-agent.env <<EOF
           MEDIA_AGENT_MODE=live
@@ -99,7 +114,9 @@ jobs:
           V1_MEDIA_STORAGE_DIR=$V1_MEDIA_STORAGE_DIR
           EOF
           sed -i 's/^          //' /tmp/alchemy-media-agent.env
-          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o StrictHostKeyChecking=accept-new /tmp/alchemy-media-agent.env "$REMOTE:$DEPLOY_DIR/src_skeleton/.env"
+          remote_env_temp="$DEPLOY_DIR/src_skeleton/.env.initial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o StrictHostKeyChecking=accept-new /tmp/alchemy-media-agent.env "$REMOTE:$remote_env_temp"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "chmod 600 '$remote_env_temp' && if ln '$remote_env_temp' '$DEPLOY_DIR/src_skeleton/.env'; then rm -f '$remote_env_temp'; else rm -f '$remote_env_temp'; echo 'Runtime env appeared during initialization; refusing to overwrite.' >&2; exit 1; fi"
           rm -f /tmp/alchemy-media-agent.env
 
       - name: Start stack

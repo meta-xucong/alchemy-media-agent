@@ -126,6 +126,16 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "Sync source to VPS" not in workflow
     assert "vps_migrate_release_layout.sh" in workflow
     assert "TARGET_SHA='$GITHUB_SHA'" in workflow
+    assert 'ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE"' in workflow
+    assert 'runtime_env_state="$(ssh ' in workflow
+    assert 'case "$runtime_env_state" in' in workflow
+    assert 'MISSING)' in workflow
+    assert 'Unable to verify remote runtime env state; refusing to overwrite.' in workflow
+    assert "group: deploy-vps-${{ inputs.deploy_dir }}" in workflow
+    assert "ln '$remote_env_temp' '$DEPLOY_DIR/src_skeleton/.env'" in workflow
+    assert '"$REMOTE:$remote_env_temp"' in workflow
+    assert "Runtime env appeared during initialization; refusing to overwrite." in workflow
+    assert '"$REMOTE:$DEPLOY_DIR/src_skeleton/.env"' not in workflow
 
 
 def test_runtime_guard_requires_bridge_transport_import() -> None:
