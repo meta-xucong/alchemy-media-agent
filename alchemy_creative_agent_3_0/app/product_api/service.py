@@ -8714,7 +8714,12 @@ class V3ProductApiService:
             ):
                 return False, "closure_mode_binding_invalid"
         declared_ids = {str(item).strip() for item in declared if str(item).strip()}
-        if final_delivery_status == "ready" and declared_ids != output_ids:
+        if final_delivery_status == "ready" and (
+            not declared_ids or not declared_ids.issubset(output_ids)
+        ):
+            # A closure binds every current reviewed winner, including winners
+            # withheld by per-image review.  The eligible set is the formal
+            # delivery subset and may therefore be smaller than `outputs`.
             return False, "closure_delivery_output_mismatch"
         if final_delivery_status != "ready" and declared_ids:
             return False, "closure_delivery_output_mismatch"
@@ -10633,6 +10638,9 @@ class V3ProductApiService:
         attempt_index: int,
     ) -> dict[str, Any]:
         inspections = [dict(item) for item in package.get("inspections", []) if isinstance(item, dict)]
+        raw_resolutions = package.get("resolutions")
+        raw_plans = package.get("review_evidence_plans")
+        raw_digests = package.get("review_evidence_plan_digests")
         issue_codes = self._dedupe_strings(
             issue.get("code")
             for inspection in inspections
@@ -10643,6 +10651,20 @@ class V3ProductApiService:
             "stage": stage,
             "attempt_index": attempt_index,
             "package_id": package.get("package_id"),
+            "review_evidence_receipt_status": package.get("review_evidence_receipt_status"),
+            "review_evidence_receipt_errors": self._string_list(package.get("review_evidence_receipt_errors")),
+            "resolutions": [
+                dict(item) for item in raw_resolutions if isinstance(item, dict)
+            ] if isinstance(raw_resolutions, list) else [],
+            "review_evidence_plans": {
+                str(key): dict(value)
+                for key, value in (raw_plans or {}).items()
+                if isinstance(value, dict)
+            } if isinstance(raw_plans, dict) else {},
+            "review_evidence_plan_digests": dict(raw_digests) if isinstance(raw_digests, dict) else {},
+            "doc276_face_integrity_required_output_ids": self._dedupe_strings(
+                package.get("doc276_face_integrity_required_output_ids")
+            ),
             "output_ids": self._dedupe_strings(inspection.get("output_id") for inspection in inspections),
             "inspection_ids": self._dedupe_strings(inspection.get("inspection_id") for inspection in inspections),
             "statuses": self._dedupe_strings(inspection.get("status") for inspection in inspections),
@@ -10874,6 +10896,12 @@ class V3ProductApiService:
             "ranked_outputs": ranked_outputs,
             "append_only_attempt_history": True,
         }
+        winner_package = self._reviewed_winner_review_package(
+            package,
+            preferred_output_ids,
+            job_id=str(result.creative_job.job_id or "").strip(),
+        )
+        winner_package["reviewed_delivery_preference"] = preference
         preferred = set(preference["preferred_output_ids"])
         for item in ranked_outputs:
             updater = getattr(self.output_store, "update_metadata", None)
@@ -10893,16 +10921,176 @@ class V3ProductApiService:
 
         asset_pack = result.asset_pack.model_copy(
             update={
-                "manifest": {**dict(result.asset_pack.manifest), "reviewed_delivery_preference": preference},
-                "metadata": {**dict(result.asset_pack.metadata), "reviewed_delivery_preference": preference},
+                "manifest": {
+                    **dict(result.asset_pack.manifest),
+                    "post_generation_review_package": winner_package,
+                    "reviewed_delivery_preference": preference,
+                },
+                "metadata": {
+                    **dict(result.asset_pack.metadata),
+                    "post_generation_review_package": winner_package,
+                    "reviewed_delivery_preference": preference,
+                },
             }
         )
         return result.model_copy(
             update={
                 "asset_pack": asset_pack,
-                "metadata": {**dict(result.metadata), "reviewed_delivery_preference": preference},
+                "metadata": {
+                    **dict(result.metadata),
+                    "post_generation_review_package": winner_package,
+                    "reviewed_delivery_preference": preference,
+                },
             }
         )
+
+    def _reviewed_winner_review_package(
+        self,
+        package: dict[str, Any],
+        preferred_output_ids: list[str],
+        *,
+        job_id: str,
+    ) -> dict[str, Any]:
+        """Project preferred outputs with the receipt from each original attempt.
+
+        ``review_attempts`` remains append-only. The package's current review
+        fields contain only preferred outputs whose own complete receipt,
+        resolution, plan, and inspection still agree.
+        """
+
+        attempts = package.get("review_attempts")
+        if not isinstance(attempts, list):
+            attempts = []
+        by_output_id: dict[str, list[dict[str, Any]]] = {}
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            errors = attempt.get("review_evidence_receipt_errors")
+            if (
+                str(attempt.get("review_evidence_receipt_status") or "").strip().lower() != "complete"
+                or not isinstance(errors, (list, tuple))
+                or bool(errors)
+            ):
+                continue
+            resolutions = attempt.get("resolutions")
+            plans = attempt.get("review_evidence_plans")
+            digests = attempt.get("review_evidence_plan_digests")
+            inspections = attempt.get("inspections")
+            if not (
+                isinstance(resolutions, list)
+                and isinstance(plans, dict)
+                and isinstance(digests, dict)
+                and isinstance(inspections, list)
+            ):
+                continue
+            output_ids = set(self._dedupe_strings(attempt.get("output_ids")))
+            required_output_ids = set(
+                self._dedupe_strings(attempt.get("doc276_face_integrity_required_output_ids"))
+            )
+            for inspection in inspections:
+                if not isinstance(inspection, dict):
+                    continue
+                output_id = str(inspection.get("output_id") or "").strip()
+                asset_id = str(inspection.get("asset_id") or "").strip()
+                if not output_id or not asset_id or output_id not in output_ids:
+                    continue
+                matching_resolutions = [
+                    item for item in resolutions
+                    if isinstance(item, dict)
+                    and str(item.get("output_id") or "").strip() == output_id
+                ]
+                if len(matching_resolutions) != 1:
+                    continue
+                resolution = matching_resolutions[0]
+                if (
+                    str(resolution.get("job_id") or "").strip() != job_id
+                    or str(resolution.get("asset_id") or "").strip() != asset_id
+                    or str(resolution.get("status") or "").strip().lower() != "ready"
+                    or (
+                        inspection.get("candidate_id")
+                        and resolution.get("candidate_id")
+                        and str(inspection.get("candidate_id")).strip()
+                        != str(resolution.get("candidate_id")).strip()
+                    )
+                ):
+                    continue
+                raw_plan = plans.get(output_id)
+                digest = str(digests.get(output_id) or "").strip()
+                try:
+                    plan = ReviewEvidencePlan.model_validate(raw_plan)
+                except (ValidationError, TypeError, ValueError):
+                    continue
+                if (
+                    plan.job_id != job_id
+                    or plan.output_id != output_id
+                    or not digest
+                    or digest != plan.review_plan_digest
+                    or plan.review_plan_digest != review_plan_digest(plan.model_dump(mode="json"))
+                ):
+                    continue
+                by_output_id.setdefault(output_id, []).append(
+                    {
+                        "inspection": dict(inspection),
+                        "resolution": dict(resolution),
+                        "plan": plan.model_dump(mode="json"),
+                        "digest": digest,
+                        "doc276_required": output_id in required_output_ids,
+                    }
+                )
+
+        selected: list[dict[str, Any]] = []
+        for output_id in self._dedupe_strings(preferred_output_ids):
+            matches = by_output_id.get(output_id, [])
+            if len(matches) == 1:
+                selected.append(matches[0])
+        if not selected:
+            return {
+                **package,
+                "inspections": [],
+                "user_visible_summary": [
+                    "V3 checked the final selected images.",
+                    "No reviewed image qualifies for final delivery.",
+                ],
+                "resolutions": [],
+                "review_evidence_plans": {},
+                "review_evidence_plan_digests": {},
+                "review_evidence_receipt_status": "closed",
+                "review_evidence_receipt_errors": ["preferred_output_review_evidence_unavailable"],
+                "doc276_face_integrity_required_output_ids": [],
+            }
+
+        inspections = [item["inspection"] for item in selected]
+        resolutions = [item["resolution"] for item in selected]
+        plans = {item["plan"]["output_id"]: item["plan"] for item in selected}
+        digests = {item["plan"]["output_id"]: item["digest"] for item in selected}
+        statuses = {
+            str(item["inspection"].get("status") or "").strip().lower()
+            for item in selected
+        }
+        if statuses.intersection({"manual_review", "fail_retryable"}):
+            winner_summary = "Some selected images need manual confirmation."
+        elif statuses.difference({"pass", "warning"}):
+            winner_summary = "Some selected images do not qualify for final delivery."
+        elif "warning" in statuses:
+            winner_summary = "The final selected set is usable with minor warnings."
+        else:
+            winner_summary = "No clear visual issue was found in the final selected set."
+        required = [
+            item["plan"]["output_id"]
+            for item in selected
+            if item["doc276_required"]
+        ]
+        return {
+            **package,
+            "inspections": inspections,
+            "user_visible_summary": ["V3 checked the final selected images.", winner_summary],
+            "resolutions": resolutions,
+            "review_evidence_plans": plans,
+            "review_evidence_plan_digests": digests,
+            "review_evidence_receipt_status": "complete",
+            "review_evidence_receipt_errors": [],
+            "doc276_face_integrity_required_output_ids": required,
+        }
 
     def _identity_local_repair_candidate_accepted(
         self,
@@ -11317,7 +11505,7 @@ class V3ProductApiService:
                 metadata={"source": "V3ProductApiService", "rules_version": RULE_VERSION},
             )
 
-        final_delivery, _eligible_output_ids, _eligible_asset_ids = self._public_final_delivery_projection(result)
+        final_delivery, eligible_output_ids, eligible_asset_ids = self._public_final_delivery_projection(result)
         explicit_selection_requested = bool(
             select_request.selected_candidate_ids or select_request.selected_asset_ids
         )
@@ -11358,13 +11546,165 @@ class V3ProductApiService:
             )
 
         selected_assets = self._selected_assets(result, select_request)
+        if final_delivery["automatic_delivery_available"]:
+            package = result.metadata.get("post_generation_review_package")
+            inspections = package.get("inspections") if isinstance(package, dict) else []
+            eligible_bindings = {
+                (
+                    str(item.get("output_id") or "").strip(),
+                    str(item.get("asset_id") or "").strip(),
+                )
+                for item in inspections or []
+                if isinstance(item, dict)
+                and str(item.get("output_id") or "").strip() in eligible_output_ids
+                and str(item.get("asset_id") or "").strip() in eligible_asset_ids
+            }
+
+            def asset_binding(asset: PackagedAsset) -> tuple[str, str]:
+                metadata = dict(asset.metadata or {})
+                candidate_metadata = metadata.get("candidate_metadata")
+                candidate_metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
+                output_id = candidate_metadata.get("output_id") or metadata.get("output_id")
+                return str(output_id or "").strip(), str(asset.asset_id or "").strip()
+
+            eligible_assets = [
+                asset for asset in result.asset_pack.assets if asset_binding(asset) in eligible_bindings
+            ]
+            requested_ids_valid = True
+            requested_assets: list[PackagedAsset] = []
+            for candidate_id in select_request.selected_candidate_ids:
+                matches = [
+                    asset
+                    for asset in eligible_assets
+                    if str(asset.metadata.get("selected_candidate_id") or "").strip() == candidate_id
+                ]
+                if len(matches) != 1:
+                    requested_ids_valid = False
+                    break
+                requested_assets.extend(matches)
+            if requested_ids_valid:
+                for asset_id in select_request.selected_asset_ids:
+                    matches = [asset for asset in eligible_assets if asset.asset_id == asset_id]
+                    if len(matches) != 1:
+                        requested_ids_valid = False
+                        break
+                    requested_assets.extend(matches)
+            if explicit_selection_requested:
+                selected_by_binding: dict[tuple[str, str], PackagedAsset] = {}
+                for asset in requested_assets:
+                    selected_by_binding[asset_binding(asset)] = asset
+                selected_assets = list(selected_by_binding.values())
+            else:
+                selected_assets = eligible_assets
+            unique_bindings = {asset_binding(asset) for asset in selected_assets}
+            if not requested_ids_valid or not selected_assets or len(unique_bindings) != len(selected_assets):
+                selected = SelectedResult(
+                    metadata={
+                        "selection_status": "ineligible_selection_rejected",
+                        "reason": "requested_output_not_eligible",
+                    }
+                )
+                return SelectionResponse(
+                    job_id=job_id,
+                    status=record.status,
+                    selected_result=selected,
+                    job_status=self._status_from_record(record),
+                    warnings=["The requested image selection includes an output that is not eligible for final delivery."],
+                    metadata={
+                        "source": "V3ProductApiService",
+                        "rules_version": RULE_VERSION,
+                        "selection_rejected": True,
+                        "hold_reason": "requested_output_not_eligible",
+                    },
+                )
+        elif explicit_selection_requested:
+            # Explicit browsing is allowed before visual review, but the
+            # requested IDs must still identify real candidates/assets. It
+            # remains a browse selection and does not certify delivery.
+            requested_assets: list[PackagedAsset] = []
+            requested_ids_valid = True
+            for candidate_id in select_request.selected_candidate_ids:
+                matches = [
+                    asset
+                    for asset in result.asset_pack.assets
+                    if str(asset.metadata.get("selected_candidate_id") or "").strip() == candidate_id
+                ]
+                if len(matches) != 1:
+                    requested_ids_valid = False
+                    break
+                requested_assets.extend(matches)
+            if requested_ids_valid:
+                for asset_id in select_request.selected_asset_ids:
+                    matches = [asset for asset in result.asset_pack.assets if asset.asset_id == asset_id]
+                    if len(matches) != 1:
+                        requested_ids_valid = False
+                        break
+                    requested_assets.extend(matches)
+            selected_by_identity = {
+                (
+                    str(asset.metadata.get("selected_candidate_id") or "").strip(),
+                    str(asset.asset_id or "").strip(),
+                ): asset
+                for asset in requested_assets
+            }
+            selected_assets = list(selected_by_identity.values())
+            if not requested_ids_valid or not selected_assets:
+                selected = SelectedResult(
+                    metadata={
+                        "selection_status": "ineligible_selection_rejected",
+                        "reason": "requested_candidate_not_found",
+                    }
+                )
+                return SelectionResponse(
+                    job_id=job_id,
+                    status=record.status,
+                    selected_result=selected,
+                    job_status=self._status_from_record(record),
+                    warnings=["The requested image candidate could not be found."],
+                    metadata={
+                        "source": "V3ProductApiService",
+                        "rules_version": RULE_VERSION,
+                        "selection_rejected": True,
+                        "hold_reason": "requested_candidate_not_found",
+                    },
+                )
+
+        if not selected_assets:
+            selected = SelectedResult(
+                metadata={
+                    "selection_status": "ineligible_selection_rejected",
+                    "reason": "no_matching_asset",
+                }
+            )
+            return SelectionResponse(
+                job_id=job_id,
+                status=record.status,
+                selected_result=selected,
+                job_status=self._status_from_record(record),
+                warnings=["No image asset matched the requested selection."],
+                metadata={
+                    "source": "V3ProductApiService",
+                    "rules_version": RULE_VERSION,
+                    "selection_rejected": True,
+                    "hold_reason": "no_matching_asset",
+                },
+            )
+
         selected_candidate_ids = [
             asset.metadata["selected_candidate_id"]
             for asset in selected_assets
             if asset.metadata.get("selected_candidate_id")
         ]
         selected_asset_ids = [asset.asset_id for asset in selected_assets]
-        update = self._memory_update_for_selection(result.asset_pack.brand_memory_update, selected_asset_ids)
+        update = self._memory_update_for_selection(
+            result.asset_pack.brand_memory_update,
+            selected_asset_ids,
+            {
+                str(asset.metadata.get("selected_candidate_id") or "").strip(): asset.asset_id
+                for asset in selected_assets
+                if str(asset.metadata.get("selected_candidate_id") or "").strip()
+            },
+        )
         memory_update_applied = False
         if update is not None and select_request.apply_memory_update:
             memory_update_applied = self.brand_profile_service.apply_memory_update(update) is not None
@@ -11488,8 +11828,18 @@ class V3ProductApiService:
             )
 
         pack_output = self._ecommerce_pack_output(record)
-        export_package = self._ecommerce_runtime_export_package(record, pack_output)
-        manifest = self._ecommerce_export_manifest(record, pack_output, export_package)
+        eligible_output_ids = self._ecommerce_formal_output_ids(record)
+        export_package = self._ecommerce_runtime_export_package(
+            record,
+            pack_output,
+            eligible_output_ids=eligible_output_ids,
+        )
+        manifest = self._ecommerce_export_manifest(
+            record,
+            pack_output,
+            export_package,
+            eligible_output_ids=eligible_output_ids,
+        )
         return V3ExportPackageResponse(
             job_id=record.job_id,
             status=record.status,
@@ -12530,11 +12880,40 @@ class V3ProductApiService:
         except OSError:
             return None
         outputs_by_id = {str(output.output_id or "").strip(): output for output in output_records}
-        if set(outputs_by_id) != expected_output_ids:
+        if not expected_output_ids.issubset(outputs_by_id):
             return None
 
         final_delivery, _eligible_output_ids, _eligible_asset_ids = self._public_final_delivery_projection(result)
         final_state = str(final_delivery.get("final_delivery_status") or "").strip()
+        if set(outputs_by_id) != expected_output_ids:
+            # OutputStore is append-only across retries. Superseded attempts
+            # may remain beside the exact current package; only a complete,
+            # byte-verified closure can establish that the package is the
+            # current job's immutable output subset.
+            closure = self._output_store_job_closure(record.job_id)
+            closure_valid, _closure_reason = self._valid_output_store_job_closure(
+                closure,
+                job_id=record.job_id,
+                records=output_records,
+            )
+            closure_output_ids = {
+                str(item.get("output_id") or "").strip()
+                for item in (closure.get("outputs", []) if isinstance(closure, dict) else [])
+                if isinstance(item, dict) and str(item.get("output_id") or "").strip()
+            }
+            closure_eligible_ids = {
+                str(item).strip()
+                for item in (closure.get("eligible_output_ids", []) if isinstance(closure, dict) else [])
+                if str(item).strip()
+            }
+            if (
+                not closure_valid
+                or closure_output_ids != expected_output_ids
+                or closure_eligible_ids != set(_eligible_output_ids)
+                or str(closure.get("final_delivery_status") or "").strip() != final_state
+                or not self._output_store_closure_files_match(closure, outputs_by_id)
+            ):
+                return None
         state_by_delivery = {
             "ready": "final_delivery_available",
             "withheld_manual_confirmation": "review_withheld_manual_confirmation",
@@ -12543,12 +12922,6 @@ class V3ProductApiService:
         disposition_state = state_by_delivery.get(final_state)
         if disposition_state is None:
             return None
-        expected_delivery = {
-            "delivery_gate_applies": True,
-            "final_delivery_status": final_state,
-            "automatic_delivery_available": final_state == "ready",
-            "manual_confirmation_required": final_state == "withheld_manual_confirmation",
-        }
         for output_id in sorted(expected_output_ids):
             output = outputs_by_id[output_id]
             inspection = inspection_by_output[output_id]
@@ -12565,7 +12938,28 @@ class V3ProductApiService:
             if actual_sha != str(dict(output.metadata or {}).get("content_sha256") or "").strip():
                 return None
             persisted_delivery = dict(dict(output.metadata or {}).get("final_delivery") or {})
-            if any(persisted_delivery.get(key) != value for key, value in expected_delivery.items()):
+            inspection_status = str(inspection.get("status") or "").strip().lower()
+            per_output_state = (
+                "ready"
+                if inspection_status in {"pass", "warning"}
+                else "withheld_manual_confirmation"
+                if inspection_status in {"manual_review", "fail_retryable"}
+                else "withheld_review_failure"
+                if inspection_status == "fail_final"
+                else ""
+            )
+            if not per_output_state:
+                return None
+            expected_output_delivery = {
+                "delivery_gate_applies": True,
+                "final_delivery_status": per_output_state,
+                "automatic_delivery_available": per_output_state == "ready",
+                "manual_confirmation_required": per_output_state == "withheld_manual_confirmation",
+            }
+            if any(
+                persisted_delivery.get(key) != value
+                for key, value in expected_output_delivery.items()
+            ):
                 return None
 
         return {
@@ -14696,18 +15090,46 @@ class V3ProductApiService:
         self,
         update: MemoryUpdate | None,
         selected_asset_ids: list[str],
+        selected_candidate_asset_ids: dict[str, str] | None = None,
     ) -> MemoryUpdate | None:
         if update is None:
             return None
         selected_asset_set = set(selected_asset_ids)
-        selected_refs = [
-            ref for ref in update.new_reference_assets if ref.metadata.get("candidate_id") or ref.asset_id in selected_asset_set
-        ]
+        selected_candidate_asset_ids = selected_candidate_asset_ids or {}
+        selected_candidate_set = set(selected_candidate_asset_ids)
+        accepted_asset_set = set(update.accepted_asset_ids).intersection(selected_asset_set)
+        if not accepted_asset_set:
+            return None
+        selected_refs: list[ReferenceAsset] = []
+        for reference in update.new_reference_assets:
+            metadata = dict(reference.metadata or {})
+            candidate_id = str(metadata.get("candidate_id") or "").strip()
+            source_asset_id = str(
+                metadata.get("source_asset_id") or metadata.get("asset_id") or ""
+            ).strip()
+            mapped_source_asset_id = selected_candidate_asset_ids.get(candidate_id, "")
+            if not source_asset_id:
+                source_asset_id = mapped_source_asset_id
+            if source_asset_id and candidate_id:
+                if mapped_source_asset_id and mapped_source_asset_id != source_asset_id:
+                    return None
+                if source_asset_id in selected_asset_set and candidate_id not in selected_candidate_set:
+                    return None
+                if candidate_id in selected_candidate_set and source_asset_id not in selected_asset_set:
+                    return None
+            if source_asset_id in selected_asset_set and source_asset_id not in accepted_asset_set:
+                return None
+            matches_selected_asset = source_asset_id in selected_asset_set or (
+                not source_asset_id and reference.asset_id in selected_asset_set
+            )
+            matches_selected_candidate = candidate_id in selected_candidate_set
+            if matches_selected_asset or matches_selected_candidate:
+                selected_refs.append(reference)
         filtered = update.model_copy(deep=True)
-        filtered.accepted_asset_ids = [asset_id for asset_id in update.accepted_asset_ids if asset_id in selected_asset_set]
-        if not filtered.accepted_asset_ids:
-            filtered.accepted_asset_ids = list(selected_asset_ids)
-        filtered.new_reference_assets = selected_refs or list(update.new_reference_assets)
+        filtered.accepted_asset_ids = [asset_id for asset_id in update.accepted_asset_ids if asset_id in accepted_asset_set]
+        if update.new_reference_assets and not selected_refs:
+            return None
+        filtered.new_reference_assets = selected_refs
         filtered.metadata = {
             **filtered.metadata,
             "selected_via_v3_product_api": True,
@@ -14870,7 +15292,11 @@ class V3ProductApiService:
         pack_output = self._ecommerce_pack_output(record)
         warnings = self._ecommerce_public_warnings(record, pack_output)
         output_intents = self._ecommerce_output_intents(record)
-        export_package = self._ecommerce_runtime_export_package(record, pack_output)
+        export_package = self._ecommerce_runtime_export_package(
+            record,
+            pack_output,
+            eligible_output_ids=self._ecommerce_formal_output_ids(record),
+        )
         creative_context = dict(record.request.metadata.get("ecommerce_creative_context") or {})
         return EcommerceCapabilitySummary(
             enabled=True,
@@ -14922,13 +15348,15 @@ class V3ProductApiService:
         self,
         record: ProductJobRecord,
         output: EcommercePackOutput,
+        *,
+        eligible_output_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Bind actual provider outputs to opaque Brain-selected output IDs."""
 
         package = output.export_package.model_dump(mode="json")
         output_by_asset = {
             str(item.get("asset_id") or ""): item
-            for item in self._generated_asset_records(record)
+            for item in self._generated_asset_records(record, eligible_output_ids=eligible_output_ids)
             if str(item.get("asset_id") or "")
         }
         files: list[dict[str, Any]] = []
@@ -14939,7 +15367,7 @@ class V3ProductApiService:
             if generated is None:
                 continue
             output_id = str(generated.get("output_id") or "").strip()
-            if not output_id:
+            if not output_id or (eligible_output_ids is not None and output_id not in eligible_output_ids):
                 continue
             # A new LLM-native E-Commerce run exposes the immutable
             # deliverable binding, not a local semantic slot.  ``slot_id`` is
@@ -14986,6 +15414,8 @@ class V3ProductApiService:
         record: ProductJobRecord,
         output: EcommercePackOutput,
         export_package: dict[str, Any],
+        *,
+        eligible_output_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         return {
             "manifest_version": "v3_ecommerce_export_manifest_001",
@@ -15001,7 +15431,10 @@ class V3ProductApiService:
             "commerce_brief": output.commerce_brief.model_dump(mode="json"),
             "image_recipes": [],
             "remote_brain_output_intents": self._ecommerce_output_intents(record),
-            "generated_assets": self._generated_asset_records(record),
+            "generated_assets": self._generated_asset_records(
+                record,
+                eligible_output_ids=eligible_output_ids,
+            ),
             "export_files": list(export_package.get("files") or []),
             "review_checks": [dict(item) for item in output.critic.checks],
             "warnings": self._ecommerce_public_warnings(record, output),
@@ -15050,15 +15483,87 @@ class V3ProductApiService:
             )
         return records
 
-    def _generated_asset_records(self, record: ProductJobRecord) -> list[dict[str, Any]]:
+    def _ecommerce_formal_output_ids(self, record: ProductJobRecord) -> set[str]:
+        result = record.generation_result
+        if result is None:
+            return set()
+        eligible_bindings = self._ecommerce_eligible_output_bindings(record)
+        if not eligible_bindings:
+            return set()
+        eligible_output_ids = {output_id for output_id, _asset_id in eligible_bindings}
+        selected = record.selected_result
+        if selected is None:
+            return eligible_output_ids
+        selected_candidate_ids = set(self._dedupe_strings(selected.selected_candidate_ids))
+        selected_asset_ids = set(self._dedupe_strings(selected.selected_asset_ids))
+        if not selected_candidate_ids and not selected_asset_ids:
+            return eligible_output_ids
+        selected_output_ids: set[str] = set()
+        for asset in result.asset_pack.assets:
+            metadata = dict(asset.metadata or {})
+            candidate_metadata = metadata.get("candidate_metadata")
+            candidate_metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
+            output_id = str(candidate_metadata.get("output_id") or metadata.get("output_id") or "").strip()
+            candidate_id = str(metadata.get("selected_candidate_id") or "").strip()
+            if (output_id, asset.asset_id) in eligible_bindings and (
+                (candidate_id and candidate_id in selected_candidate_ids)
+                or asset.asset_id in selected_asset_ids
+            ):
+                selected_output_ids.add(output_id)
+        return selected_output_ids
+
+    def _ecommerce_eligible_output_bindings(self, record: ProductJobRecord) -> set[tuple[str, str]]:
+        result = record.generation_result
+        if result is None:
+            return set()
+        final_delivery, eligible_output_ids, eligible_asset_ids = self._public_final_delivery_projection(result)
+        if not final_delivery.get("automatic_delivery_available"):
+            return set()
+        package = result.metadata.get("post_generation_review_package")
+        inspections = package.get("inspections") if isinstance(package, dict) else []
+        return {
+            (
+                str(item.get("output_id") or "").strip(),
+                str(item.get("asset_id") or "").strip(),
+            )
+            for item in inspections or []
+            if isinstance(item, dict)
+            and str(item.get("output_id") or "").strip() in eligible_output_ids
+            and str(item.get("asset_id") or "").strip() in eligible_asset_ids
+        }
+
+    def _generated_asset_records(
+        self,
+        record: ProductJobRecord,
+        *,
+        eligible_output_ids: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         result = record.generation_result
         if result is None:
             return []
+        package = result.metadata.get("post_generation_review_package")
+        inspections = package.get("inspections") if isinstance(package, dict) else []
+        review_status_by_output = {
+            str(item.get("output_id") or "").strip(): str(item.get("status") or "not_evaluated").strip()
+            for item in inspections or []
+            if isinstance(item, dict) and str(item.get("output_id") or "").strip()
+        }
+        eligible_bindings = (
+            self._ecommerce_eligible_output_bindings(record)
+            if eligible_output_ids is not None
+            else None
+        )
         records: list[dict[str, Any]] = []
         for asset in result.asset_pack.assets:
             candidate_metadata = asset.metadata.get("candidate_metadata", {})
             output_id = candidate_metadata.get("output_id")
             if not output_id:
+                continue
+            output_id = str(output_id).strip()
+            if eligible_output_ids is not None and (
+                output_id not in eligible_output_ids
+                or (output_id, str(asset.asset_id or "").strip()) not in eligible_bindings
+            ):
                 continue
             records.append(
                 {
@@ -15079,7 +15584,7 @@ class V3ProductApiService:
                     "height": candidate_metadata.get("height"),
                     "mime_type": candidate_metadata.get("mime_type"),
                     "format": candidate_metadata.get("format"),
-                    "review_status": "ready_for_manual_review",
+                    "review_status": review_status_by_output.get(output_id, "not_evaluated"),
                     "v3_owned_output": bool(candidate_metadata.get("v3_owned_output")),
                 }
             )

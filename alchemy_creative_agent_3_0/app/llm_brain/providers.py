@@ -497,6 +497,14 @@ class V3LLMBrainProvider:
                 "model": model,
                 "health_checked": False,
             }
+        if provider == "openai" and not _chat_completions_url(base_url).startswith(("http://", "https://")):
+            return {
+                "available": False,
+                "reason_code": "invalid_configuration",
+                "provider": provider,
+                "model": model,
+                "health_checked": False,
+            }
         return {
             "available": True,
             "reason_code": "configured",
@@ -1095,6 +1103,8 @@ class V3LLMBrainProvider:
             headers = {"content-type": "application/json"}
             token_header = "x-api-key" if self.provider == "anthropic" else "authorization"
             headers[token_header] = api_key if token_header == "x-api-key" else f"Bearer {api_key}"
+            if self.provider == "anthropic":
+                headers["anthropic-version"] = "2023-06-01"
             url = f"{base_url.rstrip('/')}/v1/messages"
             payload = {
                 "model": self.model,
@@ -1994,9 +2004,9 @@ def _is_retryable_transient_provider_error(error: BaseException) -> bool:
 
 
 def _chat_completions_url(base_url: str | None) -> str:
-    base = str(base_url or "").rstrip("/")
+    base = str(base_url or "https://api.openai.com/v1").rstrip("/")
     if not base:
-        return "/v1/chat/completions"
+        base = "https://api.openai.com/v1"
     return f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
 
 

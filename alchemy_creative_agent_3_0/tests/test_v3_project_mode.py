@@ -778,6 +778,126 @@ def test_project_mode_accepts_ready_saved_product_reference(tmp_path) -> None:
     assert job["status"] == "planned"
     assert job["scenario"]["scenario_id"] == "ecommerce"
     assert job["ecommerce"]["product_truth"]["evidence_sources"] == [f"uploaded_asset:{product_asset_id}"]
+    saved = handlers.get_project(project["project_id"])
+    admitted_reference = next(
+        item for item in saved["project"]["reference_assets"] if item["asset_ref_id"] == product_asset_id
+    )
+    assert admitted_reference["metadata"]["template_id"] == "ecommerce_template"
+
+
+def test_project_mode_does_not_reuse_inactive_saved_product_reference_for_ecommerce(tmp_path) -> None:
+    handlers = _ecommerce_handlers()
+    product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
+    project = handlers.post_projects({"user_goal": "Create a product launch image suite"})["project"]
+    reference = handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_asset_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )["reference"]
+    handlers.post_project_reference_remove(project["project_id"], reference["reference_id"], {})
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create a direct-to-use ecommerce image set for this desk lamp",
+        },
+    )
+    saved = handlers.get_project(project["project_id"])
+    inactive_reference = next(
+        item for item in saved["project"]["reference_assets"] if item["reference_id"] == reference["reference_id"]
+    )
+
+    assert job["status"] == "planned"
+    assert job["metadata"]["has_product_reference"] is False
+    assert not any(
+        str(source).startswith("uploaded_asset:")
+        for source in job["ecommerce"]["product_truth"]["evidence_sources"]
+    )
+    assert inactive_reference["status"] == "inactive"
+
+
+def test_project_mode_does_not_promote_saved_non_product_reference_for_ecommerce(tmp_path) -> None:
+    handlers = _ecommerce_handlers()
+    style_asset_id = _ready_upload(handlers, tmp_path, role="style_reference", filename="style-board.png")
+    project = handlers.post_projects({"user_goal": "Create a product launch image suite"})["project"]
+    handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": style_asset_id,
+            "source_type": "uploaded",
+            "use_policy": "style",
+            "metadata": {"template_id": "ecommerce_template"},
+        },
+    )
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create an ecommerce image set inspired by this style",
+        },
+    )
+
+    assert job["status"] == "planned"
+    assert job["metadata"]["has_product_reference"] is False
+    assert not any(
+        str(source).startswith("uploaded_asset:")
+        for source in job["ecommerce"]["product_truth"]["evidence_sources"]
+    )
+
+
+def test_project_mode_rejects_saved_product_reference_when_upload_record_is_missing(tmp_path, monkeypatch) -> None:
+    handlers = _ecommerce_handlers()
+    product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
+    project = handlers.post_projects({"user_goal": "Create a product launch image suite"})["project"]
+    handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_asset_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )
+    monkeypatch.setattr(handlers.project_service.product_service, "get_uploaded_asset", lambda _asset_id: None)
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create a direct-to-use ecommerce image set for this desk lamp",
+        },
+    )
+    assert job["status"] != "planned"
+    assert job["metadata"].get("ecommerce_text_to_image_fallback") is not True
+
+
+def test_project_mode_saved_product_reference_keeps_general_job_binding(tmp_path) -> None:
+    handlers = _ecommerce_handlers()
+    product_asset_id = _ready_upload(handlers, tmp_path, role="product_reference", filename="desk-lamp.png")
+    project = handlers.post_projects({"user_goal": "Create a product launch image suite"})["project"]
+    reference = handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_asset_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )["reference"]
+
+    handlers.post_project_job(
+        project["project_id"],
+        {"template_id": "general_template", "user_input": "Create a visual variation"},
+    )
+    saved = handlers.get_project(project["project_id"])
+    general_reference = next(
+        item for item in saved["project"]["reference_assets"] if item["reference_id"] == reference["reference_id"]
+    )
+
+    assert general_reference["use_policy"] == "product"
+    assert general_reference["metadata"].get("template_id") != "ecommerce_template"
 
 
 def test_project_mode_creates_ecommerce_project_job_through_template_registry(tmp_path) -> None:

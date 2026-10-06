@@ -1676,6 +1676,99 @@ def test_openai_brain_uses_portable_chat_transport_by_default(monkeypatch) -> No
     assert calls == {"responses": 0, "chat": 1}
 
 
+@pytest.mark.parametrize(
+    ("base_url", "expected_url"),
+    [
+        (None, "https://api.openai.com/v1/chat/completions"),
+        ("https://gateway.example/v1", "https://gateway.example/v1/chat/completions"),
+        ("https://gateway.example/v1/", "https://gateway.example/v1/chat/completions"),
+        ("https://gateway.example/", "https://gateway.example/v1/chat/completions"),
+    ],
+)
+def test_openai_brain_chat_url_is_absolute_and_uses_configured_or_default_base(
+    base_url: str | None, expected_url: str
+) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import _chat_completions_url
+
+    assert _chat_completions_url(base_url) == expected_url
+
+
+def test_openai_brain_availability_and_chat_transport_share_default_base(monkeypatch) -> None:
+    from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls: list[dict[str, object]] = []
+
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls.append(kwargs)
+        return '{"remote": true}'
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "")
+    monkeypatch.setattr(settings, "openai_base_url", None)
+    monkeypatch.setattr(settings, "lab_openai_base_url", None)
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
+
+    provider = V3LLMBrainProvider()
+    assert provider.availability(force=True)["available"] is True
+    result = provider.run(BrainRunRequest(user_input="Create one direction."))
+    assert result["remote"] is True
+    assert calls[0]["url"] == "https://api.openai.com/v1/chat/completions"
+
+
+def test_anthropic_brain_sends_version_auth_path_and_message_body(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls: list[dict[str, object]] = []
+    request = BrainRunRequest(user_input="Create one direction.")
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": '{"remote": true}'}]}
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]):
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "anthropic")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "anthropic-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://anthropic.example")
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(Client=FakeClient))
+
+    result = V3LLMBrainProvider()._run_anthropic_compatible(  # noqa: SLF001 - outbound contract
+        request
+    )
+
+    assert result == {"remote": True}
+    assert calls[0]["url"] == "https://anthropic.example/v1/messages"
+    assert calls[0]["headers"] == {
+        "content-type": "application/json",
+        "x-api-key": "anthropic-test-key",
+        "anthropic-version": "2023-06-01",
+    }
+    assert calls[0]["json"]["model"] == V3LLMBrainProvider().model
+    assert calls[0]["json"]["max_tokens"] == V3LLMBrainProvider().max_tokens
+    assert calls[0]["json"]["system"]
+    assert calls[0]["json"]["messages"] == [
+        {"role": "user", "content": brain_providers.build_remote_payload(request)}
+    ]
+
+
 def test_openai_brain_can_use_codex_compatible_complete_chat_transport(monkeypatch) -> None:
     from app.config import settings
 

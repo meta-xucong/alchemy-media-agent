@@ -19,6 +19,8 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Platform
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import GeneratedOutputResolution, VisionOutputInspector
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import ReviewEvidencePlan
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_evidence import review_plan_digest
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
     OpenAIVisionInspectionProvider,
     VisionInspectionProviderError,
@@ -671,6 +673,38 @@ class _StaticReadyResolver:
 
     def resolve_result(self, result, project_id: str | None = None):
         return [self.resolution.model_copy(update={"project_id": project_id or self.resolution.project_id, "job_id": result.creative_job.job_id})]
+
+
+class _DistinctAttemptReadyResolver(_StaticReadyResolver):
+    """Give each retry materialization its own output identity."""
+
+    def __init__(self, resolution: GeneratedOutputResolution) -> None:
+        super().__init__(resolution)
+        self.attempt_count = 0
+
+    def resolve_result(self, result, project_id: str | None = None):
+        self.attempt_count += 1
+        resolved = []
+        for index, packaged in enumerate(result.asset_pack.assets, 1):
+            metadata = dict(packaged.metadata or {})
+            candidate_metadata = metadata.get("candidate_metadata")
+            candidate_metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
+            candidate_id = metadata.get("selected_candidate_id") or candidate_metadata.get("candidate_id")
+            output_index = self.attempt_count * 10 + index
+            output_id = f"v3_output_{output_index:020d}"
+            resolved.append(
+                self.resolution.model_copy(
+                    update={
+                        "resolution_id": f"resolution_{output_id}",
+                        "project_id": project_id or self.resolution.project_id,
+                        "job_id": result.creative_job.job_id,
+                        "candidate_id": str(candidate_id) if candidate_id else None,
+                        "asset_id": packaged.asset_id,
+                        "output_id": output_id,
+                    }
+                )
+            )
+        return resolved
 
 
 class _BoundReadyResolver(_StaticReadyResolver):
@@ -1411,7 +1445,7 @@ def test_product_api_real_vision_signal_triggers_retry_and_inspects_retry_output
     )
     service = _service(
         tmp_path,
-        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        output_resolver=_DistinctAttemptReadyResolver(_ready_resolution(tmp_path)),
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
@@ -1551,7 +1585,7 @@ def test_product_api_retry_review_becomes_authoritative_and_preserves_initial_fa
     )
     service = _service(
         tmp_path,
-        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        output_resolver=_DistinctAttemptReadyResolver(_ready_resolution(tmp_path)),
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
@@ -1701,6 +1735,333 @@ def test_doc95_delivery_selection_compares_each_suite_role_independently(tmp_pat
     retry_a = next(item for item in preference["ranked_outputs"] if item["output_id"] == "retry_a")
     assert retry_a["hard_gate_passed"] is False
     assert retry_a["hard_gate_failures"] == ["identity_truth_not_respected"]
+
+
+def test_retry_winner_projection_keeps_old_and_new_role_winners_with_own_receipts(tmp_path) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    result = record.generation_result
+
+    def inspection(output_id: str, asset_id: str, status: str, score: float) -> dict:
+        return {
+            "inspection_id": f"inspection_{output_id}",
+            "output_id": output_id,
+            "asset_id": asset_id,
+            "status": status,
+            "mode": "vision_model",
+            "verification_state": "verified",
+            "evidence": {"provider_pixel_result_certified": True},
+            "detected_issues": [],
+            "score_card": {
+                "same_person_readability": score,
+                "prompt_owned_channel_obedience": score,
+                "human_realism": score,
+                "commercial_finish": score,
+            },
+        }
+
+    def package(package_id: str, rows: list[dict]) -> dict:
+        resolutions = [
+            {
+                "resolution_id": f"resolution_{row['output_id']}",
+                "job_id": created.job_id,
+                "output_id": row["output_id"],
+                "asset_id": row["asset_id"],
+                "candidate_id": f"candidate_{row['output_id']}",
+                "status": "ready",
+            }
+            for row in rows
+        ]
+
+
+        plans = {}
+        digests = {}
+        for row in rows:
+            output_id = row["output_id"]
+            plan = {
+                "contract_version": "review_evidence_plan_v1",
+                "plan_id": f"plan_{output_id}",
+                "job_id": created.job_id,
+                "output_id": output_id,
+                "review_mode": "real_pixel",
+                "channels": {
+                    "product_truth": {
+                        "applicability": "not_applicable",
+                        "evidence_state": "not_applicable",
+                    },
+                    "person_identity": {
+                        "applicability": "not_applicable",
+                        "evidence_state": "not_applicable",
+                    },
+                    "prompt_semantics": {
+                        "applicability": "required",
+                        "evidence_state": "available",
+                        "evidence_ids": ["prompt_contract"],
+                        "source_type": "prompt_contract",
+                    },
+                    "selected_output": {
+                        "applicability": "required",
+                        "evidence_state": "available",
+                        "evidence_ids": [output_id],
+                    },
+                },
+                "source_binding_digest": f"binding_{output_id}",
+                "review_plan_digest": "pending",
+            }
+            plan = ReviewEvidencePlan.model_validate(plan).model_dump(mode="json")
+            plan["review_plan_digest"] = review_plan_digest(plan)
+            plans[output_id] = plan
+            digests[output_id] = plan["review_plan_digest"]
+        return {
+            "package_id": package_id,
+            "job_id": created.job_id,
+            "review_evidence_receipt_status": "complete",
+            "review_evidence_receipt_errors": [],
+            "resolutions": resolutions,
+            "review_evidence_plans": plans,
+            "review_evidence_plan_digests": digests,
+            "inspections": rows,
+        }
+
+    initial_package = package(
+        "initial_package",
+        [
+            inspection("old_a", "role_a", "warning", 0.93),
+            inspection("old_b", "role_b", "fail_final", 0.35),
+        ],
+    )
+    retry_package = package(
+        "retry_package",
+        [
+            inspection("new_a", "role_a", "fail_final", 0.31),
+            inspection("new_b", "role_b", "warning", 0.91),
+        ],
+    )
+    initial_package["user_visible_summary"] = ["The initial batch included one failed image."]
+    retry_package["user_visible_summary"] = ["The latest retry still has an unresolved image failure."]
+    initial = result.model_copy(
+        update={
+            "metadata": {
+                **dict(result.metadata),
+                "post_generation_review_package": initial_package,
+            }
+        }
+    )
+    retry = result.model_copy(
+        update={
+            "metadata": {
+                **dict(result.metadata),
+                "visual_auto_retry_attempt": 1,
+                "post_generation_review_package": retry_package,
+            }
+        }
+    )
+
+    merged = service._merge_retry_generation_result(  # noqa: SLF001 - real retry merge boundary
+        initial,
+        retry,
+        records=[],
+        max_attempts=1,
+    )
+    preferred = service._apply_reviewed_delivery_preference(merged)  # noqa: SLF001 - real winner selection
+    final_delivery, eligible_output_ids, _eligible_asset_ids = service._public_final_delivery_projection(  # noqa: SLF001 - public authority
+        preferred
+    )
+
+    assert set(preferred.metadata["reviewed_delivery_preference"]["preferred_output_ids"]) == {"old_a", "new_b"}
+    assert eligible_output_ids == {"old_a", "new_b"}, preferred.metadata["post_generation_review_package"]
+    assert final_delivery["final_delivery_status"] == "ready"
+    review_attempts = preferred.metadata["post_generation_review_package"]["review_attempts"]
+    assert [item["review_evidence_receipt_status"] for item in review_attempts] == ["complete", "complete"]
+    projected_package = preferred.metadata["post_generation_review_package"]
+    assert projected_package["review_evidence_receipt_status"] == "complete", projected_package
+    assert {item["output_id"] for item in projected_package["inspections"]} == {"old_a", "new_b"}
+    assert set(projected_package["review_evidence_plans"]) == {"old_a", "new_b"}
+    assert {item["output_id"] for item in projected_package["resolutions"]} == {"old_a", "new_b"}
+    assert projected_package["user_visible_summary"] == [
+        "V3 checked the final selected images.",
+        "The final selected set is usable with minor warnings.",
+    ]
+    assert service._public_post_generation_review(projected_package)["user_visible_summary"] == [  # noqa: SLF001
+        "V3 checked the final selected images.",
+        "The final selected set is usable with minor warnings.",
+    ]
+
+
+def _store_mixed_review_selection_job(service: V3ProductApiService, tmp_path: Path) -> tuple[str, dict[str, str]]:
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    base_result = record.generation_result
+    base_asset = base_result.asset_pack.assets[0]
+    ids = {
+        "good_asset": "asset_selection_good",
+        "bad_asset": "asset_selection_bad",
+        "good_candidate": "candidate_selection_good",
+        "bad_candidate": "candidate_selection_bad",
+        "good_output": "v3_output_00000000000000001001",
+        "bad_output": "v3_output_00000000000000001002",
+    }
+
+    def packaged(asset_id: str, candidate_id: str, output_id: str) -> PackagedAsset:
+        return base_asset.model_copy(
+            update={
+                "asset_id": asset_id,
+                "metadata": {
+                    **dict(base_asset.metadata or {}),
+                    "selected_candidate_id": candidate_id,
+                    "candidate_metadata": {
+                        **dict((base_asset.metadata or {}).get("candidate_metadata") or {}),
+                        "candidate_id": candidate_id,
+                        "output_id": output_id,
+                    },
+                },
+            }
+        )
+
+    package = {
+        "review_evidence_receipt_status": "complete",
+        "review_evidence_receipt_errors": [],
+        "inspections": [
+            {
+                "inspection_id": "inspection_selection_good",
+                "output_id": ids["good_output"],
+                "asset_id": ids["good_asset"],
+                "mode": "vision_model",
+                "verification_state": "verified",
+                "status": "warning",
+                "evidence": {"provider_pixel_result_certified": True},
+                "detected_issues": [],
+            },
+            {
+                "inspection_id": "inspection_selection_bad",
+                "output_id": ids["bad_output"],
+                "asset_id": ids["bad_asset"],
+                "mode": "vision_model",
+                "verification_state": "verified",
+                "status": "fail_final",
+                "evidence": {"provider_pixel_result_certified": True},
+                "detected_issues": [{"code": "visible_text_artifact"}],
+            },
+        ],
+    }
+    updated = base_result.model_copy(
+        update={
+            "asset_pack": base_result.asset_pack.model_copy(
+                update={
+                    "assets": [
+                        packaged(ids["good_asset"], ids["good_candidate"], ids["good_output"]),
+                        packaged(ids["bad_asset"], ids["bad_candidate"], ids["bad_output"]),
+                    ]
+                }
+            ),
+            "metadata": {**dict(base_result.metadata), "post_generation_review_package": package},
+        }
+    )
+    record.generation_result = updated
+    record.status = ProductJobStatusValue.GENERATED
+    service.job_store.save(record)
+    return created.job_id, ids
+
+
+@pytest.mark.parametrize(
+    ("selection", "expected_selected"),
+    [
+        ({}, "good"),
+        ({"selected_asset_ids": ["asset_selection_good"]}, "good"),
+        (
+            {
+                "selected_asset_ids": ["asset_selection_good"],
+                "selected_candidate_ids": ["candidate_selection_good"],
+            },
+            "good",
+        ),
+    ],
+)
+def test_formal_selection_defaults_to_and_accepts_only_eligible_output(tmp_path, selection, expected_selected) -> None:
+    service = _service(tmp_path)
+    job_id, ids = _store_mixed_review_selection_job(service, tmp_path)
+
+    response = service.select_result(job_id, selection)
+
+    assert response.selected_result.metadata["selection_status"] == "selected"
+    assert response.selected_result.selected_asset_ids == [ids[f"{expected_selected}_asset"]]
+    assert response.selected_result.selected_candidate_ids == [ids[f"{expected_selected}_candidate"]]
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        {"selected_asset_ids": ["asset_selection_bad"]},
+        {"selected_asset_ids": ["asset_selection_good", "asset_selection_bad"]},
+        {"selected_asset_ids": ["asset_selection_unknown"]},
+    ],
+)
+def test_formal_selection_rejects_ineligible_mixed_and_unknown_ids_atomically(tmp_path, selection) -> None:
+    service = _service(tmp_path)
+    job_id, _ids = _store_mixed_review_selection_job(service, tmp_path)
+
+    response = service.select_result(job_id, selection)
+    record = service.job_store.get(job_id)
+
+    assert response.selected_result.metadata["selection_status"] == "ineligible_selection_rejected"
+    assert response.status == ProductJobStatusValue.GENERATED
+    assert record is not None and record.status == ProductJobStatusValue.GENERATED
+    assert record.selected_result is None
+    assert response.selected_result.selected_asset_ids == []
+
+
+def test_unreviewed_explicit_candidate_browsing_remains_non_delivery_selection(tmp_path) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    candidate_id = record.generation_result.asset_pack.assets[0].metadata["selected_candidate_id"]
+
+    response = service.select_result(created.job_id, {"selected_candidate_ids": [candidate_id]})
+
+    assert response.selected_result.metadata["selection_status"] == "selected"
+    assert response.job_status.metadata["final_delivery"]["final_delivery_status"] == "not_evaluated"
+
+
+def test_unreviewed_candidate_browsing_rejects_unknown_ids(tmp_path) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+    service.generate_job(created.job_id, {"quality_mode": "standard", "metadata": {}})
+
+    response = service.select_result(created.job_id, {"selected_candidate_ids": ["candidate_missing"]})
+    record = service.job_store.get(created.job_id)
+
+    assert response.selected_result.metadata["selection_status"] == "ineligible_selection_rejected"
+    assert response.selected_result.selected_candidate_ids == []
+    assert record is not None and record.selected_result is None
+
+
+def test_legacy_no_review_empty_default_selection_is_rejected_without_mutation(tmp_path) -> None:
+    service = _service(tmp_path)
+    job_id, _ids = _store_mixed_review_selection_job(service, tmp_path)
+    record = service.job_store.get(job_id)
+    assert record is not None and record.generation_result is not None
+    result = record.generation_result.model_copy(deep=True)
+    result.asset_pack = result.asset_pack.model_copy(update={"assets": []})
+    result.metadata.pop("post_generation_review_package", None)
+    record.generation_result = result
+    service.job_store.save(record)
+
+    response = service.select_result(job_id, {})
+
+    assert response.selected_result.metadata["selection_status"] == "ineligible_selection_rejected"
+    assert response.selected_result.metadata["reason"] == "no_matching_asset"
+    assert response.selected_result.selected_asset_ids == []
+    persisted = service.job_store.get(job_id)
+    assert persisted is not None
+    assert persisted.status == ProductJobStatusValue.GENERATED
+    assert persisted.selected_result is None
 
 
 def test_doc96_unreviewed_retry_cannot_replace_reviewed_initial_output(tmp_path) -> None:

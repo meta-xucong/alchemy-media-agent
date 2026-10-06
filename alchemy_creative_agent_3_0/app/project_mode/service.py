@@ -4389,6 +4389,18 @@ class V3ProjectModeService:
                         }
                     }
                 )
+            saved_product_reference_ids = self._explicit_ecommerce_saved_product_reference_ids(project)
+            if saved_product_reference_ids:
+                # The user explicitly selected E-Commerce for this job. Revalidate
+                # active project-owned product references and establish trusted
+                # E-Commerce provenance before reading the canonical product pool.
+                self._persist_job_uploaded_references(
+                    project,
+                    saved_product_reference_ids,
+                    template_id=template_manifest.template_id,
+                    user_input=job_request.user_input or project.user_goal,
+                    strict=True,
+                )
             self._ensure_ecommerce_selected_output_integrity(project)
             doc269_selected_continuation_admissions = (
                 self._doc269_selected_continuation_admissions(project, continuity_snapshot=continuity_snapshot)
@@ -7002,6 +7014,18 @@ class V3ProjectModeService:
         return self._dedupe_uploaded_asset_ids_by_content(
             [asset_id for asset_id in dict.fromkeys([*candidate_ids, *legacy_ids]) if asset_id]
         )
+
+    def _explicit_ecommerce_saved_product_reference_ids(self, project: ProjectRecord) -> list[str]:
+        """Return active, project-owned uploaded product refs for an explicit E-Commerce admission."""
+        asset_ids = [
+            reference.asset_ref_id
+            for reference in project.reference_assets
+            if reference.project_id == project.project_id
+            and reference.status == ProjectReferenceStatus.ACTIVE
+            and reference.source_type == ProjectReferenceSourceType.UPLOADED
+            and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
+        ]
+        return self._dedupe_uploaded_asset_ids_by_content(asset_ids)
 
     @staticmethod
     def _is_ecommerce_product_reference(

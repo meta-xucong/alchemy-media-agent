@@ -7906,6 +7906,7 @@ function resumeV3ActiveProjectJobRecovery(job = v3State.currentJob) {
     .then(async (generated) => {
       if (v3State.projectRecoveryKey !== recoveryKey || v3State.currentProject?.project_id !== projectId) return;
       await completeV3GeneratedJob(generated, [], v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative"), {
+        expectedCount,
         shouldContinue: () => (
           v3State.projectRecoveryKey === recoveryKey
           && v3State.currentProject?.project_id === projectId
@@ -10467,6 +10468,7 @@ async function createV3Job() {
         sessionReceipt: ecommerceSession,
       });
       await completeV3GeneratedJob(generated, uploadedAssets, copy, {
+        expectedCount: generationSettings.count,
         shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
         sessionReceipt: ecommerceSession,
       });
@@ -10485,6 +10487,7 @@ async function createV3Job() {
       const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(created.job_id, created, { allowPartial: true });
       if (recoveredFromOutputs) {
         await completeV3GeneratedJob(recoveredFromOutputs, uploadedAssets, copy, {
+          expectedCount: generationSettings.count,
           shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
           sessionReceipt: ecommerceSession,
         });
@@ -10530,7 +10533,7 @@ async function completeV3GeneratedJob(
   generated,
   uploadedAssets = [],
   copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative"),
-  { shouldContinue = null, sessionReceipt = null } = {},
+  { expectedCount = null, shouldContinue = null, sessionReceipt = null } = {},
 ) {
   if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   v3State.currentJob = generated;
@@ -10539,16 +10542,29 @@ async function completeV3GeneratedJob(
   syncV3ProjectOutputsFromPayload(generated);
   const partialRecovery = v3JobHasRecoverablePartialDelivery(generated);
   const deliveryWithheld = v3JobDeliveryWithheld(generated);
+  const hasExpectedDelivery = v3JobHasExpectedVisibleImages(generated, expectedCount);
+  const terminalFailure = ["blocked", "failed", "not_found"].includes(
+    String(generated?.status || "").trim().toLowerCase()
+  );
+  const missingDelivery = !hasExpectedDelivery && !partialRecovery && !deliveryWithheld;
+  const failedWithoutPartialDelivery = (terminalFailure && !partialRecovery) || missingDelivery;
+  const terminalFailureNotice = missingDelivery && !terminalFailure
+    ? "任务已结束，但没有可交付图片；项目记录已保留。"
+    : generated?.status === "not_found"
+    ? "任务不存在或已无法恢复，请从项目中重新发起生成。"
+    : generated?.status === "failed"
+      ? (generated.warnings?.[0] || "生成任务失败，项目记录已保留。")
+      : (generated.warnings?.[0] || "生成遇到阻碍，已保留项目记录。");
   setV3Progress(
-    generated?.status === "blocked" ? "failed" : deliveryWithheld ? "review_blocked" : "completed",
-    generated?.status === "blocked"
-      ? "生成遇到阻碍，已保留项目记录。"
+    failedWithoutPartialDelivery ? "failed" : deliveryWithheld ? "review_blocked" : "completed",
+    failedWithoutPartialDelivery
+      ? terminalFailureNotice
       : deliveryWithheld
         ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
         ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
         : "后台已完成出图，正在刷新项目图片。",
-    generated?.status === "blocked" || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
+    failedWithoutPartialDelivery || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
   renderV3Job(generated);
   await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
@@ -10564,7 +10580,7 @@ async function completeV3GeneratedJob(
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     openV3ProjectSubpage("compose");
   }
-  if (generated?.status === "blocked" && !partialRecovery) {
+  if (failedWithoutPartialDelivery) {
     const ecommerceFailure = v3EcommerceFailureMessage(generated);
     if (ecommerceFailure) {
       updateV3Notice(ecommerceFailure, "warning");
@@ -10572,14 +10588,14 @@ async function completeV3GeneratedJob(
     }
   }
   updateV3Notice(
-    generated?.status === "blocked"
-      ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。")
+    failedWithoutPartialDelivery
+      ? terminalFailureNotice
       : deliveryWithheld
         ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
         ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
         : copy.generatedNotice,
-    generated?.status === "blocked" || deliveryWithheld || partialRecovery ? "warning" : "success"
+    failedWithoutPartialDelivery || deliveryWithheld || partialRecovery ? "warning" : "success"
   );
 }
 

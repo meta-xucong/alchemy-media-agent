@@ -3,6 +3,7 @@ from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
+import tempfile
 from uuid import uuid4
 
 from PIL import Image
@@ -34,7 +35,7 @@ from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import (
 )
 from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
-from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, Platform
+from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, MemoryUpdate, Platform, ReferenceAsset
 
 
 _RUNTIME_ROOTS: list[Path] = []
@@ -49,8 +50,10 @@ def _cleanup_runtime_product_api_stores():
 
 
 def _test_store_root(name: str) -> Path:
-    root = Path(__file__).resolve().parent / "_runtime_product_api" / f"{name}_{uuid4().hex}"
-    root.mkdir(parents=True)
+    # Keep persistent-store fixture paths short enough for Windows MAX_PATH,
+    # including when this repository is checked out in a nested worktree.
+    root = Path(tempfile.gettempdir()) / f"v3pa_{name}_{uuid4().hex}"
+    root.mkdir(parents=True, exist_ok=False)
     _RUNTIME_ROOTS.append(root)
     return root
 
@@ -1733,6 +1736,193 @@ def test_v3_product_api_generates_selects_and_applies_brand_memory_update(tmp_pa
     assert updated is not None
     assert updated.successful_asset_ids
     assert balance.checked_credits == [0]
+
+
+@pytest.mark.parametrize("apply_memory_update", [True, False])
+def test_v3_product_api_brand_memory_update_contains_only_the_selected_reference(
+    tmp_path,
+    apply_memory_update: bool,
+) -> None:
+    service, brand_service, _balance = _service("selected_reference_only")
+    _install_local_pixel_review_fixture(service, tmp_path)
+    brand_response = service.create_brand(
+        {
+            "brand_id": "brand_selected_reference_only",
+            "brand_name": "Selected Reference Test",
+            "industry": IndustryCategory.BEVERAGE,
+            "visual_tone": ["fresh", "clean"],
+        }
+    )
+    created = service.create_job(
+        {
+            "user_input": "沿用品牌风格生成两张饮品宣传图。",
+            "continue_style_from_brand_id": brand_response.brand.brand_id,
+        }
+    )
+    generated = service.generate_job(created.job_id)
+    record = service.job_store.get(generated.job_id)
+    assert record is not None and record.generation_result is not None
+    assets = record.generation_result.asset_pack.assets
+    assert len(assets) >= 2
+    selected_asset, unselected_asset = assets[:2]
+    selected_candidate = selected_asset.metadata["selected_candidate_id"]
+    unselected_candidate = unselected_asset.metadata["selected_candidate_id"]
+    refs = [
+        ReferenceAsset(
+            asset_id=f"ref_{candidate_id}",
+            asset_type="accepted_generated_candidate",
+            source="v3_generation_loop",
+            metadata={"candidate_id": candidate_id, "asset_id": asset.asset_id},
+        )
+        for candidate_id, asset in (
+            (selected_candidate, selected_asset),
+            (unselected_candidate, unselected_asset),
+        )
+    ]
+    result = record.generation_result.model_copy(deep=True)
+    result.asset_pack.brand_memory_update = MemoryUpdate(
+        memory_update_id="memory_selected_reference_only",
+        brand_id=brand_response.brand.brand_id,
+        action="propose",
+        accepted_asset_ids=[selected_asset.asset_id, unselected_asset.asset_id],
+        new_reference_assets=refs,
+    )
+    record.generation_result = result
+    service.job_store.save(record)
+
+    selected = service.select_result(
+        generated.job_id,
+        {
+            "selected_asset_ids": [selected_asset.asset_id],
+            "apply_memory_update": apply_memory_update,
+        },
+    )
+    profile = brand_service.load_profile(brand_response.brand.brand_id)
+
+    assert selected.status == ProductJobStatusValue.SELECTED
+    assert selected.selected_result.memory_update_applied is apply_memory_update
+    assert profile is not None
+    if apply_memory_update:
+        assert profile.successful_asset_ids == [selected_asset.asset_id]
+        assert [reference.asset_id for reference in profile.reference_assets] == [f"ref_{selected_candidate}"]
+    else:
+        assert profile.successful_asset_ids == []
+        assert profile.reference_assets == []
+
+
+@pytest.mark.parametrize(
+    ("reference_metadata", "expected_reference_ids"),
+    [
+        ({"candidate_id": "candidate_a"}, ["ref_candidate_a"]),
+        ({"source_asset_id": "asset_a"}, ["ref_source_a"]),
+    ],
+)
+def test_memory_update_selection_accepts_exact_candidate_or_source_asset_mapping(
+    tmp_path,
+    reference_metadata,
+    expected_reference_ids,
+) -> None:
+    service, _brand_service, _balance = _service("memory_mapping")
+    reference_id = expected_reference_ids[0]
+    update = MemoryUpdate(
+        memory_update_id="memory_exact_mapping",
+        brand_id="brand_exact_mapping",
+        action="propose",
+        accepted_asset_ids=["asset_a", "asset_b"],
+        new_reference_assets=[
+            ReferenceAsset(
+                asset_id=reference_id,
+                asset_type="accepted_generated_candidate",
+                source="test",
+                metadata=reference_metadata,
+            ),
+            ReferenceAsset(
+                asset_id="ref_unselected_b",
+                asset_type="accepted_generated_candidate",
+                source="test",
+                metadata={"candidate_id": "candidate_b", "asset_id": "asset_b"},
+            ),
+        ],
+    )
+
+    filtered = service._memory_update_for_selection(update, ["asset_a"], {"candidate_a": "asset_a"})  # noqa: SLF001
+
+    assert filtered is not None
+    assert filtered.accepted_asset_ids == ["asset_a"]
+    assert [reference.asset_id for reference in filtered.new_reference_assets] == expected_reference_ids
+
+
+def test_memory_update_selection_rejects_conflict_and_empty_reference_match_without_fallback(tmp_path) -> None:
+    service, _brand_service, _balance = _service("memory_conflict")
+    conflict = MemoryUpdate(
+        memory_update_id="memory_conflict",
+        brand_id="brand_memory_conflict",
+        action="propose",
+        accepted_asset_ids=["asset_a"],
+        new_reference_assets=[
+            ReferenceAsset(
+                asset_id="ref_conflict",
+                asset_type="accepted_generated_candidate",
+                source="test",
+                metadata={"candidate_id": "candidate_b", "asset_id": "asset_a"},
+            )
+        ],
+    )
+    no_match = MemoryUpdate(
+        memory_update_id="memory_no_match",
+        brand_id="brand_memory_no_match",
+        action="propose",
+        accepted_asset_ids=["asset_a"],
+        new_reference_assets=[
+            ReferenceAsset(
+                asset_id="ref_unselected",
+                asset_type="accepted_generated_candidate",
+                source="test",
+                metadata={"candidate_id": "candidate_b", "asset_id": "asset_b"},
+            )
+        ],
+    )
+    no_accepted_match = MemoryUpdate(
+        memory_update_id="memory_no_accepted_match",
+        brand_id="brand_no_accepted_match",
+        action="propose",
+        accepted_asset_ids=["asset_b"],
+        new_reference_assets=[
+            ReferenceAsset(
+                asset_id="ref_selected_candidate_only",
+                asset_type="accepted_generated_candidate",
+                source="test",
+                metadata={"candidate_id": "candidate_a"},
+            )
+        ],
+    )
+    selected_pair_conflict = MemoryUpdate(
+        memory_update_id="memory_selected_pair_conflict",
+        brand_id="brand_selected_pair_conflict",
+        action="propose",
+        accepted_asset_ids=["asset_a", "asset_b"],
+        new_reference_assets=[
+            ReferenceAsset(
+                asset_id="ref_selected_pair_conflict",
+                asset_type="accepted_generated_candidate",
+                source="test",
+                metadata={"candidate_id": "candidate_a", "asset_id": "asset_b"},
+            )
+        ],
+    )
+
+    assert service._memory_update_for_selection(conflict, ["asset_a"], {"candidate_a": "asset_a"}) is None  # noqa: SLF001
+    assert service._memory_update_for_selection(no_match, ["asset_a"], {"candidate_a": "asset_a"}) is None  # noqa: SLF001
+    assert service._memory_update_for_selection(  # noqa: SLF001
+        no_accepted_match,
+        ["asset_a", "asset_b"],
+        {"candidate_a": "asset_a", "candidate_b": "asset_b"},
+    ) is None
+    assert service._memory_update_for_selection(  # noqa: SLF001
+        selected_pair_conflict,
+        ["asset_a", "asset_b"],
+        {"candidate_a": "asset_a", "candidate_b": "asset_b"},
+    ) is None
 
 
 def test_v3_product_api_does_not_accept_low_level_generation_controls() -> None:

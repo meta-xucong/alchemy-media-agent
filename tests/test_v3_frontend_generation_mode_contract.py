@@ -168,3 +168,19 @@ def test_frontend_preferences_are_response_authoritative_and_reset_missing_proje
     assert "...(responsePreferences" in mobile
     assert "selected_mode_id: mobileV3State.selectedPhotographyMode" in mobile
     assert "reference_role: mobileV3State.selectedPhotographyReferenceRole" in mobile
+
+
+def test_desktop_v3_terminal_failures_do_not_complete_as_success() -> None:
+    desktop = _read(DESKTOP_JS)
+    terminal = _function_body(desktop, "v3JobHasTerminalOutcome")
+    start = desktop.index("async function completeV3GeneratedJob")
+    end = desktop.index("\nasync function runV3GenerationWithRecovery", start)
+    completion = desktop[start:end]
+
+    # These are all terminal failures in the shared V3 predicate. Completion
+    # must consume that classification while preserving partial recovery.
+    assert '"blocked", "failed", "not_found"' in terminal
+    assert "const hasExpectedDelivery = v3JobHasExpectedVisibleImages(generated, expectedCount)" in completion
+    assert "const missingDelivery = !hasExpectedDelivery && !partialRecovery && !deliveryWithheld" in completion
+    assert "failedWithoutPartialDelivery" in completion
+    assert 'failedWithoutPartialDelivery || deliveryWithheld || partialRecovery ? "warning"' in completion

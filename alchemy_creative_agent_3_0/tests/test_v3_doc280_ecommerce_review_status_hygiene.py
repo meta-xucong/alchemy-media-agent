@@ -15,6 +15,8 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import ReviewEvidencePlan
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_evidence import review_plan_digest
 from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_browser import (
     DESKTOP_HTML,
     DESKTOP_JS,
@@ -136,6 +138,206 @@ def _persist_generated_review_state(
     return output
 
 
+def _persist_formal_export_review_case(record, handlers, statuses: list[str]) -> tuple[set[str], dict[str, str]]:
+    result = record.planning_result.model_copy(deep=True)
+    intents = handlers.service._ecommerce_output_intents(record)  # noqa: SLF001
+    assert intents and len(intents) == len(statuses)
+    any_eligible = any(status in {"pass", "warning"} for status in statuses)
+    delivery_facts = {
+        "delivery_gate_applies": True,
+        "final_delivery_status": "ready" if any_eligible else "withheld_review_failure",
+        "automatic_delivery_available": any_eligible,
+        "manual_confirmation_required": False,
+    }
+    envelope = {
+        "execution_fingerprint": f"fingerprint_{record.job_id}",
+        "envelope_id": f"envelope_{record.job_id}",
+        "resolved_constraint_ledger": {
+            "ledger_id": f"ledger_{record.job_id}",
+            "provider_projection": {"capability_projection": {}},
+        },
+    }
+    base_asset = result.asset_pack.assets[0]
+    packaged_assets = []
+    resolutions = []
+    inspections = []
+    eligible_ids: set[str] = set()
+    status_by_output: dict[str, str] = {}
+    for index, (intent, status) in enumerate(zip(intents, statuses), start=1):
+        asset_id = str(intent["asset_id"])
+        output_id = _doc280_output_id(f"formal-export-{record.job_id}-{index}")
+        candidate_id = f"candidate_{output_id}"
+        output_delivery_status = (
+            "ready"
+            if status in {"pass", "warning"}
+            else "withheld_manual_confirmation"
+            if status in {"manual_review", "fail_retryable"}
+            else "withheld_review_failure"
+        )
+        output_delivery_facts = {
+            "delivery_gate_applies": True,
+            "final_delivery_status": output_delivery_status,
+            "automatic_delivery_available": output_delivery_status == "ready",
+            "manual_confirmation_required": output_delivery_status == "withheld_manual_confirmation",
+        }
+        output = handlers.service.output_store.save_base64_output(
+            job_id=record.job_id,
+            candidate_id=candidate_id,
+            asset_id=asset_id,
+            provider="local-export-fixture",
+            model="offline",
+            encoded_image=_png_base64(),
+            output_id=output_id,
+            metadata={
+                "final_delivery": output_delivery_facts,
+                "project_id": record.request.metadata.get("project_id"),
+                "capability_execution_envelope": envelope,
+            },
+        )
+        packaged_assets.append(
+            base_asset.model_copy(
+                update={
+                    "asset_id": asset_id,
+                    "file_path": output.file_path,
+                    "metadata": {
+                        **dict(base_asset.metadata or {}),
+                        "selected_candidate_id": candidate_id,
+                        "candidate_metadata": {
+                            "candidate_id": candidate_id,
+                            "output_id": output_id,
+                            "download_url": output.download_url,
+                            "preview_url": output.preview_url,
+                            "thumbnail_url": output.thumbnail_url,
+                            "width": output.width,
+                            "height": output.height,
+                            "mime_type": output.mime_type,
+                            "format": "png",
+                            "v3_owned_output": True,
+                        },
+                    },
+                }
+            )
+        )
+        resolutions.append(
+            {
+                "resolution_id": f"resolution_{output_id}",
+                "job_id": record.job_id,
+                "output_id": output_id,
+                "asset_id": asset_id,
+                "candidate_id": candidate_id,
+                "status": "ready",
+            }
+        )
+        inspections.append(
+            {
+                "inspection_id": f"inspection_{output_id}",
+                "output_id": output_id,
+                "asset_id": asset_id,
+                "mode": "vision_model",
+                "verification_state": "verified",
+                "status": status,
+                "evidence": {"provider_pixel_result_certified": True},
+                "detected_issues": [] if status in {"pass", "warning"} else [{"code": "visible_text_artifact"}],
+            }
+        )
+        status_by_output[output_id] = status
+        if status in {"pass", "warning"}:
+            eligible_ids.add(output_id)
+
+    result.asset_pack = result.asset_pack.model_copy(update={"assets": packaged_assets})
+    result.metadata = {
+        **dict(result.metadata or {}),
+        "capability_execution_envelope": envelope,
+        "post_generation_review_package": {
+            "review_evidence_receipt_status": "complete",
+            "review_evidence_receipt_errors": [],
+            "resolutions": resolutions,
+            "inspections": inspections,
+        },
+    }
+    record.generation_result = result
+    record.status = ProductJobStatusValue.GENERATED
+    handlers.service.job_store.save(record)
+    return eligible_ids, status_by_output
+
+
+def _retry_review_package(job_id: str, rows: list[dict[str, str]], package_id: str) -> dict[str, Any]:
+    resolutions = []
+    inspections = []
+    plans = {}
+    digests = {}
+    for row in rows:
+        output_id = row["output_id"]
+        asset_id = row["asset_id"]
+        resolutions.append(
+            {
+                "resolution_id": f"resolution_{output_id}",
+                "job_id": job_id,
+                "output_id": output_id,
+                "asset_id": asset_id,
+                "candidate_id": f"candidate_{output_id}",
+                "status": "ready",
+            }
+        )
+        inspections.append(
+            {
+                "inspection_id": f"inspection_{output_id}",
+                "output_id": output_id,
+                "asset_id": asset_id,
+                "mode": "vision_model",
+                "verification_state": "verified",
+                "status": row["status"],
+                "evidence": {"provider_pixel_result_certified": True},
+                "detected_issues": [] if row["status"] in {"pass", "warning"} else [{"code": "visible_text_artifact"}],
+                "score_card": {
+                    "same_person_readability": 0.9 if row["status"] in {"pass", "warning"} else 0.3,
+                    "prompt_owned_channel_obedience": 0.9 if row["status"] in {"pass", "warning"} else 0.3,
+                    "human_realism": 0.9 if row["status"] in {"pass", "warning"} else 0.3,
+                    "commercial_finish": 0.9 if row["status"] in {"pass", "warning"} else 0.3,
+                },
+            }
+        )
+        plan = ReviewEvidencePlan.model_validate(
+            {
+                "contract_version": "review_evidence_plan_v1",
+                "plan_id": f"plan_{output_id}",
+                "job_id": job_id,
+                "output_id": output_id,
+                "review_mode": "real_pixel",
+                "channels": {
+                    "product_truth": {"applicability": "not_applicable", "evidence_state": "not_applicable"},
+                    "person_identity": {"applicability": "not_applicable", "evidence_state": "not_applicable"},
+                    "prompt_semantics": {
+                        "applicability": "required",
+                        "evidence_state": "available",
+                        "evidence_ids": ["prompt_contract"],
+                        "source_type": "prompt_contract",
+                    },
+                    "selected_output": {
+                        "applicability": "required",
+                        "evidence_state": "available",
+                        "evidence_ids": [output_id],
+                    },
+                },
+                "source_binding_digest": f"binding_{output_id}",
+                "review_plan_digest": "pending",
+            }
+        ).model_dump(mode="json")
+        plan["review_plan_digest"] = review_plan_digest(plan)
+        plans[output_id] = plan
+        digests[output_id] = plan["review_plan_digest"]
+    return {
+        "package_id": package_id,
+        "job_id": job_id,
+        "review_evidence_receipt_status": "complete",
+        "review_evidence_receipt_errors": [],
+        "resolutions": resolutions,
+        "review_evidence_plans": plans,
+        "review_evidence_plan_digests": digests,
+        "inspections": inspections,
+    }
+
+
 def _expected_disposition(state: str) -> dict[str, Any]:
     actions = [] if state == "final_delivery_available" else [{"id": "review_generation_history"}]
     return {
@@ -197,6 +399,288 @@ def test_doc280_public_review_disposition_is_exactly_derived_from_canonical_revi
     assert [item["output_id"] for item in review["review_items"]] == [output.output_id]
     assert review["recommended_output_ids"] == ([output.output_id] if state == "final_delivery_available" else [])
     assert all("asset_id" not in item and "evidence" not in item and "file_path" not in item for item in review["review_items"])
+
+
+def test_doc280_formal_export_excludes_all_failed_outputs(tmp_path) -> None:
+    handlers, _project, record = _ecommerce_record(tmp_path, key="doc280-formal-all-fail")
+    intents = handlers.service._ecommerce_output_intents(record)  # noqa: SLF001
+    eligible_ids, _status_by_output = _persist_formal_export_review_case(
+        record,
+        handlers,
+        ["fail_final"] * len(intents),
+    )
+
+    exported = handlers.service.export_job(record.job_id).model_dump(mode="json")
+    public_job = handlers.get_job(record.job_id)
+
+    assert eligible_ids == set()
+    assert exported["export_package"]["files"] == []
+    assert exported["manifest"]["export_files"] == []
+    assert exported["manifest"]["generated_assets"] == []
+    assert {item["status"] for item in public_job["metadata"]["post_generation_review"]["review_items"]} == {
+        "fail_final"
+    }
+
+
+def test_doc280_formal_export_contains_only_eligible_outputs_with_true_review_status(tmp_path) -> None:
+    handlers, _project, record = _ecommerce_record(tmp_path, key="doc280-formal-partial")
+    intents = handlers.service._ecommerce_output_intents(record)  # noqa: SLF001
+    assert len(intents) >= 2
+    states = ["warning", *(["fail_final"] * (len(intents) - 1))]
+    eligible_ids, status_by_output = _persist_formal_export_review_case(record, handlers, states)
+
+    exported = handlers.service.export_job(record.job_id).model_dump(mode="json")
+    public_job = handlers.get_job(record.job_id)
+    files = exported["export_package"]["files"]
+    generated_assets = exported["manifest"]["generated_assets"]
+
+    assert {item["output_id"] for item in files} == eligible_ids
+    assert {item["output_id"] for item in generated_assets} == eligible_ids
+    assert {item["review_status"] for item in files} == {"warning"}
+    assert {item["review_status"] for item in generated_assets} == {"warning"}
+    assert all(status == "fail_final" for output_id, status in status_by_output.items() if output_id not in eligible_ids)
+    assert {item["status"] for item in public_job["metadata"]["post_generation_review"]["review_items"]} == {
+        "warning",
+        "fail_final",
+    }
+
+
+def test_doc280_formal_export_respects_explicit_eligible_selection_subset(tmp_path) -> None:
+    handlers, _project, record = _ecommerce_record(tmp_path, key="doc280-formal-selected-subset")
+    intents = handlers.service._ecommerce_output_intents(record)  # noqa: SLF001
+    eligible_ids, _status_by_output = _persist_formal_export_review_case(
+        record,
+        handlers,
+        ["warning"] * len(intents),
+    )
+    assert len(eligible_ids) >= 2
+    record = handlers.service.get_job_record(record.job_id)
+    assert record is not None and record.generation_result is not None
+    chosen_asset = record.generation_result.asset_pack.assets[0]
+    chosen_output_id = chosen_asset.metadata["candidate_metadata"]["output_id"]
+
+    selection = handlers.service.select_result(
+        record.job_id,
+        {"selected_asset_ids": [chosen_asset.asset_id]},
+    )
+    exported = handlers.service.export_job(record.job_id).model_dump(mode="json")
+
+    assert selection.status == ProductJobStatusValue.SELECTED
+    assert {item["output_id"] for item in exported["export_package"]["files"]} == {chosen_output_id}
+    assert {item["output_id"] for item in exported["manifest"]["generated_assets"]} == {chosen_output_id}
+
+
+def test_doc280_automatic_product_project_and_export_consumers_share_the_eligible_set(tmp_path) -> None:
+    handlers, project, record = _ecommerce_record(tmp_path, key="doc280-consumer-set-equality")
+    intents = handlers.service._ecommerce_output_intents(record)  # noqa: SLF001
+    eligible_ids, _status_by_output = _persist_formal_export_review_case(
+        record,
+        handlers,
+        ["warning"] * len(intents),
+    )
+    final_delivery, closure_eligible_ids, _eligible_asset_ids = handlers.service._public_final_delivery_projection(  # noqa: SLF001
+        record.generation_result
+    )
+    assert closure_eligible_ids == eligible_ids
+    output_records = handlers.service.output_store.list_by_job(record.job_id)
+    result_envelope = output_records[0].metadata["capability_execution_envelope"]
+    result_ledger = result_envelope["resolved_constraint_ledger"]
+    closure = {
+        "schema_version": "v3_output_delivery_closure_v1",
+        "job_id": record.job_id,
+        "status": "complete",
+        "review_evidence_receipt_status": "complete",
+        "final_delivery_status": final_delivery["final_delivery_status"],
+        "automatic_delivery_available": final_delivery["automatic_delivery_available"],
+        "eligible_output_ids": sorted(eligible_ids),
+        "execution_fingerprint": result_envelope["execution_fingerprint"],
+        "envelope_id": result_envelope["envelope_id"],
+        "ledger_id": result_ledger["ledger_id"],
+        "outputs": [
+            {
+                "output_id": item.output_id,
+                "job_id": item.job_id,
+                "asset_id": item.asset_id,
+                "candidate_id": item.candidate_id,
+                "content_sha256": item.metadata["content_sha256"],
+            }
+            for item in output_records
+        ],
+    }
+    closure_valid = handlers.service._valid_output_store_job_closure(  # noqa: SLF001
+        closure,
+        job_id=record.job_id,
+        records=output_records,
+    )
+    assert closure_valid[0], closure_valid
+    handlers.service.output_store.save_job_closure(record.job_id, closure)
+
+    product_status = handlers.get_job(record.job_id)
+    project_outputs = handlers.get_project_outputs(project_id=project["project_id"], compact=True)["items"]
+    exported = handlers.service.export_job(record.job_id).model_dump(mode="json")
+
+    assert set(product_status["metadata"]["post_generation_review"]["recommended_output_ids"]) == eligible_ids
+    assert {item["output_id"] for item in project_outputs} == eligible_ids
+    assert {item["output_id"] for item in exported["export_package"]["files"]} == eligible_ids
+    assert {item["output_id"] for item in exported["manifest"]["generated_assets"]} == eligible_ids
+
+
+@pytest.mark.parametrize("mixed_winner_status", [False, True])
+def test_doc280_retry_winners_match_product_project_and_formal_export_consumers(
+    tmp_path,
+    mixed_winner_status: bool,
+) -> None:
+    handlers, project, record = _ecommerce_record(tmp_path, key="doc280-retry-consumer-equality")
+    result = record.planning_result.model_copy(deep=True)
+    intents = handlers.service._ecommerce_output_intents(record)  # noqa: SLF001
+    assert len(intents) == 2
+    roles = [str(item["asset_id"]) for item in intents]
+    attempt_rows = {
+        "initial": [
+            {"output_id": _doc280_output_id("retry-old-a"), "asset_id": roles[0], "status": "warning"},
+            {"output_id": _doc280_output_id("retry-old-b"), "asset_id": roles[1], "status": "fail_final"},
+        ],
+        "retry": [
+            {"output_id": _doc280_output_id("retry-new-a"), "asset_id": roles[0], "status": "fail_final"},
+            {
+                "output_id": _doc280_output_id("retry-new-b"),
+                "asset_id": roles[1],
+                "status": "fail_final" if mixed_winner_status else "warning",
+            },
+        ],
+    }
+    envelope = result.metadata["capability_execution_envelope"]
+    base_asset = result.asset_pack.assets[0]
+
+    def packaged_assets(rows: list[dict[str, str]]) -> list[Any]:
+        assets = []
+        for row in rows:
+            output_id = row["output_id"]
+            candidate_id = f"candidate_{output_id}"
+            output = handlers.service.output_store.save_base64_output(
+                job_id=record.job_id,
+                candidate_id=candidate_id,
+                asset_id=row["asset_id"],
+                provider="local-retry-fixture",
+                model="offline",
+                encoded_image=_png_base64(),
+                output_id=output_id,
+                metadata={
+                    "project_id": project["project_id"],
+                    "capability_execution_envelope": envelope,
+                    "final_delivery": {
+                        "delivery_gate_applies": True,
+                        "final_delivery_status": "ready" if row["status"] in {"pass", "warning"} else "withheld_review_failure",
+                        "automatic_delivery_available": row["status"] in {"pass", "warning"},
+                        "manual_confirmation_required": False,
+                    },
+                },
+            )
+            assets.append(
+                base_asset.model_copy(
+                    update={
+                        "asset_id": row["asset_id"],
+                        "file_path": output.file_path,
+                        "metadata": {
+                            **dict(base_asset.metadata or {}),
+                            "selected_candidate_id": candidate_id,
+                            "candidate_metadata": {
+                                "candidate_id": candidate_id,
+                                "output_id": output_id,
+                                "download_url": output.download_url,
+                                "preview_url": output.preview_url,
+                                "thumbnail_url": output.thumbnail_url,
+                                "width": output.width,
+                                "height": output.height,
+                                "mime_type": output.mime_type,
+                                "format": "png",
+                                "v3_owned_output": True,
+                            },
+                        },
+                    }
+                )
+            )
+        return assets
+
+    initial_package = _retry_review_package(record.job_id, attempt_rows["initial"], "initial_attempt")
+    retry_package = _retry_review_package(record.job_id, attempt_rows["retry"], "retry_attempt")
+    initial_package["user_visible_summary"] = ["The first attempt included one failed image."]
+    retry_package["user_visible_summary"] = ["The latest retry still has an unresolved image failure."]
+    initial = result.model_copy(
+        update={
+            "asset_pack": result.asset_pack.model_copy(update={"assets": packaged_assets(attempt_rows["initial"])}),
+            "metadata": {**dict(result.metadata), "post_generation_review_package": initial_package},
+        }
+    )
+    retry = result.model_copy(
+        update={
+            "asset_pack": result.asset_pack.model_copy(update={"assets": packaged_assets(attempt_rows["retry"])}),
+            "metadata": {
+                **dict(result.metadata),
+                "visual_auto_retry_attempt": 1,
+                "post_generation_review_package": retry_package,
+            },
+        }
+    )
+    merged = handlers.service._merge_retry_generation_result(  # noqa: SLF001
+        initial,
+        retry,
+        records=[],
+        max_attempts=1,
+    )
+    preferred = handlers.service._apply_reviewed_delivery_preference(merged)  # noqa: SLF001
+    record.generation_result = preferred
+    record.status = ProductJobStatusValue.GENERATED
+    handlers.service.job_store.save(record)
+    winner_ids = (
+        {_doc280_output_id("retry-old-a"), _doc280_output_id("retry-new-b")}
+    )
+    eligible_winner_ids = (
+        {_doc280_output_id("retry-old-a")}
+        if mixed_winner_status
+        else winner_ids
+    )
+    assert handlers.service._public_final_delivery_projection(preferred)[1] == eligible_winner_ids  # noqa: SLF001
+    assert handlers.service._persist_output_store_job_closure(record, preferred)  # noqa: SLF001
+
+    product_status = handlers.get_job(record.job_id)
+    project_outputs = handlers.get_project_outputs(project_id=project["project_id"], compact=True)["items"]
+    exported = handlers.service.export_job(record.job_id).model_dump(mode="json")
+
+    assert set(product_status["metadata"]["post_generation_review"]["recommended_output_ids"]) == eligible_winner_ids
+    assert product_status["metadata"]["review_disposition"] == _expected_disposition(
+        "final_delivery_available"
+    )
+    assert {item["output_id"] for item in project_outputs} == eligible_winner_ids
+    expected_export_ids = eligible_winner_ids if mixed_winner_status else winner_ids
+    assert {item["output_id"] for item in exported["export_package"]["files"]} == expected_export_ids
+    assert {item["output_id"] for item in exported["manifest"]["generated_assets"]} == expected_export_ids
+    assert {item["review_status"] for item in exported["manifest"]["generated_assets"]} == {"warning"}
+    if mixed_winner_status:
+        assert {item["status"] for item in product_status["metadata"]["post_generation_review"]["review_items"]} == {
+            "warning",
+            "fail_final",
+        }
+
+
+def test_doc280_extra_append_only_output_without_matching_closure_fails_closed(tmp_path) -> None:
+    handlers, _project, record = _ecommerce_record(tmp_path, key="doc280-extra-output-without-closure")
+    output = _persist_generated_review_state(record, handlers, state="final_delivery_available")
+    assert output is not None
+    handlers.service.output_store.save_base64_output(
+        job_id=record.job_id,
+        candidate_id="candidate-unclosed-extra",
+        asset_id="asset-unclosed-extra",
+        provider="local-test",
+        model="local-test",
+        encoded_image=_png_base64(),
+        output_id=_doc280_output_id("unclosed-extra"),
+        metadata={"final_delivery": _final_delivery_facts("final_delivery_available")},
+    )
+
+    public_job = handlers.get_job(record.job_id)
+
+    assert "review_disposition" not in public_job["metadata"]
 
 
 @pytest.mark.parametrize(
