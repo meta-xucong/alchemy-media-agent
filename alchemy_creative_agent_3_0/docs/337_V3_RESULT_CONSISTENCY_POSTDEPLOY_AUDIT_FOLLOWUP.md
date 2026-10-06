@@ -255,3 +255,53 @@ Frozen source/test SHA-256 values checked by the auditor:
 | `tests/v3_frontend_terminal_contract.test.mjs` | `47558E7C4A65C339FE45EC1BE3C13343F3F8979A91FCDF795E8B948D03D46B7A` |
 
 The auditor's Doc337 input had SHA-256 `6F8D4910DA15157BDFA52F8896FF6567B7752CF36493E213D8670C8B9AB049B1`; this receipt is appended afterward, so the current document hash necessarily differs. **ROUTE_UNVERIFIED:** no real HTTP dispatch was made; the Photography regression uses the service-level trusted continuation seam, and the route-handler-to-service link was checked statically. Browser DOM/toast wiring was not separately exercised by the auditor. No real model/image call, deployment, or VPS state change occurred. Integration/release acceptance remains separate from this isolated feature-worktree PASS.
+
+## 9. Mobile partial-delivery notice and live image check
+
+### 9.1 Correction model
+
+Observed mismatch: the mobile generation path treats a successful terminal job with one formally eligible output as ordinary completion, even when `metadata.final_delivery.partial_delivery=true` says another requested image was held. The image set is correct; the missing behavior is an honest terminal notice.
+
+Authority: the existing backend `metadata.final_delivery` projection. A formal partial notice requires `partial_delivery=true`, automatic delivery available, and a positive `final_delivery_output_count`. Keep terminal status and visible outputs unchanged. For the formal partial case, show the exact eligible count and state that remaining requested images were withheld or require manual confirmation. Ordinary full success, review-held delivery, and terminal failure keep their current messages.
+
+Minimal fix: add a small V3 mobile notice helper beside the existing final-delivery projection, use it in both progress and status text after terminal failure/review-held checks, and test it with the backend response shape. No backend/schema change, shared status framework, or V1/V2 change.
+
+### 9.2 Regression and acceptance
+
+Add a Node VM regression that feeds a terminal `generated` payload containing two reviewed outputs, `partial_delivery=true`, automatic delivery enabled, and a final-delivery count of one. Assert the production mobile notice helper reports one eligible image and that the mobile completion path uses that message for progress and status. Also assert full delivery and review-held states do not get mislabeled partial.
+
+After regression passes and an independent A1 review accepts the exact candidate, run one real V3 image request from this source revision using the Doc336 boundary: one isolated test project/job, `require_real_images=true`, hybrid pixel review requested, no uploaded assets or Brand Memory update, maximum one requested image, preserve the evidence folder, and no deployment or cleanup. Require a real provider route plus a verified pixel-review receipt and `final_delivery=ready`; otherwise record the exact gap and do not claim complete live visual-review acceptance. This one image verifies the generation path only; it is not a live test of the mobile browser's rendering or every generation mode.
+
+### 9.3 Implementation, independent review, and real image receipt
+
+The mobile helper now reads the formal `metadata.final_delivery` projection and returns a partial-delivery notice only when the backend explicitly marks partial delivery, automatic delivery is available, and the eligible count is positive. The terminal completion path uses that message in both progress and status text, after failure and review-held handling. It does not change output rendering or selection.
+
+Regression results on the exact candidate:
+
+- Red baseline: `node --test tests/v3_mobile_terminal_contract.test.mjs` failed before the helper was added.
+- Node terminal suites: **7 passed** (`tests/v3_frontend_terminal_contract.test.mjs` and `tests/v3_mobile_terminal_contract.test.mjs`).
+- Mobile JavaScript syntax check: passed.
+- V3 frontend generation-mode Python contract: **11 passed**.
+- `git diff --check`: passed.
+
+An independent read-only A1 reviewer returned **PASS** for the mobile change. The reviewer verified that the partial notice uses the backend's formal final-delivery authority, that terminal failure and review-held branches retain precedence, and that output rendering is unchanged. The reviewer ran the mobile Node regression (**2 passed**), `node --check`, and `git diff --check`. The combined 7-case Node suite and 11-case Python suite above were run by the implementation agent, not independently by the auditor. Frozen A1 hashes:
+
+| File | SHA-256 |
+|---|---|
+| `src_skeleton/app/mobile_static/mobile.js` | `3AF5917284A5D7A0F880EF8E601969A6B127D79FCC645EED0F3E3B461202DDE9` |
+| `tests/v3_mobile_terminal_contract.test.mjs` | `1D9DA89B41FE9D29569FFD5E0B1647878CD7BDC197F9DF6148F23D66DF81D4FE` |
+| Auditor's Doc337 input | `C8E42A3CBCD5179E620FCAB8198BC0311CFC6AA2E85BE4AE5F81433E394DDDC9` |
+
+One real image was generated from the feature worktree before integration. No mock output was used. The runtime read the existing local `.env` in process only; no secret value was printed or copied. The run created one isolated project and one job, requested one image with `require_real_images=true`, disabled visual retry, used no uploaded assets, made no selection or Brand Memory update, and made no deployment or cleanup.
+
+| Check | Result |
+|---|---|
+| Source under test | `codex/v3-result-consistency-remediation` at `fc8dd60801119537331ff6bdc78692b56dd7c72e` plus the mobile working-tree change reviewed above |
+| Job / result | `job_0615a4ed3e`, status `generated`; final delivery `ready`, automatic delivery available, 1 reviewed / 1 delivered |
+| Provider | `openai_gpt_image`, model `gpt-image-2`, strategy `default_image_provider`; mock flag false |
+| Output | `v3_output_34c91ca32ddf435bbdb9`, 1024×1536 PNG, 2,102,349 bytes, SHA-256 `a3778e97f67e82e5b16de39ddc2ff5f10785187859757086f88b5d7a1087d1af` |
+| Review evidence | A project visual-review event was persisted, recommended output set contains the same output, and durable closure receipt is `complete`; however, the event's `inspection_count` is null and a verified hybrid pixel-inspection status is not recoverable from durable evidence |
+| Human visual check | Lamp, ivory ceramic, brass stem, limestone plinth, and natural interior are present; no visible text/logo or obvious rendering defect |
+| Evidence root | `C:\Users\T14S\AppData\Local\Temp\alchemy-v3-mobile-terminal-real-774529aa`; image, project records, closure, and `acceptance_receipt.json` are preserved |
+
+The real-provider generation and ready-delivery checks pass for this single output. The durable record does **not** prove that a hybrid pixel inspection completed, so this run is not claimed as full live visual-review acceptance. No mobile browser DOM/toast session was run; mobile behavior is covered by the actual-helper Node regression and source review. The real image check does not cover other generation modes or V1/V2 paths.

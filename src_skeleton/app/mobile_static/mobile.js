@@ -5738,6 +5738,7 @@ async function generateMobileV3Job() {
     });
     if (ecommerceSession && !mobileV3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     const deliveryWithheld = mobileV3JobDeliveryWithheld(finalJob);
+    const partialDeliveryNotice = mobileV3FormalPartialDeliveryNotice(finalJob);
     const terminalFailure = mobileV3IsTerminalJob(finalJob);
     if (terminalFailure) mobileV3SettleEcommerceTerminalReceipt(finalJob);
     setMobileV3Progress(
@@ -5746,14 +5747,14 @@ async function generateMobileV3Job() {
         ? "本次没有交付图片，项目记录已保留。"
         : deliveryWithheld
           ? mobileV3JobFinalDeliveryNotice(finalJob)
-          : "生成完成，已刷新项目图片",
+          : partialDeliveryNotice || "生成完成，已刷新项目图片",
     );
     updateMobileV3Status(
       terminalFailure
         ? mobileV3EcommerceTerminalMessage(finalJob)
         : deliveryWithheld
           ? mobileV3JobFinalDeliveryNotice(finalJob)
-          : "生成完成",
+          : partialDeliveryNotice || "生成完成",
     );
   } catch (error) {
     if (ecommerceSession && !mobileV3EcommerceGenerationSessionOwns(ecommerceSession)) return;
@@ -7296,6 +7297,18 @@ function mobileV3JobDeliveryWithheld(job = mobileV3State.currentJob) {
     projection?.delivery_gate_applies === true
       && projection?.automatic_delivery_available !== true,
   );
+}
+
+function mobileV3FormalPartialDeliveryNotice(job = mobileV3State.currentJob) {
+  const projection = mobileV3FinalDeliveryProjection(job);
+  const eligibleCount = Number(projection?.final_delivery_output_count || 0);
+  if (
+    projection?.partial_delivery !== true
+    || projection?.automatic_delivery_available !== true
+    || !Number.isSafeInteger(eligibleCount)
+    || eligibleCount <= 0
+  ) return "";
+  return `已交付 ${eligibleCount} 张合格图片；其余图片未通过审核或需要人工确认。`;
 }
 
 function mobileV3JobReviewLines(job = mobileV3State.currentJob) {
