@@ -1,6 +1,6 @@
 # Doc337 — V3 Result Consistency Post-Deployment Audit Follow-up
 
-Status: **A1 follow-up corrections implemented and independently audited PASS; the full affected Python suite (including both Chromium browser cases), 20 Photography tests, 5 Node VM tests, and 7 VPS release guards pass. Integrated-main acceptance and release are pending.**
+Status: **A1 follow-up corrections implemented and independently audited PASS; exact integrated-main acceptance passes. GitHub push and VPS release remain pending.**
 
 Baseline: `fb2dae1943f3e95402e94b006f65b079b6edec0a` (`main`, equal to `origin/main`).
 Prior user files and other active worktrees are preserved.
@@ -168,6 +168,18 @@ Remaining implementation limit: the reviewer found no ordinary Generic retry pat
 The two parameterized browser session-race cases were run directly using the existing local Playwright Chromium cache: **2 passed, 23 deselected** in that focused invocation. Then the complete affected Python command from §7 ran without exclusions: **342 passed in 187.15s**. This includes both browser cases.
 
 The current feature-worktree evidence is therefore: affected Python **342 passed**; Photography mainline/production activation **20 passed**; desktop Node VM **5 passed**; VPS release runtime guards **7 passed**; `node --check` and `git diff --check` passed. The independent A1 audit returned PASS against the frozen source/test manifest. The remaining required gates are latest-main synchronization, exact integrated-main verification, and then the already-authorized GitHub/VPS release sequence.
+
+### 7.9 Exact integrated-main acceptance
+
+The accepted feature commit `80ad30a08ab5a2de4e20fec414c57b29c1235033` was fast-forwarded into the unique main checkout at `D:\AI\Alchemy Media Agent System`. On that main checkout, before any release push:
+
+- Full affected Python suite, including both Playwright Chromium cases: **342 passed in 310.96s**, no deselections.
+- Photography mainline and production-activation suites: **20 passed in 109.26s**.
+- Desktop terminal Node VM: **5 passed**; `node --check src_skeleton/app/static/app.js` passed.
+- VPS release runtime guards: **7 passed**.
+- `git diff --check` passed.
+
+All code and test files match the A1-audited manifest. The main checkout also contains one pre-existing untracked user document, preserved untouched. The next action is to confirm `origin/main` has not advanced, then push this accepted main revision and continue the already-authorized guarded VPS release.
 
 Frozen A1 candidate manifest (SHA-256):
 
