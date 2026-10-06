@@ -193,3 +193,65 @@ Frozen A1 candidate manifest (SHA-256):
 | `alchemy_creative_agent_3_0/tests/test_v3_doc321_review_authority.py` | `93A800DF1F2C283657D383123EC5D32230F3B3A98C35D0075DA7E646C6B451F1` |
 | `src_skeleton/app/static/app.js` | `34E91FD9A0CCA3D3C44E890EF4FE4A6B068FEF9289DF302F45A29BEE2C5F6800` |
 | `tests/v3_frontend_terminal_contract.test.mjs` | `A018E65A879E8E768ECCFCC61D0D6C25CC6369F136C293AEF1A14D6883CB88EC` |
+
+## 8. Follow-up audit on baseline `5a249d60`
+
+### 8.1 Findings and authority
+
+This follow-up is limited to the two new residual findings reported against `5a249d60b9a57e62acd2c1b1ddca1947f65eaee7`. It does not reopen the earlier seven-item scope or change V1/V2 behavior.
+
+**D/I/A:** D0 because Docs329/331 and the existing formal delivery projection define the expected behavior; I2 because the second finding crosses provider-attempt history, per-role winner selection, final delivery, and Project output reconciliation; A1 because both findings concern cross-surface/retry invariants.
+
+| Finding | Owning layer and authority | Minimal correction model |
+|---|---|---|
+| Desktop completion calls `v3JobHasRecoverablePartialDelivery` without the request's `expectedCount`. The helper also compares visible output count to its inferred default before checking the backend's formal partial-delivery receipt. | V3 desktop terminal projection. A positive `final_delivery_output_count` with `partial_delivery=true` and automatic delivery enabled is authoritative; the request count is supplemental for legacy recovery heuristics. | Pass the completion's `expectedCount` to the helper. After requiring settled status and visible output, recognize the formal backend partial receipt before applying the expected-count heuristic. Keep legacy partial-recovery checks subject to the existing count comparison. Test the same formal response both with `expectedCount=2` and with the count omitted. |
+| Photography may select an earlier, certified winner after the latest provider attempt for that role failed, but the role terminal summary keeps the latest failed status/error and marks the project incomplete. | V3 Product role projection. The exact preferred output plus its own eligible inspection/resolution/evidence receipt determines the effective final role; append-only `specialized_role_execution` and retry records remain the authority for attempt history. | Resolve the winning inspection and its output/asset binding first. Only when that exact winner is in `_public_final_delivery_projection`'s eligible output and asset sets should the projected role take generated/certified status and clear active error fields. Derive `missing_role_keys` after that resolution. Preserve the failed retry in raw attempt history. Pending or ambiguous winners must remain withheld. |
+
+### 8.2 Required regressions and non-goals
+
+1. Node VM: a settled generated job with one visible/formally eligible image and `final_delivery.partial_delivery=true` must show “已交付 1 张合格图片” both when `expectedCount=2` reaches completion and when it is omitted. Include a guard proving completion forwards an explicitly supplied count.
+2. Offline Photography flow: produce three initial role outputs where one retryable review failure triggers retry; on that retry, the provider fails for a role whose old output was eligible, while the other roles succeed and pass review. The final task, role summary, `asset_series`, final delivery, and Project outputs must contain all three winning outputs; the role summary must bind the old candidate's pass evidence and show generated/certified. The raw latest-attempt record must still show that provider failure and retain candidate lineage.
+3. Preserve existing permanent role failure behavior: if a role has no eligible previous winner, it remains incomplete and delivery stays blocked.
+
+No public schema, new status framework, retry policy, review threshold, provider behavior, historical cleanup, real provider/model call, deployment, or V1/V2 edit is in scope.
+
+### 8.3 Verification and release gates
+
+Add both regressions first and record their failing baseline result. Then implement the bounded corrections, run focused tests and the affected suite, freeze the exact candidate, and obtain an independent read-only A1 audit. Integrate/push only after exact-main tests and audit pass. This follow-up request does not itself authorize VPS deployment; no remote action is part of this correction.
+
+### 8.4 Bounded implementation and verification
+
+Both new regressions failed against the unmodified `5a249d60` baseline:
+
+- Desktop formal-partial Node VM case returned `failed` instead of `completed` with the one-image partial-delivery notice.
+- Three-role offline Photography flow returned `blocked`, although the review package had three eligible outputs and Project output storage had all three winners.
+
+The desktop helper now accepts the formal backend partial receipt before its legacy expected-count inference, and `completeV3GeneratedJob` forwards its request `expectedCount`. The Node regression covers both an explicit count of two and an omitted count and observes the forwarded helper argument.
+
+Photography role projection now consults the existing `_public_final_delivery_projection` output/asset sets. When the role's exact preferred inspection belongs to those eligible sets, the effective public role is generated from that winner and its receipt, with attempt-local failure fields omitted from the winner projection. Raw `specialized_role_execution` is left intact and continues to retain the latest provider failure and previous candidate lineage. A permanent failure without an eligible earlier winner remains blocked.
+
+Verification on the isolated feature worktree:
+
+- Photography mainline and production-activation suites: **21 passed**.
+- Affected cross-module Python suite from §7.9: **342 passed in 354.71s**, including the browser cases present in that command.
+- Desktop terminal Node VM: **5 passed**.
+- JavaScript syntax check and `git diff --check`: passed.
+- VPS release runtime guards (`tests/test_vps_release_runtime.py`): **7 passed**.
+- The new red/green regressions were also run individually; each failed before the implementation and passed afterward.
+
+No actual image/model provider, external API, GitHub push, or VPS deployment was used. Independent A1 review of the exact frozen diff passed; exact-main integration acceptance and any subsequent release remain separate gates and are not claimed here.
+
+### 8.5 Independent A1 review receipt
+
+An independent read-only A1 audit of the frozen §8 candidate returned **PASS**. The auditor found no blocking issue in the two fixes, checked that only the five scoped files changed, and confirmed that the permanent-failure/no-eligible-winner path remains blocked. The auditor independently ran the Node VM suite (**5 passed**), the retry-provider-failure and permanent-role-failure Photography tests (**2 passed, 13 deselected**), and `git diff --check`. The 342-case affected Python suite, 21-case Photography suite, JavaScript syntax check, and 7 release-guard tests in §8.4 are author-run evidence and were not rerun by the auditor.
+
+Frozen source/test SHA-256 values checked by the auditor:
+
+| File | SHA-256 |
+|---|---|
+| `alchemy_creative_agent_3_0/app/product_api/service.py` | `0BEFBF42083AB85E2ED7AF48597C6ABC9843380B93C74A9C891E64EDDA119BFA` |
+| `alchemy_creative_agent_3_0/tests/test_v3_photography_mainline_004.py` | `30444CE8809F76322D161260C0B255C7BCE45F43E9A53991CC54B405C3C270C6` |
+| `src_skeleton/app/static/app.js` | `57766E1254ADE0DF809EA2327EF71F5E98C9C0E551C7F90DB8640A82179354CC` |
+| `tests/v3_frontend_terminal_contract.test.mjs` | `47558E7C4A65C339FE45EC1BE3C13343F3F8979A91FCDF795E8B948D03D46B7A` |
+
+The auditor's Doc337 input had SHA-256 `6F8D4910DA15157BDFA52F8896FF6567B7752CF36493E213D8670C8B9AB049B1`; this receipt is appended afterward, so the current document hash necessarily differs. **ROUTE_UNVERIFIED:** no real HTTP dispatch was made; the Photography regression uses the service-level trusted continuation seam, and the route-handler-to-service link was checked statically. Browser DOM/toast wiring was not separately exercised by the auditor. No real model/image call, deployment, or VPS state change occurred. Integration/release acceptance remains separate from this isolated feature-worktree PASS.

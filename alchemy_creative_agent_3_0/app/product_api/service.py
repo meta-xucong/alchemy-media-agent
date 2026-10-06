@@ -5311,6 +5311,9 @@ class V3ProductApiService:
             if isinstance(preference, dict)
             else []
         )
+        _final_delivery, eligible_output_ids, eligible_asset_ids = self._public_final_delivery_projection(
+            generation_result
+        )
         preferred_inspections_by_asset: dict[str, list[dict[str, Any]]] = {}
         if preferred_output_ids and isinstance(inspections, list):
             for inspection in inspections:
@@ -5339,8 +5342,6 @@ class V3ProductApiService:
         for role_key in expected_role_keys:
             item = dict(by_role.get(role_key) or {})
             status = str(item.get("status") or "missing").strip().lower()
-            if status != "generated":
-                missing_role_keys.append(role_key)
             role_asset_id = str(item.get("asset_id") or "").strip()
             role_candidate_ids = self._dedupe_strings(
                 [
@@ -5362,12 +5363,22 @@ class V3ProductApiService:
             )
             if winning_inspection is not None:
                 winning_candidate_id = str(winning_inspection.get("candidate_id") or "").strip()
+                winning_output_id = str(winning_inspection.get("output_id") or "").strip()
+                winning_asset_id = str(winning_inspection.get("asset_id") or "").strip()
                 if winning_candidate_id:
                     item["candidate_id"] = winning_candidate_id
-                item["asset_id"] = str(winning_inspection.get("asset_id") or role_asset_id).strip()
+                item["asset_id"] = winning_asset_id or role_asset_id
                 inspection = winning_inspection
+                if winning_output_id in eligible_output_ids and winning_asset_id in eligible_asset_ids:
+                    # The selected, receipt-backed winner is the effective role result.
+                    # Keep the latest failed attempt only in raw append-only execution history.
+                    status = "generated"
+                    for field in ("error_type", "error_message", "provider_failure"):
+                        item.pop(field, None)
             else:
                 inspection = inspections_by_candidate.get(str(item.get("candidate_id") or "").strip())
+            if status != "generated":
+                missing_role_keys.append(role_key)
             review_mode = str(inspection.get("mode") or "").strip().lower() if inspection else ""
             review_status = str(inspection.get("status") or "").strip().lower() if inspection else ""
             verification_state = str(inspection.get("verification_state") or "").strip().lower() if inspection else ""

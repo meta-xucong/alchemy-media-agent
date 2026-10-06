@@ -5257,8 +5257,6 @@ function v3JobHasRecoverablePartialDelivery(job = v3State.currentJob, expectedCo
   if (!job || !v3JobDeliverySettled(job)) return false;
   const visibleCount = v3JobVisibleImageCount(job);
   if (visibleCount <= 0) return false;
-  const expectedVisibleCount = v3ExpectedImageCountForJob(job, expectedCount);
-  if (visibleCount >= expectedVisibleCount) return false;
   const metadata = job?.metadata || {};
   const finalDelivery = v3FinalDeliveryProjection(job);
   const finalDeliveryOutputCount = Number(finalDelivery?.final_delivery_output_count || 0);
@@ -5268,10 +5266,11 @@ function v3JobHasRecoverablePartialDelivery(job = v3State.currentJob, expectedCo
       && Number.isFinite(finalDeliveryOutputCount)
       && finalDeliveryOutputCount > 0,
   );
+  if (formallyPartial) return true;
+  const expectedVisibleCount = v3ExpectedImageCountForJob(job, expectedCount);
+  if (visibleCount >= expectedVisibleCount) return false;
   const partialRecovery = metadata.partial_generation_recovery;
   return Boolean(
-    formallyPartial
-    ||
     (partialRecovery && typeof partialRecovery === "object" && partialRecovery.status === "partial_output_preserved")
     || metadata.restored_from_output_store
     || metadata.recovered_from_project_outputs
@@ -10550,7 +10549,7 @@ async function completeV3GeneratedJob(
   v3SettleEcommerceTerminalReceipt(generated);
   v3State.activeProjectStep = "compose";
   syncV3ProjectOutputsFromPayload(generated);
-  const partialRecovery = v3JobHasRecoverablePartialDelivery(generated);
+  const partialRecovery = v3JobHasRecoverablePartialDelivery(generated, expectedCount);
   const deliveryWithheld = v3JobDeliveryWithheld(generated);
   const finalDelivery = v3FinalDeliveryProjection(generated);
   const formalPartialDelivery = partialRecovery && finalDelivery?.partial_delivery === true;

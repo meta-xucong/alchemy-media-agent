@@ -44,16 +44,29 @@ class _RecordingProductionProvider(GenerationProvider):
 
     provider_name = "recording_production_provider"
 
-    def __init__(self, output_store: V3GeneratedOutputStore, *, fail_role: str | None = None) -> None:
+    def __init__(
+        self,
+        output_store: V3GeneratedOutputStore,
+        *,
+        fail_role: str | None = None,
+        fail_role_on_attempt: int | None = None,
+    ) -> None:
         self.output_store = output_store
         self.fail_role = fail_role
+        self.fail_role_on_attempt = fail_role_on_attempt
         self.requests: list[GenerationRequest] = []
+        self.role_attempts: dict[str, int] = {}
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         self.requests.append(request.model_copy(deep=True))
         role = dict(request.metadata.get("mode_role_recipe") or {})
         role_key = str(role.get("role_key") or "")
-        if role_key == self.fail_role:
+        self.role_attempts[role_key] = self.role_attempts.get(role_key, 0) + 1
+        should_fail_role = role_key == self.fail_role and (
+            self.fail_role_on_attempt is None
+            or self.role_attempts[role_key] == self.fail_role_on_attempt
+        )
+        if should_fail_role:
             error = ProviderRuntimeError(
                 f"simulated provider failure for {role_key}",
                 provider=self.provider_name,
@@ -126,10 +139,15 @@ def _handlers_with_recording_production_provider(
     tmp_path: Path,
     *,
     fail_role: str | None = None,
+    fail_role_on_attempt: int | None = None,
 ) -> tuple[V3ProductRouteHandlers, _RecordingProductionProvider]:
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")
     service = photography_test_service(output_store=output_store)
-    provider = _RecordingProductionProvider(output_store, fail_role=fail_role)
+    provider = _RecordingProductionProvider(
+        output_store,
+        fail_role=fail_role,
+        fail_role_on_attempt=fail_role_on_attempt,
+    )
     service.scenario_runtime.generation_router = GenerationRouter(provider=provider)
     return V3ProductRouteHandlers(service=service, project_store=PersistentProjectStore(tmp_path / "projects")), provider
 
@@ -345,6 +363,92 @@ def test_single_hero_retry_rebinds_the_frozen_role_to_the_certified_retry_winner
     assert project_output_ids == winner_ids
     assert generated["metadata"]["final_delivery"]["automatic_delivery_available"] is True
     assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 1
+
+
+def test_professional_set_retry_provider_failure_keeps_previous_certified_role_winner(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, provider = _handlers_with_recording_production_provider(
+        tmp_path,
+        fail_role="session_hero",
+        fail_role_on_attempt=2,
+    )
+
+    class RetryFailureVisionProvider:
+        provider_name = "retry_failure_photography_vision_fixture"
+
+        def __init__(self) -> None:
+            self.payloads = [
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.60}},
+                {
+                    "status": "fail_retryable",
+                    "confidence": 0.98,
+                    "issue_codes": ["visible_text_artifact"],
+                    "scores": {"overall": 0.10},
+                },
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.60}},
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.95}},
+                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.95}},
+            ]
+            self.calls = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def inspect(self, _resolution, *, metadata=None) -> dict:
+            payload = self.payloads[self.calls]
+            self.calls += 1
+            return {**payload, "human_naturalness_verdict": {"status": "pass", "issue_codes": []}}
+
+    vision_provider = RetryFailureVisionProvider()
+    handlers.service.vision_inspector = VisionOutputInspector(vision_provider=vision_provider)
+    project, root = _project_and_root(handlers, require_real_images=True)
+
+    generated = _generate_project_job(
+        handlers,
+        project,
+        root,
+        continuation=GenerateContinuation(job_id=root["job_id"], max_visual_retry_attempts=1),
+    )
+
+    assert generated["status"] == "generated", generated.get("metadata", {}).get("specialized_execution_summary")
+    assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 3
+    assert len(provider.requests) == 6
+    assert provider.role_attempts["session_hero"] == 2
+    record = handlers.service.get_job_record(root["job_id"])
+    assert record is not None
+    role_summaries = record.request.metadata["specialized_execution_summary"]["roles"]
+    hero = next(item for item in role_summaries if item["role_key"] == "session_hero")
+    assert hero["candidate_id"] == "candidate_session_hero_1"
+    assert hero["status"] == "generated"
+    assert hero["certification_state"] == "certified"
+    assert hero["review_status"] == "pass"
+    raw_hero = next(
+        item
+        for item in record.generation_result.metadata["specialized_role_execution"]["roles"]
+        if item["role_key"] == "session_hero"
+    )
+    assert raw_hero["status"] == "failed"
+    assert raw_hero["provider_failure"]
+    assert "candidate_session_hero_1" in raw_hero["previous_candidate_ids"]
+    preference = record.generation_result.metadata["reviewed_delivery_preference"]
+    winner_output_ids = set(preference["preferred_output_ids"])
+    hero_inspection = next(
+        item
+        for item in record.generation_result.metadata["post_generation_review_package"]["inspections"]
+        if item.get("candidate_id") == hero["candidate_id"]
+    )
+    assert hero_inspection["status"] == "pass"
+    assert hero_inspection["output_id"] in winner_output_ids
+    assert {
+        item["output_id"] for item in generated["asset_series"] if item.get("output_id")
+    } == winner_output_ids
+    project_output_ids = {
+        item["output_id"]
+        for item in handlers.get_project_outputs(project_id=project["project_id"])["items"]
+        if item.get("job_id") == root["job_id"] and item.get("output_id")
+    }
+    assert project_output_ids == winner_output_ids
+    assert len(project_output_ids) == 3
 
 
 def test_professional_set_mixed_retry_winners_keep_role_candidate_and_review_binding(monkeypatch, tmp_path) -> None:

@@ -19,6 +19,7 @@ const partialDeliverySource = source.slice(partialStart, partialEnd);
 async function completeWith(job, expectedCount = null) {
   const progress = [];
   const notices = [];
+  const partialExpectedCounts = [];
   const context = {
     v3State: { selectedScenario: "general_creative" },
     els: { v3ProjectSubpage: { hidden: true } },
@@ -47,13 +48,18 @@ async function completeWith(job, expectedCount = null) {
     updateV3Notice: (...args) => notices.push(args),
   };
   vm.runInNewContext(`${partialDeliverySource}\n${completionSource}`, context);
+  const originalPartialCheck = context.v3JobHasRecoverablePartialDelivery;
+  context.v3JobHasRecoverablePartialDelivery = (value, count) => {
+    partialExpectedCounts.push(count);
+    return originalPartialCheck(value, count);
+  };
   await context.completeV3GeneratedJob(
     job,
     [],
     { generatedNotice: "生成成功" },
     { expectedCount },
   );
-  return { progress, notices };
+  return { progress, notices, partialExpectedCounts };
 }
 
 test("failed and not_found jobs with no deliverable never show success", async () => {
@@ -101,27 +107,29 @@ test("partial recovery and review-held delivery stay distinct from full success"
 });
 
 test("formal partial delivery from the backend remains visible as a partial outcome", async () => {
-  const partial = await completeWith(
-    {
-      status: "generated",
-      visibleCount: 1,
-      expectedCount: 2,
-      metadata: {
-        final_delivery: {
-          final_delivery_status: "ready",
-          automatic_delivery_available: true,
-          partial_delivery: true,
-          final_delivery_output_count: 1,
+  for (const expectedCount of [2, null]) {
+    const partial = await completeWith(
+      {
+        status: "generated",
+        visibleCount: 1,
+        metadata: {
+          final_delivery: {
+            final_delivery_status: "ready",
+            automatic_delivery_available: true,
+            partial_delivery: true,
+            final_delivery_output_count: 1,
+          },
         },
       },
-    },
-    2,
-  );
-  assert.equal(partial.progress[0][0], "completed");
-  assert.equal(partial.progress[0][2], "warning");
-  assert.equal(partial.notices[0][1], "warning");
-  assert.match(partial.notices[0][0], /已交付 1 张合格图片/);
-  assert.notEqual(partial.notices[0][0], "生成成功");
+      expectedCount,
+    );
+    assert.equal(partial.progress[0][0], "completed");
+    assert.equal(partial.progress[0][2], "warning");
+    assert.equal(partial.notices[0][1], "warning");
+    assert.match(partial.notices[0][0], /已交付 1 张合格图片/);
+    assert.notEqual(partial.notices[0][0], "生成成功");
+    assert.ok(partial.partialExpectedCounts.includes(expectedCount));
+  }
 });
 
 test("terminal generated payloads without expected outputs do not show success", async () => {
