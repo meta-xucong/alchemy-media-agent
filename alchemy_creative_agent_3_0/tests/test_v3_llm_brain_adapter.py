@@ -1707,6 +1707,7 @@ def test_openai_brain_availability_and_chat_transport_share_default_base(monkeyp
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat")
     monkeypatch.setattr(settings, "openai_base_url", None)
     monkeypatch.setattr(settings, "lab_openai_base_url", None)
     monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
