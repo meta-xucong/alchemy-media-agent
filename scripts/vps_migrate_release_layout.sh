@@ -83,6 +83,34 @@ env_value() {
   sed -n "s/^${key}=//p" "${env_file}" | tr -d '\r' | head -n 1
 }
 
+set_env_default() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+  if ! grep -qE "^${key}=.+$" "${env_file}"; then
+    set_env_value "${env_file}" "${key}" "${value}"
+  fi
+}
+
+ensure_v3_brain_defaults() {
+  local env_file="$1"
+  local setting key value
+  # Keep the V3 route explicit while preserving any non-empty user override.
+  for setting in \
+    "V3_LLM_BRAIN_ENABLED=true" \
+    "V3_LLM_BRAIN_REMOTE_ENABLED=true" \
+    "V3_LLM_BRAIN_PROVIDER=openai" \
+    "V3_LLM_BRAIN_MODEL=gpt-5.6-terra" \
+    "V3_LLM_BRAIN_TRANSPORT=chat_nonstream" \
+    "V3_LLM_BRAIN_TIMEOUT_SECONDS=300" \
+    "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS=550" \
+    "V3_LLM_BRAIN_MAX_TOKENS=20000"; do
+    key="${setting%%=*}"
+    value="${setting#*=}"
+    set_env_default "${env_file}" "${key}" "${value}"
+  done
+}
+
 ensure_access_bridge_secret() {
   local bridge_secret=""
 
@@ -323,6 +351,7 @@ git -C "${REPOSITORY_ROOT}" fetch --prune origin
 git -C "${REPOSITORY_ROOT}" cat-file -e "${TARGET_SHA}^{commit}"
 git -C "${REPOSITORY_ROOT}" worktree add --detach "${candidate}" "${TARGET_SHA}"
 cp -p "${live_env}" "${candidate}/src_skeleton/.env"
+ensure_v3_brain_defaults "${candidate}/src_skeleton/.env"
 
 for release in "${old_release}" "${candidate}"; do
   v2_dir="${release}/custom_media_agent_2_0"

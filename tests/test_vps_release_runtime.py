@@ -157,3 +157,36 @@ def test_both_image_dependency_manifests_declare_httpcore() -> None:
     assert "openai-agents==0.17.4" in v2_requirements
     assert "openai==2.41.0" in v2_requirements
     assert "mcp==1.27.2" in v2_requirements
+
+
+def test_v3_brain_route_is_explicit_in_all_runtime_bootstraps() -> None:
+    root = Path(__file__).parents[1]
+    workflow = (root / ".github" / "workflows" / "deploy-vps.yml").read_text(encoding="utf-8")
+    bootstrap = (root / "scripts" / "bootstrap_env.ps1").read_text(encoding="utf-8")
+    direct_deploy = (root / "scripts" / "deploy_vps.sh").read_text(encoding="utf-8")
+    migration = (root / "scripts" / "vps_migrate_release_layout.sh").read_text(encoding="utf-8")
+    example = (root / "src_skeleton" / ".env.example").read_text(encoding="utf-8")
+
+    expected = {
+        "V3_LLM_BRAIN_ENABLED": "true",
+        "V3_LLM_BRAIN_REMOTE_ENABLED": "true",
+        "V3_LLM_BRAIN_PROVIDER": "openai",
+        "V3_LLM_BRAIN_MODEL": "gpt-5.6-terra",
+        "V3_LLM_BRAIN_TRANSPORT": "chat_nonstream",
+        "V3_LLM_BRAIN_TIMEOUT_SECONDS": "300",
+        "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS": "550",
+        "V3_LLM_BRAIN_MAX_TOKENS": "20000",
+    }
+    for key, value in expected.items():
+        assert example.count(f"{key}=") == 1
+        assert f"{key}={value}" in example
+        assert f'"{key}={value}"' in bootstrap
+        assert f"{key}=${{{key}:-{value}}}" in direct_deploy
+        assert f"{key}: ${{{{ vars.{key} || '{value}' }}}}" in workflow
+        assert f"{key}=${key}" in workflow
+        assert f'"{key}={value}"' in migration
+    migration_copy = migration.index('cp -p "${live_env}" "${candidate}/src_skeleton/.env"')
+    migration_brain_defaults = migration.index('ensure_v3_brain_defaults "${candidate}/src_skeleton/.env"')
+    migration_build = migration.index('docker build -t alchemy-media-agent:latest')
+    assert migration_copy < migration_brain_defaults < migration_build
+    assert 'grep -qE "^${key}=.+$"' in migration
