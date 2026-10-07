@@ -470,13 +470,12 @@ Regression evidence on the local checkout:
   sidecar, recovery reuse, and queued-cancellation failures. After the fixes,
   the focused Python output/store/project/route set passed **47 tests** after
   adding the batch-failure fallback and explicit 4098-row completeness cases.
-- The expanded adjacent Python set ran **201 tests**. The implementation passed
-  196 in that run; five existing review-projection fixtures still patched only
-  `get_job()` and therefore bypassed the production `get_job_read_snapshot()`
-  boundary. Those fixtures were migrated to override the actual snapshot status
-  while retaining the stored Job record, and all five targeted regressions
-  then passed. The final combined rerun passed all **201 tests**. No
-  review/delivery assertion was removed.
+- Five existing review-projection fixtures were migrated to override the
+  production `get_job_read_snapshot()` status while retaining the stored Job
+  record; no review/delivery assertion was removed. After those fixture
+  migrations and the final audit corrections, the expanded adjacent Python set
+  was rerun against the final source and passed **204 tests** (2 existing
+  deprecation warnings, 509.52 seconds).
 - The Node browse CPU suite passed **9 tests**, including repeated deferred
   image teardown, retry after a failed output read at the same signature, and
   one terminal projection refresh. `node --check src_skeleton/app/static/app.js`
