@@ -546,6 +546,23 @@ def test_openai_sdk_client_kwargs_ignores_empty_environment_base_url(monkeypatch
 
 
 @pytest.mark.parametrize(
+    ("api_key", "expected"),
+    [
+        ("\ufeffsk-test", "sk-test"),
+        (" \ufeffsk-test  ", "sk-test"),
+        ("\ufeff  ", None),
+    ],
+)
+def test_openai_sdk_client_kwargs_normalizes_api_key(api_key, expected):
+    kwargs = openai_sdk_client_kwargs(api_key=api_key, base_url=None)
+
+    if expected is None:
+        assert "api_key" not in kwargs
+    else:
+        assert kwargs["api_key"] == expected
+
+
+@pytest.mark.parametrize(
     ("configured", "expected"),
     [
         ("https://gateway.example/v1/images/generations", "https://gateway.example/v1"),

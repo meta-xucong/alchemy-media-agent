@@ -82,6 +82,13 @@ def _claude_env_value(name: str) -> str | None:
     return value or None
 
 
+def _normalize_openai_api_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lstrip("\ufeff").strip()
+    return normalized or None
+
+
 def _normalize_openai_base_url(value: str | None) -> str | None:
     if not value:
         return None
@@ -107,8 +114,9 @@ def _normalize_openai_base_url(value: str | None) -> str | None:
 
 def openai_sdk_client_kwargs(*, api_key: str | None, base_url: str | None, **extra: object) -> dict[str, object]:
     kwargs: dict[str, object] = {key: value for key, value in extra.items() if value is not None}
-    if api_key:
-        kwargs["api_key"] = api_key
+    normalized_api_key = _normalize_openai_api_key(api_key)
+    if normalized_api_key:
+        kwargs["api_key"] = normalized_api_key
     # Explicitly pass a concrete base_url so the OpenAI SDK cannot inherit an
     # empty OPENAI_BASE_URL/OPENAI_API_BASE value from the process environment.
     kwargs["base_url"] = _normalize_openai_base_url(base_url) or "https://api.openai.com/v1"
@@ -167,7 +175,9 @@ class Settings(BaseModel):
         "V3_CAPABILITY_SHADOW_AUDIT_ENABLED", "true"
     ).lower() in {"1", "true", "yes", "on"}
     mock_image_provider_enabled: bool = os.getenv("MOCK_IMAGE_PROVIDER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
-    openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
+    openai_api_key: str | None = _normalize_openai_api_key(
+        os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
+    )
     openai_base_url: str | None = _normalize_openai_base_url(os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
     anthropic_auth_token: str | None = os.getenv("ANTHROPIC_AUTH_TOKEN") or _claude_env_value("ANTHROPIC_AUTH_TOKEN")
@@ -202,7 +212,12 @@ class Settings(BaseModel):
         "LAB_LLM_MODEL",
         os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "deepseek-v4-pro")),
     )
-    lab_openai_api_key: str | None = os.getenv("LAB_OPENAI_API_KEY") or os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
+    lab_openai_api_key: str | None = _normalize_openai_api_key(
+        os.getenv("LAB_OPENAI_API_KEY")
+        or os.getenv("V2_OPENAI_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or _codex_auth_value("OPENAI_API_KEY")
+    )
     lab_openai_base_url: str | None = _normalize_openai_base_url(os.getenv("LAB_OPENAI_BASE_URL") or os.getenv("V2_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))
     lab_kimi_api_key: str | None = os.getenv("LAB_KIMI_API_KEY") or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN") or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
     lab_kimi_base_url: str | None = os.getenv("LAB_KIMI_BASE_URL") or os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL")
@@ -445,7 +460,7 @@ def update_runtime_settings(
     if image_work_intensity:
         settings.image_work_intensity = image_work_intensity
     if openai_api_key:
-        settings.openai_api_key = openai_api_key.strip()
+        settings.openai_api_key = _normalize_openai_api_key(openai_api_key)
     if openai_base_url is not None:
         settings.openai_base_url = _normalize_openai_base_url(openai_base_url.strip()) if openai_base_url.strip() else None
     if doubao_image_api_key:
@@ -467,7 +482,7 @@ def update_runtime_settings(
         if settings.gemini_image_generation_enabled and settings.default_image_provider == "gemini_image":
             settings.default_image_model = settings.gemini_image_model
     if lab_openai_api_key:
-        settings.lab_openai_api_key = lab_openai_api_key.strip()
+        settings.lab_openai_api_key = _normalize_openai_api_key(lab_openai_api_key)
     if lab_kimi_api_key:
         settings.lab_kimi_api_key = lab_kimi_api_key.strip()
     if lab_doubao_vision_api_key:
