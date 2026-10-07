@@ -17,6 +17,16 @@
     <div class="access-heading"><p class="access-eyebrow">连接 · 不改变创作方式</p><h1 id="pageTitle">连接你的工具</h1><p id="pageDescription">创建密钥，连接脚本或 Alchemy MCP。账户与计费规则保持不变。</p></div>
     <section id="accessAlert" class="access-alert" role="status" aria-live="polite" hidden></section>
     <a id="loginLink" class="access-button" href="/" hidden>前往登录</a>
+    <section class="access-card access-download" aria-labelledby="mcpDownloadTitle">
+      <div><span class="access-step">MCP / CODEX</span><h2 id="mcpDownloadTitle">下载 Alchemy MCP</h2>
+        <p>为 Codex 下载独立 MCP 包，连接 Alchemy 账户后即可调用 API 工具。无需安装整套 Alchemy 项目。</p>
+        <p class="access-muted">需要 Windows、macOS 或 Linux 上的 Python 3.10+ 和 Codex。下载包不包含账户密钥；安装后在 Codex MCP 配置中填写本页创建的 API 密钥。</p>
+      </div>
+      <div class="access-download-actions">
+        <a class="access-button" href="/mcp-download">下载与安装</a>
+      </div>
+      <p class="access-download-note">此包提供账户 API 工具（V1、V2、V3 与 Alchemy Lab）；不包含本地 Native ImageGen / handoff 插件。生图操作仍按账户现有规则计费。</p>
+    </section>
     <section id="createPanel" class="access-card access-create">
       <div><span class="access-step">01 / 创建</span><h2>创建一把 API 密钥</h2><p>像密码一样保管它。默认永久有效，也可选择有限期限；最多同时保留 5 把。</p></div>
       <form id="createKeyForm">

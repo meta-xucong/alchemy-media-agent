@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>下载 Alchemy MCP · Codex</title>
+  <link rel="stylesheet" href="/static/api-access.css?v=__API_ACCESS_CSS_VERSION__">
+</head>
+<body class="access-body">
+  <header class="access-header">
+    <a class="access-brand" href="/">A<span>ALCHEMY</span></a>
+    <nav aria-label="页面导航"><a href="/api-access">API 与 MCP</a><a href="/">返回创作</a></nav>
+  </header>
+  <main class="access-main">
+    <div class="access-heading">
+      <p class="access-eyebrow">CODEX · MCP INSTALLER</p>
+      <h1>连接 Alchemy 与 Codex</h1>
+      <p>下载独立 MCP 包，在 Codex 中配置一次，就能通过自然语言调用你 Alchemy 账户可用的 API 工具。</p>
+    </div>
+    <section class="access-card access-download" aria-labelledby="downloadTitle">
+      <div>
+        <span class="access-step">01 / 下载</span>
+        <h2 id="downloadTitle">Alchemy API MCP</h2>
+        <p>适用于 Windows、macOS 和 Linux。仅需 Python 3.10+，不依赖完整 Alchemy 项目，也不需要额外安装 Python 包。</p>
+        <p class="access-muted">包含 V1、V2、V3 与 Alchemy Lab 的账户 API 工具。不会包含你的密钥，也不会自动开始生图。</p>
+      </div>
+      <div class="access-download-actions">
+        <a class="access-button" href="/static/downloads/alchemy-api-mcp-v1.zip" download>下载 MCP 安装包（ZIP）</a>
+        <a class="access-button secondary" href="/static/downloads/ALCHEMY_MCP_INSTALL.md" target="_blank" rel="noopener">打开完整安装说明</a>
+      </div>
+    </section>
+    <section class="access-card access-help" aria-labelledby="stepsTitle">
+      <span class="access-step">02 / 配置</span>
+      <h2 id="stepsTitle">安装只需几分钟</h2>
+      <ol>
+        <li>下载并解压 ZIP 到一个固定目录，例如 <code>%USERPROFILE%\AlchemyMCP</code>。</li>
+        <li>登录 Alchemy，在 <a href="/api-access">API 与 MCP</a> 页面创建 API 密钥。密钥只显示一次，请自行保存。</li>
+        <li>在 Codex 的 <strong>Settings → MCP Servers → Add server</strong> 中添加本地 STDIO 服务。命令设为 Python 可执行文件；参数为 <code>-m</code> 和 <code>alchemy_api_mcp.server</code>；工作目录设为解压目录。</li>
+        <li>添加环境变量 <code>ALCHEMY_PRODUCT_API_BASE_URL=https://alchemy.aiself.vip</code> 和 <code>ALCHEMY_PRODUCT_SESSION_TOKEN=你的 API 密钥</code>，保存后重启 Codex。</li>
+        <li>确认工具列表出现 <code>alchemy_list_capabilities</code>，即可查看此密钥可用的 API 范围。</li>
+      </ol>
+      <p>API 密钥不要贴进聊天或 MCP 工具参数。可以在创建密钥时选有效期；生图工具会按账户原有规则计费。</p>
+      <p>此下载包提供账户 API 的 MCP 接口，不包含原有本地 Native ImageGen / handoff 工具。</p>
+    </section>
+  </main>
+  <footer class="access-footer">Alchemy · 一套账户，一条创作流程</footer>
+</body>
+</html>
