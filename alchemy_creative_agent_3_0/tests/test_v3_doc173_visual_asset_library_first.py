@@ -200,6 +200,41 @@ def test_doc173_library_and_frozen_project_binding_survive_restart(tmp_path) -> 
     assert restored_frozen.binding_set_id == frozen.binding_set_id
 
 
+def test_doc173_admin_read_can_load_assets_across_persisted_user_scopes(tmp_path) -> None:
+    root = tmp_path / "visual-asset-library"
+    catalog = PersistentVisualAssetLibraryCatalog(root)
+    first = catalog.create(
+        owner_scope="v3_user_101",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Account 101 asset",
+            asset_type="people",
+            root_source_asset_id="source_101",
+            consent_reference="authorized-101",
+            preparation_intent="Reusable reference for account 101.",
+        ),
+    )
+    second = catalog.create(
+        owner_scope="v3_user_202",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Account 202 asset",
+            asset_type="people",
+            root_source_asset_id="source_202",
+            consent_reference="authorized-202",
+            preparation_intent="Reusable reference for account 202.",
+        ),
+    )
+
+    reopened = PersistentVisualAssetLibraryCatalog(root)
+    assets = reopened.list_assets_for_scopes(owner_scopes=["v3_user_101", "v3_user_202"])
+    assert {item.visual_asset_id for item in assets} == {first.visual_asset_id, second.visual_asset_id}
+    assert reopened.list_assets_for_scopes(owner_scopes=["v3_user_101"]) == [first]
+
+    handlers = V3ProductRouteHandlers(visual_asset_library_catalog=reopened)
+    public_assets = handlers.get_visual_assets_for_admin()["visual_assets"]
+    assert {item["visual_asset_id"] for item in public_assets} == {first.visual_asset_id, second.visual_asset_id}
+    assert handlers.get_visual_asset_for_admin(second.visual_asset_id)["visual_asset"]["visual_asset_id"] == second.visual_asset_id
+
+
 def test_doc173_library_routes_create_assets_and_bind_projects_without_legacy_write() -> None:
     legacy_service = V3ProductApiService()
     library_catalog = VisualAssetLibraryCatalog()

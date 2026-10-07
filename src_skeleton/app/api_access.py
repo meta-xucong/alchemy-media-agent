@@ -8,13 +8,22 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.config import settings
 from app.storage import media_store
-from app.services.api_keys import ALL_SURFACES, ApiKeyStore, KeyAccessError, LIVE_PREFIX, PREFIX
+from app.services.api_keys import (
+    ALL_SURFACES,
+    AVAILABLE_LIFETIME_DAYS,
+    DEFAULT_LIFETIME_DAYS,
+    ApiKeyStore,
+    KeyAccessError,
+    LIVE_PREFIX,
+    PREFIX,
+)
 
 
 class CreateAccessKey(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(default="", max_length=50)
     surfaces: list[str] = Field(default_factory=lambda: list(ALL_SURFACES), min_length=1, max_length=4)
+    expires_in_days: int | None = Field(default=DEFAULT_LIFETIME_DAYS)
 
     @field_validator("surfaces")
     @classmethod
@@ -23,6 +32,13 @@ class CreateAccessKey(BaseModel):
         if not normalized or any(item not in ALL_SURFACES for item in normalized):
             raise ValueError("invalid key surfaces")
         return normalized
+
+    @field_validator("expires_in_days")
+    @classmethod
+    def validate_expiry(cls, value):
+        if value is not None and value not in AVAILABLE_LIFETIME_DAYS:
+            raise ValueError("invalid key lifetime")
+        return value
 
 
 def key_store():
@@ -129,6 +145,7 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
                     return _error("account_inactive", 403)
                 store.record_use(identity["id"])
                 request.state.alchemy_api_user_id = identity["owner_id"]
+                request.state.alchemy_api_user_is_admin = str(account.role or "").lower() == "admin"
                 request.state.alchemy_api_key_id = identity["id"]
                 request.state.alchemy_api_key_surfaces = list(identity.get("surfaces") or ())
                 request.state.alchemy_api_key_token = token
@@ -168,6 +185,8 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
         return {
             "user_id": user_id,
             "surfaces": surfaces,
+            "available_lifetime_days": list(AVAILABLE_LIFETIME_DAYS),
+            "default_lifetime_days": DEFAULT_LIFETIME_DAYS,
             "api": {
                 "v1": "/v1",
                 "v2": "/api/v2",
@@ -192,7 +211,12 @@ def install_api_access(app, *, session_user, account_loader, admin_resolver):
         _ui_write(request)
         account = await account_for(request)
         try:
-            return key_store().create(account.user_id, body.name, body.surfaces)
+            return key_store().create(
+                account.user_id,
+                body.name,
+                body.surfaces,
+                expires_in_days=body.expires_in_days,
+            )
         except KeyAccessError as exc:
             raise HTTPException(exc.status, detail={"code": exc.code}) from exc
 

@@ -1390,13 +1390,15 @@ def v3_photographer_profiles_endpoint(request: Request, authorization: str = Hea
 
 
 @app.get("/api/v3/creative-agent/history")
-def v3_history_endpoint(request: Request, limit: int = 20, authorization: str = Header(default="")):
+async def v3_history_endpoint(request: Request, limit: int = 20, authorization: str = Header(default="")):
     user_id = _require_veyra_user_if_enabled(request, authorization)
+    if await _v3_is_admin_request(request, user_id):
+        user_id = None
     return _run_v3_handler(v3_route_handlers.get_history, limit, user_id)
 
 
 @app.get("/api/v3/creative-agent/projects")
-def v3_projects_endpoint(
+async def v3_projects_endpoint(
     request: Request,
     limit: int = 20,
     cursor: str | None = None,
@@ -1404,11 +1406,13 @@ def v3_projects_endpoint(
     authorization: str = Header(default=""),
 ):
     user_id = _require_veyra_user_if_enabled(request, authorization)
+    if await _v3_is_admin_request(request, user_id):
+        user_id = None
     return _run_v3_handler(v3_route_handlers.get_projects, limit, user_id, cursor, view)
 
 
 @app.get("/api/v3/creative-agent/project-outputs")
-def v3_project_outputs_endpoint(
+async def v3_project_outputs_endpoint(
     request: Request,
     limit: int = 60,
     compact: bool = True,
@@ -1418,6 +1422,8 @@ def v3_project_outputs_endpoint(
     authorization: str = Header(default=""),
 ):
     user_id = _require_veyra_user_if_enabled(request, authorization)
+    if await _v3_is_admin_request(request, user_id):
+        user_id = None
     requested_project_ids = None
     if project_ids is not None:
         requested_project_ids = list(dict.fromkeys(
@@ -1446,13 +1452,13 @@ async def v3_create_project_endpoint(request: Request, authorization: str = Head
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}")
-def v3_get_project_endpoint(
+async def v3_get_project_endpoint(
     project_id: str,
     request: Request,
     view: str = "full",
     authorization: str = Header(default=""),
 ):
-    user_id = _require_v3_project_visible(request, project_id, authorization)
+    user_id = await _require_v3_project_read_visible(request, project_id, authorization)
     response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id, view)
     if str(view or "").strip().lower() == "summary":
         return response
@@ -1461,7 +1467,10 @@ def v3_get_project_endpoint(
     job_id = str(job_ids[-1] or "").strip() if isinstance(job_ids, list) and job_ids else ""
     if job_id:
         status = _run_v3_handler(v3_route_handlers.get_job, job_id)
-        _recover_v3_planned_auto_generation(project_id, status)
+        # A cross-account admin inspection remains read-only: do not let
+        # opening another account's project trigger background generation.
+        if user_id is not None or not settings.veyra_auth_enabled:
+            _recover_v3_planned_auto_generation(project_id, status)
     return response
 
 
@@ -1478,20 +1487,22 @@ def v3_delete_project_endpoint(project_id: str, request: Request, authorization:
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/timeline")
-def v3_project_timeline_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
-    user_id = _require_v3_project_visible(request, project_id, authorization)
+async def v3_project_timeline_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
+    user_id = await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_timeline, project_id, user_id)
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/context")
-def v3_project_context_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
-    user_id = _require_v3_project_visible(request, project_id, authorization)
+async def v3_project_context_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
+    user_id = await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_context, project_id, user_id)
 
 
 @app.get("/api/v3/creative-agent/visual-assets")
-def v3_visual_assets_endpoint(request: Request, authorization: str = Header(default="")):
+async def v3_visual_assets_endpoint(request: Request, authorization: str = Header(default="")):
     user_id = _require_veyra_user_if_enabled(request, authorization)
+    if await _v3_is_admin_request(request, user_id):
+        return _run_v3_handler(v3_route_handlers.get_visual_assets_for_admin)
     return _run_v3_handler(v3_route_handlers.get_visual_assets, _v3_visual_asset_owner_scope(user_id))
 
 
@@ -1507,8 +1518,10 @@ async def v3_create_visual_asset_endpoint(request: Request, authorization: str =
 
 
 @app.get("/api/v3/creative-agent/visual-assets/{visual_asset_id}")
-def v3_get_visual_asset_endpoint(visual_asset_id: str, request: Request, authorization: str = Header(default="")):
+async def v3_get_visual_asset_endpoint(visual_asset_id: str, request: Request, authorization: str = Header(default="")):
     user_id = _require_veyra_user_if_enabled(request, authorization)
+    if await _v3_is_admin_request(request, user_id):
+        return _run_v3_handler(v3_route_handlers.get_visual_asset_for_admin, visual_asset_id)
     return _run_v3_handler(
         v3_route_handlers.get_visual_asset,
         visual_asset_id,
@@ -1601,12 +1614,12 @@ async def v3_archive_visual_asset_endpoint(
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/visual-asset-bindings")
-def v3_project_visual_asset_bindings_endpoint(
+async def v3_project_visual_asset_bindings_endpoint(
     project_id: str,
     request: Request,
     authorization: str = Header(default=""),
 ):
-    _require_v3_project_visible(request, project_id, authorization)
+    await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_visual_asset_bindings, project_id)
 
 
@@ -1644,8 +1657,8 @@ async def v3_delete_project_visual_asset_binding_endpoint(
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/people-assets")
-def v3_project_people_assets_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_project_visible(request, project_id, authorization)
+async def v3_project_people_assets_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_people_assets, project_id)
 
 
@@ -1661,13 +1674,13 @@ async def v3_create_project_people_asset_endpoint(
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/people-assets/{people_asset_id}")
-def v3_get_project_people_asset_endpoint(
+async def v3_get_project_people_asset_endpoint(
     project_id: str,
     people_asset_id: str,
     request: Request,
     authorization: str = Header(default=""),
 ):
-    _require_v3_project_visible(request, project_id, authorization)
+    await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_people_asset, project_id, people_asset_id)
 
 
@@ -1784,8 +1797,8 @@ async def v3_project_output_reject_endpoint(
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/continuity-anchor")
-def v3_get_continuity_anchor(project_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_project_visible(request, project_id, authorization)
+async def v3_get_continuity_anchor(project_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_continuity_anchor, project_id)
 
 
@@ -1881,14 +1894,14 @@ async def v3_create_ecommerce_slot_continuation_endpoint(
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/jobs/{root_job_id}/ecommerce-slots/{slot_id}/delivery")
-def v3_get_ecommerce_slot_delivery_endpoint(
+async def v3_get_ecommerce_slot_delivery_endpoint(
     project_id: str,
     root_job_id: str,
     slot_id: str,
     request: Request,
     authorization: str = Header(default=""),
 ):
-    _require_v3_project_visible(request, project_id, authorization)
+    await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(
         v3_route_handlers.get_project_ecommerce_slot_delivery,
         project_id,
@@ -1917,14 +1930,14 @@ async def v3_create_photography_role_continuation_endpoint(
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/jobs/{root_job_id}/photography-roles/{role_id}/delivery")
-def v3_get_photography_role_delivery_endpoint(
+async def v3_get_photography_role_delivery_endpoint(
     project_id: str,
     root_job_id: str,
     role_id: str,
     request: Request,
     authorization: str = Header(default=""),
 ):
-    _require_v3_project_visible(request, project_id, authorization)
+    await _require_v3_project_read_visible(request, project_id, authorization)
     return _run_v3_handler(
         v3_route_handlers.get_project_photography_role_delivery,
         project_id,
@@ -1994,14 +2007,14 @@ def v3_complete_upload_endpoint(asset_id: str, request: Request, authorization: 
 
 
 @app.get("/api/v3/creative-agent/uploads/{asset_id}")
-def v3_get_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_uploaded_asset_visible(request, asset_id, authorization)
+async def v3_get_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_uploaded_asset_read_visible(request, asset_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_upload, asset_id)
 
 
 @app.get("/api/v3/creative-agent/uploads/{asset_id}/content")
-def v3_get_upload_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_uploaded_asset_visible(request, asset_id, authorization)
+async def v3_get_upload_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_uploaded_asset_read_visible(request, asset_id, authorization)
     content = v3_route_handlers.service.read_uploaded_asset_content(asset_id)
     if content is None:
         raise HTTPException(status_code=404, detail={"code": "v3_asset_content_not_found", "message": "Uploaded asset content not found."})
@@ -2010,8 +2023,8 @@ def v3_get_upload_content_endpoint(asset_id: str, request: Request, authorizatio
 
 
 @app.get("/api/v3/creative-agent/outputs/{output_id}/download")
-def v3_output_download_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_output_visible(request, output_id, authorization)
+async def v3_output_download_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_output_read_visible(request, output_id, authorization)
     resolved = v3_output_store.file_for_variant(output_id, "download")
     if resolved is None:
         raise HTTPException(status_code=404, detail={"code": "v3_output_not_found", "message": "Generated V3 output not found."})
@@ -2025,8 +2038,8 @@ def v3_output_download_endpoint(output_id: str, request: Request, authorization:
 
 
 @app.get("/api/v3/creative-agent/outputs/{output_id}/preview")
-def v3_output_preview_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_output_visible(request, output_id, authorization)
+async def v3_output_preview_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_output_read_visible(request, output_id, authorization)
     resolved = v3_output_store.file_for_variant(output_id, "preview")
     if resolved is None:
         raise HTTPException(status_code=404, detail={"code": "v3_output_not_found", "message": "Generated V3 output preview not found."})
@@ -2035,8 +2048,8 @@ def v3_output_preview_endpoint(output_id: str, request: Request, authorization: 
 
 
 @app.get("/api/v3/creative-agent/outputs/{output_id}/thumbnail")
-def v3_output_thumbnail_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_output_visible(request, output_id, authorization)
+async def v3_output_thumbnail_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_output_read_visible(request, output_id, authorization)
     resolved = v3_output_store.file_for_variant(output_id, "thumbnail")
     if resolved is None:
         raise HTTPException(status_code=404, detail={"code": "v3_output_not_found", "message": "Generated V3 output thumbnail not found."})
@@ -2054,25 +2067,25 @@ async def v3_create_job_endpoint(request: Request, authorization: str = Header(d
 
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}")
-def v3_get_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_job_visible(request, job_id, authorization)
+async def v3_get_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    owner_user_id = await _require_v3_job_read_visible(request, job_id, authorization)
     status = _run_v3_handler(v3_route_handlers.get_job, job_id)
     metadata = status.get("metadata") if isinstance(status, dict) else None
     project_id = str(metadata.get("project_id") or "").strip() if isinstance(metadata, dict) else ""
-    if project_id:
+    if project_id and (owner_user_id is not None or not settings.veyra_auth_enabled):
         return _recover_v3_planned_auto_generation(project_id, status)
     return status
 
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}/export")
-def v3_export_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_job_visible(request, job_id, authorization)
+async def v3_export_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_job_read_visible(request, job_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_job_export, job_id)
 
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}/export/download")
-def v3_export_job_download_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_job_visible(request, job_id, authorization)
+async def v3_export_job_download_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_job_read_visible(request, job_id, authorization)
     payload = _run_v3_handler(v3_route_handlers.get_job_export_download, job_id)
     filename = quote(payload.get("filename") or f"v3_export_{job_id}.json")
     return Response(
@@ -2551,24 +2564,79 @@ def _v3_output_project_owner_id(output_id: str) -> int | None:
     return _v3_project_owner_id(project_id)
 
 
-def _require_v3_output_visible(request: Request, output_id: str, authorization: str = "") -> dict:
+async def _v3_is_admin_request(request: Request, user_id: int | None) -> bool:
+    """Resolve the authenticated account's admin role for read-only V3 access.
+
+    API-key authentication already loads the account in middleware, so reuse
+    that trusted request-local role. Session authentication resolves the role
+    from the existing account service; no client-supplied role is accepted.
+    """
+
+    if not settings.veyra_auth_enabled or user_id is None:
+        return False
+    cached_role = getattr(request.state, "alchemy_api_user_is_admin", None)
+    if cached_role is not None:
+        return bool(cached_role)
+    account = await _veyra_account(user_id)
+    return _is_veyra_admin_account(account)
+
+
+async def _require_v3_project_read_visible(
+    request: Request,
+    project_id: str,
+    authorization: str = "",
+) -> int | None:
     if not settings.veyra_auth_enabled:
-        return {
-            "authenticated": False,
-            "user_id": None,
-            "is_admin": False,
-            "owner_id": _v3_output_owner_id(output_id) or _v3_output_project_owner_id(output_id),
-        }
+        return None
+    user_id = _veyra_user_id_from_request(request, authorization)
+    owner_id = _v3_project_owner_id(project_id)
+    if owner_id == user_id:
+        return user_id
+    if await _v3_is_admin_request(request, user_id):
+        return None
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+
+
+async def _require_v3_output_read_visible(request: Request, output_id: str, authorization: str = "") -> None:
+    if not settings.veyra_auth_enabled:
+        return
     user_id = _veyra_user_id_from_request(request, authorization)
     output_owner_id = _v3_output_owner_id(output_id)
     project_owner_id = _v3_output_project_owner_id(output_id) if output_owner_id is None else None
     if output_owner_id == user_id or (output_owner_id is None and project_owner_id == user_id):
-        return {
-            "authenticated": True,
-            "user_id": user_id,
-            "is_admin": False,
-            "owner_id": output_owner_id or project_owner_id,
-        }
+        return
+    if await _v3_is_admin_request(request, user_id):
+        return
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+
+
+async def _require_v3_job_read_visible(
+    request: Request,
+    job_id: str,
+    authorization: str = "",
+) -> int | None:
+    if not settings.veyra_auth_enabled:
+        return
+    user_id = _veyra_user_id_from_request(request, authorization)
+    if _v3_job_owner_id(job_id) == user_id:
+        return user_id
+    if await _v3_is_admin_request(request, user_id):
+        return None
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+
+
+async def _require_v3_uploaded_asset_read_visible(
+    request: Request,
+    asset_id: str,
+    authorization: str = "",
+) -> None:
+    if not settings.veyra_auth_enabled:
+        return
+    user_id = _veyra_user_id_from_request(request, authorization)
+    if _v3_uploaded_asset_owner_id(asset_id) == user_id:
+        return
+    if await _v3_is_admin_request(request, user_id):
+        return
     raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
 
 

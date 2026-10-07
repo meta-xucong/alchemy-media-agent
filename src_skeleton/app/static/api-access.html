@@ -18,9 +18,9 @@
     <section id="accessAlert" class="access-alert" role="status" aria-live="polite" hidden></section>
     <a id="loginLink" class="access-button" href="/" hidden>前往登录</a>
     <section id="createPanel" class="access-card access-create">
-      <div><span class="access-step">01 / 创建</span><h2>创建一把 API 密钥</h2><p>像密码一样保管它。默认有效期 90 天，最多同时保留 5 把。</p></div>
+      <div><span class="access-step">01 / 创建</span><h2>创建一把 API 密钥</h2><p>像密码一样保管它。默认永久有效，也可选择有限期限；最多同时保留 5 把。</p></div>
       <form id="createKeyForm">
-        <details class="access-options"><summary>给密钥起个名字（可选）</summary><label for="keyName">名称</label><input id="keyName" name="name" maxlength="50" placeholder="例如：我的 Codex" autocomplete="off"></details>
+        <details class="access-options"><summary>名称和有效期</summary><label for="keyName">名称（可选）</label><input id="keyName" name="name" maxlength="50" placeholder="例如：我的 Codex" autocomplete="off"><label for="keyLifetime">有效期</label><select id="keyLifetime" name="expires_in_days"><option value="">永久有效（默认）</option><option value="30">30 天</option><option value="90">90 天</option><option value="180">180 天</option><option value="365">365 天</option></select></details>
         <button id="createKeyButton" class="access-button" type="submit" disabled>创建密钥</button>
         <small>创建本身不触发生图；实际调用按原规则处理。</small>
       </form>

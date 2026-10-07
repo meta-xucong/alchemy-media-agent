@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -253,6 +254,34 @@ class V3ProductRouteHandlers:
                 for item in assets
             ]
         }
+
+    def get_visual_assets_for_admin(self) -> dict[str, Any]:
+        """List user and public library assets for the authenticated admin read surface."""
+
+        owner_scopes = {PUBLIC_VISUAL_ASSET_OWNER_SCOPE, "local_default"}
+        storage_root = getattr(self.visual_asset_library_catalog, "storage_root", None)
+        scopes_root = Path(storage_root) / "library" if storage_root is not None else None
+        if scopes_root is not None and scopes_root.is_dir():
+            owner_scopes.update(
+                entry.name
+                for entry in scopes_root.iterdir()
+                if entry.is_dir() and re.fullmatch(r"v3_user_[1-9]\d*", entry.name)
+            )
+        assets = self.visual_asset_library_catalog.list_assets_for_scopes(
+            owner_scopes=sorted(owner_scopes),
+        )
+        return {
+            "visual_assets": [
+                self._visual_asset_public_record(item)
+                for item in assets
+            ]
+        }
+
+    def get_visual_asset_for_admin(self, visual_asset_id: str) -> dict[str, Any]:
+        for item in self.get_visual_assets_for_admin()["visual_assets"]:
+            if item.get("visual_asset_id") == visual_asset_id:
+                return {"visual_asset": item}
+        raise KeyError("visual_asset_not_found")
 
     def post_visual_assets(self, payload: dict[str, Any], owner_scope: str | None = None) -> dict[str, Any]:
         request = LibraryVisualAssetCreateRequest.model_validate(payload)

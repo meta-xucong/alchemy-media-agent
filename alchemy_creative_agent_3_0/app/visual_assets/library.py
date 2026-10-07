@@ -427,6 +427,19 @@ class VisualAssetLibraryCatalog:
             if scope == owner_scope and (include_archived or asset.lifecycle_status != "archived")
         ]
 
+    def list_assets_for_scopes(
+        self,
+        *,
+        owner_scopes: list[str],
+        include_archived: bool = False,
+    ) -> list[VisualAsset]:
+        scopes = {scope.strip() for scope in owner_scopes if scope.strip()}
+        return [
+            asset.model_copy(deep=True)
+            for (scope, _), asset in sorted(self._assets.items())
+            if scope in scopes and (include_archived or asset.lifecycle_status != "archived")
+        ]
+
     def activate_version(
         self,
         *,
@@ -500,6 +513,19 @@ class PersistentVisualAssetLibraryCatalog(VisualAssetLibraryCatalog):
     def list_assets(self, *, owner_scope: str, include_archived: bool = False) -> list[VisualAsset]:
         self._load_scope(owner_scope)
         return super().list_assets(owner_scope=owner_scope, include_archived=include_archived)
+
+    def list_assets_for_scopes(
+        self,
+        *,
+        owner_scopes: list[str],
+        include_archived: bool = False,
+    ) -> list[VisualAsset]:
+        for owner_scope in owner_scopes:
+            self._load_scope(owner_scope)
+        return super().list_assets_for_scopes(
+            owner_scopes=owner_scopes,
+            include_archived=include_archived,
+        )
 
     def activate_version(
         self,

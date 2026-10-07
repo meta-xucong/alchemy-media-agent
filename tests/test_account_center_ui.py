@@ -25,7 +25,9 @@ def account_browser():
 @pytest.mark.parametrize("mobile", [False, True])
 def test_account_center_opens_and_contains_api_mcp(native, account_browser, mobile):
     page = account_browser.new_page(viewport={"width": 390 if mobile else 1280, "height": 960})
-    page.add_init_script("localStorage.setItem('alchemy_veyra_access_token','session-a');")
+    page.add_init_script("""localStorage.setItem('alchemy_veyra_access_token','session-a');
+      window.__clipboardValue = '';
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value) => { window.__clipboardValue = value; } } });""")
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
 
@@ -72,20 +74,31 @@ def test_account_center_opens_and_contains_api_mcp(native, account_browser, mobi
 
         page.locator("#accountAccessKeyForm").evaluate("form => form.requestSubmit()")
         expect(page.locator("#accountAccessSecretDialog")).to_be_visible()
+        assert native.store.list(owner_id=101)["items"][0]["expires_at"] is None
         secret = page.locator("#accountAccessSecretInput").input_value()
         assert secret.startswith("alk_")
         page.locator("[data-account-access-copy-api]").click()
         api_example = page.locator("#accountAccessManualCopy").input_value()
         assert "/api/v3/creative-agent/projects" in api_example
         assert "/jobs" in api_example
+        expect(page.locator("#accountAccessSecretFeedback")).to_have_text("已复制到剪贴板。")
+        assert "/api/v3/creative-agent/projects" in page.evaluate("window.__clipboardValue")
         page.locator("[data-account-access-copy-mcp]").click()
         mcp = json.loads(page.locator("#accountAccessManualCopy").input_value())
         assert mcp["env"]["ALCHEMY_PRODUCT_API_BASE_URL"] == "https://ui.test"
         assert mcp["env"]["ALCHEMY_PRODUCT_SESSION_TOKEN"] == secret
+        assert json.loads(page.evaluate("window.__clipboardValue"))["env"]["ALCHEMY_PRODUCT_SESSION_TOKEN"] == secret
         page.locator("[data-account-access-close-secret]").first.click()
         expect(page.locator("#accountAccessSecretDialog")).not_to_be_visible()
         assert page.locator("#accountAccessSecretInput").input_value() == ""
         assert secret not in page.content()
+
+        page.select_option("#accountAccessKeyLifetime", "90")
+        page.locator("#accountAccessKeyForm").evaluate("form => form.requestSubmit()")
+        expect(page.locator("#accountAccessSecretDialog")).to_be_visible()
+        listed_keys = native.store.list(owner_id=101)["items"]
+        assert any(item["expires_at"] is not None for item in listed_keys)
+        page.locator("[data-account-access-close-secret]").first.click()
         assert not errors, errors
     finally:
         page.close()

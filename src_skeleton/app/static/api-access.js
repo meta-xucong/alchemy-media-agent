@@ -32,14 +32,20 @@
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const error = new Error(payload.detail?.code || payload.detail?.error_code || "request_failed");
-        error.status = response.status; error.unknown = response.status >= 500; throw error;
+        error.status = response.status; error.unknown = response.status >= 500; error.endpoint = path; throw error;
       }
       return payload;
     } catch (error) { if (!error.status) error.unknown = true; throw error; }
     finally { clearTimeout(timeout); }
   }
   function friendly(error) {
-    return messages[error.message] || (error.status === 401 ? "登录已失效，请重新登录。" : error.status === 403 ? "当前账户没有管理员权限。" : "暂时无法连接，请检查网络后刷新。");
+    if (messages[error?.message]) return messages[error.message];
+    if (error?.status === 401) return "登录已失效，请重新登录。";
+    if (error?.status === 403) return "当前账户没有管理员权限。";
+    if (error?.status >= 500) return `账户服务暂时不可用（HTTP ${error.status}，${error.message}）。请稍后重试；如果反复出现，请联系管理员。`;
+    if (error?.name === "AbortError") return "账户服务响应超时，请检查网络后重试。";
+    if (error?.unknown) return "浏览器无法连接账户接口，请检查网络或刷新后重试。";
+    return "账户接口暂时无法完成请求，请刷新后重试。";
   }
   function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; }
   function date(value) { return value ? new Date(value).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "尚未使用"; }
@@ -72,7 +78,7 @@
       const row = text("article", "", "access-key"), info = text("div", "", "access-key-info"), title = text("div", "", "access-key-title");
       title.append(text("strong", item.name), text("span", { active: "使用中", revoked: "已停用", expired: "已过期" }[item.status] || "未知", `access-status ${item.status}`));
       info.append(title, text("code", item.masked));
-      info.append(text("p", `${admin ? `账户 #${item.owner_id} · ` : ""}创建 ${date(item.created_at)} · 到期 ${date(item.expires_at)}`));
+      info.append(text("p", `${admin ? `账户 #${item.owner_id} · ` : ""}创建 ${date(item.created_at)} · ${item.expires_at ? `到期 ${date(item.expires_at)}` : "永久有效"}`));
       info.append(text("p", `最近使用：${date(item.last_used_at)} · 已认证请求 ${item.request_count}`));
       const button = text("button", "停用", "access-button secondary"); button.type = "button"; button.disabled = item.status !== "active";
       button.setAttribute("aria-label", `停用 ${item.name}`); button.addEventListener("click", () => openRevoke(item)); row.append(info, button); list.append(row);
@@ -96,7 +102,11 @@
     creating = true; controls(); notice("");
     const epoch = sessionEpoch;
     try {
-      const payload = await request("/api/access/keys", { method: "POST", body: JSON.stringify({ name: $("keyName").value.trim() || "我的 API" }) });
+      const lifetimeValue = $("keyLifetime").value;
+      const payload = await request("/api/access/keys", { method: "POST", body: JSON.stringify({
+        name: $("keyName").value.trim() || "我的 API",
+        expires_in_days: lifetimeValue ? Number(lifetimeValue) : null,
+      }) });
       if (!ready || epoch !== sessionEpoch) return;
       if (!/^alk_(?:v3|live)_[A-Za-z0-9_-]{43}$/.test(payload.secret || "")) throw new Error("invalid_response");
       secret = payload.secret; $("newSecret").value = secret; $("secretFeedback").textContent = "";
@@ -104,7 +114,9 @@
       $("keyName").value = ""; offset = 0; await loadKeys();
     } catch (error) {
       if (error.status === 401) signedOut(error);
-      else notice(error.unknown || error.message === "invalid_response" ? "没有收到完整密钥，创建可能已成功。请先刷新列表；如出现新记录，停用它后再新建，不要连续重复点击。" : friendly(error));
+      else notice(error.unknown || error.message === "invalid_response"
+        ? `没有收到完整密钥，创建结果需要核对${error.status ? `（HTTP ${error.status}，${error.message}）` : ""}。请先刷新列表；如出现新记录，停用它后再新建，不要连续重复点击。`
+        : friendly(error));
     } finally { creating = false; controls(); }
   }
   function openRevoke(item) {
@@ -120,11 +132,19 @@
     } catch (error) { $("revokeFeedback").textContent = friendly(error) + (error.unknown ? " 请刷新确认是否已停用。" : ""); }
     finally { $("confirmRevoke").disabled = false; }
   }
-  function selectForCopy(value) {
+  async function selectForCopy(value) {
     if (!value) return;
     const field = $("manualCopy"); field.value = value; field.hidden = false;
-    field.focus(); field.select();
-    $("secretFeedback").textContent = "已选中内容。电脑按 Ctrl+C（Mac 按 ⌘C）；手机长按后选择复制。";
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard_unavailable");
+      await navigator.clipboard.writeText(value);
+      field.hidden = true;
+      $("secretFeedback").textContent = "已复制到剪贴板。";
+    } catch {
+      field.hidden = false;
+      field.focus(); field.select();
+      $("secretFeedback").textContent = "浏览器未授权直接复制，内容已选中；请使用系统复制操作。";
+    }
   }
   function apiGenerationExample(origin, apiKey) {
     return `// Node.js 18+。运行前请确认这次调用需要真实生图（会按账户规则计费）。
@@ -225,7 +245,14 @@ for (;;) {
     $("copySecret").addEventListener("click", () => selectForCopy(secret));
     $("copyApi").addEventListener("click", () => { if (secret) selectForCopy(apiGenerationExample(location.origin, secret)); });
     $("copyMcp").addEventListener("click", () => { if (secret) selectForCopy(JSON.stringify({ env: { ALCHEMY_PRODUCT_API_BASE_URL: location.origin, ALCHEMY_PRODUCT_SESSION_TOKEN: secret } }, null, 2)); });
-    $("copyAddress").addEventListener("click", () => { $("serviceAddress").focus(); $("serviceAddress").select(); notice("地址已选中，请使用系统复制操作。"); });
+    $("copyAddress").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(location.origin);
+        notice("服务地址已复制到剪贴板。");
+      } catch {
+        $("serviceAddress").focus(); $("serviceAddress").select(); notice("浏览器未授权直接复制，地址已选中；请使用系统复制操作。");
+      }
+    });
     window.addEventListener("pagehide", () => { sessionEpoch += 1; ready = false; clearSecret(); if ($("secretDialog").open) $("secretDialog").close(); });
     window.addEventListener("pageshow", (event) => { if (event.persisted) start(); });
     window.addEventListener("storage", (event) => { if (event.key === sessionKey || event.key === null) { const error = new Error("session_login_required"); error.status = 401; signedOut(error); } });

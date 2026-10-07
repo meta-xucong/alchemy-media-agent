@@ -68,6 +68,166 @@ def test_complete_key_lifecycle_and_no_plaintext_persistence(native):
     assert native.calls == [101]
 
 
+def test_key_defaults_to_permanent_and_optional_expiry_is_enforced(native):
+    permanent = create(native)
+    assert permanent["key"]["expires_at"] is None
+    assert permanent["key"]["status"] == "active"
+    capabilities = native.client.get("/api/access/capabilities", headers=headers()).json()
+    assert capabilities["default_lifetime_days"] is None
+    assert capabilities["available_lifetime_days"] == [30, 90, 180, 365]
+    native.clock[0] += 20 * 365 * 86400
+    assert native.store.resolve(permanent["secret"])["owner_id"] == 101
+
+    finite = native.client.post(
+        "/api/access/keys",
+        headers=headers(write=True),
+        json={"name": "Finite", "expires_in_days": 30},
+    )
+    assert finite.status_code == 200, finite.text
+    assert finite.json()["key"]["expires_at"] is not None
+    assert finite.json()["key"]["status"] == "active"
+    native.clock[0] += 30 * 86400
+    assert native.client.get("/api/v3/creative-agent/projects", headers=headers(finite.json()["secret"])).status_code == 401
+
+
+def test_admin_can_read_all_v3_projects_and_outputs_but_cannot_mutate_foreign_projects(native, monkeypatch, tmp_path):
+    captured = {}
+
+    def projects(limit, owner, cursor, view):
+        captured["project_owner"] = owner
+        return {"projects": [], "owner": owner}
+
+    def outputs(*args, **kwargs):
+        owner = kwargs.get("owner_user_id", args[1] if len(args) > 1 else None)
+        captured["output_owner"] = owner
+        return {"items": [], "owner": owner}
+
+    monkeypatch.setattr(native.main.v3_route_handlers, "get_projects", projects)
+    monkeypatch.setattr(native.main.v3_route_handlers, "get_project_outputs", outputs)
+    monkeypatch.setattr(native.main.v3_route_handlers, "get_history", lambda _limit, owner: {"owner": owner})
+    history = native.client.get("/api/v3/creative-agent/history", headers=headers("session-admin"))
+    assert history.status_code == 200 and history.json()["owner"] is None
+    assert native.client.get("/api/v3/creative-agent/projects", headers=headers("session-admin")).status_code == 200
+    assert captured["project_owner"] is None
+    assert native.client.get("/api/v3/creative-agent/project-outputs", headers=headers("session-admin")).status_code == 200
+    assert captured["output_owner"] is None
+
+    monkeypatch.setattr(native.main, "_v3_project_owner_id", lambda _project_id: 101)
+    monkeypatch.setattr(native.main.v3_route_handlers, "get_project", lambda project_id, owner_user_id, view: {
+        "project": {"project_id": project_id, "job_ids": []},
+        "owner_user_id": owner_user_id,
+    })
+    project = native.client.get("/api/v3/creative-agent/projects/foreign-project", headers=headers("session-admin"))
+    assert project.status_code == 200, project.text
+    assert project.json()["owner_user_id"] is None
+    assert native.client.get("/api/v3/creative-agent/projects/foreign-project", headers=headers("session-b")).status_code == 404
+    assert native.client.post("/api/v3/creative-agent/projects/foreign-project/archive", headers=headers("session-admin")).status_code == 404
+
+    image = tmp_path / "foreign.png"
+    image.write_bytes(b"image")
+    monkeypatch.setattr(native.main, "_v3_output_owner_id", lambda _output_id: 202)
+    monkeypatch.setattr(native.main.v3_output_store, "file_for_variant", lambda *_args: (image, "image/png", "foreign.png"))
+    image_response = native.client.get("/api/v3/creative-agent/outputs/foreign-output/preview", headers=headers("session-admin"))
+    assert image_response.status_code == 200
+    assert image_response.content == b"image"
+    assert native.client.get("/api/v3/creative-agent/outputs/foreign-output/preview", headers=headers("session-a")).status_code == 404
+
+    monkeypatch.setattr(native.main, "_v3_uploaded_asset_owner_id", lambda _asset_id: 202)
+    monkeypatch.setattr(native.main.v3_route_handlers, "get_upload", lambda asset_id: {"asset_id": asset_id})
+    assert native.client.get("/api/v3/creative-agent/uploads/foreign-asset", headers=headers("session-admin")).status_code == 200
+    assert native.client.get("/api/v3/creative-agent/uploads/foreign-asset", headers=headers("session-a")).status_code == 404
+
+    monkeypatch.setattr(native.main, "_v3_job_owner_id", lambda _job_id: 202)
+    monkeypatch.setattr(native.main.v3_route_handlers, "get_job", lambda job_id: {"job_id": job_id, "metadata": {}})
+    assert native.client.get("/api/v3/creative-agent/jobs/foreign-job", headers=headers("session-admin")).status_code == 200
+    assert native.client.get("/api/v3/creative-agent/jobs/foreign-job", headers=headers("session-a")).status_code == 404
+
+
+def test_admin_can_read_foreign_slot_delivery_projections(native, monkeypatch):
+    monkeypatch.setattr(native.main, "_v3_project_owner_id", lambda _project_id: 101)
+    monkeypatch.setattr(
+        native.main.v3_route_handlers,
+        "get_project_ecommerce_slot_delivery",
+        lambda project_id, job_id, slot_id: {"project_id": project_id, "slot_id": slot_id},
+    )
+    monkeypatch.setattr(
+        native.main.v3_route_handlers,
+        "get_project_photography_role_delivery",
+        lambda project_id, job_id, role_id: {"project_id": project_id, "role_id": role_id},
+    )
+
+    ecommerce = native.client.get(
+        "/api/v3/creative-agent/projects/foreign-project/jobs/root-job/ecommerce-slots/hero/delivery",
+        headers=headers("session-admin"),
+    )
+    photography = native.client.get(
+        "/api/v3/creative-agent/projects/foreign-project/jobs/root-job/photography-roles/portrait/delivery",
+        headers=headers("session-admin"),
+    )
+    assert ecommerce.status_code == 200, ecommerce.text
+    assert photography.status_code == 200, photography.text
+    assert native.client.get(
+        "/api/v3/creative-agent/projects/foreign-project/jobs/root-job/ecommerce-slots/hero/delivery",
+        headers=headers("session-b"),
+    ).status_code == 404
+
+
+def test_admin_can_read_cross_account_visual_asset_library(native, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        native.main.v3_route_handlers,
+        "get_visual_assets_for_admin",
+        lambda: {"visual_assets": [{"visual_asset_id": "asset-from-another-user"}]},
+    )
+    monkeypatch.setattr(
+        native.main.v3_route_handlers,
+        "get_visual_asset_for_admin",
+        lambda asset_id: {"visual_asset": {"visual_asset_id": asset_id}},
+    )
+    monkeypatch.setattr(
+        native.main.v3_route_handlers,
+        "get_visual_assets",
+        lambda owner_scope: captured.update(owner_scope=owner_scope) or {"visual_assets": []},
+    )
+
+    admin_list = native.client.get("/api/v3/creative-agent/visual-assets", headers=headers("session-admin"))
+    admin_detail = native.client.get(
+        "/api/v3/creative-agent/visual-assets/asset-from-another-user",
+        headers=headers("session-admin"),
+    )
+    assert admin_list.status_code == 200
+    assert admin_list.json()["visual_assets"][0]["visual_asset_id"] == "asset-from-another-user"
+    assert admin_detail.status_code == 200
+    assert admin_detail.json()["visual_asset"]["visual_asset_id"] == "asset-from-another-user"
+
+    user_list = native.client.get("/api/v3/creative-agent/visual-assets", headers=headers("session-b"))
+    assert user_list.status_code == 200
+    assert captured["owner_scope"] == "v3_user_202"
+
+
+def test_admin_job_read_does_not_start_foreign_auto_generation(native, monkeypatch):
+    monkeypatch.setattr(native.main, "_v3_job_owner_id", lambda _job_id: 202)
+    monkeypatch.setattr(
+        native.main.v3_route_handlers,
+        "get_job",
+        lambda job_id: {"job_id": job_id, "metadata": {"project_id": "foreign-project"}},
+    )
+    recovered = []
+    monkeypatch.setattr(
+        native.main,
+        "_recover_v3_planned_auto_generation",
+        lambda project_id, status: recovered.append((project_id, status)) or status,
+    )
+
+    admin = native.client.get("/api/v3/creative-agent/jobs/foreign-job", headers=headers("session-admin"))
+    assert admin.status_code == 200, admin.text
+    assert recovered == []
+
+    owner = native.client.get("/api/v3/creative-agent/jobs/foreign-job", headers=headers("session-b"))
+    assert owner.status_code == 200, owner.text
+    assert len(recovered) == 1
+
+
 @pytest.mark.parametrize("method,path", [("GET","/api/access/keys"),("POST","/api/access/keys"),
     ("GET","/api/access/admin/keys"),("GET","/v1/admin/retention/settings"),
     ("GET","/api/v3/creative-agent/mcp-materializations/handoff"),
@@ -137,7 +297,11 @@ def test_foreign_key_and_admin_boundaries(native):
 
 
 def test_inactive_account_and_expiry_are_enforced(native):
-    result = create(native)
+    result = native.client.post(
+        "/api/access/keys",
+        headers=headers(write=True),
+        json={"name": "Expires", "expires_in_days": 90},
+    ).json()
     native.states[101] = "disabled"
     assert native.client.get("/api/v3/creative-agent/projects",headers=headers(result["secret"])).status_code == 403
     assert native.client.post("/api/access/keys",headers=headers(write=True),json={}).status_code == 403
@@ -192,7 +356,7 @@ def test_revocation_checked_after_account_lookup(native):
     with pytest.raises(KeyAccessError): native.store.record_use(identity["id"])
 
 
-@pytest.mark.parametrize("body", [{"owner_id":202},{"name":"x"*51},{"name":"bad\nname"},{"name":1}])
+@pytest.mark.parametrize("body", [{"owner_id":202},{"name":"x"*51},{"name":"bad\nname"},{"name":1},{"expires_in_days":45}])
 def test_creation_does_not_accept_owner_or_invalid_names(native, body):
     assert native.client.post("/api/access/keys",headers=headers(write=True),json=body).status_code in {400,422}
     assert native.store.list(owner_id=None)["total"] == 0

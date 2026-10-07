@@ -23,7 +23,7 @@ def browser():
 def open_ui(native, browser, *, admin=False, width=1280, token=None, failure=None):
     page = browser.new_page(viewport={"width":width,"height":960})
     token = token if token is not None else ("session-admin" if admin else "session-a")
-    page.add_init_script("localStorage.setItem('alchemy_veyra_access_token',"+json.dumps(token)+");")
+    page.add_init_script("localStorage.setItem('alchemy_veyra_access_token',"+json.dumps(token)+"); window.__clipboardValue=''; Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.__clipboardValue=value;}}});")
     calls, errors = [], []
     page.on("pageerror", lambda error:errors.append(str(error)))
     def route_handler(route):
@@ -46,8 +46,11 @@ def open_ui(native, browser, *, admin=False, width=1280, token=None, failure=Non
 def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,width):
     page,calls,errors=open_ui(native,browser,width=width)
     try:
+        expect(page.get_by_text("默认永久有效，也可选择有限期限")).to_be_visible()
         expect(page.locator("#createKeyButton")).to_be_enabled()
         expect(page.locator("#keyList .access-key")).to_have_count(0)
+        page.locator(".access-options summary").click()
+        page.select_option("#keyLifetime", "90")
         page.evaluate("document.getElementById('createKeyForm').requestSubmit(); document.getElementById('createKeyForm').requestSubmit();")
         expect(page.locator("#secretDialog")).to_be_visible()
         secret=page.locator("#newSecret").input_value()
@@ -55,7 +58,7 @@ def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,wid
         assert len([x for x in calls if x==("POST","/api/access/keys")])==1
         page.click("#copySecret")
         assert page.locator("#manualCopy").input_value()==secret
-        assert page.locator("#manualCopy").evaluate("e=>e.selectionEnd-e.selectionStart")==len(secret)
+        assert page.evaluate("window.__clipboardValue")==secret
         page.locator("#secretDialog details summary").click()
         page.click("#copyApi")
         api_example=page.locator("#manualCopy").input_value()
@@ -64,10 +67,13 @@ def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,wid
         assert "/jobs" in api_example
         assert "auto_generate" in api_example
         assert "/export" in api_example
+        assert "创建项目" in page.evaluate("window.__clipboardValue")
         page.click("#copyMcp")
         config=json.loads(page.locator("#manualCopy").input_value())
         assert config["env"]["ALCHEMY_PRODUCT_SESSION_TOKEN"]==secret
         assert config["env"]["ALCHEMY_PRODUCT_API_BASE_URL"]=="https://ui.test"
+        assert json.loads(page.evaluate("window.__clipboardValue")) == config
+        assert native.store.list(owner_id=101)["items"][0]["expires_at"] is not None
         page.click("#closeSecret")
         expect(page.locator("#secretDialog")).not_to_be_visible()
         assert page.locator("#newSecret").input_value()==""
@@ -138,6 +144,8 @@ def test_create_failure_is_not_retried_or_shown_as_success(native,browser):
     try:
         expect(page.locator("#createKeyButton")).to_be_enabled();page.click("#createKeyButton")
         expect(page.locator("#accessAlert")).to_be_visible()
+        expect(page.locator("#accessAlert")).to_contain_text("HTTP 503")
+        expect(page.locator("#accessAlert")).to_contain_text("key_service_unavailable")
         expect(page.locator("#secretDialog")).not_to_be_visible()
         assert len([x for x in calls if x==("POST","/api/access/keys")])==1
         assert native.store.list(owner_id=None)["total"]==0

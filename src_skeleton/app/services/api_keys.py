@@ -19,7 +19,12 @@ LIVE_PREFIX = "alk_live_"
 _TOKEN = re.compile(r"^alk_(?:v3|live)_[A-Za-z0-9_-]{43}$")
 ALL_SURFACES = ("v1", "v2", "v3", "lab")
 MAX_ACTIVE_KEYS = 5
-LIFETIME_DAYS = 90
+DEFAULT_LIFETIME_DAYS = None
+AVAILABLE_LIFETIME_DAYS = (30, 90, 180, 365)
+# Existing SQLite databases declare expires_at NOT NULL. Zero is the stable
+# storage sentinel for a key that does not expire; public responses expose it
+# as expires_at=null.
+NEVER_EXPIRES = 0.0
 
 
 class KeyAccessError(ValueError):
@@ -63,9 +68,10 @@ class ApiKeyStore:
 
     def _public(self, row):
         result = {k: row[k] for k in ("id", "owner_id", "name", "masked", "request_count")}
-        result.update({k: _iso(row[k]) for k in ("created_at", "expires_at", "revoked_at", "last_used_at")})
+        result.update({k: _iso(row[k]) for k in ("created_at", "revoked_at", "last_used_at")})
+        result["expires_at"] = None if row["expires_at"] == NEVER_EXPIRES else _iso(row["expires_at"])
         result["status"] = "revoked" if row["revoked_at"] is not None else (
-            "expired" if row["expires_at"] <= self.clock() else "active")
+            "expired" if row["expires_at"] != NEVER_EXPIRES and row["expires_at"] <= self.clock() else "active")
         try:
             surfaces = json.loads(row["surfaces"] or "[\"v3\"]")
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -73,7 +79,13 @@ class ApiKeyStore:
         result["surfaces"] = [item for item in surfaces if item in ALL_SURFACES]
         return result
 
-    def create(self, owner_id: int, name: str, surfaces: list[str] | tuple[str, ...] | None = None):
+    def create(
+        self,
+        owner_id: int,
+        name: str,
+        surfaces: list[str] | tuple[str, ...] | None = None,
+        expires_in_days: int | None = DEFAULT_LIFETIME_DAYS,
+    ):
         if type(owner_id) is not int or owner_id <= 0:
             raise KeyAccessError("account_required")
         if not isinstance(name, str) or len(name) > 50 or any(ord(c) < 32 for c in name):
@@ -82,17 +94,22 @@ class ApiKeyStore:
         selected = tuple(sorted({str(item).strip().lower() for item in (surfaces or ALL_SURFACES) if str(item).strip()}))
         if not selected or any(item not in ALL_SURFACES for item in selected):
             raise KeyAccessError("invalid_key_surfaces", 400)
+        if expires_in_days is not None and (
+            type(expires_in_days) is not int or expires_in_days not in AVAILABLE_LIFETIME_DAYS
+        ):
+            raise KeyAccessError("invalid_key_lifetime", 400)
         now = self.clock()
+        expires_at = NEVER_EXPIRES if expires_in_days is None else now + expires_in_days * 86400
         token = LIVE_PREFIX + secrets.token_urlsafe(32)
         key_id = "key_" + secrets.token_hex(12)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            active = db.execute("SELECT COUNT(*) FROM access_keys WHERE owner_id=? AND revoked_at IS NULL AND expires_at>?", (owner_id, now)).fetchone()[0]
+            active = db.execute("SELECT COUNT(*) FROM access_keys WHERE owner_id=? AND revoked_at IS NULL AND (expires_at=? OR expires_at>?)", (owner_id, NEVER_EXPIRES, now)).fetchone()[0]
             if active >= MAX_ACTIVE_KEYS:
                 raise KeyAccessError("active_key_limit", 409)
             db.execute("INSERT INTO access_keys (id,owner_id,name,digest,masked,created_at,expires_at,surfaces) VALUES (?,?,?,?,?,?,?,?)",
                 (key_id, owner_id, name, hashlib.sha256(token.encode()).hexdigest(),
-                 LIVE_PREFIX + token[len(LIVE_PREFIX):len(LIVE_PREFIX)+4] + "..." + token[-4:], now, now + LIFETIME_DAYS*86400,
+                 LIVE_PREFIX + token[len(LIVE_PREFIX):len(LIVE_PREFIX)+4] + "..." + token[-4:], now, expires_at,
                  json.dumps(selected, separators=(",", ":"))))
             row = db.execute("SELECT * FROM access_keys WHERE id=?", (key_id,)).fetchone()
         return {"key": self._public(row), "secret": token}
@@ -102,7 +119,9 @@ class ApiKeyStore:
             raise KeyAccessError("api_key_invalid")
         with self._db() as db:
             row = db.execute("SELECT * FROM access_keys WHERE digest=?", (hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
-        if row is None or row["revoked_at"] is not None or row["expires_at"] <= self.clock():
+        if row is None or row["revoked_at"] is not None or (
+            row["expires_at"] != NEVER_EXPIRES and row["expires_at"] <= self.clock()
+        ):
             raise KeyAccessError("api_key_invalid")
         try:
             surfaces = json.loads(row["surfaces"] or "[\"v3\"]")
@@ -114,7 +133,7 @@ class ApiKeyStore:
         # Check again after the account service call; concurrent revocation wins.
         now = self.clock()
         with self._db() as db:
-            result = db.execute("UPDATE access_keys SET last_used_at=?,request_count=request_count+1 WHERE id=? AND revoked_at IS NULL AND expires_at>?", (now,key_id,now))
+            result = db.execute("UPDATE access_keys SET last_used_at=?,request_count=request_count+1 WHERE id=? AND revoked_at IS NULL AND (expires_at=? OR expires_at>?)", (now,key_id,NEVER_EXPIRES,now))
             if result.rowcount != 1:
                 raise KeyAccessError("api_key_invalid")
 
@@ -139,9 +158,10 @@ class ApiKeyStore:
         where = " WHERE " + " AND ".join(predicates) if predicates else ""
         now = self.clock()
         with self._db() as db:
-            totals = db.execute("SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN revoked_at IS NULL AND expires_at>? THEN 1 ELSE 0 END),0) active, COALESCE(SUM(request_count),0) requests FROM access_keys"+where, [now,*params]).fetchone()
+            totals = db.execute("SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN revoked_at IS NULL AND (expires_at=? OR expires_at>?) THEN 1 ELSE 0 END),0) active, COALESCE(SUM(request_count),0) requests FROM access_keys"+where, [NEVER_EXPIRES,now,*params]).fetchone()
             rows = db.execute("SELECT * FROM access_keys"+where+" ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", [*params,limit,offset]).fetchall()
         return {"items": [self._public(row) for row in rows], "total": totals["total"],
             "summary": dict(totals), "offset": offset, "limit": limit,
             "has_more": offset+len(rows)<totals["total"], "max_active_keys": MAX_ACTIVE_KEYS,
-            "default_lifetime_days": LIFETIME_DAYS}
+            "default_lifetime_days": DEFAULT_LIFETIME_DAYS,
+            "available_lifetime_days": list(AVAILABLE_LIFETIME_DAYS)}

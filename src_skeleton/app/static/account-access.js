@@ -66,9 +66,11 @@
         signal: controller.signal,
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
+    if (!response.ok) {
         const code = payload.detail?.code || payload.detail?.error_code || "request_failed";
-        throw errorWithCode(code, response.status);
+        const error = errorWithCode(code, response.status);
+        error.endpoint = path;
+        throw error;
       }
       return payload;
     } catch (error) {
@@ -80,7 +82,13 @@
   }
 
   function friendly(error) {
-    return messages[error?.message] || (error?.status === 401 ? "登录已失效，请重新登录。" : error?.status === 403 ? "当前账户无权执行此操作。" : "暂时无法连接，请刷新后重试。");
+    if (messages[error?.message]) return messages[error.message];
+    if (error?.status === 401) return "登录已失效，请重新登录。";
+    if (error?.status === 403) return "当前账户无权执行此操作。";
+    if (error?.status >= 500) return `账户服务暂时不可用（HTTP ${error.status}，${error.message}）。请稍后重试；如果反复出现，请联系管理员。`;
+    if (error?.name === "AbortError") return "账户服务响应超时，请检查网络后重试。";
+    if (error?.unknown) return "浏览器无法连接账户接口，请检查网络或刷新后重试。";
+    return "账户接口暂时无法完成请求，请刷新后重试。";
   }
 
   function text(tag, value, className = "") {
@@ -157,7 +165,7 @@
       const title = text("div", "", "account-access-key-title");
       title.append(text("strong", item.name || "我的 API"), text("span", statusLabels[item.status] || "未知", `access-status ${item.status || ""}`));
       info.append(title, text("code", item.masked || "alk_…"));
-      info.append(text("p", `创建 ${date(item.created_at)} · 到期 ${date(item.expires_at)}`));
+      info.append(text("p", `创建 ${date(item.created_at)} · ${item.expires_at ? `到期 ${date(item.expires_at)}` : "永久有效"}`));
       info.append(text("p", `最近使用：${date(item.last_used_at)} · 已认证请求 ${Number(item.request_count || 0).toLocaleString()}`));
       const revoke = text("button", "停用", "button compact secondary");
       revoke.type = "button";
@@ -206,16 +214,27 @@
     }
   }
 
-  function selectForCopy(value, message = "已选中内容。电脑按 Ctrl+C（Mac 按 ⌘C）；手机长按后选择复制。") {
+  async function selectForCopy(value, message = "") {
     if (!value) return;
     const manual = $("#accountAccessManualCopy");
     const feedback = $("#accountAccessSecretFeedback");
     if (!manual) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard_unavailable");
+      await navigator.clipboard.writeText(value);
+      manual.value = value;
+      manual.hidden = true;
+      if (feedback) feedback.textContent = message || "已复制到剪贴板。";
+      return;
+    } catch {
+      // Preserve a keyboard/touch selection fallback when clipboard access is
+      // unavailable (for example, browser permissions or an embedded webview).
+    }
     manual.value = value;
     manual.hidden = false;
     manual.focus();
     manual.select();
-    if (feedback) feedback.textContent = message;
+    if (feedback) feedback.textContent = "浏览器未授权直接复制，内容已选中；请使用系统复制操作。";
   }
 
   function apiGenerationExample(origin, apiKey) {
@@ -250,7 +269,11 @@ for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${proje
     const epoch = state.epoch;
     try {
       const name = $("#accountAccessKeyName")?.value.trim() || "我的 API";
-      const payload = await request("/api/access/keys", { method: "POST", body: { name } });
+      const lifetimeValue = $("#accountAccessKeyLifetime")?.value ?? "";
+      const payload = await request("/api/access/keys", {
+        method: "POST",
+        body: { name, expires_in_days: lifetimeValue ? Number(lifetimeValue) : null },
+      });
       if (epoch !== state.epoch || !secretPattern.test(payload?.secret || "")) throw new Error("invalid_response");
       state.secret = payload.secret;
       $("#accountAccessSecretInput").value = state.secret;
@@ -318,7 +341,7 @@ for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${proje
     $("[data-account-access-copy-secret]")?.addEventListener("click", () => selectForCopy(state.secret));
     $("[data-account-access-copy-api]")?.addEventListener("click", () => selectForCopy(apiGenerationExample(location.origin, state.secret)));
     $("[data-account-access-copy-mcp]")?.addEventListener("click", () => selectForCopy(mcpConfig(location.origin, state.secret)));
-    $("[data-account-access-copy-address]")?.addEventListener("click", () => selectForCopy(location.origin, "已选中服务地址。电脑按 Ctrl+C（Mac 按 ⌘C）；手机长按后选择复制。"));
+    $("[data-account-access-copy-address]")?.addEventListener("click", () => selectForCopy(location.origin, "服务地址已复制到剪贴板。"));
     document.addEventListener("click", (event) => {
       const viewButton = event.target.closest("[data-account-view-target]");
       if (viewButton && accountShell().contains(viewButton)) {

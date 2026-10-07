@@ -1165,6 +1165,7 @@
                   </div>
                   <form id="accountAccessKeyForm" class="account-access-create-form">
                     <label class="field"><span>名称（可选）</span><input id="accountAccessKeyName" maxlength="50" autocomplete="off" placeholder="例如：我的 Codex" /></label>
+                    <label class="field"><span>有效期</span><select id="accountAccessKeyLifetime"><option value="">永久有效（默认）</option><option value="30">30 天</option><option value="90">90 天</option><option value="180">180 天</option><option value="365">365 天</option></select></label>
                     <button id="accountAccessCreateBtn" class="button primary" type="submit">创建密钥</button>
                   </form>
                   <div id="accountAccessKeyList" class="account-access-key-list" aria-live="polite"></div>
@@ -1177,7 +1178,7 @@
             <div class="account-access-dialog-head"><div><p class="eyebrow">One-time Secret</p><h3 id="accountAccessSecretTitle">密钥已创建</h3></div><button data-account-access-close-secret class="modal-close" type="button" aria-label="关闭">×</button></div>
             <p>完整密钥只显示这一次。请先保存；关闭后无法从系统找回。</p>
             <input id="accountAccessSecretInput" class="account-access-secret" readonly aria-label="新建 API 密钥" />
-            <div class="account-access-dialog-actions"><button data-account-access-copy-secret class="button secondary" type="button">选中密钥</button><button data-account-access-copy-api class="button secondary" type="button">选中 API 示例</button><button data-account-access-copy-mcp class="button secondary" type="button">选中 MCP 配置</button></div>
+            <div class="account-access-dialog-actions"><button data-account-access-copy-secret class="button secondary" type="button">复制密钥</button><button data-account-access-copy-api class="button secondary" type="button">复制 API 示例</button><button data-account-access-copy-mcp class="button secondary" type="button">复制 MCP 配置</button></div>
             <textarea id="accountAccessManualCopy" class="account-access-manual-copy" hidden readonly></textarea>
             <p id="accountAccessSecretFeedback" class="account-access-feedback" role="status" aria-live="polite"></p>
             <button data-account-access-close-secret class="button primary" type="button">我已保存，关闭</button>

@@ -9,7 +9,7 @@
 .access-card{background:#fffefa;border:1px solid #e5e6dc;border-radius:18px;padding:28px;margin:20px 0}.access-card h2{font-size:21px;margin:8px 0}
 .access-create{display:grid;grid-template-columns:1.3fr 1fr;align-items:center;gap:36px;border-color:#c6d0c0}.access-step{color:#79826d;font-size:11px;font-weight:700;letter-spacing:1.5px}
 .access-card p,.access-dialog p{color:#626c65}.access-create form{display:grid;gap:12px}.access-body label{display:block;font-size:13px;margin:12px 0 6px;color:#445047}
-.access-body input,.access-body textarea{width:100%;border:1px solid #cdd3c8;border-radius:9px;padding:12px;background:#fff;color:#25312c;font:inherit}.access-body button{font:inherit;cursor:pointer}
+.access-body input,.access-body textarea,.access-body select{width:100%;border:1px solid #cdd3c8;border-radius:9px;padding:12px;background:#fff;color:#25312c;font:inherit}.access-body button{font:inherit;cursor:pointer}
 .access-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:10px 18px;border:1px solid transparent;border-radius:10px;background:#304f40;color:#fff;text-decoration:none;font-size:14px;font-weight:600;transition:background .15s}
 .access-body a.access-button{color:#fff}.access-button:hover{background:#203d2f}.access-button.secondary{background:#f6f7f1;color:#344f40;border-color:#dce0d5}.access-button.secondary:hover{background:#e9ede3}.access-button.danger{background:#893e3e}
 .access-button:disabled{cursor:not-allowed;opacity:.5}.access-body :focus-visible{outline:3px solid #9bb297;outline-offset:3px}.access-options summary,.access-help summary{cursor:pointer;color:#3c5b47;font-weight:600}.access-options{font-size:13px}
