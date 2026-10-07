@@ -227,7 +227,34 @@ class PersistentProjectStore(InMemoryProjectStore):
             try:
                 header = self._read_project_header_sidecar(project_id, revision)
                 if header is None:
-                    header = _read_project_header_json(path, project_id)
+                    # The source project remains authoritative. Rebuild a
+                    # missing or malformed sidecar lazily, with the same
+                    # process lock used by save_project so the derivative can
+                    # never be paired with another source revision.
+                    with _PROJECT_METADATA_TRANSACTION_LOCK:
+                        before_parse = self._project_revision(path)
+                        if before_parse is None or before_parse != revision:
+                            self._evict_project_header(project_id)
+                            continue
+                        header = _read_project_header_json(path, project_id)
+                        after_parse = self._project_revision(path)
+                        if after_parse is None or after_parse != before_parse:
+                            self._evict_project_header(project_id)
+                            continue
+                        payload = {
+                            "schema_version": _PROJECT_HEADER_SIDECAR_SCHEMA,
+                            "source_revision": list(before_parse),
+                            "header": header,
+                        }
+                        try:
+                            _atomic_write_json(self._project_header_path(project_id), payload)
+                        except OSError:
+                            # Listing can use a freshly parsed, stable source
+                            # even when derivative persistence is unavailable.
+                            pass
+                        if self._project_revision(path) != before_parse:
+                            self._evict_project_header(project_id)
+                            continue
             except (OSError, json.JSONDecodeError, UnicodeError, ValueError):
                 self._evict_project_header(project_id)
                 continue
@@ -272,24 +299,33 @@ class PersistentProjectStore(InMemoryProjectStore):
             return None
         if not isinstance(payload, dict) or payload.get("schema_version") != _PROJECT_HEADER_SIDECAR_SCHEMA:
             return None
-        try:
-            source_revision = tuple(int(value) for value in payload.get("source_revision", []))
-        except (TypeError, ValueError):
+        raw_revision = payload.get("source_revision")
+        if (
+            not isinstance(raw_revision, list)
+            or len(raw_revision) != 3
+            or any(type(value) is not int or value < 0 for value in raw_revision)
+        ):
             return None
+        source_revision = tuple(raw_revision)
         header = payload.get("header")
         if source_revision != revision or not isinstance(header, dict):
             return None
-        if str(header.get("project_id") or "") != project_id:
+        if type(header.get("project_id")) is not str or header.get("project_id") != project_id:
             return None
         required = {"status", "created_at", "updated_at", "owner_user_id"}
         if not required.issubset(header):
             return None
+        if any(type(header.get(key)) is not str for key in ("status", "created_at", "updated_at")):
+            return None
+        owner_user_id = header.get("owner_user_id")
+        if owner_user_id is not None and type(owner_user_id) not in {int, str}:
+            return None
         return {
             "project_id": project_id,
-            "status": str(header.get("status") or "active"),
-            "created_at": str(header.get("created_at") or ""),
-            "updated_at": str(header.get("updated_at") or ""),
-            "owner_user_id": header.get("owner_user_id"),
+            "status": header["status"] or "active",
+            "created_at": header["created_at"],
+            "updated_at": header["updated_at"],
+            "owner_user_id": owner_user_id,
         }
 
     def _cache_project(self, project: ProjectRecord, revision: tuple[int, int, int]) -> None:

@@ -756,7 +756,14 @@ async def _run_v3_project_header_scan(scan):
             _v3_browse_header_admitted = max(0, _v3_browse_header_admitted - 1)
 
     future.add_done_callback(release_admission)
-    return await asyncio.shield(asyncio.wrap_future(future))
+    try:
+        return await asyncio.shield(asyncio.wrap_future(future))
+    except asyncio.CancelledError:
+        # A concurrent Future that has not started can be removed from the
+        # executor queue. If it is already running, cancel() returns False and
+        # the done callback keeps admission occupied until the real work ends.
+        future.cancel()
+        raise
 
 
 def _v3_planning_failure_code(exc: Exception) -> str:

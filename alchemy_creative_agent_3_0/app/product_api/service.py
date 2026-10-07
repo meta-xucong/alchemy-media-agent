@@ -3039,7 +3039,10 @@ class V3ProductApiService:
         if _failed_artifact_expired(record):
             return self._not_found_status(job_id, expired_failure_artifact=True), None
         self._expire_background_generation_if_due(record)
-        status = self._partial_output_recovery_status(record) or self._status_from_record(record)
+        status = self._partial_output_recovery_status(
+            record,
+            output_records=output_records,
+        ) or self._status_from_record(record)
         return status, record
 
     def get_ecommerce_authority_snapshot(
@@ -14610,7 +14613,12 @@ class V3ProductApiService:
             },
         )
 
-    def _partial_output_recovery_status(self, record: ProductJobRecord) -> ProductJobStatus | None:
+    def _partial_output_recovery_status(
+        self,
+        record: ProductJobRecord,
+        *,
+        output_records: list[V3GeneratedOutputRecord] | None = None,
+    ) -> ProductJobStatus | None:
         """Expose durable earlier deliveries when a later set role fails.
 
         The worker can persist a reviewed first output before a later role
@@ -14624,7 +14632,7 @@ class V3ProductApiService:
             return None
         if record.generation_result is not None:
             return None
-        restored = self._status_from_output_store(record.job_id)
+        restored = self._status_from_output_store(record.job_id, records=output_records)
         if restored is None:
             return None
         result = record.planning_result

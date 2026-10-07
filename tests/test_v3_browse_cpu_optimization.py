@@ -109,3 +109,51 @@ def test_summary_projects_route_offloads_only_detached_headers(monkeypatch) -> N
     assert scan_threads and scan_threads[0] != event_loop_thread
     assert handler_threads == [event_loop_thread]
     assert seen_headers == [header]
+
+
+def test_cancelled_queued_header_scan_releases_admission_and_does_not_run(monkeypatch) -> None:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-v3-header-cancel")
+    monkeypatch.setattr(app_main, "_v3_browse_header_executor", executor)
+    with app_main._v3_browse_header_gate_lock:  # noqa: SLF001
+        app_main._v3_browse_header_admitted = 0  # noqa: SLF001
+        app_main._v3_browse_header_active = 0  # noqa: SLF001
+
+    entered = threading.Event()
+    release = threading.Event()
+    queued_ran: list[int] = []
+
+    def active_scan():
+        entered.set()
+        assert release.wait(timeout=5)
+        return "active"
+
+    def queued_scan(index):
+        queued_ran.append(index)
+        return index
+
+    async def exercise():
+        active = asyncio.create_task(app_main._run_v3_project_header_scan(active_scan))
+        assert await asyncio.to_thread(entered.wait, 5)
+        queued_one = asyncio.create_task(app_main._run_v3_project_header_scan(lambda: queued_scan(1)))
+        queued_two = asyncio.create_task(app_main._run_v3_project_header_scan(lambda: queued_scan(2)))
+        await asyncio.sleep(0.02)
+        assert app_main._v3_browse_header_admitted == 3  # noqa: SLF001
+        queued_one.cancel()
+        queued_two.cancel()
+        await asyncio.gather(queued_one, queued_two, return_exceptions=True)
+        assert app_main._v3_browse_header_admitted == 1  # noqa: SLF001
+        replacement = asyncio.create_task(
+            app_main._run_v3_project_header_scan(lambda: queued_scan(3))
+        )
+        await asyncio.sleep(0.02)
+        assert app_main._v3_browse_header_admitted == 2  # noqa: SLF001
+        release.set()
+        return await asyncio.gather(active, replacement)
+
+    try:
+        assert asyncio.run(exercise()) == ["active", 3]
+    finally:
+        release.set()
+        executor.shutdown(wait=True)
+
+    assert queued_ran == [3]

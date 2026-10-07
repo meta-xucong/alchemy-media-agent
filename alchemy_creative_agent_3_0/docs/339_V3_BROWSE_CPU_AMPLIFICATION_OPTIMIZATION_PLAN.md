@@ -356,3 +356,139 @@ are in scope without returning to the document gate for a revised contract.
       changes are preserved and excluded.
 - [ ] Local `main`, `origin/main`, and final commit SHA are reported.
 - [ ] No VPS deployment, real model call, or real image generation is claimed.
+
+## 9. Follow-up correction plan for baseline 17860f88
+
+An independent review of `17860f88380f22c39e36637639bca51f1e17e1c1`
+confirmed five acceptance defects and four additional CPU/lifecycle gaps.
+The project-header revision conversion exception claim was not reproduced;
+this follow-up still tightens revision shape/type validation so malformed
+derived metadata safely falls back to the source record.
+
+The source `project.json`, Job records, and output records remain authoritative.
+The home-preview sentinel is only a bounded locator signal; it must not become
+a completeness claim or a cap on full project detail. Full project detail must
+retain every output previously visible through the project’s declared Jobs,
+including legacy Job-only records, while locating them in one output-catalog
+pass and avoiding a whole-catalog index above Doc338’s bound.
+
+Implement these bounded corrections before any VPS validation:
+
+1. **Separate complete detail from bounded home lookup.** Use the 4097 sentinel
+   only for the home/count projection. For full project detail, stream and
+   retain all exact project-linked and declared Job-only matches in the
+   request snapshot. Keep the one-catalog-pass property and exact owner,
+   project, Job, review, delivery, ordering, and history predicates. Add real
+   store-to-detail regressions with 4096, 4097, and 4098 outputs, including a
+   sole eligible delivery outside the first 4097 and the legacy Job-only path.
+2. **Keep completeness separate from lookup success.** A successful batch call
+   only means the query ran. On home/count reads, 4097 returned rows means the
+   4096-row result is incomplete; never overwrite that sentinel result with
+   `true`. Test exact counts and completeness at 4096/4097/4098 through the
+   production batch method.
+3. **Reuse records for failed Jobs and use linear de-duplication.** Pass the
+   already batched output rows through failed/blocked output recovery instead
+   of calling `list_by_job` again. Maintain a request-local set of output IDs
+   beside each Job bucket so grouping remains linear for a Job with many
+   outputs. Preserve all existing failure, review, ownership, and delivery
+   gates.
+4. **Bound deferred-image lifetime by DOM lifetime.** Before V3 list/grid
+   replacement and history-modal closure, cancel pending observers, abort
+   their image subscriptions, release object URLs, and remove entries for the
+   removed subtree. Do not rely on a future IntersectionObserver callback for
+   disconnected nodes. Add a deterministic repeated-render test proving the
+   retained deferred-load map returns to the current live-node count.
+5. **Retry changed output projections after read failure.** Do not commit the
+   handled output signature before the project-output request succeeds.
+   Distinguish successful empty results from a failed request, retain the last
+   good projection on a recovery read failure, and retry with a capped
+   backoff. Test failure then success at the same Job signature and prove a
+   successful empty result does not loop.
+6. **Lazily rebuild old or damaged project-header sidecars.** When a sidecar is
+   missing or invalid, parse the source once and atomically rewrite the small
+   derivative only if the project source revision is unchanged before and
+   after. Serialize this with in-process project writes; an external race must
+   leave the sidecar safely stale and eligible for a later retry. Do not grow
+   the 4096-entry memory cache, batch-migrate the corpus, or let a sidecar
+   authorize visibility. Validate exact revision shape/types and header field
+   types; malformed sidecars fall back to the authoritative parser.
+   Regression cases cover 4097 old projects across repeat scans and a fresh
+   Store, sidecar corruption, malformed owner, malformed revision, deletion,
+   and save/out-of-band interleavings.
+7. **Consolidate terminal refresh and cancel abandoned queued scans.** A
+   recovered terminal Job must flow through one completion refresh path rather
+   than refreshing inside recovery and again during completion. Preserve
+   required state restoration while avoiding duplicate project, timeline,
+   output, and Job reads. When an HTTP waiter is cancelled, attempt to cancel
+   its header-scan Future: a queued Future releases admission when cancellation
+   completes; an already-running scan retains its slot until it actually
+   finishes. Test repeated terminal completion request counts and queued
+   cancellation followed by successful admission.
+
+The correction set is bounded to the existing V3 output, project-store,
+project-service, route, and frontend layers plus focused regressions and this
+document. No new database, persistent cache class, worker pool, state framework,
+public response contract, V1/V2 behavior, generation behavior, model call, or
+VPS operation is in scope.
+
+### Follow-up release gates
+
+1. Independently audit this amendment against the source at `17860f88`, the
+   confirmed DOT findings, Doc338, and repository rules. No code changes before
+   document `PASS`.
+2. Add the failing boundary tests first, then implement all seven corrections
+   as minimal related changes. Keep full detail untruncated; keep only home
+   lookup bounded.
+3. Run focused output/project/store/frontend/route tests, compile checks,
+   Node fake-fetch tests, and browser tests where the environment permits.
+   Browser tests unavailable in this environment remain unverified.
+4. Freeze the exact final diff and evidence for a separate read-only code audit.
+   Any `FAIL` returns to a bounded correction and another audit.
+5. Only after code audit `PASS` and all executable acceptance gates pass, commit
+   task-owned files and push `main`. Preserve all existing unrelated local
+   edits. Do not deploy VPS; actual server CPU/P95/RSS validation is a separate
+   phase.
+
+## 10. Implementation and local verification record
+
+The follow-up corrections are implemented in the existing V3 project/output,
+store, route, and desktop UI layers. Full detail now requests all matching
+project/declared-Job outputs in one catalog query; the 4097 sentinel remains
+limited to home preview. Failed/blocked Job recovery consumes that request's
+records, and output grouping uses request-local identity sets. Project header
+sidecars are repaired lazily from a revision-stable source under the existing
+metadata transaction lock. Deferred images are explicitly released before V3
+list/grid replacement or history-modal closure. Output projection signatures
+are committed only after a successful read, failures preserve the last good
+projection and use capped retry delay, terminal recovery delegates refresh to
+one completion path, and cancelled queued scans cancel their Future where
+possible.
+
+Regression evidence on the local checkout:
+
+- The new boundary tests first reproduced the truncation, completeness,
+  sidecar, recovery reuse, and queued-cancellation failures. After the fixes,
+  the focused Python output/store/project/route set passed **47 tests** after
+  adding the batch-failure fallback and explicit 4098-row completeness cases.
+- The expanded adjacent Python set ran **201 tests**. The implementation passed
+  196 in that run; five existing review-projection fixtures still patched only
+  `get_job()` and therefore bypassed the production `get_job_read_snapshot()`
+  boundary. Those fixtures were migrated to override the actual snapshot status
+  while retaining the stored Job record, and all five targeted regressions
+  then passed. The final combined rerun passed all **201 tests**. No
+  review/delivery assertion was removed.
+- The Node browse CPU suite passed **9 tests**, including repeated deferred
+  image teardown, retry after a failed output read at the same signature, and
+  one terminal projection refresh. `node --check src_skeleton/app/static/app.js`
+  `python -m compileall` for the modified Python modules, and `git diff --check`
+  passed.
+- The 4097-project sidecar fixture confirms one source parse per old project,
+  disk-sidecar creation, zero repeat parses on the next scan, and zero repeat
+  parses after Store reopen, while the in-memory header cache stays at 4096.
+- A real output Store-to-public-project-detail fixture places the sole
+  review-qualified legacy Job-only output behind 4097 newer non-qualified
+  records; the public detail projection still returns that output. A separate
+  failed-batch fixture verifies the uncapped declared-Job fallback above 128
+  rows, and home completeness is checked at 4096/4097/4098.
+- Browser-driven tests and VPS CPU/RSS/P95 validation have not run in this
+  environment. This record does not claim deployed performance improvement.

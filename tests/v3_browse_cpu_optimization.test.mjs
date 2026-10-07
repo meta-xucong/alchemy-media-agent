@@ -100,7 +100,7 @@ test("recovery does not refresh project projections on unchanged poll ticks", as
   );
   assert.equal(result.status, "generated");
   assert.equal(jobReads, 3);
-  assert.equal(projectRefreshes, 1);
+  assert.equal(projectRefreshes, 0);
   assert.equal(timelineReads, 0);
   assert.equal(outputReads, 0);
 });
@@ -272,4 +272,119 @@ test("V3 authenticated image fetch waits for intersection and cancels offscreen 
   observers[0].intersect(cancelled);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(fetchCount, 1);
+});
+
+test("V3 deferred image teardown releases disconnected image references and subscriptions", () => {
+  const start = source.indexOf("const v3DeferredImageLoads = new Map();");
+  const end = source.indexOf("function bindProgressiveLightboxImage", start);
+  const imageSource = `${source.slice(start, end)}\nthis.deferredCount = () => v3DeferredImageLoads.size;`;
+  const observers = [];
+  class MockIntersectionObserver {
+    constructor(callback) { this.callback = callback; this.observed = new Set(); observers.push(this); }
+    observe(image) { this.observed.add(image); }
+    unobserve(image) { this.observed.delete(image); }
+  }
+  const context = {
+    Map,
+    WeakMap,
+    AbortController,
+    IntersectionObserver: MockIntersectionObserver,
+    Date,
+    Math,
+    URL,
+    uniqueNonEmpty: (values) => [...new Set(values.filter(Boolean))],
+    mediaUrlNeedsAuthenticatedFetch: () => true,
+    releaseImageObjectUrl: () => {},
+    resolveAuthenticatedMediaSource: async () => ({ url: "blob:test", objectUrl: false }),
+    v3State: { projectDetailProjectId: "project_1", projectDetailEpoch: 1 },
+    v3ProjectDetailSignal: () => undefined,
+  };
+  vm.runInNewContext(imageSource, context);
+  const container = {
+    images: [],
+    querySelectorAll(selector) { assert.equal(selector, "img"); return this.images; },
+    matches() { return false; },
+  };
+  const makeImage = () => ({
+    dataset: {},
+    loading: "lazy",
+    isConnected: true,
+    classList: { add() {}, remove() {} },
+    removeAttribute() { this.src = ""; },
+  });
+  for (let render = 0; render < 100; render += 1) {
+    container.images = Array.from({ length: 24 }, () => makeImage());
+    for (const image of container.images) {
+      context.bindV3ImageWithFallback(image, ["/api/v3/media/deferred"], { detailBound: true });
+    }
+    assert.equal(context.deferredCount(), 24);
+    context.releaseV3ImageBindingsWithin(container);
+    container.images = [];
+    assert.equal(context.deferredCount(), 0);
+  }
+  assert.equal(observers[0].observed.size, 0);
+});
+
+test("output projection retry commits a signature only after successful refresh", async () => {
+  const recoverySource = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  let now = 0;
+  let jobReads = 0;
+  let outputReads = 0;
+  const running = {
+    status: "generating",
+    metadata: {},
+    candidates: [{ output_id: "out_1" }],
+    asset_series: [],
+  };
+  const terminal = { ...running, status: "generated" };
+  const context = {
+    v3RecoveryMaxAttempts: 4,
+    v3State: {},
+    v3ApiBase: "/api/v3",
+    Date: { now: () => now },
+    v3Delay: async () => { now += 3000; },
+    request: async () => {
+      jobReads += 1;
+      return jobReads <= 3 ? running : terminal;
+    },
+    v3JobOutputProjectionSignature: (job) => JSON.stringify((job.candidates || []).map((item) => item.output_id)),
+    v3JobHasTerminalOutcome: (job) => job.status === "generated",
+    v3JobHasExpectedVisibleImages: () => false,
+    v3JobHasRecoverablePartialDelivery: () => false,
+    v3GenerationSessionOwns: () => true,
+    v3SettleEcommerceTerminalReceipt: () => {},
+    renderV3Job: () => {},
+    refreshV3CurrentProject: async () => { throw new Error("recovery must not refresh terminal projections"); },
+    loadV3ProjectTimeline: async () => {},
+    loadV3ProjectOutputs: async (options) => {
+      assert.equal(options.throwOnError, true);
+      assert.equal(options.preserveOnError, true);
+      outputReads += 1;
+      if (outputReads === 1) throw new Error("temporary output request failure");
+      return [];
+    },
+    setV3Progress: () => {},
+    v3JobProviderRetryActive: () => false,
+    v3JobAwaitingFinalDelivery: () => false,
+    v3RecoveryAttemptLimitForServerWatchdog: () => 0,
+    v3RecoveredJobFromProjectOutputs: () => null,
+    v3ProviderFailureUserMessage: () => "failed",
+    clearV3RecoverPolling: () => {},
+    renderV3ProjectDetail: () => {},
+  };
+  vm.runInNewContext(recoverySource, context);
+  const result = await context.recoverV3GeneratedJob("project_1", "job_1", new Error("pending"));
+  assert.equal(result.status, "generated");
+  assert.equal(outputReads, 2);
+});
+
+test("generation completion uses one project projection refresh", () => {
+  const completion = extractFunction("completeV3GeneratedJob", "\nasync function runV3GenerationWithRecovery");
+  const recovery = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  assert.equal((completion.match(/refreshV3CurrentProject\(/g) || []).length, 1);
+  assert.equal((completion.match(/loadV3ProjectOutputs\(/g) || []).length, 0);
+  assert.match(completion, /restoreJob:\s*false/);
+  assert.match(completion, /preserveOutputOnError:\s*true/);
+  assert.match(completion, /preserveOutputOnError:\s*true/);
+  assert.doesNotMatch(recovery, /refreshV3CurrentProject\(/);
 });

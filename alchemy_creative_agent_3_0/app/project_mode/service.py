@@ -3078,12 +3078,13 @@ class V3ProjectModeService:
                 if str(raw_job_id or "").strip()
             ))
             indexed_job_ids: set[str] = set()
+            output_ids_by_job: dict[str, set[str]] = {}
             batch_list = getattr(output_store, "list_by_project_and_jobs", None)
             batch_project_index_loaded = False
             if callable(batch_list):
                 try:
                     batch_limit = None
-                    if use_project_index:
+                    if use_project_index and not prefetch_job_state:
                         bounded_index_limit = max(
                             1,
                             int(project_index_limit or _HOME_PREVIEW_MAX_INDEX_RECORDS),
@@ -3096,10 +3097,15 @@ class V3ProjectModeService:
                     except TypeError:
                         project_records = list(batch_list(project_id, declared_job_ids))
                     batch_project_index_loaded = True
-                    if use_project_index:
+                    if use_project_index and not prefetch_job_state:
                         snapshot["project_index_complete"][project_id] = (
                             len(project_records) <= bounded_index_limit
                         )
+                        snapshot["records_by_project"][project_id] = project_records
+                    elif use_project_index:
+                        # Full detail uses the request-scoped unbounded query;
+                        # unlike the home preview, these rows are the complete
+                        # source for delivery, review, and history projection.
                         snapshot["records_by_project"][project_id] = project_records
                     for record in project_records:
                         job_id = str(getattr(record, "job_id", "") or "").strip()
@@ -3108,23 +3114,32 @@ class V3ProjectModeService:
                         indexed_job_ids.add(job_id)
                         bucket = snapshot["records_by_job"].setdefault(job_id, [])
                         identity = str(getattr(record, "output_id", "") or "").strip()
-                        if identity and not any(
-                            str(getattr(existing, "output_id", "") or "").strip() == identity
-                            for existing in bucket
-                        ):
+                        identities = output_ids_by_job.setdefault(job_id, set())
+                        if identity and identity not in identities:
                             bucket.append(record)
+                            identities.add(identity)
                     for job_id in declared_job_ids:
                         snapshot["records_by_job"].setdefault(job_id, [])
                 except Exception:
                     batch_project_index_loaded = False
             if use_project_index:
-                project_index_complete = batch_project_index_loaded or callable(list_by_project)
+                project_index_complete = snapshot["project_index_complete"].get(project_id)
+                if project_index_complete is None:
+                    # The project index API is a bounded home locator. If the
+                    # full-detail batch failed, it cannot certify a complete
+                    # detail projection; declared Job fallbacks below restore
+                    # the prior per-Job semantics instead.
+                    project_index_complete = (
+                        batch_project_index_loaded
+                        if prefetch_job_state
+                        else batch_project_index_loaded or callable(list_by_project)
+                    )
                 project_records: list[Any] = (
                     list(snapshot["records_by_project"].get(project_id, []))
                     if batch_project_index_loaded
                     else []
                 )
-                if project_index_complete and not batch_project_index_loaded:
+                if project_index_complete and not batch_project_index_loaded and not prefetch_job_state:
                     try:
                         bounded_index_limit = max(1, int(project_index_limit or _HOME_PREVIEW_MAX_INDEX_RECORDS))
                         project_records = list(list_by_project(project_id, limit=bounded_index_limit + 1))
@@ -3144,12 +3159,12 @@ class V3ProjectModeService:
                     indexed_job_ids.add(job_id)
                     bucket = snapshot["records_by_job"].setdefault(job_id, [])
                     identity = str(getattr(record, "output_id", "") or "").strip()
-                    if identity and any(
-                        str(getattr(existing, "output_id", "") or "").strip() == identity
-                        for existing in bucket
-                    ):
+                    identities = output_ids_by_job.setdefault(job_id, set())
+                    if identity and identity in identities:
                         continue
                     bucket.append(record)
+                    if identity:
+                        identities.add(identity)
 
             if use_project_index and not prefetch_job_state and not candidate_job_outputs_only:
                 home_candidate_job_ids = [
@@ -3237,7 +3252,28 @@ class V3ProjectModeService:
                 if candidate_job_outputs_only and job_id not in snapshot["records_by_job"]:
                     if callable(list_by_job):
                         try:
-                            snapshot["records_by_job"][job_id] = read_job_outputs(job_id, bounded=True)
+                            job_outputs = read_job_outputs(
+                                job_id,
+                                bounded=not prefetch_job_state,
+                            )
+                            snapshot["records_by_job"][job_id] = job_outputs
+                            output_ids_by_job[job_id] = {
+                                str(getattr(item, "output_id", "") or "").strip()
+                                for item in job_outputs
+                                if str(getattr(item, "output_id", "") or "").strip()
+                            }
+                            if use_project_index and prefetch_job_state and not batch_project_index_loaded:
+                                project_bucket = snapshot["records_by_project"].setdefault(project_id, [])
+                                project_ids = {
+                                    str(getattr(item, "output_id", "") or "").strip()
+                                    for item in project_bucket
+                                    if str(getattr(item, "output_id", "") or "").strip()
+                                }
+                                for item in job_outputs:
+                                    identity = str(getattr(item, "output_id", "") or "").strip()
+                                    if identity and identity not in project_ids:
+                                        project_bucket.append(item)
+                                        project_ids.add(identity)
                         except Exception:
                             snapshot["records_by_job"][job_id] = []
                     else:
@@ -3282,7 +3318,11 @@ class V3ProjectModeService:
                     # fall back to a full Job scan on the home surface.
                     snapshot["records_by_job"].setdefault(job_id, [])
                     continue
-                if callable(list_by_job) and not batch_project_index_loaded:
+                if (
+                    callable(list_by_job)
+                    and not batch_project_index_loaded
+                    and not (candidate_job_outputs_only and job_id in snapshot["records_by_job"])
+                ):
                     try:
                         snapshot["records_by_job"][job_id] = list(list_by_job(job_id))
                     except Exception:

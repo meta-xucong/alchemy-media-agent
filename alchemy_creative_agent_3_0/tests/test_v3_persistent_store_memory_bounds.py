@@ -4,7 +4,11 @@ from types import SimpleNamespace
 import pytest
 
 from alchemy_creative_agent_3_0.app.product_api import CreateCreativeJobRequest, ProductJobStatusValue
-from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, ProductJobRecord
+from alchemy_creative_agent_3_0.app.product_api.service import (
+    PersistentProductJobStore,
+    ProductJobRecord,
+    V3ProductApiService,
+)
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     ProjectMemorySummary,
     ProjectRecord,
@@ -366,6 +370,86 @@ def test_project_header_sidecar_uses_small_schema_and_survives_store_reopen(tmp_
     assert not sidecar_path.exists()
 
 
+def test_old_project_headers_rebuild_sidecars_once_without_expanding_cache(tmp_path, monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.project_mode.store as project_store_module
+
+    root = tmp_path / "projects"
+    root.mkdir()
+    total = 4097
+    for index in range(total):
+        project_id = f"project_old_header_{index:04d}"
+        directory = root / project_id
+        directory.mkdir()
+        (directory / "project.json").write_text(
+            json.dumps({
+                "project_id": project_id,
+                "status": "active",
+                "created_at": "2026-09-01T00:00:00+00:00",
+                "updated_at": "2026-09-01T00:00:00+00:00",
+                "metadata": {"veyra_user_id": 7},
+            }),
+            encoding="utf-8",
+        )
+
+    parse_count = 0
+    original_parser = project_store_module._read_project_header_json
+
+    def tracked_parser(*args, **kwargs):
+        nonlocal parse_count
+        parse_count += 1
+        return original_parser(*args, **kwargs)
+
+    monkeypatch.setattr(project_store_module, "_read_project_header_json", tracked_parser)
+    first_store = PersistentProjectStore(root)
+    assert len(first_store.list_project_headers()) == total
+    assert parse_count == total
+    assert len(first_store._project_header_cache) <= 4096  # noqa: SLF001
+    assert sum(1 for _ in root.glob("project_*/project_header.json")) == total
+
+    parse_count = 0
+    assert len(first_store.list_project_headers()) == total
+    assert parse_count == 0
+
+    reopened = PersistentProjectStore(root)
+    assert len(reopened.list_project_headers()) == total
+    assert parse_count == 0
+
+
+@pytest.mark.parametrize(
+    "bad_header",
+    [
+        {"owner_user_id": {"unexpected": "object"}},
+        {"source_revision": [1.0, 2, 3]},
+        {"source_revision": [10**1000, 2, 3]},
+    ],
+)
+def test_malformed_project_header_sidecar_falls_back_to_authoritative_project(
+    tmp_path, bad_header
+) -> None:
+    root = tmp_path / "projects"
+    store = PersistentProjectStore(root)
+    project = _project("project_header_damaged", "2026-09-03T00:00:00+00:00", owner_id=17)
+    store.save_project(project)
+    sidecar_path = store._project_header_path(project.project_id)  # noqa: SLF001
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    if "owner_user_id" in bad_header:
+        sidecar["header"]["owner_user_id"] = bad_header["owner_user_id"]
+    else:
+        sidecar["source_revision"] = bad_header["source_revision"]
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    reopened = PersistentProjectStore(root)
+    headers = reopened.list_project_headers()
+
+    assert len(headers) == 1
+    assert headers[0]["owner_user_id"] == 17
+    repaired = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert repaired["header"]["owner_user_id"] == 17
+    assert repaired["source_revision"] == list(reopened._project_revision(  # noqa: SLF001
+        reopened._project_path(project.project_id)  # noqa: SLF001
+    ))
+
+
 def test_project_header_sidecar_skips_publication_after_external_replacement(tmp_path, monkeypatch) -> None:
     root = tmp_path / "projects"
     store = PersistentProjectStore(root)
@@ -696,6 +780,171 @@ def test_project_output_snapshot_uses_batched_outputs_and_one_job_snapshot_read(
     assert service.product_service.job_reads == 1
     assert snapshot["records_by_job"]["job_snapshot_batch"] == [record]
     assert snapshot["job_status_by_id"]["job_snapshot_batch"].status == ProductJobStatusValue.GENERATED
+
+
+def test_full_project_snapshot_reads_beyond_home_sentinel_and_preserves_job_only_rows() -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project("project_full_snapshot", "2026-09-01T00:00:00+00:00")
+    project.job_ids = ["job_many_outputs", "job_legacy_only"]
+    records = [
+        SimpleNamespace(job_id="job_many_outputs", output_id=f"out_{index:04d}")
+        for index in range(4098)
+    ]
+    legacy = SimpleNamespace(job_id="job_legacy_only", output_id="out_legacy")
+    records.append(legacy)
+    limits = []
+
+    class OutputStore:
+        def list_by_project_and_jobs(self, _project_id, _job_ids, *, limit=None):
+            limits.append(limit)
+            return records if limit is None else records[:limit]
+
+        def list_by_job(self, job_id, **_kwargs):
+            return [legacy] if job_id == "job_legacy_only" else []
+
+    status = SimpleNamespace(status=ProductJobStatusValue.GENERATED, metadata={}, asset_series=[], candidates=[])
+    service.product_service = SimpleNamespace(
+        output_store=OutputStore(),
+        get_job_read_snapshot=lambda job_id, *, output_records=None: (status, SimpleNamespace(request=SimpleNamespace(metadata={}))),
+    )
+
+    snapshot = service._project_output_read_snapshot(
+        [project],
+        use_project_index=True,
+        prefetch_job_state=True,
+        candidate_job_outputs_only=True,
+    )
+
+    assert limits == [None]
+    assert len(snapshot["records_by_project"][project.project_id]) == 4099
+    assert len(snapshot["records_by_job"]["job_many_outputs"]) == 4098
+    assert snapshot["records_by_job"]["job_legacy_only"] == [legacy]
+
+
+def test_full_project_snapshot_uses_unbounded_job_fallback_when_batch_lookup_fails() -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project("project_full_fallback", "2026-09-01T00:00:00+00:00")
+    project.job_ids = ["job_many_outputs"]
+    records = [
+        SimpleNamespace(job_id="job_many_outputs", output_id=f"out_{index:04d}")
+        for index in range(140)
+    ]
+    calls = {"project": 0, "job": 0}
+
+    class OutputStore:
+        def list_by_project_and_jobs(self, *_args, **_kwargs):
+            raise OSError("synthetic batch catalog failure")
+
+        def list_by_project(self, _project_id, *, limit=None):
+            calls["project"] += 1
+            return records[:limit]
+
+        def list_by_job(self, job_id, **kwargs):
+            calls["job"] += 1
+            assert kwargs == {}
+            return records if job_id == "job_many_outputs" else []
+
+    status = SimpleNamespace(status=ProductJobStatusValue.GENERATED, metadata={}, asset_series=[], candidates=[])
+    service.product_service = SimpleNamespace(
+        output_store=OutputStore(),
+        get_job_read_snapshot=lambda job_id, *, output_records=None: (
+            status,
+            SimpleNamespace(request=SimpleNamespace(metadata={})),
+        ),
+    )
+
+    snapshot = service._project_output_read_snapshot(
+        [project],
+        use_project_index=True,
+        prefetch_job_state=True,
+        candidate_job_outputs_only=True,
+    )
+
+    assert calls == {"project": 0, "job": 1}
+    assert len(snapshot["records_by_job"]["job_many_outputs"]) == 140
+    assert len(snapshot["records_by_project"][project.project_id]) == 140
+
+
+@pytest.mark.parametrize(
+    "row_count, expected_complete",
+    [(4096, True), (4097, False), (4098, False)],
+)
+def test_home_snapshot_keeps_sentinel_completeness_separate_from_query_success(
+    row_count, expected_complete
+) -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project(f"project_home_{row_count}", "2026-09-01T00:00:00+00:00")
+    project.job_ids = []
+    records = [SimpleNamespace(job_id=f"job_{index}", output_id=f"out_{index}") for index in range(row_count)]
+
+    class OutputStore:
+        def list_by_project_and_jobs(self, _project_id, _job_ids, *, limit=None):
+            return records if limit is None else records[:limit]
+
+        def list_by_project(self, _project_id, *, limit=None):
+            return records[:limit]
+
+    service.product_service = SimpleNamespace(
+        output_store=OutputStore(),
+        get_job=lambda _job_id: None,
+        get_job_record=lambda _job_id: None,
+    )
+    snapshot = service._project_output_read_snapshot(
+        [project],
+        use_project_index=True,
+        prefetch_job_state=False,
+        candidate_job_outputs_only=False,
+        project_index_limit=4096,
+    )
+
+    assert snapshot["project_index_complete"][project.project_id] is expected_complete
+    assert len(snapshot["records_by_project"][project.project_id]) == min(row_count, 4097)
+
+
+def test_partial_output_recovery_reuses_request_scoped_output_records() -> None:
+    from alchemy_creative_agent_3_0.app.product_api.service import ProductJobStatusValue
+
+    service = object.__new__(V3ProductApiService)
+    output_record = SimpleNamespace(output_id="out_partial", created_at="2026-09-01T00:00:00+00:00")
+    restored = SimpleNamespace(
+        brand_id=None,
+        planning_result_id=None,
+        asset_pack_id=None,
+        scenario=None,
+        campaign=None,
+        style_continuation=None,
+        general_creative=None,
+        ecommerce=None,
+        candidates=[output_record],
+        metadata={},
+        model_copy=lambda *, update, deep: SimpleNamespace(**{**vars(restored), **update}),
+    )
+    service._status_from_output_store = lambda job_id, *, records=None: (
+        restored if job_id == "job_partial" and records == [output_record] else None
+    )
+    service._partial_recovery_requested_image_count = lambda *_args: 2
+    service._public_job_warnings = lambda warnings, _metadata: warnings
+    service._scenario_summary = lambda _record: None
+    service._campaign_summary = lambda *_args: None
+    service._style_continuation_summary = lambda *_args: None
+    service._general_creative_summary = lambda _record: None
+    service._ecommerce_summary = lambda _record: None
+    service._project_mode_status_metadata = lambda _record: {}
+    service._lifecycle_summary = lambda _record: {}
+
+    record = SimpleNamespace(
+        status=ProductJobStatusValue.FAILED,
+        generation_result=None,
+        job_id="job_partial",
+        planning_result=None,
+        request=SimpleNamespace(metadata={}),
+        warnings=[],
+        balance_estimate={},
+    )
+
+    result = service._partial_output_recovery_status(record, output_records=[output_record])
+
+    assert result.metadata["partial_generation_recovery"]["delivered_output_count"] == 1
 
 
 def test_project_output_status_projection_preserves_missing_role_diagnostics() -> None:

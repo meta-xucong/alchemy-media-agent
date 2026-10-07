@@ -1,6 +1,8 @@
 import pytest
 from alchemy_creative_agent_3_0.tests.doc322_test_support import install_offline_pixel_provider, certify_output
 import base64
+import json
+import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -55,6 +57,19 @@ def _project_handlers_with_output_store(tmp_path) -> V3ProductRouteHandlers:
     )
     product_service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
     return V3ProductRouteHandlers(service=product_service)
+
+
+def _override_job_read_snapshot_status(handlers, job_id, status, monkeypatch):
+    """Override the status at the same snapshot boundary used by output reads."""
+
+    original = handlers.service.get_job_read_snapshot
+
+    def read_snapshot(target_job_id, *, output_records=None):
+        current_status, record = original(target_job_id, output_records=output_records)
+        return (status, record) if target_job_id == job_id else (current_status, record)
+
+    monkeypatch.setattr(handlers.service, "get_job_read_snapshot", read_snapshot)
+    return original
 
 
 class _ProjectModeCertifiedVisionTestProvider:
@@ -2011,6 +2026,9 @@ def test_doc73_auto_anchor_is_publicly_rebindable_and_excluded_from_review(tmp_p
         if target_job_id == job["job_id"]
         else original_get_job(target_job_id),
     )
+    original_read_snapshot = _override_job_read_snapshot_status(
+        handlers, job["job_id"], review_status, monkeypatch
+    )
 
     detail=handlers.get_project(project["project_id"])
     assert "doc73_auto_identity_anchor" not in detail["project"]["metadata"]
@@ -2022,6 +2040,7 @@ def test_doc73_auto_anchor_is_publicly_rebindable_and_excluded_from_review(tmp_p
             "output_id":anchor.output_id,"expected_job_id":job["job_id"],
             "expected_version":detail["project"]["metadata"]["continuity_anchor"]["version"],"confirm_binding":True})
     monkeypatch.setattr(handlers.service,"get_job",original_get_job)
+    monkeypatch.setattr(handlers.service, "get_job_read_snapshot", original_read_snapshot)
     certify_output(handlers.service,anchor)
     before=handlers.project_service.get_continuity_anchor(project["project_id"])
     bound=handlers.project_service.bind_continuity_anchor(project["project_id"],{
@@ -2133,6 +2152,7 @@ def test_project_outputs_expose_terminal_withheld_pixels_only_in_review_items(tm
         "get_job",
         lambda target_job_id: withheld_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
     )
+    _override_job_read_snapshot_status(handlers, job["job_id"], withheld_status, monkeypatch)
 
     payload = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)
 
@@ -2140,6 +2160,75 @@ def test_project_outputs_expose_terminal_withheld_pixels_only_in_review_items(tm
     assert [item["output_id"] for item in payload["review_items"]] == [withheld.output_id]
     assert payload["review_items"][0]["review_only"] is True
     assert payload["review_items"][0]["certification_state"] == "manual_confirmation_required"
+
+
+def test_full_project_detail_delivers_legacy_job_output_beyond_home_sentinel(tmp_path, monkeypatch) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a reviewed image"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create a reviewed image"})
+    eligible = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_legacy_eligible",
+        asset_id="asset_legacy_eligible",
+        metadata_override={"project_id": project["project_id"]},
+    )
+    eligible_dir = Path(eligible.file_path).parent
+    eligible_path = eligible_dir / "output.json"
+    eligible_payload = json.loads(eligible_path.read_text(encoding="utf-8"))
+    eligible_payload["created_at"] = "2025-01-01T00:00:00+00:00"
+    eligible_payload["metadata"].pop("project_id", None)
+    eligible_path.write_text(json.dumps(eligible_payload), encoding="utf-8")
+
+    # Fill the bounded home window with newer, non-reviewed outputs. The only
+    # eligible result is an older declared-Job-only record beyond row 4097.
+    for index in range(4097):
+        output_id = f"v3_output_{index + 1:020x}"
+        output_dir = handlers.service.output_store.storage_root / output_id
+        shutil.copytree(eligible_dir, output_dir)
+        payload_record = dict(eligible_payload)
+        payload_record["output_id"] = output_id
+        payload_record["candidate_id"] = f"candidate_filler_{index}"
+        payload_record["asset_id"] = f"asset_filler_{index}"
+        payload_record["created_at"] = f"2026-10-08T00:{index // 60:02d}:{index % 60:02d}+00:00"
+        payload_record["metadata"] = {
+            **eligible_payload["metadata"],
+            "project_id": project["project_id"],
+        }
+        for path_key in ("file_path", "preview_path", "thumbnail_path"):
+            if payload_record.get(path_key):
+                payload_record[path_key] = str(output_dir / Path(payload_record[path_key]).name)
+        (output_dir / "output.json").write_text(json.dumps(payload_record), encoding="utf-8")
+
+    base_status = handlers.service.get_job(job["job_id"])
+    reviewed_status = base_status.model_copy(
+        update={
+            "status": ProductJobStatusValue.GENERATED,
+            "metadata": {
+                **dict(base_status.metadata or {}),
+                "post_generation_review": {
+                    "recommended_output_ids": [eligible.output_id],
+                    "inspections": [{
+                        "output_id": eligible.output_id,
+                        "mode": "hybrid",
+                        "status": "pass",
+                        "verification_state": "verified",
+                    }],
+                },
+                "final_delivery": {
+                    "final_delivery_status": "ready",
+                    "automatic_delivery_available": True,
+                    "manual_confirmation_required": False,
+                    "delivery_gate_applies": True,
+                },
+            },
+        }
+    )
+    _override_job_read_snapshot_status(handlers, job["job_id"], reviewed_status, monkeypatch)
+
+    payload = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)
+
+    assert [item["output_id"] for item in payload["items"]] == [eligible.output_id]
 
 
 def test_project_outputs_mark_retry_superseded_and_final_delivery_group(tmp_path) -> None:
@@ -2238,6 +2327,7 @@ def test_project_outputs_use_job_review_final_ids_over_stale_record_preference(t
         "get_job",
         lambda target_job_id: reviewed_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
     )
+    _override_job_read_snapshot_status(handlers, job["job_id"], reviewed_status, monkeypatch)
 
     payload = handlers.get_project_outputs(project_id=project["project_id"], limit=20, compact=True)
     visible_ids = {item["output_id"] for item in payload["items"]}
@@ -2519,6 +2609,7 @@ def test_project_outputs_project_safe_certified_review_projection(tmp_path, monk
         "get_job",
         lambda target_job_id: reviewed_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
     )
+    _override_job_read_snapshot_status(handlers, job["job_id"], reviewed_status, monkeypatch)
 
     full = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=False)["items"]
     compact = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["items"]
@@ -2577,6 +2668,7 @@ def test_project_outputs_hide_modern_withheld_review_candidate(tmp_path, monkeyp
         "get_job",
         lambda target_job_id: withheld_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
     )
+    _override_job_read_snapshot_status(handlers, job["job_id"], withheld_status, monkeypatch)
 
     visible = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["items"]
     review_items = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["review_items"]

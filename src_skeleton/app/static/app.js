@@ -3194,6 +3194,8 @@ async function loadV3ProjectOutputs({
   detailEpoch = null,
   shouldContinue = null,
   sessionReceipt = null,
+  throwOnError = false,
+  preserveOnError = false,
 } = {}) {
   const scopedProjectId = projectId || v3State.currentProject?.project_id || "";
   const requestOwner = sessionReceipt || null;
@@ -3306,26 +3308,23 @@ async function loadV3ProjectOutputs({
   } catch (error) {
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     if (!v3HistoryModalRequestIsCurrent(requestOwner, scopedProjectId)) return [];
-    v3State.imageHistoryLoaded = false;
-    if (!scopedProjectId) v3State.imageHistorySurface = "none";
-    if (!scopedProjectId && normalizedSurface === "home_preview") {
-      markV3HomePreviewStale(requestedHomeProjectIds);
-    }
-    v3State.imageHistoryError = friendlyError(error);
-    if (scopedProjectId) {
+    if (!preserveOnError) {
+      v3State.imageHistoryLoaded = false;
+      if (!scopedProjectId) v3State.imageHistorySurface = "none";
+      if (!scopedProjectId && normalizedSurface === "home_preview") {
+        markV3HomePreviewStale(requestedHomeProjectIds);
+      }
+      v3State.imageHistoryError = friendlyError(error);
       v3State.projectOutputs = [];
       v3State.projectOutputItems = [];
       v3State.projectReviewOutputs = [];
-    } else {
-      v3State.projectOutputs = [];
-      v3State.projectOutputItems = [];
-      v3State.projectReviewOutputs = [];
+      renderV3History();
+      renderV3HeroHistory();
+      renderV3ProjectOutputBoard();
+      renderV3ProjectSnapshot();
     }
-    renderV3History();
-    renderV3HeroHistory();
-    renderV3ProjectOutputBoard();
-    renderV3ProjectSnapshot();
     if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
+    if (throwOnError) throw error;
     return [];
   } finally {
     if (
@@ -4027,6 +4026,7 @@ function renderV3Projects() {
       : "";
     els.v3ProjectCount.textContent = `${items.length} 个项目${paginationHint}`;
   }
+  releaseV3ImageBindingsWithin(els.v3ProjectList);
   els.v3ProjectList.innerHTML = "";
   els.v3ProjectList.classList.toggle("empty-v3-list", items.length === 0 && !v3State.projectsHasMore);
   if (!items.length && !v3State.projectsHasMore) {
@@ -4089,6 +4089,7 @@ function renderV3History() {
   const groups = v3ProjectImageGroups();
   const visibleGroups = groups.slice(0, v3State.projectRenderLimit);
   if (els.v3HistoryCount) els.v3HistoryCount.textContent = `${groups.length} 个项目`;
+  releaseV3ImageBindingsWithin(els.v3HistoryList);
   els.v3HistoryList.innerHTML = "";
   els.v3HistoryList.classList.toggle("empty-v3-list", groups.length === 0 && !v3State.projectsHasMore);
   if (!groups.length) {
@@ -4440,6 +4441,7 @@ function openV3ProjectHistoryModal(projectId) {
 
 function closeV3ProjectHistoryModal({ keepBodyState = false } = {}) {
   if (!els.v3ProjectHistoryModal) return;
+  releaseV3ImageBindingsWithin(els.v3ProjectHistoryModal);
   els.v3ProjectHistoryModal.hidden = true;
   v3State.activeHistoryProjectId = "";
   v3State.historyModalEpoch = Number(v3State.historyModalEpoch || 0) + 1;
@@ -4477,6 +4479,7 @@ function releaseV3ScrollLockAfterNativeDialogClose() {
 function renderV3ProjectHistoryGrid(group) {
   if (!els.v3ProjectHistoryGrid) return;
   const items = Array.isArray(group?.items) ? group.items : [];
+  releaseV3ImageBindingsWithin(els.v3ProjectHistoryGrid);
   els.v3ProjectHistoryGrid.innerHTML = "";
   els.v3ProjectHistoryGrid.classList.toggle("empty-v3-list", items.length === 0);
   if (!items.length) {
@@ -5549,6 +5552,7 @@ function renderV3ProjectOutputBoard() {
   const reviewItems = v3StoredProjectReviewOutputItems(project);
   v3State.projectOutputItems = items;
   v3State.projectProcessOutputItems = reviewItems;
+  releaseV3ImageBindingsWithin(els.v3ProjectOutputBoard);
   els.v3ProjectOutputBoard.innerHTML = "";
   els.v3ProjectOutputBoard.classList.toggle("empty-v3-list", !items.length && !reviewItems.length);
   if (!project) {
@@ -9707,7 +9711,13 @@ async function loadV3ProjectTimeline(projectId, { silent = false, detailEpoch = 
   return v3State.projectTimeline;
 }
 
-async function refreshV3CurrentProject({ silent = true, shouldContinue = null, sessionReceipt = null } = {}) {
+async function refreshV3CurrentProject({
+  silent = true,
+  shouldContinue = null,
+  sessionReceipt = null,
+  restoreJob = true,
+  preserveOutputOnError = false,
+} = {}) {
   const projectId = v3State.currentProject?.project_id;
   if (!projectId || !v3GenerationSessionOwns(shouldContinue)) return false;
   try {
@@ -9728,10 +9738,18 @@ async function refreshV3CurrentProject({ silent = true, shouldContinue = null, s
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
     if (!v3GenerationSessionOwns(shouldContinue)) return false;
-    await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+    await loadV3ProjectOutputs({
+      silent: true,
+      force: true,
+      shouldContinue,
+      sessionReceipt,
+      preserveOnError: preserveOutputOnError,
+    });
     if (!v3GenerationSessionOwns(shouldContinue)) return false;
-    await restoreV3LatestProjectJob(v3State.currentProject, { silent: true, shouldContinue });
-    if (!v3GenerationSessionOwns(shouldContinue)) return false;
+    if (restoreJob) {
+      await restoreV3LatestProjectJob(v3State.currentProject, { silent: true, shouldContinue });
+      if (!v3GenerationSessionOwns(shouldContinue)) return false;
+    }
     renderV3ProjectDetail();
     return true;
   } catch (error) {
@@ -10616,9 +10634,13 @@ async function completeV3GeneratedJob(
     failedWithoutPartialDelivery || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
   renderV3Job(generated);
-  await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-  if (typeof shouldContinue === "function" && !shouldContinue()) return null;
-  await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+  await refreshV3CurrentProject({
+    silent: true,
+    shouldContinue,
+    sessionReceipt,
+    restoreJob: false,
+    preserveOutputOnError: true,
+  });
   if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   if (syncV3CurrentJobFromProjectOutputs({ preferLatest: false })) {
     renderV3Job(v3State.currentJob);
@@ -10719,6 +10741,8 @@ async function recoverV3GeneratedJob(
   let lastError = originalError;
   let recoveryAttemptLimit = v3RecoveryMaxAttempts;
   let lastOutputProjectionSignature = "";
+  let outputRetryAttempt = 0;
+  let nextOutputRetryAt = 0;
   for (let attempt = 1; attempt <= recoveryAttemptLimit; attempt += 1) {
     if (typeof shouldContinue === "function" && !shouldContinue()) {
       throw new Error("v3_project_recovery_replaced");
@@ -10733,15 +10757,14 @@ async function recoverV3GeneratedJob(
       }
       const outputProjectionSignature = v3JobOutputProjectionSignature(job);
       outputProjectionChanged = Boolean(
-        outputProjectionSignature && outputProjectionSignature !== lastOutputProjectionSignature
+        outputProjectionSignature
+        && outputProjectionSignature !== lastOutputProjectionSignature
+        && Date.now() >= nextOutputRetryAt
       );
-      lastOutputProjectionSignature = outputProjectionSignature || lastOutputProjectionSignature;
       if (v3JobHasTerminalOutcome(job)) {
         v3State.currentJob = job;
         v3SettleEcommerceTerminalReceipt(job);
         renderV3Job(job);
-        await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         return job;
       }
       if (v3JobHasExpectedVisibleImages(job, expectedCount)) {
@@ -10751,8 +10774,6 @@ async function recoverV3GeneratedJob(
         v3State.currentJob = job;
         v3SettleEcommerceTerminalReceipt(job);
         renderV3Job(job);
-        await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         setV3Progress("completed", "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。", "warning", { forceNotice: true });
         return job;
       }
@@ -10761,8 +10782,6 @@ async function recoverV3GeneratedJob(
         if (recovered) {
           v3State.currentJob = recovered;
           renderV3Job(recovered);
-          await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-          if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
           setV3Progress(
             "completed",
             v3JobHasRecoverablePartialDelivery(recovered, expectedCount)
@@ -10775,8 +10794,6 @@ async function recoverV3GeneratedJob(
         }
         v3State.currentJob = job;
         renderV3Job(job);
-        await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         setV3Progress("failed", v3ProviderFailureUserMessage(job), "warning", { forceNotice: true });
         return job;
       }
@@ -10799,13 +10816,25 @@ async function recoverV3GeneratedJob(
     }
     try {
       if (outputProjectionChanged) {
-        await loadV3ProjectOutputs({
-          silent: true,
-          force: true,
-          projectId,
-          shouldContinue,
-          sessionReceipt,
-        });
+        try {
+          await loadV3ProjectOutputs({
+            silent: true,
+            force: true,
+            projectId,
+            shouldContinue,
+            sessionReceipt,
+            throwOnError: true,
+            preserveOnError: true,
+          });
+          lastOutputProjectionSignature = outputProjectionSignature;
+          outputRetryAttempt = 0;
+          nextOutputRetryAt = 0;
+        } catch (error) {
+          lastError = error;
+          outputRetryAttempt += 1;
+          nextOutputRetryAt = Date.now() + Math.min(30000, 1000 * (2 ** Math.min(outputRetryAttempt, 5)));
+          outputProjectionChanged = false;
+        }
       }
       if (typeof shouldContinue === "function" && !shouldContinue()) {
         throw new Error("v3_project_recovery_replaced");
@@ -10832,7 +10861,15 @@ async function recoverV3GeneratedJob(
     }
   }
   try {
-    await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+    await loadV3ProjectOutputs({
+      silent: true,
+      force: true,
+      projectId,
+      shouldContinue,
+      sessionReceipt,
+      throwOnError: true,
+      preserveOnError: true,
+    });
     if (typeof shouldContinue === "function" && !shouldContinue()) {
       throw new Error("v3_project_recovery_replaced");
     }
@@ -11706,6 +11743,7 @@ function renderV3ResultBoard(job) {
   const assets = Array.isArray(job?.asset_series) ? job.asset_series : [];
   const candidates = Array.isArray(job?.candidates) ? job.candidates : [];
   const warnings = Array.isArray(job?.warnings) ? job.warnings : [];
+  releaseV3ImageBindingsWithin(els.v3ResultBoard);
   els.v3ResultBoard.innerHTML = "";
   if (v3EcommerceReviewWithheldFinalizationOperation()) {
     v3State.resultItems = [];
@@ -16765,6 +16803,20 @@ function cancelV3DeferredImageLoad(image) {
   v3DeferredImageLoads.delete(image);
   v3DeferredImageObserver?.unobserve(image);
   pending.signal?.removeEventListener("abort", pending.onAbort);
+}
+
+function releaseV3ImageBindingsWithin(root) {
+  if (!root) return;
+  const images = [...(root.querySelectorAll?.("img") || [])];
+  if (root.matches?.("img")) images.unshift(root);
+  for (const image of images) {
+    v3ImageBindingStates.get(image)?.cleanup();
+    v3ImageBindingStates.delete(image);
+    cancelV3DeferredImageLoad(image);
+    releaseImageObjectUrl(image);
+    image.onload = null;
+    image.onerror = null;
+  }
 }
 
 function deferV3ImageUntilVisible(image, start, signal) {

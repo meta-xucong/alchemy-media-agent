@@ -119,6 +119,38 @@ def test_oversized_project_job_batch_enumerates_directory_once(tmp_path, monkeyp
     assert scans == 1
 
 
+def test_batch_lookup_preserves_all_outputs_beyond_home_sentinel(tmp_path) -> None:
+    root = tmp_path / "outputs"
+    store = V3GeneratedOutputStore(root)
+    project_id = "project_batch_4098"
+    job_id = "job_batch_4098"
+    expected_ids = []
+    for index in range(4098):
+        output_id = f"v3_output_{index:020x}"
+        expected_ids.append(output_id)
+        output_dir = root / output_id
+        output_dir.mkdir(parents=True)
+        (output_dir / "output.json").write_text(
+            json.dumps({
+                "output_id": output_id,
+                "job_id": job_id,
+                "candidate_id": f"candidate_{index}",
+                "asset_id": f"asset_{index}",
+                "provider": "test",
+                "model": "test",
+                "metadata": {"project_id": project_id},
+                "created_at": f"2026-09-{(index % 28) + 1:02d}T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    assert len(store.list_by_project_and_jobs(project_id, [job_id], limit=4096)) == 4096
+    assert len(store.list_by_project_and_jobs(project_id, [job_id], limit=4097)) == 4097
+    complete = store.list_by_project_and_jobs(project_id, [job_id])
+    assert len(complete) == 4098
+    assert {record.output_id for record in complete} == set(expected_ids)
+
+
 def test_output_closure_reuses_revision_aware_original_hash_validation(tmp_path, monkeypatch) -> None:
     from pathlib import Path
 
