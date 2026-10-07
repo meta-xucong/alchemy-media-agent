@@ -1173,6 +1173,7 @@ class V3LLMBrainProvider:
         else:
             api_key = _env("V3_LLM_BRAIN_API_KEY") or _settings_value("openai_api_key") or _settings_value("lab_openai_api_key")
             base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("openai_base_url") or _settings_value("lab_openai_base_url")
+        api_key = _normalize_provider_api_key(api_key)
         if not api_key:
             raise BrainProviderUnavailable("remote brain API key is not configured")
         return str(api_key), str(base_url) if base_url else None
@@ -2278,6 +2279,21 @@ def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -
 def _env(name: str) -> str | None:
     value = os.getenv(name)
     return value.strip() if value and value.strip() else None
+
+
+def _normalize_provider_api_key(value: Any) -> str | None:
+    """Remove a UTF-8 BOM accidentally persisted at the start of a secret.
+
+    Some environment-file writers preserve a leading BOM as part of the value
+    after the equals sign.  HTTP Authorization headers are ASCII, so the OpenAI
+    SDK rejects that key locally before any request is sent.  Normalize only
+    the boundary BOM and surrounding whitespace; never alter key contents.
+    """
+
+    if value is None:
+        return None
+    normalized = str(value).strip().lstrip("\ufeff").strip()
+    return normalized or None
 
 
 def _remote_enabled(*, force: bool = False) -> bool:

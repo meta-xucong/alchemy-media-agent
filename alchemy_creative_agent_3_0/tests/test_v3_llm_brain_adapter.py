@@ -1520,6 +1520,26 @@ def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monk
     assert base_url == "https://brain.example.test/v1"
 
 
+def test_remote_brain_strips_leading_utf8_bom_from_api_key(monkeypatch) -> None:
+    """A BOM at the key boundary must not break ASCII Authorization headers."""
+
+    from app.config import settings
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    monkeypatch.setattr(settings, "openai_api_key", "\ufeffbrain-test-key")
+    monkeypatch.setattr(settings, "openai_base_url", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "lab_openai_api_key", None)
+
+    provider = V3LLMBrainProvider()
+
+    api_key, base_url = provider._credentials()  # noqa: SLF001 - config boundary regression
+    assert api_key == "brain-test-key"
+    assert base_url == "https://brain.example.test/v1"
+
+
 def test_remote_brain_does_not_reuse_unrelated_anthropic_credential_for_deepseek(monkeypatch) -> None:
     """A Claude/local-gateway credential is not an Aiself DeepSeek credential."""
 
