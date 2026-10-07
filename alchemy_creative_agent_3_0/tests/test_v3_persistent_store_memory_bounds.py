@@ -837,7 +837,9 @@ def test_full_project_snapshot_uses_unbounded_job_fallback_when_batch_lookup_fai
 
         def list_by_project(self, _project_id, *, limit=None):
             calls["project"] += 1
-            return records[:limit]
+            # These legacy rows have no project_id link and are discoverable
+            # only through their declared Job relationship.
+            return []
 
         def list_by_job(self, job_id, **kwargs):
             calls["job"] += 1
@@ -860,9 +862,84 @@ def test_full_project_snapshot_uses_unbounded_job_fallback_when_batch_lookup_fai
         candidate_job_outputs_only=True,
     )
 
-    assert calls == {"project": 0, "job": 1}
+    assert calls == {"project": 1, "job": 1}
     assert len(snapshot["records_by_job"]["job_many_outputs"]) == 140
     assert len(snapshot["records_by_project"][project.project_id]) == 140
+
+
+def test_full_project_snapshot_falls_back_to_project_linked_rows_when_batch_lookup_fails() -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project("project_full_project_link_fallback", "2026-09-01T00:00:00+00:00")
+    project.job_ids = []
+    record = SimpleNamespace(job_id="job_legacy_project_link", output_id="out_project_link")
+    calls = {"project": 0}
+
+    class OutputStore:
+        def list_by_project_and_jobs(self, *_args, **_kwargs):
+            raise OSError("synthetic batch catalog failure")
+
+        def list_by_project(self, project_id, *, limit=None):
+            calls["project"] += 1
+            assert project_id == project.project_id
+            assert limit == 4097
+            return [record]
+
+        def list_by_job(self, _job_id, **_kwargs):
+            raise AssertionError("project-linked fallback should discover this output")
+
+    status = SimpleNamespace(status=ProductJobStatusValue.GENERATED, metadata={}, asset_series=[], candidates=[])
+    service.product_service = SimpleNamespace(
+        output_store=OutputStore(),
+        get_job_read_snapshot=lambda job_id, *, output_records=None: (
+            status,
+            SimpleNamespace(request=SimpleNamespace(metadata={})),
+        ),
+    )
+
+    snapshot = service._project_output_read_snapshot(
+        [project],
+        use_project_index=True,
+        prefetch_job_state=True,
+        candidate_job_outputs_only=True,
+    )
+
+    assert calls["project"] == 1
+    assert snapshot["project_index_complete"][project.project_id] is False
+    assert snapshot["records_by_project"][project.project_id] == [record]
+    assert snapshot["records_by_job"][record.job_id] == [record]
+
+
+def test_full_project_link_fallback_retries_legacy_adapter_without_limit_keyword() -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project("project_full_project_link_legacy_adapter", "2026-09-01T00:00:00+00:00")
+    project.job_ids = []
+    record = SimpleNamespace(job_id="job_legacy_project_link", output_id="out_project_link")
+
+    class OutputStore:
+        def list_by_project_and_jobs(self, *_args, **_kwargs):
+            raise OSError("synthetic batch catalog failure")
+
+        def list_by_project(self, _project_id):
+            return [record]
+
+    status = SimpleNamespace(status=ProductJobStatusValue.GENERATED, metadata={}, asset_series=[], candidates=[])
+    service.product_service = SimpleNamespace(
+        output_store=OutputStore(),
+        get_job_read_snapshot=lambda job_id, *, output_records=None: (
+            status,
+            SimpleNamespace(request=SimpleNamespace(metadata={})),
+        ),
+    )
+
+    snapshot = service._project_output_read_snapshot(
+        [project],
+        use_project_index=True,
+        prefetch_job_state=True,
+        candidate_job_outputs_only=True,
+    )
+
+    assert snapshot["project_index_complete"][project.project_id] is False
+    assert snapshot["records_by_project"][project.project_id] == [record]
 
 
 @pytest.mark.parametrize(

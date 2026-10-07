@@ -491,3 +491,33 @@ Regression evidence on the local checkout:
   rows, and home completeness is checked at 4096/4097/4098.
 - Browser-driven tests and VPS CPU/RSS/P95 validation have not run in this
   environment. This record does not claim deployed performance improvement.
+
+## 11. Follow-up closure for audit findings on 7df8ce7b
+
+The subsequent read-only audit found four bounded gaps. They are corrected in
+the existing owning layers:
+
+- Output projection signatures now live for the full recovery-loop iteration
+  and are committed only after output loading succeeds. Regression tests cover
+  stable signatures across multiple active polls and a failed read followed by
+  one successful retry.
+- A cancelled project-header request keeps its admission slot until its
+  executor work item is physically dequeued. The worker then skips the scan;
+  it does not call `Future.cancel()` and prematurely free queue capacity. A
+  deterministic test blocks the worker, cancels two queued scans, attempts
+  1,000 more cancellations, and confirms the real executor queue remains at
+  two items before draining to zero.
+- Full project detail falls back to the existing project-linked output lookup
+  when the combined catalog call fails or is unavailable. The result remains
+  marked incomplete. Declared Job-only history still uses its uncapped Job
+  fallback. Coverage includes both the snapshot boundary and the public
+  `project-outputs` projection with a real output store.
+- Returning to V3 home now aborts and invalidates the active project-detail
+  epoch before clearing the project, so a late response cannot restore the
+  prior workspace.
+
+Final follow-up verification on the local checkout: **142** related Python
+tests and **19** Node tests passed; Python compilation, JavaScript syntax, and
+`git diff --check` passed. Two FastAPI deprecation warnings remain. Browser
+heap inspection and VPS CPU/RSS/P95 measurements remain unrun; no online
+performance claim is made.

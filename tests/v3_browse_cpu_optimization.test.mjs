@@ -378,6 +378,132 @@ test("output projection retry commits a signature only after successful refresh"
   assert.equal(outputReads, 2);
 });
 
+test("unchanged successful output projection is read once across running polls", async () => {
+  const recoverySource = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  let now = 0;
+  let jobReads = 0;
+  let outputReads = 0;
+  const running = {
+    status: "generating",
+    metadata: {},
+    candidates: [{ output_id: "out_1" }],
+    asset_series: [],
+  };
+  const context = {
+    v3RecoveryMaxAttempts: 8,
+    v3State: {},
+    v3ApiBase: "/api/v3",
+    Date: { now: () => now },
+    v3Delay: async () => { now += 3000; },
+    request: async () => {
+      jobReads += 1;
+      return jobReads <= 7 ? running : { ...running, status: "failed" };
+    },
+    v3JobOutputProjectionSignature: (job) => JSON.stringify((job.candidates || []).map((item) => item.output_id)),
+    v3JobHasTerminalOutcome: (job) => job.status === "failed",
+    v3JobHasExpectedVisibleImages: () => false,
+    v3JobHasRecoverablePartialDelivery: () => false,
+    v3GenerationSessionOwns: () => true,
+    v3SettleEcommerceTerminalReceipt: () => {},
+    renderV3Job: () => {},
+    loadV3ProjectOutputs: async () => { outputReads += 1; return []; },
+    setV3Progress: () => {},
+    v3JobProviderRetryActive: () => false,
+    v3JobAwaitingFinalDelivery: () => false,
+    v3RecoveryAttemptLimitForServerWatchdog: () => 0,
+    v3RecoveredJobFromProjectOutputs: () => null,
+    v3ProviderFailureUserMessage: () => "failed",
+    clearV3RecoverPolling: () => {},
+    renderV3ProjectDetail: () => {},
+  };
+  vm.runInNewContext(recoverySource, context);
+  await context.recoverV3GeneratedJob("project_1", "job_1", new Error("pending"));
+  assert.equal(jobReads, 8);
+  assert.equal(outputReads, 1, "a changed projection is read once while the job remains active");
+});
+
+test("output projection retries once after failure then suppresses unchanged successful reads", async () => {
+  const recoverySource = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  let now = 0;
+  let jobReads = 0;
+  let outputReads = 0;
+  const running = {
+    status: "generating",
+    metadata: {},
+    candidates: [{ output_id: "out_1" }],
+    asset_series: [],
+  };
+  const context = {
+    v3RecoveryMaxAttempts: 8,
+    v3State: {},
+    v3ApiBase: "/api/v3",
+    Date: { now: () => now },
+    v3Delay: async () => { now += 3000; },
+    request: async () => {
+      jobReads += 1;
+      return jobReads <= 7 ? running : { ...running, status: "failed" };
+    },
+    v3JobOutputProjectionSignature: (job) => JSON.stringify((job.candidates || []).map((item) => item.output_id)),
+    v3JobHasTerminalOutcome: (job) => job.status === "failed",
+    v3JobHasExpectedVisibleImages: () => false,
+    v3JobHasRecoverablePartialDelivery: () => false,
+    v3GenerationSessionOwns: () => true,
+    v3SettleEcommerceTerminalReceipt: () => {},
+    renderV3Job: () => {},
+    loadV3ProjectOutputs: async () => {
+      outputReads += 1;
+      if (outputReads === 1) throw new Error("temporary output read failure");
+      return [];
+    },
+    setV3Progress: () => {},
+    v3JobProviderRetryActive: () => false,
+    v3JobAwaitingFinalDelivery: () => false,
+    v3RecoveryAttemptLimitForServerWatchdog: () => 0,
+    v3RecoveredJobFromProjectOutputs: () => null,
+    v3ProviderFailureUserMessage: () => "failed",
+    clearV3RecoverPolling: () => {},
+    renderV3ProjectDetail: () => {},
+  };
+  vm.runInNewContext(recoverySource, context);
+  await context.recoverV3GeneratedJob("project_1", "job_1", new Error("pending"));
+  assert.equal(jobReads, 8);
+  assert.equal(outputReads, 2, "failed read followed by one successful retry");
+});
+
+test("returning to V3 home invalidates and aborts an in-flight project detail", () => {
+  const invalidate = extractFunction("invalidateV3ProjectDetail", "\nfunction v3ProjectDetailIsCurrent");
+  const home = extractFunction("openV3Home", "\nfunction openV3ProfessionalWorkspace");
+  const controller = new AbortController();
+  const context = {
+    AbortController,
+    v3State: {
+      projectDetailAbortController: controller,
+      projectDetailEpoch: 7,
+      projectDetailProjectId: "project_old",
+      currentProject: { project_id: "project_old" },
+      projectsLoaded: true,
+      projectsLoading: false,
+      loading: false,
+    },
+    closeV3ProjectSubpage: () => {},
+    renderV3ViewState: () => {},
+    renderV3ScenarioState: () => {},
+    renderV3HomeTemplateChooser: () => {},
+    renderV3Projects: () => {},
+    renderV3History: () => {},
+    renderV3ProjectDetail: () => {},
+    renderV3Job: () => {},
+    clearV3PendingUploads: () => {},
+    window: { setTimeout: () => {}, scrollTo: () => {} },
+  };
+  vm.runInNewContext(`${invalidate}\n${home}`, context);
+  context.openV3Home();
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(context.v3State.projectDetailEpoch, 8);
+  assert.equal(context.v3State.projectDetailProjectId, "");
+  assert.equal(context.v3State.currentProject, null);
+});
+
 test("generation completion uses one project projection refresh", () => {
   const completion = extractFunction("completeV3GeneratedJob", "\nasync function runV3GenerationWithRecovery");
   const recovery = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");

@@ -111,7 +111,7 @@ def test_summary_projects_route_offloads_only_detached_headers(monkeypatch) -> N
     assert seen_headers == [header]
 
 
-def test_cancelled_queued_header_scan_releases_admission_and_does_not_run(monkeypatch) -> None:
+def test_cancelled_queued_header_scans_keep_the_executor_queue_physically_bounded(monkeypatch) -> None:
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-v3-header-cancel")
     monkeypatch.setattr(app_main, "_v3_browse_header_executor", executor)
     with app_main._v3_browse_header_gate_lock:  # noqa: SLF001
@@ -141,19 +141,31 @@ def test_cancelled_queued_header_scan_releases_admission_and_does_not_run(monkey
         queued_one.cancel()
         queued_two.cancel()
         await asyncio.gather(queued_one, queued_two, return_exceptions=True)
-        assert app_main._v3_browse_header_admitted == 1  # noqa: SLF001
-        replacement = asyncio.create_task(
-            app_main._run_v3_project_header_scan(lambda: queued_scan(3))
-        )
-        await asyncio.sleep(0.02)
-        assert app_main._v3_browse_header_admitted == 2  # noqa: SLF001
+        assert app_main._v3_browse_header_admitted == 3  # noqa: SLF001
+        assert executor._work_queue.qsize() == 2  # noqa: SLF001
+        for index in range(1000):
+            pending = asyncio.create_task(
+                app_main._run_v3_project_header_scan(lambda index=index: queued_scan(index + 10))
+            )
+            await asyncio.sleep(0)
+            if not pending.done():
+                pending.cancel()
+            result = await asyncio.gather(pending, return_exceptions=True)
+            if isinstance(result[0], HTTPException):
+                assert result[0].status_code == 503
+            else:
+                assert isinstance(result[0], asyncio.CancelledError)
+        assert executor._work_queue.qsize() == 2  # noqa: SLF001
         release.set()
-        return await asyncio.gather(active, replacement)
+        assert await active == "active"
+        await asyncio.sleep(0.02)
+        assert executor._work_queue.qsize() == 0  # noqa: SLF001
 
     try:
-        assert asyncio.run(exercise()) == ["active", 3]
+        asyncio.run(exercise())
     finally:
         release.set()
         executor.shutdown(wait=True)
 
-    assert queued_ran == [3]
+    assert queued_ran == []
+    assert app_main._v3_browse_header_admitted == 0  # noqa: SLF001

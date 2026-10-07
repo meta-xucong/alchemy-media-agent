@@ -3081,6 +3081,7 @@ class V3ProjectModeService:
             output_ids_by_job: dict[str, set[str]] = {}
             batch_list = getattr(output_store, "list_by_project_and_jobs", None)
             batch_project_index_loaded = False
+            project_link_fallback_loaded = False
             if callable(batch_list):
                 try:
                     batch_limit = None
@@ -3122,6 +3123,21 @@ class V3ProjectModeService:
                         snapshot["records_by_job"].setdefault(job_id, [])
                 except Exception:
                     batch_project_index_loaded = False
+            if prefetch_job_state and not batch_project_index_loaded and callable(list_by_project):
+                # Full detail must preserve discovery of older project-linked
+                # outputs when the combined catalog read fails or an older
+                # adapter does not implement it. This fallback is deliberately
+                # best-effort and never claims the project index is complete.
+                try:
+                    try:
+                        project_records = list(list_by_project(project_id, limit=4097))
+                    except TypeError:
+                        project_records = list(list_by_project(project_id))
+                    snapshot["records_by_project"][project_id] = project_records
+                    snapshot["project_index_complete"][project_id] = False
+                    project_link_fallback_loaded = True
+                except Exception:
+                    snapshot["project_index_complete"][project_id] = False
             if use_project_index:
                 project_index_complete = snapshot["project_index_complete"].get(project_id)
                 if project_index_complete is None:
@@ -3136,7 +3152,7 @@ class V3ProjectModeService:
                     )
                 project_records: list[Any] = (
                     list(snapshot["records_by_project"].get(project_id, []))
-                    if batch_project_index_loaded
+                    if batch_project_index_loaded or project_link_fallback_loaded
                     else []
                 )
                 if project_index_complete and not batch_project_index_loaded and not prefetch_job_state:

@@ -2041,6 +2041,7 @@ function handleV3ScenarioClick(button) {
 }
 
 function openV3Home({ silent = false } = {}) {
+  invalidateV3ProjectDetail("");
   v3State.view = "home";
   closeV3ProjectSubpage({ silent: true });
   v3State.currentProject = null;
@@ -10750,12 +10751,13 @@ async function recoverV3GeneratedJob(
     v3State.recoverPollAttempt = attempt;
     await v3Delay(attempt === 1 ? 1200 : 2500);
     let outputProjectionChanged = false;
+    let outputProjectionSignature = "";
     try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
       if (typeof shouldContinue === "function" && !shouldContinue()) {
         throw new Error("v3_project_recovery_replaced");
       }
-      const outputProjectionSignature = v3JobOutputProjectionSignature(job);
+      outputProjectionSignature = v3JobOutputProjectionSignature(job);
       outputProjectionChanged = Boolean(
         outputProjectionSignature
         && outputProjectionSignature !== lastOutputProjectionSignature

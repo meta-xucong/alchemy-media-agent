@@ -1951,6 +1951,46 @@ def test_project_outputs_append_across_jobs_and_delete_hides_only_selected_image
     assert state_map[first_record.output_id] == "unselected"
 
 
+def test_project_outputs_preserve_project_linked_history_when_batch_lookup_fails(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a legacy project history"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create a legacy image"})
+    record = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_legacy_project_link",
+        asset_id="asset_legacy_project_link",
+        metadata_override={"project_id": project["project_id"]},
+    )
+
+    stored_project = handlers.project_service.project_store.get_project(project["project_id"])
+    stored_project.job_ids = []
+    handlers.project_service.project_store.save_project(stored_project)
+
+    original_output_store = handlers.service.output_store
+
+    class BatchUnavailableOutputStore:
+        def __getattr__(self, name):
+            return getattr(original_output_store, name)
+
+        def list_by_project_and_jobs(self, *_args, **_kwargs):
+            raise OSError("synthetic batch catalog failure")
+
+    handlers.service.output_store = BatchUnavailableOutputStore()
+    payload = handlers.get_project_outputs(
+        project_id=project["project_id"],
+        limit=10,
+        compact=True,
+    )
+
+    visible_ids = {
+        item["output_id"]
+        for key in ("items", "review_items", "history_items")
+        for item in payload[key]
+    }
+    assert record.output_id in visible_ids, payload
+
+
 def test_doc73_auto_anchor_is_publicly_rebindable_and_excluded_from_review(tmp_path, monkeypatch) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects(

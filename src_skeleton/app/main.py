@@ -721,10 +721,17 @@ async def _run_v3_project_header_scan(scan):
             )
         _v3_browse_header_admitted += 1
 
+    scan_ticket = {"cancel_requested": False, "started": False}
+
     def run_scan():
         global _v3_browse_header_active
         started_at = time.perf_counter()
         with _v3_browse_header_gate_lock:
+            if scan_ticket["cancel_requested"]:
+                # Keep admission occupied until ThreadPoolExecutor has
+                # physically dequeued this cancelled request.
+                return None
+            scan_ticket["started"] = True
             _v3_browse_header_active += 1
             active = _v3_browse_header_active
             admitted = _v3_browse_header_admitted
@@ -759,10 +766,14 @@ async def _run_v3_project_header_scan(scan):
     try:
         return await asyncio.shield(asyncio.wrap_future(future))
     except asyncio.CancelledError:
-        # A concurrent Future that has not started can be removed from the
-        # executor queue. If it is already running, cancel() returns False and
-        # the done callback keeps admission occupied until the real work ends.
-        future.cancel()
+        # Future.cancel() marks a queued work item done immediately, but the
+        # executor retains that item until a worker dequeues it. Releasing
+        # admission here would therefore allow an unbounded physical queue.
+        # Leave the item in the bounded queue and let run_scan skip it when
+        # it reaches a worker; its done callback then releases admission.
+        with _v3_browse_header_gate_lock:
+            if not scan_ticket["started"]:
+                scan_ticket["cancel_requested"] = True
         raise
 
 
