@@ -3289,7 +3289,7 @@ class V3ProjectModeService:
         if isinstance(execution, dict):
             metadata["specialized_execution_summary"] = {
                 key: execution[key]
-                for key in ("status", "final_delivery_withheld", "role_keys")
+                for key in ("status", "final_delivery_withheld", "role_keys", "missing_role_keys")
                 if key in execution
             }
         certification = metadata.get("review_certification")
@@ -13407,7 +13407,7 @@ class V3ProjectModeService:
 
         if owner_user_id is None or record is None:
             return True
-        metadata = dict(getattr(getattr(record, "request", None), "metadata", None) or {})
+        metadata = V3ProjectModeService._project_output_job_request_metadata(record)
         raw_job_owner = metadata.get("veyra_user_id")
         if raw_job_owner is not None and str(raw_job_owner).strip():
             return False

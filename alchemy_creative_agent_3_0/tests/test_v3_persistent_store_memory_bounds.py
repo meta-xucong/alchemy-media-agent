@@ -402,6 +402,7 @@ def test_job_store_cache_does_not_retain_released_history(tmp_path) -> None:
 
     assert reference() is None
     assert len(store._records) == 0  # noqa: SLF001
+    assert store.count() == 1
     restored = store.get("job_memory_large")
     assert restored is not None
     assert restored.request.user_input == "history" + ("x" * 20_000)
@@ -437,6 +438,44 @@ def test_project_output_snapshot_keeps_only_authorization_and_review_metadata() 
     assert metadata["project_id"] == "project_memory_1"
     assert metadata["veyra_user_id"] == 7
     assert "large_retry_history" not in metadata
+
+
+@pytest.mark.parametrize(
+    ("owner_metadata", "expected_visible"),
+    [
+        ({}, True),
+        ({"project_id": "project_owner_projection", "veyra_user_id": 7}, True),
+        ({"project_id": "project_owner_projection", "veyra_user_id": 9}, False),
+        ({"project_id": "project_owner_projection", "veyra_user_id": "invalid-owner"}, False),
+    ],
+    ids=("owner-missing", "owner-matches", "owner-mismatches", "owner-invalid"),
+)
+def test_project_job_owner_fallback_matches_full_record_and_lightweight_projection(
+    owner_metadata: dict[str, object], expected_visible: bool
+) -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project("project_owner_projection", "2026-09-01T00:00:00+00:00", owner_id=7)
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(user_input="owner projection", metadata=owner_metadata),
+        status=ProductJobStatusValue.GENERATED,
+        job_id_value="job_owner_projection",
+    )
+    projected = service._project_output_job_record_projection(record)
+    output_records = [
+        SimpleNamespace(
+            metadata={"project_id": project.project_id},
+        )
+    ]
+
+    def visible(job_record: object) -> bool:
+        return service._project_job_record_visible_to_owner(project, job_record, 7) or (
+            service._project_job_owner_gap_can_use_project_output_scope(
+                project, job_record, output_records, 7
+            )
+        )
+
+    assert visible(record) is expected_visible
+    assert visible(projected) is expected_visible
 
 
 def test_project_output_snapshot_compacts_job_status_and_record() -> None:
@@ -496,5 +535,29 @@ def test_project_output_snapshot_compacts_job_status_and_record() -> None:
     assert "large_role_recipe" not in compact_status.metadata["specialized_execution_summary"]
     compact_record = snapshot["job_record_by_id"]["job_snapshot"]
     assert set(compact_record["_v3_project_output_request_metadata"]) == set(_PROJECT_OUTPUT_JOB_METADATA_KEYS)
+
+
+def test_project_output_status_projection_preserves_missing_role_diagnostics() -> None:
+    status = SimpleNamespace(
+        job_id="job_missing_role_projection",
+        status=ProductJobStatusValue.GENERATED,
+        metadata={
+            "specialized_execution_summary": {
+                "status": "incomplete",
+                "final_delivery_withheld": True,
+                "role_keys": ["hero", "environmental_context"],
+                "missing_role_keys": ["environmental_context"],
+                "large_debug_payload": "x" * 10000,
+            }
+        },
+        asset_series=[],
+        candidates=[],
+    )
+
+    projection = V3ProjectModeService._project_output_job_status_projection(status)
+
+    execution = projection.metadata["specialized_execution_summary"]
+    assert execution["missing_role_keys"] == ["environmental_context"]
+    assert "large_debug_payload" not in execution
 import gc
 import weakref

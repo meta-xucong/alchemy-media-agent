@@ -1050,6 +1050,21 @@ class PersistentProductJobStore(InMemoryProductJobStore):
                 break
         return sorted(records, key=lambda record: record.updated_at, reverse=True)
 
+    def count(self) -> int:
+        """Count durable Job files without loading records into the weak cache."""
+
+        try:
+            with os.scandir(self.storage_root) as entries:
+                return sum(
+                    1
+                    for entry in entries
+                    if entry.name.endswith(".json")
+                    and _valid_product_job_id(entry.name[:-5])
+                    and entry.is_file(follow_symlinks=False)
+                )
+        except OSError:
+            return 0
+
     def iter_recent_records(self) -> Iterator[ProductJobRecord]:
         """Yield durable jobs from newest files without caching the catalog.
 

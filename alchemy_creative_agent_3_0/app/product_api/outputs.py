@@ -590,8 +590,8 @@ class V3GeneratedOutputStore:
         self,
     ) -> tuple[tuple[Path, ...], tuple[tuple[str, int, int, int], ...], bool]:
         paths: list[Path] = []
-        signature_items: list[tuple[str, int, int]] = []
-        for path in self.storage_root.glob("v3_output_*/output.json"):
+        signature_items: list[tuple[str, int, int, int]] = []
+        for path in _iter_output_record_paths(self.storage_root):
             if len(paths) >= _OUTPUT_SCOPED_INDEX_MAX_RECORDS:
                 # Keep only a fixed-size sample. Large catalogs use a second,
                 # streaming query scan instead of building an O(N) index.
@@ -687,7 +687,7 @@ class V3GeneratedOutputStore:
     def _iter_scoped_output_paths(self, *, field: str, target: str):
         """Yield matching paths one at a time for catalogs beyond the index bound."""
 
-        for path in self.storage_root.glob("v3_output_*/output.json"):
+        for path in _iter_output_record_paths(self.storage_root):
             output_id = path.parent.name
             if not _valid_output_id(output_id):
                 continue
@@ -704,14 +704,13 @@ class V3GeneratedOutputStore:
 
     def _read_scoped_records(
         self,
-        paths: tuple[Path, ...],
+        paths: Iterable[Path],
         *,
         job_id: str | None = None,
         project_id: str | None = None,
         limit: int | None = None,
     ) -> list[V3GeneratedOutputRecord]:
-        records: list[tuple[str, int, V3GeneratedOutputRecord]] = []
-        sequence = 0
+        records: list[tuple[str, int, str, V3GeneratedOutputRecord]] = []
         for path in paths:
             record = self.get_output(path.parent.name)
             if record is None:
@@ -721,35 +720,42 @@ class V3GeneratedOutputStore:
             actual_project_id = str((record.metadata or {}).get("project_id") or "").strip()
             if project_id is not None and actual_project_id != project_id:
                 continue
-            entry = (str(record.created_at or ""), sequence, record)
-            sequence += 1
+            entry = (
+                str(record.created_at or ""),
+                -_output_id_order_number(record.output_id),
+                str(path),
+                record,
+            )
             if limit is None:
                 records.append(entry)
             elif len(records) < limit:
                 heapq.heappush(records, entry)
             elif entry[:2] > records[0][:2]:
                 heapq.heapreplace(records, entry)
-        return [record for _created, _sequence, record in sorted(records, reverse=True)]
+        return [record for _created, _reverse_id, _path, record in sorted(records, reverse=True)]
 
     def _read_records_cached(self, limit: int = 100) -> list[V3GeneratedOutputRecord]:
         """Read a bounded newest-first page without retaining the full catalog."""
 
         bounded_limit = _bounded_output_limit(limit, default=100)
-        newest: list[tuple[str, int, V3GeneratedOutputRecord]] = []
-        sequence = 0
-        for path in self.storage_root.glob("v3_output_*/output.json"):
+        newest: list[tuple[str, int, str, V3GeneratedOutputRecord]] = []
+        for path in _iter_output_record_paths(self.storage_root):
             try:
                 with path.open("r", encoding="utf-8") as handle:
                     record = V3GeneratedOutputRecord(**json.load(handle))
             except Exception:
                 continue
-            entry = (str(record.created_at or ""), sequence, record)
-            sequence += 1
+            entry = (
+                str(record.created_at or ""),
+                -_output_id_order_number(record.output_id),
+                str(path),
+                record,
+            )
             if len(newest) < bounded_limit:
                 heapq.heappush(newest, entry)
             elif entry[:2] > newest[0][:2]:
                 heapq.heapreplace(newest, entry)
-        return [record for _created, _sequence, record in sorted(newest, reverse=True)]
+        return [record for _created, _reverse_id, _path, record in sorted(newest, reverse=True)]
 
 
 def download_route(output_id: str) -> str:
@@ -769,6 +775,37 @@ def _default_storage_root() -> Path:
     if configured:
         return Path(configured)
     return Path(__file__).resolve().parents[3] / ".media_storage" / "v3_outputs"
+
+
+def _iter_output_record_paths(storage_root: Path) -> Iterable[Path]:
+    """Yield output record paths through scandir without materializing the directory."""
+
+    try:
+        with os.scandir(storage_root) as entries:
+            for entry in entries:
+                try:
+                    if not _valid_output_id(entry.name) or not entry.is_dir(follow_symlinks=False):
+                        continue
+                    record_path = Path(entry.path) / "output.json"
+                    if not record_path.is_file():
+                        continue
+                except OSError:
+                    continue
+                yield record_path
+    except OSError:
+        return
+
+
+def _output_id_order_number(output_id: str) -> int:
+    """Return a stable lexical rank for valid, fixed-width V3 output IDs."""
+
+    value = str(output_id or "")
+    if not _valid_output_id(value):
+        return 0
+    try:
+        return int(value.rsplit("_", 1)[1], 16)
+    except (IndexError, ValueError):
+        return 0
 
 
 def _now_iso() -> str:

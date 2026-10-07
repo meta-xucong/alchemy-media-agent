@@ -2034,6 +2034,61 @@ def test_v3_output_store_global_history_read_keeps_only_the_requested_page(tmp_p
     assert len(store._scoped_records_by_id_cache) == 0  # noqa: SLF001
 
 
+def test_v3_output_store_uses_stable_output_id_order_for_equal_timestamps(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    output_ids = [f"v3_output_{index:020x}" for index in range(3)]
+    for index, output_id in enumerate(reversed(output_ids)):
+        store.save_base64_output(
+            job_id=f"job_stable_order_{index}",
+            candidate_id=f"candidate_stable_order_{index}",
+            asset_id=f"asset_stable_order_{index}",
+            provider="test_provider",
+            model="test-model",
+            output_id=output_id,
+            encoded_image=_png_base64(32, 24),
+            metadata={"project_id": "project_stable_order"},
+        )
+
+    for output_id in output_ids:
+        record_path = tmp_path / "outputs" / output_id / "output.json"
+        payload = json.loads(record_path.read_text(encoding="utf-8"))
+        payload["created_at"] = "2026-01-01T00:00:00Z"
+        record_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert [item.output_id for item in store.list_by_project("project_stable_order", limit=2)] == output_ids[:2]
+    assert [item.output_id for item in store.list_outputs(limit=2)] == output_ids[:2]
+
+
+def test_v3_output_store_path_enumeration_does_not_use_path_glob(tmp_path, monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.product_api.outputs as output_module
+
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = store.save_base64_output(
+        job_id="job_scandir_output_paths",
+        candidate_id="candidate_scandir_output_paths",
+        asset_id="asset_scandir_output_paths",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(32, 24),
+        metadata={"project_id": "project_scandir_output_paths"},
+    )
+    empty_output_dir = tmp_path / "outputs" / "v3_output_000000000000000000aa"
+    empty_output_dir.mkdir()
+    assert list(output_module._iter_output_record_paths(store.storage_root)) == [  # noqa: SLF001
+        tmp_path / "outputs" / record.output_id / "output.json"
+    ]
+
+    def fail_path_glob(*_args, **_kwargs):
+        raise AssertionError("output catalog iteration must use os.scandir, not Path.glob")
+
+    monkeypatch.setattr(Path, "glob", fail_path_glob)
+
+    assert [item.output_id for item in store.list_by_project("project_scandir_output_paths")] == [
+        record.output_id
+    ]
+    assert [item.output_id for item in store.list_outputs()] == [record.output_id]
+
+
 def test_v3_output_store_observes_a_write_from_another_store_instance(tmp_path) -> None:
     root = tmp_path / "outputs"
     reader = V3GeneratedOutputStore(root)
