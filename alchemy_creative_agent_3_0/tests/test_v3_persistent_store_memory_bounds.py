@@ -942,6 +942,64 @@ def test_full_project_link_fallback_retries_legacy_adapter_without_limit_keyword
     assert snapshot["records_by_project"][project.project_id] == [record]
 
 
+def test_full_project_batch_failure_merges_project_linked_and_job_only_rows() -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project("project_full_mixed_fallback", "2026-09-01T00:00:00+00:00")
+    project.job_ids = ["job_mixed_legacy"]
+    project_linked = SimpleNamespace(
+        job_id="job_mixed_legacy",
+        output_id="out_project_linked",
+        metadata={"project_id": project.project_id},
+    )
+    job_only = SimpleNamespace(
+        job_id="job_mixed_legacy",
+        output_id="out_job_only",
+        metadata={},
+    )
+    calls = {"project": 0, "job": 0}
+
+    class OutputStore:
+        def list_by_project_and_jobs(self, *_args, **_kwargs):
+            raise OSError("synthetic batch catalog failure")
+
+        def list_by_project(self, _project_id, *, limit=None):
+            calls["project"] += 1
+            assert limit == 4097
+            return [project_linked]
+
+        def list_by_job(self, job_id, **_kwargs):
+            calls["job"] += 1
+            assert job_id == "job_mixed_legacy"
+            return [job_only, project_linked]
+
+    status = SimpleNamespace(status=ProductJobStatusValue.GENERATED, metadata={}, asset_series=[], candidates=[])
+    service.product_service = SimpleNamespace(
+        output_store=OutputStore(),
+        get_job_read_snapshot=lambda job_id, *, output_records=None: (
+            status,
+            SimpleNamespace(request=SimpleNamespace(metadata={})),
+        ),
+    )
+
+    snapshot = service._project_output_read_snapshot(
+        [project],
+        use_project_index=True,
+        prefetch_job_state=True,
+        candidate_job_outputs_only=True,
+    )
+
+    assert calls == {"project": 1, "job": 1}
+    assert [row.output_id for row in snapshot["records_by_job"]["job_mixed_legacy"]] == [
+        "out_project_linked",
+        "out_job_only",
+    ]
+    assert {row.output_id for row in snapshot["records_by_project"][project.project_id]} == {
+        "out_project_linked",
+        "out_job_only",
+    }
+    assert snapshot["project_index_complete"][project.project_id] is False
+
+
 @pytest.mark.parametrize(
     "row_count, expected_complete",
     [(4096, True), (4097, False), (4098, False)],

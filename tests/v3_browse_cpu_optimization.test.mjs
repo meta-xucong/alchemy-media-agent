@@ -470,38 +470,109 @@ test("output projection retries once after failure then suppresses unchanged suc
   assert.equal(outputReads, 2, "failed read followed by one successful retry");
 });
 
-test("returning to V3 home invalidates and aborts an in-flight project detail", () => {
+test("returning home releases an opening project and permits a later project after stale success or abort", async () => {
   const invalidate = extractFunction("invalidateV3ProjectDetail", "\nfunction v3ProjectDetailIsCurrent");
+  const isCurrent = extractFunction("v3ProjectDetailIsCurrent", "\nfunction v3ProjectDetailRequestIsCurrent");
+  const requestIsCurrent = extractFunction("v3ProjectDetailRequestIsCurrent", "\nfunction v3ProjectDetailSignal");
   const home = extractFunction("openV3Home", "\nfunction openV3ProfessionalWorkspace");
-  const controller = new AbortController();
-  const context = {
-    AbortController,
-    v3State: {
-      projectDetailAbortController: controller,
-      projectDetailEpoch: 7,
-      projectDetailProjectId: "project_old",
-      currentProject: { project_id: "project_old" },
-      projectsLoaded: true,
-      projectsLoading: false,
-      loading: false,
-    },
-    closeV3ProjectSubpage: () => {},
-    renderV3ViewState: () => {},
-    renderV3ScenarioState: () => {},
-    renderV3HomeTemplateChooser: () => {},
-    renderV3Projects: () => {},
-    renderV3History: () => {},
-    renderV3ProjectDetail: () => {},
-    renderV3Job: () => {},
-    clearV3PendingUploads: () => {},
-    window: { setTimeout: () => {}, scrollTo: () => {} },
-  };
-  vm.runInNewContext(`${invalidate}\n${home}`, context);
-  context.openV3Home();
-  assert.equal(controller.signal.aborted, true);
-  assert.equal(context.v3State.projectDetailEpoch, 8);
-  assert.equal(context.v3State.projectDetailProjectId, "");
-  assert.equal(context.v3State.currentProject, null);
+  const openProject = extractFunction("openV3Project", "\nasync function syncV3ProjectDetailInBackground");
+
+  for (const oldOutcome of ["late_success", "abort_error"]) {
+    const pendingA = [];
+    const overlay = { hidden: true };
+    const context = {
+      AbortController,
+      Promise,
+      encodeURIComponent,
+      v3ApiBase: "/api/v3",
+      v3State: {
+        projectDetailEpoch: 7,
+        projectDetailProjectId: "",
+        projectDetailAbortController: null,
+        currentProject: null,
+        currentJob: null,
+        projectsLoaded: true,
+        projectsLoading: false,
+        loading: false,
+        templates: [],
+      },
+      els: { v3WorkspaceView: { dataset: {} }, v3PromptInput: { value: "" } },
+      window: { setTimeout: () => {}, scrollTo: () => {} },
+      closeV3ProjectSubpage: () => {},
+      renderV3ViewState: () => {},
+      renderV3ScenarioState: () => {},
+      renderV3HomeTemplateChooser: () => {},
+      renderV3Projects: () => {},
+      renderV3History: () => {},
+      renderV3ProjectDetail: () => {},
+      renderV3ProjectOpeningState: () => {},
+      renderV3Job: () => {},
+      clearV3PendingUploads: () => {},
+      setV3PageLoading: (visible) => { overlay.hidden = !visible; },
+      setV3Busy: (busy) => { context.v3State.loading = Boolean(busy); },
+      releaseV3ScrollLockIfNoModal: () => {},
+      updateV3Notice: () => {},
+      v3GenerationSessionOwns: () => true,
+      v3ProjectWithResponsePreferences: (project) => project,
+      applyV3GenerationPreferences: () => {},
+      setV3WorkspaceMode: () => {},
+      v3ProjectUsesProfessionalWorkspace: () => false,
+      closeV3VisualAssetBindingDialog: () => {},
+      closeV3VisualAssetLibraryDialog: () => {},
+      syncV3ProjectOutputsFromPayload: () => {},
+      syncV3ProjectOutputsFromList: () => {},
+      v3ProjectTemplateId: (project) => project.primary_template_id,
+      saveV3ProjectSnapshot: () => {},
+      openV3ScenarioWorkspace: () => {},
+      v3ScenarioForTemplate: () => "general_creative",
+      waitForV3FirstProjectPreviewImage: async () => true,
+      syncV3ProjectDetailInBackground: () => {},
+      v3RequestWithTimeout: (path, _timeoutMs, signal) => {
+        if (path.includes("project_id=A") || path.includes("projects/A?")) {
+          return new Promise((resolve, reject) => pendingA.push({ resolve, reject, signal }));
+        }
+        if (path.includes("projects/B?")) {
+          return Promise.resolve({ project: { project_id: "B", primary_template_id: "general_template" } });
+        }
+        return Promise.resolve({ items: [] });
+      },
+    };
+    vm.runInNewContext(`${invalidate}\n${isCurrent}\n${requestIsCurrent}\n${home}\n${openProject}`, context);
+
+    const openingA = context.openV3Project("A");
+    assert.equal(pendingA.length, 2);
+    assert.equal(context.v3State.projectOpening, true);
+    assert.equal(context.v3State.loading, true);
+    assert.equal(overlay.hidden, false);
+    const controllerA = context.v3State.projectDetailAbortController;
+
+    context.openV3Home();
+    assert.equal(controllerA.signal.aborted, true);
+    assert.equal(context.v3State.projectDetailEpoch, 9);
+    assert.equal(context.v3State.projectDetailProjectId, "");
+    assert.equal(context.v3State.currentProject, null);
+
+    for (const request of pendingA) {
+      if (oldOutcome === "late_success") {
+        request.resolve({ project: { project_id: "A", primary_template_id: "general_template" } });
+      } else {
+        request.reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+      }
+    }
+    await openingA;
+
+    assert.equal(context.v3State.view, "home");
+    assert.equal(context.v3State.projectOpening, false);
+    assert.equal(context.v3State.loading, false);
+    assert.equal(overlay.hidden, true);
+    assert.equal(Object.hasOwn(context.els.v3WorkspaceView.dataset, "v3Opening"), false);
+
+    await context.openV3Project("B");
+    assert.equal(context.v3State.currentProject.project_id, "B");
+    assert.equal(context.v3State.view, "workspace");
+    assert.equal(context.v3State.projectOpening, false);
+    assert.equal(overlay.hidden, true);
+  }
 });
 
 test("generation completion uses one project projection refresh", () => {

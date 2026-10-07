@@ -3265,19 +3265,45 @@ class V3ProjectModeService:
             for job_id in candidate_job_ids:
                 if not job_id or job_id in snapshot["job_status_by_id"]:
                     continue
-                if candidate_job_outputs_only and job_id not in snapshot["records_by_job"]:
+                needs_full_job_output_completion = (
+                    candidate_job_outputs_only
+                    and prefetch_job_state
+                    and not batch_project_index_loaded
+                    and job_id in snapshot["records_by_job"]
+                )
+                if candidate_job_outputs_only and (
+                    job_id not in snapshot["records_by_job"]
+                    or needs_full_job_output_completion
+                ):
                     if callable(list_by_job):
                         try:
                             job_outputs = read_job_outputs(
                                 job_id,
                                 bounded=not prefetch_job_state,
                             )
-                            snapshot["records_by_job"][job_id] = job_outputs
-                            output_ids_by_job[job_id] = {
+                            existing_job_outputs = snapshot["records_by_job"].get(job_id, [])
+                            seen_job_output_ids = {
+                                str(getattr(item, "output_id", "") or "").strip()
+                                for item in existing_job_outputs
+                                if str(getattr(item, "output_id", "") or "").strip()
+                            }
+                            job_output_ids = set(seen_job_output_ids)
+                            job_output_ids.update(
                                 str(getattr(item, "output_id", "") or "").strip()
                                 for item in job_outputs
                                 if str(getattr(item, "output_id", "") or "").strip()
-                            }
+                            )
+                            if existing_job_outputs:
+                                merged_job_outputs = list(existing_job_outputs)
+                                for item in job_outputs:
+                                    identity = str(getattr(item, "output_id", "") or "").strip()
+                                    if not identity or identity not in seen_job_output_ids:
+                                        merged_job_outputs.append(item)
+                                        if identity:
+                                            seen_job_output_ids.add(identity)
+                                job_outputs = merged_job_outputs
+                            snapshot["records_by_job"][job_id] = job_outputs
+                            output_ids_by_job[job_id] = job_output_ids
                             if use_project_index and prefetch_job_state and not batch_project_index_loaded:
                                 project_bucket = snapshot["records_by_project"].setdefault(project_id, [])
                                 project_ids = {
@@ -3291,7 +3317,8 @@ class V3ProjectModeService:
                                         project_bucket.append(item)
                                         project_ids.add(identity)
                         except Exception:
-                            snapshot["records_by_job"][job_id] = []
+                            snapshot["records_by_job"].setdefault(job_id, [])
+                            output_ids_by_job.setdefault(job_id, set())
                     else:
                         snapshot["records_by_job"][job_id] = []
                 if candidate_job_outputs_only and not snapshot["records_by_job"].get(job_id):

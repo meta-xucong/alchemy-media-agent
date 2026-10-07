@@ -2041,7 +2041,14 @@ function handleV3ScenarioClick(button) {
 }
 
 function openV3Home({ silent = false } = {}) {
+  const cancelledProjectOpening = Boolean(v3State.projectOpening);
   invalidateV3ProjectDetail("");
+  if (cancelledProjectOpening) {
+    v3State.projectOpening = false;
+    if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
+    setV3PageLoading(false);
+    setV3Busy(false);
+  }
   v3State.view = "home";
   closeV3ProjectSubpage({ silent: true });
   v3State.currentProject = null;

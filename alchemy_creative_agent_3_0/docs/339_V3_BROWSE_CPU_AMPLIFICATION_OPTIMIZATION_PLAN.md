@@ -521,3 +521,29 @@ tests and **19** Node tests passed; Python compilation, JavaScript syntax, and
 `git diff --check` passed. Two FastAPI deprecation warnings remain. Browser
 heap inspection and VPS CPU/RSS/P95 measurements remain unrun; no online
 performance claim is made.
+
+## 12. Follow-up closure for audit findings on 432e65f
+
+Two interaction gaps are closed in the existing V3 home and project-output
+read paths:
+
+- Returning home while a project is opening now releases that operation's
+  `projectOpening`, page overlay, and busy state. The detail epoch/abort guard
+  remains authoritative, so a late success or cancellation from the old
+  request cannot restore the prior workspace or clear a later open. A
+  deterministic frontend test covers opening A, returning home, both late
+  success and `AbortError`, then successfully opening B.
+- If the combined project/output catalog query fails, full project detail now
+  completes each declared Job bucket from its full Job output read and merges
+  those rows with project-linked fallback rows by output ID. If that Job read
+  also fails, the already recovered project-linked rows remain available. The
+  project index remains marked incomplete. Coverage checks both the snapshot
+  and the public `project-outputs` projection with a real output store and
+  mixed project-linked/Job-only history.
+
+Final local verification for this follow-up: the six related Python modules
+passed **144 tests** (2 existing FastAPI deprecation warnings); all **19 Node
+tests** passed. Python compilation, JavaScript syntax, and `git diff --check`
+passed. Browser-driven tests, browser heap inspection, and VPS CPU/RSS/P95
+validation remain unrun. This is code-path and offline regression evidence,
+not a deployment or production performance claim.
