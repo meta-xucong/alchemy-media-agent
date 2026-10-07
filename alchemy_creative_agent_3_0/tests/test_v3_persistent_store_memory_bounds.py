@@ -200,6 +200,7 @@ def test_project_listing_reuses_small_header_cache_between_pages(tmp_path, monke
     store = PersistentProjectStore(tmp_path / "projects")
     for index in range(4):
         store.save_project(_project(f"project_header_{index}", f"2026-08-{index + 1:02d}T00:00:00+00:00"))
+    store = PersistentProjectStore(tmp_path / "projects")
 
     parse_count = 0
     original_parser = project_store_module._read_project_header_json
@@ -214,7 +215,7 @@ def test_project_listing_reuses_small_header_cache_between_pages(tmp_path, monke
     parsed_after_first = parse_count
     second = store.list_project_headers()
 
-    assert parsed_after_first == 4
+    assert parsed_after_first == 0
     assert parse_count == parsed_after_first
     assert first == second
 
@@ -329,8 +330,113 @@ def test_project_header_cache_does_not_keep_a_stale_revision(tmp_path, monkeypat
 
     monkeypatch.setattr(project_store_module, "_read_project_header_json", change_owner_during_header_read)
 
+    store._project_header_cache.clear()  # noqa: SLF001
+    store._project_header_path(old.project_id).unlink()  # noqa: SLF001
+
     assert store.list_project_headers() == []
     assert "project_header_race" not in store._project_header_cache  # noqa: SLF001
+
+
+def test_project_header_sidecar_uses_small_schema_and_survives_store_reopen(tmp_path, monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.project_mode.store as project_store_module
+
+    root = tmp_path / "projects"
+    store = PersistentProjectStore(root)
+    project = _project("project_header_sidecar", "2026-09-03T00:00:00+00:00", owner_id=17)
+    project.metadata["append_only_history"] = "x" * 50_000
+    store.save_project(project)
+    sidecar_path = root / project.project_id / "project_header.json"
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+
+    assert set(sidecar) == {"schema_version", "source_revision", "header"}
+    assert set(sidecar["header"]) == {
+        "project_id", "status", "created_at", "updated_at", "owner_user_id",
+    }
+    assert "append_only_history" not in json.dumps(sidecar)
+
+    reopened = PersistentProjectStore(root)
+    monkeypatch.setattr(
+        project_store_module,
+        "_read_project_header_json",
+        lambda *_args, **_kwargs: pytest.fail("valid sidecar should avoid the streaming parser"),
+    )
+    assert reopened.list_project_headers()[0]["owner_user_id"] == 17
+
+    assert store.delete_project(project.project_id)
+    assert not sidecar_path.exists()
+
+
+def test_project_header_sidecar_skips_publication_after_external_replacement(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "projects"
+    store = PersistentProjectStore(root)
+    project = _project("project_header_external", "2026-09-03T00:00:00+00:00", owner_id=7)
+    original_write = store._write_project_bytes  # noqa: SLF001
+
+    def write_then_external_replace(project_id, serialized):
+        original_write(project_id, serialized)
+        project_path = store._project_path(project_id)  # noqa: SLF001
+        external = json.loads(project_path.read_text(encoding="utf-8"))
+        external["updated_at"] = "2026-09-04T00:00:00+00:00"
+        external["metadata"]["veyra_user_id"] = 9
+        replacement = project_path.with_suffix(".external.tmp")
+        replacement.write_text(json.dumps(external), encoding="utf-8")
+        replacement.replace(project_path)
+
+    monkeypatch.setattr(store, "_write_project_bytes", write_then_external_replace)
+    store.save_project(project)
+
+    assert not store._project_header_path(project.project_id).exists()  # noqa: SLF001
+    restored = store.get_project(project.project_id)
+    assert restored is not None
+    assert restored.metadata["veyra_user_id"] == 9
+    assert store.list_project_headers()[0]["owner_user_id"] == 9
+
+
+def test_project_header_pair_writes_are_serialized_across_stores(tmp_path, monkeypatch) -> None:
+    from threading import Event
+
+    root = tmp_path / "projects"
+    first_store = PersistentProjectStore(root)
+    second_store = PersistentProjectStore(root)
+    first_project = _project("project_header_interleave", "2026-09-05T00:00:00+00:00", owner_id=7)
+    second_project = _project("project_header_interleave", "2026-09-06T00:00:00+00:00", owner_id=9)
+    second_project.status = "archived"
+    first_write_entered = Event()
+    allow_first_to_finish = Event()
+    second_write_entered = Event()
+    first_write = first_store._write_project_bytes  # noqa: SLF001
+    second_write = second_store._write_project_bytes  # noqa: SLF001
+
+    def pause_first(project_id, serialized):
+        first_write(project_id, serialized)
+        first_write_entered.set()
+        assert allow_first_to_finish.wait(timeout=5)
+
+    def observe_second(project_id, serialized):
+        second_write_entered.set()
+        second_write(project_id, serialized)
+
+    monkeypatch.setattr(first_store, "_write_project_bytes", pause_first)
+    monkeypatch.setattr(second_store, "_write_project_bytes", observe_second)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(first_store.save_project, first_project)
+        assert first_write_entered.wait(timeout=5)
+        second_future = executor.submit(second_store.save_project, second_project)
+        assert not second_write_entered.wait(timeout=0.05)
+        allow_first_to_finish.set()
+        first_future.result(timeout=5)
+        second_future.result(timeout=5)
+
+    project_path = root / first_project.project_id / "project.json"
+    sidecar_path = root / first_project.project_id / "project_header.json"
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    disk_project = json.loads(project_path.read_text(encoding="utf-8"))
+    revision = first_store._project_revision(project_path)  # noqa: SLF001
+    assert sidecar["source_revision"] == list(revision)
+    assert sidecar["header"]["owner_user_id"] == 9
+    assert sidecar["header"]["status"] == "archived"
+    assert disk_project["metadata"]["veyra_user_id"] == 9
+    assert first_store.list_project_headers()[0]["owner_user_id"] == 9
 
 
 def test_project_header_cache_is_also_bounded(tmp_path, monkeypatch) -> None:
@@ -535,6 +641,61 @@ def test_project_output_snapshot_compacts_job_status_and_record() -> None:
     assert "large_role_recipe" not in compact_status.metadata["specialized_execution_summary"]
     compact_record = snapshot["job_record_by_id"]["job_snapshot"]
     assert set(compact_record["_v3_project_output_request_metadata"]) == set(_PROJECT_OUTPUT_JOB_METADATA_KEYS)
+
+
+def test_project_output_snapshot_uses_batched_outputs_and_one_job_snapshot_read() -> None:
+    service = object.__new__(V3ProjectModeService)
+    project = _project("project_snapshot_batch", "2026-09-01T00:00:00+00:00")
+    project.job_ids = ["job_snapshot_batch"]
+    record = SimpleNamespace(job_id="job_snapshot_batch", output_id="output_batch")
+    status = SimpleNamespace(
+        job_id="job_snapshot_batch",
+        status=ProductJobStatusValue.GENERATED,
+        metadata={},
+        asset_series=[],
+        candidates=[],
+    )
+
+    class OutputStore:
+        def __init__(self):
+            self.calls = 0
+
+        def list_by_project_and_jobs(self, project_id, job_ids, *, limit=None):
+            self.calls += 1
+            assert project_id == project.project_id
+            assert job_ids == ["job_snapshot_batch"]
+            return [record]
+
+        def list_by_job(self, _job_id, **_kwargs):
+            raise AssertionError("batched output snapshot must not reread a Job catalog")
+
+        def list_by_project(self, _project_id, **_kwargs):
+            raise AssertionError("batched output snapshot must not rescan the project catalog")
+
+    class ProductService:
+        def __init__(self):
+            self.output_store = OutputStore()
+            self.job_reads = 0
+
+        def get_job_read_snapshot(self, job_id, *, output_records=None):
+            self.job_reads += 1
+            assert job_id == "job_snapshot_batch"
+            assert output_records == [record]
+            return status, SimpleNamespace(request=SimpleNamespace(metadata={}))
+
+        def get_job(self, _job_id):
+            raise AssertionError("status should come from the same durable Job read")
+
+        def get_job_record(self, _job_id):
+            raise AssertionError("record should come from the same durable Job read")
+
+    service.product_service = ProductService()
+    snapshot = service._project_output_read_snapshot([project])
+
+    assert service.product_service.output_store.calls == 1
+    assert service.product_service.job_reads == 1
+    assert snapshot["records_by_job"]["job_snapshot_batch"] == [record]
+    assert snapshot["job_status_by_id"]["job_snapshot_batch"].status == ProductJobStatusValue.GENERATED
 
 
 def test_project_output_status_projection_preserves_missing_role_diagnostics() -> None:

@@ -2456,15 +2456,18 @@ class V3ProjectModeService:
         owner_user_id: int | None = None,
         cursor: str | None = None,
         view: str = "full",
+        project_headers: list[dict[str, object]] | None = None,
     ) -> ProjectListResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
         requested_view = str(view or "full").strip().lower()
         lightweight_view = requested_view == "summary"
         iter_project_headers = getattr(self.project_store, "iter_project_headers", None)
         list_project_headers = getattr(self.project_store, "list_project_headers", None)
-        if callable(iter_project_headers) or callable(list_project_headers):
+        if project_headers is not None or callable(iter_project_headers) or callable(list_project_headers):
             headers = (
-                iter_project_headers()
+                (dict(header) for header in project_headers if isinstance(header, dict))
+                if project_headers is not None
+                else iter_project_headers()
                 if callable(iter_project_headers)
                 else list_project_headers()
             )
@@ -3037,6 +3040,7 @@ class V3ProjectModeService:
         list_by_project = getattr(output_store, "list_by_project", None)
         get_job = getattr(product_service, "get_job", None)
         get_job_record = getattr(product_service, "get_job_record", None)
+        get_job_read_snapshot = getattr(product_service, "get_job_read_snapshot", None)
 
         def read_job_outputs(job_id: str, *, bounded: bool) -> list[Any]:
             """Read a bounded compatibility window without breaking old adapters."""
@@ -3054,7 +3058,9 @@ class V3ProjectModeService:
                 # uses the bounded API above.
                 return list(list_by_job(job_id))[:limit]
 
-        if not callable(get_job) or not callable(get_job_record):
+        if not callable(get_job_read_snapshot) and (
+            not callable(get_job) or not callable(get_job_record)
+        ):
             if use_project_index:
                 for project in projects:
                     project_id = str(project.project_id or "").strip()
@@ -3072,10 +3078,53 @@ class V3ProjectModeService:
                 if str(raw_job_id or "").strip()
             ))
             indexed_job_ids: set[str] = set()
+            batch_list = getattr(output_store, "list_by_project_and_jobs", None)
+            batch_project_index_loaded = False
+            if callable(batch_list):
+                try:
+                    batch_limit = None
+                    if use_project_index:
+                        bounded_index_limit = max(
+                            1,
+                            int(project_index_limit or _HOME_PREVIEW_MAX_INDEX_RECORDS),
+                        )
+                        batch_limit = bounded_index_limit + 1
+                    try:
+                        project_records = list(
+                            batch_list(project_id, declared_job_ids, limit=batch_limit)
+                        )
+                    except TypeError:
+                        project_records = list(batch_list(project_id, declared_job_ids))
+                    batch_project_index_loaded = True
+                    if use_project_index:
+                        snapshot["project_index_complete"][project_id] = (
+                            len(project_records) <= bounded_index_limit
+                        )
+                        snapshot["records_by_project"][project_id] = project_records
+                    for record in project_records:
+                        job_id = str(getattr(record, "job_id", "") or "").strip()
+                        if not job_id:
+                            continue
+                        indexed_job_ids.add(job_id)
+                        bucket = snapshot["records_by_job"].setdefault(job_id, [])
+                        identity = str(getattr(record, "output_id", "") or "").strip()
+                        if identity and not any(
+                            str(getattr(existing, "output_id", "") or "").strip() == identity
+                            for existing in bucket
+                        ):
+                            bucket.append(record)
+                    for job_id in declared_job_ids:
+                        snapshot["records_by_job"].setdefault(job_id, [])
+                except Exception:
+                    batch_project_index_loaded = False
             if use_project_index:
-                project_index_complete = callable(list_by_project)
-                project_records: list[Any] = []
-                if project_index_complete:
+                project_index_complete = batch_project_index_loaded or callable(list_by_project)
+                project_records: list[Any] = (
+                    list(snapshot["records_by_project"].get(project_id, []))
+                    if batch_project_index_loaded
+                    else []
+                )
+                if project_index_complete and not batch_project_index_loaded:
                     try:
                         bounded_index_limit = max(1, int(project_index_limit or _HOME_PREVIEW_MAX_INDEX_RECORDS))
                         project_records = list(list_by_project(project_id, limit=bounded_index_limit + 1))
@@ -3113,6 +3162,8 @@ class V3ProjectModeService:
                         if len(declared_job_ids) > _HOME_PREVIEW_MAX_JOB_STATES
                         else declared_job_ids
                     )
+                    if batch_project_index_loaded:
+                        fallback_job_ids = []
                     # The project index already covers records carrying the
                     # current project link.  Use the compatibility outlet
                     # only for declared Jobs missing from that index; this
@@ -3177,7 +3228,9 @@ class V3ProjectModeService:
                         snapshot["records_by_job"].setdefault(job_id, [])
                 snapshot["records_by_project"][project_id] = project_records
                 continue
-            candidate_job_ids = declared_job_ids or sorted(indexed_job_ids)
+            candidate_job_ids = declared_job_ids or (
+                sorted(indexed_job_ids) if use_project_index else []
+            )
             for job_id in candidate_job_ids:
                 if not job_id or job_id in snapshot["job_status_by_id"]:
                     continue
@@ -3199,8 +3252,15 @@ class V3ProjectModeService:
                     continue
                 if use_project_index and job_id not in indexed_job_ids and not candidate_job_outputs_only:
                     continue
+                job_record = None
                 try:
-                    job_status = get_job(job_id)
+                    if callable(get_job_read_snapshot):
+                        job_status, job_record = get_job_read_snapshot(
+                            job_id,
+                            output_records=snapshot["records_by_job"].get(job_id),
+                        )
+                    else:
+                        job_status = get_job(job_id)
                 except Exception:
                     snapshot["job_read_failures"].add(job_id)
                     job_status = None
@@ -3210,18 +3270,19 @@ class V3ProjectModeService:
                     if use_project_index:
                         snapshot["records_by_job"].setdefault(job_id, [])
                     continue
-                try:
-                    job_record = get_job_record(job_id)
-                except Exception:
-                    snapshot["job_read_failures"].add(job_id)
-                    job_record = None
+                if not callable(get_job_read_snapshot):
+                    try:
+                        job_record = get_job_record(job_id)
+                    except Exception:
+                        snapshot["job_read_failures"].add(job_id)
+                        job_record = None
                 snapshot["job_record_by_id"][job_id] = self._project_output_job_record_projection(job_record)
                 if use_project_index and not candidate_job_outputs_only:
                     # A project index miss is a bounded preview miss. Do not
                     # fall back to a full Job scan on the home surface.
                     snapshot["records_by_job"].setdefault(job_id, [])
                     continue
-                if callable(list_by_job):
+                if callable(list_by_job) and not batch_project_index_loaded:
                     try:
                         snapshot["records_by_job"][job_id] = list(list_by_job(job_id))
                     except Exception:

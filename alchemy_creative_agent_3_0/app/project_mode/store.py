@@ -19,6 +19,8 @@ from .contracts import ProjectRecord, ProjectTimelineItem
 
 _PROJECT_ID_PATTERN = re.compile(r"^project_[A-Za-z0-9_-]{1,64}$")
 _PROJECT_HEADER_CACHE_MAX_ENTRIES = 4096
+_PROJECT_HEADER_SIDECAR_SCHEMA = 1
+_PROJECT_METADATA_TRANSACTION_LOCK = RLock()
 _DOC270_PHASE4_PRIVATE_NAMESPACES = frozenset(
     {
         "doc270_phase4_activation_policy",
@@ -139,16 +141,41 @@ class PersistentProjectStore(InMemoryProjectStore):
         self.storage_root = Path(storage_root) if storage_root else _default_storage_root()
         self._project_revisions: dict[str, tuple[int, int, int]] = {}
         self._project_header_cache: dict[str, tuple[tuple[int, int, int], dict[str, object]]] = {}
+        self._project_header_cache_lock = RLock()
         self._timeline_lock = RLock()
 
     def save_project(self, project: ProjectRecord) -> ProjectRecord:
         saved = super().save_project(project)
-        self._write_project(saved)
-        revision = self._project_revision(self._project_path(saved.project_id))
-        if revision is not None:
-            self._cache_project(saved, revision)
-        else:
-            self._evict_project(saved.project_id)
+        with _PROJECT_METADATA_TRANSACTION_LOCK:
+            payload = saved.model_dump(mode="json")
+            serialized = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+            self._write_project_bytes(saved.project_id, serialized)
+            project_path = self._project_path(saved.project_id)
+            before = self._project_revision(project_path)
+            try:
+                source_bytes = project_path.read_bytes()
+            except OSError:
+                source_bytes = None
+            after = self._project_revision(project_path)
+            if before is None or before != after or source_bytes != serialized:
+                self._evict_project_header(saved.project_id)
+                self._evict_project(saved.project_id)
+                return saved
+
+            header = _project_header_from_payload(payload, saved.project_id)
+            sidecar_payload = {
+                "schema_version": _PROJECT_HEADER_SIDECAR_SCHEMA,
+                "source_revision": list(before),
+                "header": header,
+            }
+            _atomic_write_json(self._project_header_path(saved.project_id), sidecar_payload)
+            latest_revision = self._project_revision(project_path)
+            if latest_revision == before:
+                self._cache_project_header(saved.project_id, before, header)
+                self._cache_project(saved, before)
+            else:
+                self._evict_project_header(saved.project_id)
+                self._evict_project(saved.project_id)
         return saved
 
     def get_project(self, project_id: str) -> ProjectRecord | None:
@@ -167,7 +194,7 @@ class PersistentProjectStore(InMemoryProjectStore):
         return loaded
 
     def list_project_headers(self) -> list[dict[str, object]]:
-        return list(self.iter_project_headers())
+        return [dict(header) for header in self.iter_project_headers()]
 
     def iter_project_headers(self):
         """Read only the fields needed to sort and authorize project pages.
@@ -179,35 +206,91 @@ class PersistentProjectStore(InMemoryProjectStore):
         """
 
         if not self.storage_root.exists():
-            self._project_header_cache.clear()
+            with self._project_header_cache_lock:
+                self._project_header_cache.clear()
             return
         for path in self.storage_root.glob("project_*/project.json"):
             project_id = path.parent.name
             if not _valid_project_id(project_id):
                 continue
             revision = self._project_revision(path)
-            cached = self._project_header_cache.get(project_id)
+            with self._project_header_cache_lock:
+                cached = self._project_header_cache.get(project_id)
             if revision is not None and cached is not None and cached[0] == revision:
-                self._project_header_cache.pop(project_id, None)
-                self._project_header_cache[project_id] = cached
-                yield cached[1]
-                continue
+                if self._project_revision(path) == revision:
+                    with self._project_header_cache_lock:
+                        if self._project_header_cache.get(project_id) == cached:
+                            self._project_header_cache.pop(project_id, None)
+                            self._project_header_cache[project_id] = cached
+                    yield dict(cached[1])
+                    continue
             try:
-                header = _read_project_header_json(path, project_id)
+                header = self._read_project_header_sidecar(project_id, revision)
+                if header is None:
+                    header = _read_project_header_json(path, project_id)
             except (OSError, json.JSONDecodeError, UnicodeError, ValueError):
-                self._project_header_cache.pop(project_id, None)
+                self._evict_project_header(project_id)
                 continue
             refreshed_revision = self._project_revision(path)
             if revision is None or refreshed_revision != revision:
-                self._project_header_cache.pop(project_id, None)
+                self._evict_project_header(project_id)
                 continue
-            self._project_header_cache[project_id] = (revision, header)
+            self._cache_project_header(project_id, revision, header)
+            yield dict(header)
+        with self._project_header_cache_lock:
+            cached_headers = list(self._project_header_cache.items())
+        for project_id, (cached_revision, _) in cached_headers:
+            if self._project_revision(self._project_path(project_id)) != cached_revision:
+                self._evict_project_header(project_id)
+
+    def _cache_project_header(
+        self,
+        project_id: str,
+        revision: tuple[int, int, int],
+        header: dict[str, object],
+    ) -> None:
+        with self._project_header_cache_lock:
+            self._project_header_cache[project_id] = (revision, dict(header))
             while len(self._project_header_cache) > _PROJECT_HEADER_CACHE_MAX_ENTRIES:
                 self._project_header_cache.pop(next(iter(self._project_header_cache)))
-            yield header
-        for project_id, (cached_revision, _) in list(self._project_header_cache.items()):
-            if self._project_revision(self._project_path(project_id)) != cached_revision:
-                self._project_header_cache.pop(project_id, None)
+
+    def _evict_project_header(self, project_id: str) -> None:
+        with self._project_header_cache_lock:
+            self._project_header_cache.pop(project_id, None)
+
+    def _read_project_header_sidecar(
+        self,
+        project_id: str,
+        revision: tuple[int, int, int] | None,
+    ) -> dict[str, object] | None:
+        if revision is None:
+            return None
+        path = self._project_header_path(project_id)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(payload, dict) or payload.get("schema_version") != _PROJECT_HEADER_SIDECAR_SCHEMA:
+            return None
+        try:
+            source_revision = tuple(int(value) for value in payload.get("source_revision", []))
+        except (TypeError, ValueError):
+            return None
+        header = payload.get("header")
+        if source_revision != revision or not isinstance(header, dict):
+            return None
+        if str(header.get("project_id") or "") != project_id:
+            return None
+        required = {"status", "created_at", "updated_at", "owner_user_id"}
+        if not required.issubset(header):
+            return None
+        return {
+            "project_id": project_id,
+            "status": str(header.get("status") or "active"),
+            "created_at": str(header.get("created_at") or ""),
+            "updated_at": str(header.get("updated_at") or ""),
+            "owner_user_id": header.get("owner_user_id"),
+        }
 
     def _cache_project(self, project: ProjectRecord, revision: tuple[int, int, int]) -> None:
         project_id = project.project_id
@@ -354,6 +437,7 @@ class PersistentProjectStore(InMemoryProjectStore):
             return False
         removed = super().delete_project(project_id)
         self._evict_project(project_id)
+        self._evict_project_header(project_id)
         project_dir = self.storage_root / project_id
         if project_dir.exists():
             _safe_remove_tree(self.storage_root, project_dir)
@@ -429,10 +513,10 @@ class PersistentProjectStore(InMemoryProjectStore):
                 continue
         return sorted(items, key=lambda entry: entry.created_at)
 
-    def _write_project(self, project: ProjectRecord) -> None:
-        path = self._project_path(project.project_id)
+    def _write_project_bytes(self, project_id: str, serialized: bytes) -> None:
+        path = self._project_path(project_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(path, project.model_dump(mode="json"))
+        _atomic_write_bytes(path, serialized)
 
     def _write_timeline_items(self, project_id: str, items: list[ProjectTimelineItem]) -> None:
         path = self._timeline_path(project_id)
@@ -460,11 +544,30 @@ class PersistentProjectStore(InMemoryProjectStore):
     def _private_records_path(self, project_id: str) -> Path:
         return self.storage_root / project_id / "private_records.json"
 
+    def _project_header_path(self, project_id: str) -> Path:
+        return self.storage_root / project_id / "project_header.json"
+
 
 def _atomic_write_json(path: Path, payload: object) -> None:
+    _atomic_write_bytes(path, json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     temp = path.with_suffix(f"{path.suffix}.{uuid4().hex}.tmp")
-    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.write_bytes(payload)
     temp.replace(path)
+
+
+def _project_header_from_payload(payload: dict[str, object], project_id: str) -> dict[str, object]:
+    metadata = payload.get("metadata")
+    owner_user_id = metadata.get("veyra_user_id") if isinstance(metadata, dict) else None
+    return {
+        "project_id": project_id,
+        "status": str(payload.get("status") or "active"),
+        "created_at": str(payload.get("created_at") or ""),
+        "updated_at": str(payload.get("updated_at") or ""),
+        "owner_user_id": owner_user_id,
+    }
 
 
 def _frozen_private_record(value: object) -> dict[str, object]:

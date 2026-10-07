@@ -334,6 +334,167 @@ class V3GeneratedOutputStore:
             records = self._read_scoped_records(paths, project_id=target, limit=bounded_limit)
         return records
 
+    def list_by_project_and_jobs(
+        self,
+        project_id: str,
+        job_ids: Iterable[str],
+        *,
+        limit: int | None = None,
+    ) -> list[V3GeneratedOutputRecord]:
+        """Read project-linked outputs and declared legacy Job outputs in one catalog pass."""
+
+        target_project = str(project_id or "").strip()
+        target_jobs = {
+            str(job_id or "").strip()
+            for job_id in job_ids
+            if str(job_id or "").strip()
+        }
+        if not target_project:
+            return []
+
+        path_iterator = iter(_iter_output_record_paths(self.storage_root))
+        paths: list[Path] = []
+        signature_items: list[tuple[str, int, int, int]] = []
+        overflow_path: Path | None = None
+        for path in path_iterator:
+            if len(paths) >= _OUTPUT_SCOPED_INDEX_MAX_RECORDS:
+                overflow_path = path
+                break
+            paths.append(path)
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            signature_items.append(
+                (str(path), int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+            )
+        paths.sort()
+        signature_items.sort()
+        signature = tuple(signature_items)
+        oversized = overflow_path is not None
+        if oversized:
+            with self._cache_lock:
+                self._scoped_index_revision = None
+                self._scoped_paths_by_job = None
+                self._scoped_paths_by_project = None
+            def all_paths_from_one_scan():
+                yield from paths
+                if overflow_path is not None:
+                    yield overflow_path
+                yield from path_iterator
+
+            candidates = self._iter_project_job_output_paths(
+                target_project,
+                target_jobs,
+                paths=all_paths_from_one_scan(),
+            )
+        else:
+            storage_revision = self._storage_revision()
+            revision = (storage_revision, signature)
+            with self._cache_lock:
+                cache_hit = (
+                    revision == self._scoped_index_revision
+                    and self._scoped_paths_by_job is not None
+                    and self._scoped_paths_by_project is not None
+                )
+                cached_by_project = self._scoped_paths_by_project
+                cached_by_job = self._scoped_paths_by_job
+
+            if not cache_hit:
+                by_job: dict[str, list[Path]] = {}
+                by_project: dict[str, list[Path]] = {}
+                for path in paths:
+                    output_id = path.parent.name
+                    if not _valid_output_id(output_id):
+                        continue
+                    try:
+                        raw = path.read_bytes()
+                    except OSError:
+                        continue
+                    seen_job_ids: set[str] = set()
+                    seen_project_ids: set[str] = set()
+                    for match in _SCOPED_INDEX_FIELD_PATTERN.finditer(raw):
+                        value = _decode_scoped_index_value(match.group("value"))
+                        if not value:
+                            continue
+                        if match.group("field") == b"job_id":
+                            seen_job_ids.add(value)
+                        else:
+                            seen_project_ids.add(value)
+                    for job_id in seen_job_ids:
+                        by_job.setdefault(job_id, []).append(path)
+                    for indexed_project_id in seen_project_ids:
+                        by_project.setdefault(indexed_project_id, []).append(path)
+                frozen_by_job = {key: tuple(value) for key, value in by_job.items()}
+                frozen_by_project = {key: tuple(value) for key, value in by_project.items()}
+                with self._cache_lock:
+                    self._scoped_index_revision = revision
+                    self._scoped_paths_by_job = frozen_by_job
+                    self._scoped_paths_by_project = frozen_by_project
+                    cached_by_project = frozen_by_project
+                    cached_by_job = frozen_by_job
+
+            candidate_paths = set(cached_by_project.get(target_project, ()))
+            for job_id in target_jobs:
+                candidate_paths.update(cached_by_job.get(job_id, ()))
+            candidates = sorted(candidate_paths)
+
+        bounded_limit = None if limit is None else _bounded_output_limit(limit, default=1)
+        records: list[tuple[str, int, str, V3GeneratedOutputRecord]] = []
+        for path in candidates:
+            record = self.get_output(path.parent.name)
+            if record is None:
+                continue
+            actual_project_id = str((record.metadata or {}).get("project_id") or "").strip()
+            actual_job_id = str(record.job_id or "").strip()
+            if actual_project_id != target_project and not (
+                not actual_project_id and actual_job_id in target_jobs
+            ):
+                continue
+            entry = (
+                str(record.created_at or ""),
+                -_output_id_order_number(record.output_id),
+                str(path),
+                record,
+            )
+            if bounded_limit is None:
+                records.append(entry)
+            elif len(records) < bounded_limit:
+                heapq.heappush(records, entry)
+            elif entry[:2] > records[0][:2]:
+                heapq.heapreplace(records, entry)
+        return [record for _created, _reverse_id, _path, record in sorted(records, reverse=True)]
+
+    def _iter_project_job_output_paths(
+        self,
+        project_id: str,
+        job_ids: set[str],
+        *,
+        paths: Iterable[Path] | None = None,
+    ) -> Iterable[Path]:
+        """Stream one oversized catalog pass for project and declared Job locators."""
+
+        source_paths = paths if paths is not None else _iter_output_record_paths(self.storage_root)
+        for path in source_paths:
+            output_id = path.parent.name
+            if not _valid_output_id(output_id):
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            project_match = False
+            job_match = False
+            for match in _SCOPED_INDEX_FIELD_PATTERN.finditer(raw):
+                value = _decode_scoped_index_value(match.group("value"))
+                if match.group("field") == b"project_id" and value == project_id:
+                    project_match = True
+                elif match.group("field") == b"job_id" and value in job_ids:
+                    job_match = True
+                if project_match or job_match:
+                    yield path
+                    break
+
     def file_for_variant(self, output_id: str, variant: str) -> tuple[Path, str, str] | None:
         record = self.get_output(output_id)
         if record is None:
@@ -341,6 +502,7 @@ class V3GeneratedOutputStore:
         output_dir = (self.storage_root / output_id).resolve(strict=False)
         if not _path_is_within(self.storage_root, output_dir) or output_dir.name != record.output_id:
             return None
+        original_path = output_dir / f"original{_FORMAT_SUFFIXES.get(record.output_format, '.png')}"
         if variant == "download":
             media_type = record.mime_type
             filename = f"{output_id}.{_extension(record.output_format)}"
@@ -363,9 +525,33 @@ class V3GeneratedOutputStore:
         path = fallback_path
         if not _path_is_within(output_dir, path) or not path.exists() or not path.is_file():
             return None
-        if not self._image_is_valid_cached(path):
+        if path.resolve(strict=False) != original_path.resolve(strict=False) and not self._image_is_valid_cached(path):
             return None
         return path, media_type, filename
+
+    def verify_canonical_download(
+        self,
+        record: V3GeneratedOutputRecord,
+        path: str | Path,
+        expected_sha256: str,
+    ) -> bool:
+        """Reuse the revision-aware original-file proof for a closure digest."""
+
+        expected = str(expected_sha256 or "").strip().lower()
+        record_expected = _expected_output_content_sha256(record)
+        if not expected or expected != record_expected:
+            return False
+        output_dir = (self.storage_root / record.output_id).resolve(strict=False)
+        canonical = output_dir / f"original{_FORMAT_SUFFIXES.get(record.output_format, '.png')}"
+        try:
+            requested_path = Path(path).resolve(strict=False)
+        except (OSError, TypeError, ValueError):
+            return False
+        if requested_path != canonical.resolve(strict=False):
+            return False
+        if not _path_is_within(self.storage_root, output_dir) or output_dir.name != record.output_id:
+            return False
+        return self._canonical_output_files_match_record_cached(record, output_dir)
 
     def delete_output(self, output_id: str) -> bool:
         if not _valid_output_id(output_id):
@@ -877,25 +1063,21 @@ def _canonical_output_files_match_record(record: V3GeneratedOutputRecord, output
         return False
     if not original_path.exists() or not original_path.is_file():
         return False
+    try:
+        original_bytes = original_path.read_bytes()
+        _validate_image(original_bytes)
+    except (OSError, ValueError):
+        return False
     metadata = record.metadata or {}
     canonical_hash_present = any(key in metadata for key in _IMMUTABLE_OUTPUT_METADATA_KEYS)
     expected_sha = _expected_output_content_sha256(record)
     if canonical_hash_present:
         if not expected_sha:
             return False
-        try:
-            return hashlib.sha256(original_path.read_bytes()).hexdigest() == expected_sha
-        except OSError:
-            return False
+        return hashlib.sha256(original_bytes).hexdigest() == expected_sha
     if expected_sha:
-        try:
-            return hashlib.sha256(original_path.read_bytes()).hexdigest() == expected_sha
-        except OSError:
-            return False
-    try:
-        width, height = _validate_image(original_path.read_bytes())
-    except ValueError:
-        return False
+        return hashlib.sha256(original_bytes).hexdigest() == expected_sha
+    width, height = _validate_image(original_bytes)
     if record.width is not None and int(record.width) != int(width):
         # Pre-hash V3 records occasionally contain the provider's requested
         # dimensions instead of the dimensions of the persisted PNG.  The

@@ -325,6 +325,7 @@ const v3State = {
   currentProject: null,
   projectDetailEpoch: 0,
   projectDetailProjectId: "",
+  projectDetailAbortController: null,
   projectTimeline: [],
   selectedTemplate: "general_template",
   // Visual Assets belong to the user/workspace library.  Projects remain
@@ -3251,8 +3252,14 @@ async function loadV3ProjectOutputs({
       : "";
     const outputRequestPath = `${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}`;
     requestPromise = normalizedSurface === "home_preview"
-      ? v3RequestWithTimeout(outputRequestPath, v3HomePreviewRequestTimeoutMs)
-      : request(outputRequestPath);
+      ? v3RequestWithTimeout(
+        outputRequestPath,
+        v3HomePreviewRequestTimeoutMs,
+        v3ProjectDetailSignal(scopedProjectId, detailEpoch),
+      )
+      : request(outputRequestPath, {
+        signal: v3ProjectDetailSignal(scopedProjectId, detailEpoch),
+      });
     v3State.projectOutputsRequest = requestPromise;
     v3State.projectOutputsRequestOwner = requestOwner;
     v3State.projectOutputsRequestKey = requestKey;
@@ -4037,7 +4044,7 @@ function renderV3Projects() {
     card.dataset.v3ProjectId = item.project_id;
     card.innerHTML = `
       <div class="v3-project-thumb-wrap">
-        ${thumbnails.length ? `<img class="v3-project-thumb" alt="" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-project-thumb-placeholder" aria-hidden="true"></span>`}
+        ${thumbnails.length ? `<img class="v3-project-thumb" alt="" loading="lazy" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-project-thumb-placeholder" aria-hidden="true"></span>`}
       </div>
       <div class="v3-project-goal-slot" title="${escapeHtml(projectGoal)}">
         <p>${escapeHtml(projectGoal)}</p>
@@ -4054,7 +4061,7 @@ function renderV3Projects() {
     `;
     els.v3ProjectList.appendChild(card);
     const projectImage = card.querySelector(".v3-project-thumb");
-    if (projectImage) bindImageWithFallback(projectImage, [v3MediaUrl(thumbnails[0])], { emptyAlt: "项目封面暂不可用" });
+    if (projectImage) bindV3ImageWithFallback(projectImage, [v3MediaUrl(thumbnails[0])], { emptyAlt: "项目封面暂不可用" });
   });
   if (v3State.projectsHasMore || items.length > v3State.projectRenderLimit) {
     const loadMore = document.createElement("article");
@@ -4108,7 +4115,7 @@ function renderV3History() {
         <span class="v3-history-stack" aria-hidden="true">
           ${Array.from({ length: stackCount }, () => "<span></span>").join("")}
         </span>
-        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" loading="eager" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-history-empty-thumb">${escapeHtml(emptyImageLabel)}</span>`}
+        ${previewUrl ? `<img alt="${escapeHtml(groupTitle)}" loading="lazy" decoding="async" data-v3-home-thumb="true" />` : `<span class="v3-history-empty-thumb">${escapeHtml(emptyImageLabel)}</span>`}
       </button>
       <div class="v3-history-body">
         <strong>${escapeHtml(v3ShortText(groupTitle, 32))}</strong>
@@ -4125,7 +4132,7 @@ function renderV3History() {
     `;
     els.v3HistoryList.appendChild(card);
     const image = card.querySelector("img");
-    if (image) bindImageWithFallback(image, [previewUrl], { emptyAlt: emptyImageLabel });
+    if (image) bindV3ImageWithFallback(image, [previewUrl], { emptyAlt: emptyImageLabel });
   });
   if (v3State.projectsHasMore || groups.length > visibleGroups.length) {
     const loadMore = document.createElement("article");
@@ -4498,7 +4505,7 @@ function renderV3ProjectHistoryGrid(group) {
       </div>
     `;
     const image = card.querySelector("img");
-    if (image) bindImageWithFallback(image, previewCandidates, { emptyAlt: "图片暂不可用" });
+    if (image) bindV3ImageWithFallback(image, previewCandidates, { emptyAlt: "图片暂不可用" });
     els.v3ProjectHistoryGrid.appendChild(card);
   });
 }
@@ -5582,7 +5589,7 @@ function renderV3ProjectOutputBoard() {
       </div>
     `;
     const image = card.querySelector(".v3-project-output-preview img");
-    if (image) bindImageWithFallback(image, urls, { emptyAlt: "V3 project image unavailable" });
+    if (image) bindV3ImageWithFallback(image, urls, { emptyAlt: "V3 project image unavailable", detailBound: true });
     const preview = card.querySelector(".v3-project-output-preview");
     if (preview) {
       preview.addEventListener("click", () => {
@@ -5611,12 +5618,12 @@ function renderV3ProjectOutputBoard() {
       const card = document.createElement("article");
       card.className = "v3-review-output-tile";
       card.innerHTML = `
-        <button class="v3-process-output-tile" type="button" aria-label="查看${escapeHtml(title)}"><img alt="${escapeHtml(title)}" /></button>
+        <button class="v3-process-output-tile" type="button" aria-label="查看${escapeHtml(title)}"><img alt="${escapeHtml(title)}" loading="lazy" /></button>
         <strong>${escapeHtml(title)}</strong>
         <span>${escapeHtml(v3ProjectReviewReason(item))}</span>
       `;
       const image = card.querySelector("img");
-      if (image) bindImageWithFallback(image, urls, { emptyAlt: "复核图暂时无法加载" });
+      if (image) bindV3ImageWithFallback(image, urls, { emptyAlt: "复核图暂时无法加载", detailBound: true });
       card.querySelector("button")?.addEventListener("click", () => {
         openV3OutputLightbox(item, {
           title,
@@ -7821,7 +7828,9 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
       return v3State.currentJob;
     }
     try {
-      const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(receipt.jobId)}`);
+      const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(receipt.jobId)}`, {
+        signal: v3ProjectDetailSignal(project?.project_id),
+      });
       if (!v3GenerationSessionOwns(shouldContinue)) return null;
       v3State.currentJob = job;
       v3State.selectedResult = null;
@@ -7839,7 +7848,9 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
     return v3State.currentJob;
   }
   try {
-    const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+    const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`, {
+      signal: v3ProjectDetailSignal(project?.project_id),
+    });
     if (!v3GenerationSessionOwns(shouldContinue)) return null;
     if (["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase())) {
       const recovered = v3RecoveredJobFromProjectOutputs(jobId, job, { allowPartial: true });
@@ -9161,7 +9172,9 @@ async function loadV3ProjectVisualAssetBindings({
   v3State.projectVisualAssetBindingsLoading = true;
   renderV3ProjectVisualAssetPanel();
   try {
-    const payload = await request(v3ProjectVisualAssetBindingsPath(projectId));
+    const payload = await request(v3ProjectVisualAssetBindingsPath(projectId), {
+      signal: v3ProjectDetailSignal(projectId, detailEpoch),
+    });
     if (!detailIsCurrent()) return [];
     v3State.projectVisualAssetBindings = Array.isArray(payload?.bindings) ? payload.bindings : [];
     v3State.projectVisualAssetBindingState = String(payload?.state || "empty");
@@ -9368,6 +9381,8 @@ async function clearV3ProjectVisualAssetBinding() {
 }
 
 function invalidateV3ProjectDetail(projectId) {
+  v3State.projectDetailAbortController?.abort();
+  v3State.projectDetailAbortController = null;
   v3State.projectDetailEpoch = Number(v3State.projectDetailEpoch || 0) + 1;
   v3State.projectDetailProjectId = String(projectId || "").trim();
   return v3State.projectDetailEpoch;
@@ -9388,6 +9403,16 @@ function v3ProjectDetailRequestIsCurrent(projectId, detailEpoch, shouldContinue 
   return detailIsCurrent && v3GenerationSessionOwns(shouldContinue);
 }
 
+function v3ProjectDetailSignal(projectId, detailEpoch = null) {
+  const controller = v3State.projectDetailAbortController;
+  if (!controller || controller.signal.aborted) return undefined;
+  if (String(v3State.projectDetailProjectId || "") !== String(projectId || "")) return undefined;
+  if (detailEpoch !== null && detailEpoch !== undefined && v3State.projectDetailEpoch !== detailEpoch) {
+    return undefined;
+  }
+  return controller.signal;
+}
+
 function v3HistoryModalRequestIsCurrent(requestOwner, projectId) {
   if (requestOwner?.kind !== "project_history_modal") return true;
   return Boolean(
@@ -9398,29 +9423,25 @@ function v3HistoryModalRequestIsCurrent(requestOwner, projectId) {
   );
 }
 
-function v3RequestWithTimeout(path, timeoutMs = 6000) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = window.setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error("项目首屏读取超时"));
-    }, timeoutMs);
-    request(path).then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+async function v3RequestWithTimeout(path, timeoutMs = 6000, parentSignal = null) {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await request(path, { signal: controller.signal });
+  } catch (error) {
+    if (timedOut) throw new Error("项目首屏读取超时");
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", abortFromParent);
+  }
 }
 
 function v3ProjectPreviewImages() {
@@ -9476,6 +9497,8 @@ async function openV3Project(projectId) {
   const requestedProjectId = String(projectId || "").trim();
   if (!requestedProjectId || v3State.projectOpening) return;
   const detailEpoch = invalidateV3ProjectDetail(requestedProjectId);
+  const detailAbortController = new AbortController();
+  v3State.projectDetailAbortController = detailAbortController;
   const sameProject = v3State.currentProject?.project_id === requestedProjectId;
   if (!sameProject) {
     v3State.currentProject = null;
@@ -9504,9 +9527,15 @@ async function openV3Project(projectId) {
   const detailIsCurrent = () => v3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch);
   try {
     const [summaryResult, previewResult] = await Promise.allSettled([
-      v3RequestWithTimeout(`${v3ApiBase}/projects/${encodeURIComponent(requestedProjectId)}?view=summary`),
+      v3RequestWithTimeout(
+        `${v3ApiBase}/projects/${encodeURIComponent(requestedProjectId)}?view=summary`,
+        6000,
+        detailAbortController.signal,
+      ),
       v3RequestWithTimeout(
         `${v3ApiBase}/project-outputs?limit=1&compact=true&project_id=${encodeURIComponent(requestedProjectId)}&surface=delivery_preview`,
+        6000,
+        detailAbortController.signal,
       ),
     ]);
     if (!detailIsCurrent()) return;
@@ -9662,7 +9691,10 @@ async function loadV3ProjectTimeline(projectId, { silent = false, detailEpoch = 
     return [];
   }
   try {
-    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/timeline`);
+    const payload = await request(
+      `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/timeline`,
+      { signal: v3ProjectDetailSignal(projectId, detailEpoch) },
+    );
     if (!v3ProjectDetailRequestIsCurrent(projectId, detailEpoch, shouldContinue)) return [];
     v3State.projectTimeline = Array.isArray(payload.items) ? payload.items : [];
   } catch (error) {
@@ -9679,7 +9711,10 @@ async function refreshV3CurrentProject({ silent = true, shouldContinue = null, s
   const projectId = v3State.currentProject?.project_id;
   if (!projectId || !v3GenerationSessionOwns(shouldContinue)) return false;
   try {
-    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
+    const payload = await request(
+      `${v3ApiBase}/projects/${encodeURIComponent(projectId)}`,
+      { signal: v3ProjectDetailSignal(projectId) },
+    );
     if (!v3GenerationSessionOwns(shouldContinue)) return false;
     v3State.currentProject = payload.project || v3State.currentProject;
     if (!v3GenerationSessionOwns(shouldContinue)) return false;
@@ -10633,6 +10668,32 @@ async function runV3GenerationWithRecovery({ projectId, jobId, body, expectedCou
   }
 }
 
+function v3JobOutputProjectionSignature(job) {
+  if (!job || typeof job !== "object") return "";
+  const outputIds = [
+    ...(Array.isArray(job.asset_series) ? job.asset_series : []),
+    ...(Array.isArray(job.candidates) ? job.candidates : []),
+    ...(Array.isArray(job.outputs) ? job.outputs : []),
+  ]
+    .map((item) => String(item?.output_id || "").trim())
+    .filter(Boolean)
+    .sort();
+  const finalDelivery = job.metadata?.final_delivery || {};
+  const closure = job.metadata?.post_generation_review_closure || {};
+  const deliveryStatus = String(finalDelivery.final_delivery_status || "");
+  const reviewClosure = String(closure.state || "");
+  const restoreState = String(job.metadata?.output_store_restore_state || "");
+  if (!outputIds.length && !deliveryStatus && !reviewClosure && !restoreState) return "";
+  return JSON.stringify({
+    outputIds,
+    deliveryStatus,
+    deliveryCount: Number(finalDelivery.final_delivery_output_count || 0),
+    partialDelivery: Boolean(finalDelivery.partial_delivery),
+    reviewClosure,
+    restoreState,
+  });
+}
+
 function withV3SoftTimeout(promise, timeoutMs) {
   let timer = null;
   const timeoutPromise = new Promise((_, reject) => {
@@ -10657,26 +10718,29 @@ async function recoverV3GeneratedJob(
   clearV3RecoverPolling();
   let lastError = originalError;
   let recoveryAttemptLimit = v3RecoveryMaxAttempts;
+  let lastOutputProjectionSignature = "";
   for (let attempt = 1; attempt <= recoveryAttemptLimit; attempt += 1) {
     if (typeof shouldContinue === "function" && !shouldContinue()) {
       throw new Error("v3_project_recovery_replaced");
     }
     v3State.recoverPollAttempt = attempt;
     await v3Delay(attempt === 1 ? 1200 : 2500);
+    let outputProjectionChanged = false;
     try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
       if (typeof shouldContinue === "function" && !shouldContinue()) {
         throw new Error("v3_project_recovery_replaced");
       }
+      const outputProjectionSignature = v3JobOutputProjectionSignature(job);
+      outputProjectionChanged = Boolean(
+        outputProjectionSignature && outputProjectionSignature !== lastOutputProjectionSignature
+      );
+      lastOutputProjectionSignature = outputProjectionSignature || lastOutputProjectionSignature;
       if (v3JobHasTerminalOutcome(job)) {
         v3State.currentJob = job;
         v3SettleEcommerceTerminalReceipt(job);
         renderV3Job(job);
         await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-        await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-        await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
         if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         return job;
       }
@@ -10689,10 +10753,6 @@ async function recoverV3GeneratedJob(
         renderV3Job(job);
         await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
         if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-        await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-        await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         setV3Progress("completed", "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。", "warning", { forceNotice: true });
         return job;
       }
@@ -10702,10 +10762,6 @@ async function recoverV3GeneratedJob(
           v3State.currentJob = recovered;
           renderV3Job(recovered);
           await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-          if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-          await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
-          if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-          await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
           if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
           setV3Progress(
             "completed",
@@ -10720,10 +10776,6 @@ async function recoverV3GeneratedJob(
         v3State.currentJob = job;
         renderV3Job(job);
         await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-        await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
-        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
-        await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
         if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         setV3Progress("failed", v3ProviderFailureUserMessage(job), "warning", { forceNotice: true });
         return job;
@@ -10746,11 +10798,22 @@ async function recoverV3GeneratedJob(
       throw new Error("v3_project_recovery_replaced");
     }
     try {
-      await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+      if (outputProjectionChanged) {
+        await loadV3ProjectOutputs({
+          silent: true,
+          force: true,
+          projectId,
+          shouldContinue,
+          sessionReceipt,
+        });
+      }
       if (typeof shouldContinue === "function" && !shouldContinue()) {
         throw new Error("v3_project_recovery_replaced");
       }
-      const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
+      const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(
+        jobId,
+        v3State.currentJob,
+      );
       if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) {
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
@@ -10759,8 +10822,6 @@ async function recoverV3GeneratedJob(
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
       }
-      const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true, shouldContinue });
-      if (restored?.job_id === jobId && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;
     } catch (error) {
       lastError = error;
     }
@@ -11694,7 +11755,7 @@ function renderV3ResultBoard(job) {
         const downloadUrl = v3OutputDownloadUrl(item);
         card.className = "v3-result-card v3-review-only-card";
         card.innerHTML = `
-          <button class="v3-result-preview" type="button" data-v3-review-preview aria-label="预览复核图"><img alt="${escapeHtml(title)}" /></button>
+          <button class="v3-result-preview" type="button" data-v3-review-preview aria-label="预览复核图"><img alt="${escapeHtml(title)}" loading="lazy" /></button>
           <div class="v3-card-head">
             <strong>${escapeHtml(title)}</strong>
             <span class="mini-pill">仅供复核</span>
@@ -11705,7 +11766,7 @@ function renderV3ResultBoard(job) {
           </div>
         `;
         const image = card.querySelector(".v3-result-preview img");
-        if (image) bindImageWithFallback(image, imageCandidates, { emptyAlt: "复核图暂时无法加载" });
+        if (image) bindV3ImageWithFallback(image, imageCandidates, { emptyAlt: "复核图暂时无法加载", detailBound: true });
         card.querySelector("[data-v3-review-preview]")?.addEventListener("click", () => {
           openV3OutputLightbox(item, {
             title,
@@ -11799,7 +11860,7 @@ function renderV3ResultBoard(job) {
     card.innerHTML = `
       ${
         hasRealImage
-          ? `<button class="v3-result-preview" type="button" data-v3-preview="${escapeHtml(String(index))}" aria-label="预览生成图"><img alt="${escapeHtml(v3ReadableTitle(title))}" /></button>`
+          ? `<button class="v3-result-preview" type="button" data-v3-preview="${escapeHtml(String(index))}" aria-label="预览生成图"><img alt="${escapeHtml(v3ReadableTitle(title))}" loading="${index === 0 ? "eager" : "lazy"}" /></button>`
           : `<div class="v3-result-placeholder"><span>${escapeHtml(job.status === "generated" ? "准备中" : "已规划")}</span></div>`
       }
       <div class="v3-card-head">
@@ -11828,14 +11889,14 @@ function renderV3ResultBoard(job) {
         <button class="button compact ghost" type="button" data-v3-project-refresh>稍后刷新项目</button>
       `;
       recovery.querySelector("[data-v3-image-reload]")?.addEventListener("click", () => {
-        if (image) bindImageWithFallback(image, imageCandidates, { emptyAlt: "图片暂时无法加载", onExhausted: showImageRecovery });
+        if (image) bindV3ImageWithFallback(image, imageCandidates, { emptyAlt: "图片暂时无法加载", onExhausted: showImageRecovery, detailBound: true });
       });
       recovery.querySelector("[data-v3-project-refresh]")?.addEventListener("click", () => {
         refreshV3CurrentProject({ silent: false }).catch(() => {});
       });
       card.appendChild(recovery);
     };
-    if (image) bindImageWithFallback(image, imageCandidates, { emptyAlt: "V3 generated image unavailable", onExhausted: showImageRecovery });
+    if (image) bindV3ImageWithFallback(image, imageCandidates, { emptyAlt: "V3 generated image unavailable", onExhausted: showImageRecovery, detailBound: true });
     const preview = card.querySelector(".v3-result-preview");
     if (preview) {
       preview.addEventListener("click", () => {
@@ -16553,18 +16614,135 @@ function mediaUrlNeedsAuthenticatedFetch(url) {
   return allowedOrigins.has(parsed.origin);
 }
 
-async function resolveAuthenticatedMediaSource(url) {
+const v3ProtectedMediaQueue = [];
+const v3ProtectedMediaInflight = new Map();
+let v3ProtectedMediaActive = 0;
+const v3ProtectedMediaConcurrency = 2;
+
+function v3AbortError() {
+  const error = new Error("Protected image load was cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function scheduleV3ProtectedMediaFetches() {
+  while (v3ProtectedMediaActive < v3ProtectedMediaConcurrency && v3ProtectedMediaQueue.length) {
+    const entry = v3ProtectedMediaQueue.shift();
+    if (!entry || entry.waiters <= 0) {
+      if (entry) {
+        if (v3ProtectedMediaInflight.get(entry.key) === entry) {
+          v3ProtectedMediaInflight.delete(entry.key);
+        }
+        entry.reject(v3AbortError());
+      }
+      continue;
+    }
+    entry.started = true;
+    v3ProtectedMediaActive += 1;
+    void (async () => {
+      const response = await fetch(entry.url, {
+        credentials: "include",
+        headers: entry.token ? { Authorization: `Bearer ${entry.token}` } : undefined,
+        signal: entry.controller.signal,
+      });
+      if (!response.ok) {
+        const error = new Error(`Media request failed (${response.status})`);
+        error.status = response.status;
+        throw error;
+      }
+      const blob = await response.blob();
+      if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) {
+        throw new Error("Media response did not contain an image.");
+      }
+      return blob;
+    })().then(entry.resolve, entry.reject).finally(() => {
+      v3ProtectedMediaActive = Math.max(0, v3ProtectedMediaActive - 1);
+      if (v3ProtectedMediaInflight.get(entry.key) === entry) {
+        v3ProtectedMediaInflight.delete(entry.key);
+      }
+      scheduleV3ProtectedMediaFetches();
+    });
+  }
+}
+
+function fetchV3ProtectedMediaBlob(url, signal) {
+  if (signal?.aborted) return Promise.reject(v3AbortError());
+  const token = getVeyraToken();
+  const key = JSON.stringify([url, token]);
+  let entry = v3ProtectedMediaInflight.get(key);
+  if (!entry) {
+    let resolveEntry;
+    let rejectEntry;
+    const promise = new Promise((resolve, reject) => {
+      resolveEntry = resolve;
+      rejectEntry = reject;
+    });
+    promise.catch(() => {});
+    entry = {
+      key,
+      url,
+      token,
+      controller: new AbortController(),
+      promise,
+      resolve: resolveEntry,
+      reject: rejectEntry,
+      waiters: 0,
+      started: false,
+    };
+    v3ProtectedMediaInflight.set(key, entry);
+    v3ProtectedMediaQueue.push(entry);
+  }
+  entry.waiters += 1;
+  scheduleV3ProtectedMediaFetches();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const release = () => {
+      if (settled) return false;
+      settled = true;
+      entry.waiters = Math.max(0, entry.waiters - 1);
+      signal?.removeEventListener("abort", onAbort);
+      if (entry.waiters === 0) {
+        if (!entry.started) {
+          const index = v3ProtectedMediaQueue.indexOf(entry);
+          if (index >= 0) v3ProtectedMediaQueue.splice(index, 1);
+          if (v3ProtectedMediaInflight.get(key) === entry) v3ProtectedMediaInflight.delete(key);
+          entry.reject(v3AbortError());
+        } else {
+          entry.controller.abort();
+          if (v3ProtectedMediaInflight.get(key) === entry) v3ProtectedMediaInflight.delete(key);
+        }
+      }
+      return true;
+    };
+    const onAbort = () => {
+      if (release()) reject(v3AbortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    entry.promise.then(
+      (blob) => { if (release()) resolve(blob); },
+      (error) => { if (release()) reject(error); },
+    );
+    if (signal?.aborted) onAbort();
+  });
+}
+
+async function resolveAuthenticatedMediaSource(url, { signal = null, v3Queued = false } = {}) {
   const value = String(url || "").trim();
   if (!mediaUrlNeedsAuthenticatedFetch(value)) return { url: value, objectUrl: false };
   const token = getVeyraToken();
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-  const response = await fetch(value, { credentials: "include", headers });
-  if (!response.ok) {
-    const error = new Error(`Media request failed (${response.status})`);
-    error.status = response.status;
-    throw error;
+  let blob;
+  if (v3Queued) {
+    blob = await fetchV3ProtectedMediaBlob(value, signal);
+  } else {
+    const response = await fetch(value, { credentials: "include", headers, signal: signal || undefined });
+    if (!response.ok) {
+      const error = new Error(`Media request failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
+    blob = await response.blob();
   }
-  const blob = await response.blob();
   if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) {
     throw new Error("Media response did not contain an image.");
   }
@@ -16577,8 +16755,52 @@ function releaseImageObjectUrl(image) {
   if (image?.dataset) delete image.dataset.authenticatedObjectUrl;
 }
 
-function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用", onExhausted = null } = {}) {
+const v3DeferredImageLoads = new Map();
+const v3ImageBindingStates = new WeakMap();
+let v3DeferredImageObserver = null;
+
+function cancelV3DeferredImageLoad(image) {
+  const pending = v3DeferredImageLoads.get(image);
+  if (!pending) return;
+  v3DeferredImageLoads.delete(image);
+  v3DeferredImageObserver?.unobserve(image);
+  pending.signal?.removeEventListener("abort", pending.onAbort);
+}
+
+function deferV3ImageUntilVisible(image, start, signal) {
+  if (signal?.aborted) return;
+  if (typeof IntersectionObserver !== "function") {
+    start();
+    return;
+  }
+  if (!v3DeferredImageObserver) {
+    v3DeferredImageObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const pending = v3DeferredImageLoads.get(entry.target);
+        if (!pending) continue;
+        if (!entry.target.isConnected) {
+          cancelV3DeferredImageLoad(entry.target);
+          continue;
+        }
+        if (!entry.isIntersecting && entry.intersectionRatio <= 0) continue;
+        cancelV3DeferredImageLoad(entry.target);
+        pending.start();
+      }
+    }, { rootMargin: "240px 0px" });
+  }
+  const onAbort = () => cancelV3DeferredImageLoad(image);
+  v3DeferredImageLoads.set(image, { start, signal, onAbort });
+  signal?.addEventListener("abort", onAbort, { once: true });
+  v3DeferredImageObserver.observe(image);
+}
+
+function bindImageWithFallback(
+  image,
+  candidates,
+  { emptyAlt = "图片暂不可用", onExhausted = null, signal = null, deferAuthenticated = false, v3Queued = false } = {},
+) {
   if (!image) return;
+  cancelV3DeferredImageLoad(image);
   const urls = uniqueNonEmpty(candidates || []);
   const loadToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   image.dataset.mediaLoadToken = loadToken;
@@ -16612,7 +16834,7 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
     }
     image.dataset.fallbackIndex = String(index);
     try {
-      const resolved = await resolveAuthenticatedMediaSource(candidate);
+      const resolved = await resolveAuthenticatedMediaSource(candidate, { signal, v3Queued });
       if (image.dataset.mediaLoadToken !== loadToken) {
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
         return;
@@ -16621,6 +16843,7 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
       if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
       image.src = resolved.url;
     } catch {
+      if (signal?.aborted) return;
       await loadCandidate(index + 1);
     }
   };
@@ -16634,7 +16857,41 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
     image.src = urls[0];
     return;
   }
+  if (deferAuthenticated && image.loading !== "eager") {
+    deferV3ImageUntilVisible(image, () => { void loadCandidate(0); }, signal);
+    return;
+  }
   void loadCandidate(0);
+}
+
+function bindV3ImageWithFallback(image, candidates, { detailBound = false, ...options } = {}) {
+  if (!image) return;
+  const previous = v3ImageBindingStates.get(image);
+  previous?.cleanup();
+  const pageSignal = detailBound
+    ? v3ProjectDetailSignal(v3State.projectDetailProjectId, v3State.projectDetailEpoch)
+    : undefined;
+  if (detailBound && v3State.projectDetailAbortController?.signal.aborted) return;
+  const controller = new AbortController();
+  const abortForProjectChange = () => controller.abort();
+  const cleanup = () => {
+    pageSignal?.removeEventListener("abort", abortForProjectChange);
+    if (!controller.signal.aborted) controller.abort();
+  };
+  const releaseOnAbort = () => {
+    cancelV3DeferredImageLoad(image);
+    releaseImageObjectUrl(image);
+    image.removeAttribute("src");
+  };
+  controller.signal.addEventListener("abort", releaseOnAbort, { once: true });
+  pageSignal?.addEventListener("abort", abortForProjectChange, { once: true });
+  v3ImageBindingStates.set(image, { cleanup, controller });
+  bindImageWithFallback(image, candidates, {
+    ...options,
+    signal: controller.signal,
+    deferAuthenticated: true,
+    v3Queued: true,
+  });
 }
 
 function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "", emptyAlt = "图片暂不可用" } = {}) {
@@ -19720,6 +19977,7 @@ async function request(path, options = {}) {
     headers: Object.keys(headers).length ? headers : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
     credentials: "include",
+    signal: options.signal,
   });
   if (!response.ok) {
     const detail = await response.text();

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ import json
 import logging
 import os
 import sys
+import time
 from html import escape
 from pathlib import Path
 import threading
@@ -137,6 +139,13 @@ _v3_planning_executor = ThreadPoolExecutor(
     max_workers=_positive_worker_count("V3_BACKGROUND_PLANNING_WORKERS", default=1),
     thread_name_prefix="v3-planning",
 )
+_v3_browse_header_executor = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="v3-project-header",
+)
+_v3_browse_header_gate_lock = threading.Lock()
+_v3_browse_header_admitted = 0
+_v3_browse_header_active = 0
 _v3_background_planning_operations: dict[str, str] = {}
 _v3_background_planning_operations_lock = threading.Lock()
 _v3_background_generation_jobs: dict[str, str] = {}
@@ -693,6 +702,61 @@ def _require_local_mcp_materialization(request: Request) -> None:
 
 async def _run_v3_handler_threaded(handler, *args):
     return await run_in_threadpool(_run_v3_handler, handler, *args)
+
+
+async def _run_v3_project_header_scan(scan):
+    """Run only detached project-header enumeration through a bounded worker."""
+
+    global _v3_browse_header_admitted, _v3_browse_header_active
+    enqueued_at = time.perf_counter()
+    with _v3_browse_header_gate_lock:
+        if _v3_browse_header_admitted >= 3:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "v3_browse_read_capacity_exceeded",
+                    "message": "项目列表繁忙，请稍后重试。",
+                },
+                headers={"Retry-After": "1"},
+            )
+        _v3_browse_header_admitted += 1
+
+    def run_scan():
+        global _v3_browse_header_active
+        started_at = time.perf_counter()
+        with _v3_browse_header_gate_lock:
+            _v3_browse_header_active += 1
+            active = _v3_browse_header_active
+            admitted = _v3_browse_header_admitted
+        try:
+            return scan()
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            queue_wait_ms = (started_at - enqueued_at) * 1000
+            logger.debug(
+                "V3 project header scan finished active=%s admitted=%s queue_wait_ms=%.1f duration_ms=%.1f",
+                active,
+                admitted,
+                queue_wait_ms,
+                duration_ms,
+            )
+            with _v3_browse_header_gate_lock:
+                _v3_browse_header_active = max(0, _v3_browse_header_active - 1)
+
+    try:
+        future = _v3_browse_header_executor.submit(run_scan)
+    except Exception:
+        with _v3_browse_header_gate_lock:
+            _v3_browse_header_admitted = max(0, _v3_browse_header_admitted - 1)
+        raise
+
+    def release_admission(_future):
+        global _v3_browse_header_admitted
+        with _v3_browse_header_gate_lock:
+            _v3_browse_header_admitted = max(0, _v3_browse_header_admitted - 1)
+
+    future.add_done_callback(release_admission)
+    return await asyncio.shield(asyncio.wrap_future(future))
 
 
 def _v3_planning_failure_code(exc: Exception) -> str:
@@ -1408,6 +1472,20 @@ async def v3_projects_endpoint(
     user_id = _require_veyra_user_if_enabled(request, authorization)
     if await _v3_is_admin_request(request, user_id):
         user_id = None
+    project_headers = None
+    if str(view or "").strip().lower() == "summary":
+        project_store = getattr(v3_route_handlers.project_service, "project_store", None)
+        header_reader = getattr(project_store, "list_project_headers", None)
+        if callable(header_reader):
+            project_headers = await _run_v3_project_header_scan(header_reader)
+            return _run_v3_handler(
+                v3_route_handlers.get_projects,
+                limit,
+                user_id,
+                cursor,
+                view,
+                project_headers=project_headers,
+            )
     return _run_v3_handler(v3_route_handlers.get_projects, limit, user_id, cursor, view)
 
 

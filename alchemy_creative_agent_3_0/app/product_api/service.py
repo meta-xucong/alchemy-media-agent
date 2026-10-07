@@ -3024,6 +3024,24 @@ class V3ProductApiService:
         record = self.job_store.get(job_id)
         return None if record is not None and _failed_artifact_expired(record) else record
 
+    def get_job_read_snapshot(
+        self,
+        job_id: str,
+        *,
+        output_records: list[V3GeneratedOutputRecord] | None = None,
+    ) -> tuple[ProductJobStatus, ProductJobRecord | None]:
+        """Read status and durable Job once for one project-output projection."""
+
+        record = self.job_store.get(job_id)
+        if record is None:
+            restored = self._status_from_output_store(job_id, records=output_records)
+            return restored or self._not_found_status(job_id), None
+        if _failed_artifact_expired(record):
+            return self._not_found_status(job_id, expired_failure_artifact=True), None
+        self._expire_background_generation_if_due(record)
+        status = self._partial_output_recovery_status(record) or self._status_from_record(record)
+        return status, record
+
     def get_ecommerce_authority_snapshot(
         self,
         job_id: str,
@@ -8915,12 +8933,22 @@ class V3ProductApiService:
             try:
                 resolved = resolver(output_id, "download")
                 path = Path(resolved[0]) if isinstance(resolved, tuple) and resolved else None
-                actual = hashlib.sha256(path.read_bytes()).hexdigest() if path is not None else ""
+                record_expected = str(dict(record.metadata or {}).get("content_sha256") or "").strip().lower()
+                if record_expected != expected:
+                    return False
+                verifier = getattr(self.output_store, "verify_canonical_download", None)
+                if path is None:
+                    return False
+                if callable(verifier):
+                    if not verifier(record, path, expected):
+                        return False
+                    actual = record_expected
+                else:
+                    actual = hashlib.sha256(path.read_bytes()).hexdigest()
             except (OSError, TypeError, ValueError, IndexError):
                 return False
             if actual != expected:
                 return False
-            record_expected = str(dict(record.metadata or {}).get("content_sha256") or "").strip().lower()
             if record_expected != actual:
                 return False
         return True
@@ -14761,8 +14789,13 @@ class V3ProductApiService:
             )
         return sorted(items, key=lambda item: item.updated_at or item.created_at, reverse=True)[:limit]
 
-    def _status_from_output_store(self, job_id: str) -> ProductJobStatus | None:
-        records = self.output_store.list_by_job(job_id)
+    def _status_from_output_store(
+        self,
+        job_id: str,
+        *,
+        records: list[V3GeneratedOutputRecord] | None = None,
+    ) -> ProductJobStatus | None:
+        records = list(records) if records is not None else self.output_store.list_by_job(job_id)
         if not records:
             return None
         records = sorted(records, key=lambda item: item.created_at or "")

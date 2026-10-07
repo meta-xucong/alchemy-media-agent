@@ -506,7 +506,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "v3RecoveredLatestVisibleProjectOutputs" not in recover_body
     assert "recovered_without_exact_job_match" not in recover_body
     assert "if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" not in recover_body
-    assert "if (restored?.job_id === jobId && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" in recover_body
+    assert "outputProjectionChanged" in recover_body
+    assert "loadV3ProjectOutputs" in recover_body
+    assert "await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });" in recover_body
     assert "syncV3CurrentJobFromProjectOutputs({ preferLatest: false })" in script.text
     assert "project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}" in script.text
     assert "imageHistory" in script.text
