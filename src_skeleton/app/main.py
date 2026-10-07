@@ -1481,8 +1481,8 @@ def v3_archive_project_endpoint(project_id: str, request: Request, authorization
 
 
 @app.delete("/api/v3/creative-agent/projects/{project_id}")
-def v3_delete_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_project_visible(request, project_id, authorization)
+async def v3_delete_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v3_project_delete_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.delete_project, project_id)
 
 
@@ -2586,6 +2586,24 @@ async def _require_v3_project_read_visible(
     project_id: str,
     authorization: str = "",
 ) -> int | None:
+    if not settings.veyra_auth_enabled:
+        return None
+    user_id = _veyra_user_id_from_request(request, authorization)
+    owner_id = _v3_project_owner_id(project_id)
+    if owner_id == user_id:
+        return user_id
+    if await _v3_is_admin_request(request, user_id):
+        return None
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+
+
+async def _require_v3_project_delete_visible(
+    request: Request,
+    project_id: str,
+    authorization: str = "",
+) -> int | None:
+    """Allow project owners and authenticated admins to delete V3 projects."""
+
     if not settings.veyra_auth_enabled:
         return None
     user_id = _veyra_user_id_from_request(request, authorization)

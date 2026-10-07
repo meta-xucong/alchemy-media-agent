@@ -90,7 +90,7 @@ def test_key_defaults_to_permanent_and_optional_expiry_is_enforced(native):
     assert native.client.get("/api/v3/creative-agent/projects", headers=headers(finite.json()["secret"])).status_code == 401
 
 
-def test_admin_can_read_all_v3_projects_and_outputs_but_cannot_mutate_foreign_projects(native, monkeypatch, tmp_path):
+def test_admin_can_read_and_delete_foreign_v3_projects_but_cannot_archive_them(native, monkeypatch, tmp_path):
     captured = {}
 
     def projects(limit, owner, cursor, view):
@@ -122,6 +122,18 @@ def test_admin_can_read_all_v3_projects_and_outputs_but_cannot_mutate_foreign_pr
     assert project.json()["owner_user_id"] is None
     assert native.client.get("/api/v3/creative-agent/projects/foreign-project", headers=headers("session-b")).status_code == 404
     assert native.client.post("/api/v3/creative-agent/projects/foreign-project/archive", headers=headers("session-admin")).status_code == 404
+
+    deleted = []
+    monkeypatch.setattr(native.main.v3_route_handlers, "delete_project", lambda project_id: deleted.append(project_id) or {
+        "project_id": project_id, "deleted": True,
+    })
+    admin_delete = native.client.delete("/api/v3/creative-agent/projects/foreign-project", headers=headers("session-admin"))
+    assert admin_delete.status_code == 200, admin_delete.text
+    assert admin_delete.json()["deleted"] is True
+    assert deleted == ["foreign-project"]
+    denied_delete = native.client.delete("/api/v3/creative-agent/projects/foreign-project", headers=headers("session-b"))
+    assert denied_delete.status_code == 404
+    assert deleted == ["foreign-project"]
 
     image = tmp_path / "foreign.png"
     image.write_bytes(b"image")
