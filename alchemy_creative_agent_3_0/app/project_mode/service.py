@@ -8,11 +8,13 @@ from ..reference_input_plan import PLAN_KEY, plan_from_metadata
 import base64
 from datetime import datetime, timezone
 import hashlib
+import heapq
 import json
 import os
 from pathlib import Path
 import re
 import threading
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -149,6 +151,13 @@ from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 ECOMMERCE_PRODUCT_UPLOAD_ROLES = {"product_reference", "subject_reference"}
 PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
 _PROJECT_LIST_CURSOR_SCHEMA = "v3_project_list_cursor_v1"
+_PROJECT_OUTPUT_JOB_METADATA_KEYS = frozenset(
+    {
+        "project_id",
+        "veyra_user_id",
+        "post_generation_review_closure",
+    }
+)
 _GENERAL_VARIATION_MODES = GENERAL_VARIATION_MODES
 _GENERAL_VARIATION_MODE_ALIASES = GENERAL_VARIATION_MODE_ALIASES
 # Home cards are a bounded read surface.  A project with more indexed Jobs
@@ -186,11 +195,19 @@ def _project_listing_key(project: ProjectRecord) -> tuple[str, str, str]:
 
 
 def _encode_project_list_cursor(project: ProjectRecord) -> str:
+    return _encode_project_list_cursor_values(
+        project.updated_at,
+        project.created_at,
+        project.project_id,
+    )
+
+
+def _encode_project_list_cursor_values(updated_at: str, created_at: str, project_id: str) -> str:
     payload = {
-        "created_at": str(project.created_at or ""),
-        "project_id": str(project.project_id or ""),
+        "created_at": str(created_at or ""),
+        "project_id": str(project_id or ""),
         "schema_version": _PROJECT_LIST_CURSOR_SCHEMA,
-        "updated_at": str(project.updated_at or ""),
+        "updated_at": str(updated_at or ""),
     }
     raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -2443,6 +2460,78 @@ class V3ProjectModeService:
         bounded_limit = max(1, min(int(limit or 20), 100))
         requested_view = str(view or "full").strip().lower()
         lightweight_view = requested_view == "summary"
+        iter_project_headers = getattr(self.project_store, "iter_project_headers", None)
+        list_project_headers = getattr(self.project_store, "list_project_headers", None)
+        if callable(iter_project_headers) or callable(list_project_headers):
+            headers = (
+                iter_project_headers()
+                if callable(iter_project_headers)
+                else list_project_headers()
+            )
+            boundary = _decode_project_list_cursor(cursor)
+            total_count = 0
+            after_boundary_count = 0
+            page_candidates: list[tuple[tuple[str, str, str], dict[str, object]]] = []
+            for header in headers:
+                if (
+                    str(header.get("status") or "active").strip().lower() == ProjectStatus.ARCHIVED.value
+                    or (
+                        owner_user_id is not None
+                        and self._positive_owner_id(header.get("owner_user_id")) != owner_user_id
+                    )
+                ):
+                    continue
+                total_count += 1
+                key = (
+                    str(header.get("updated_at") or ""),
+                    str(header.get("created_at") or ""),
+                    str(header.get("project_id") or ""),
+                )
+                if boundary is not None and key >= boundary:
+                    continue
+                after_boundary_count += 1
+                entry = (key, header)
+                if len(page_candidates) < bounded_limit:
+                    heapq.heappush(page_candidates, entry)
+                elif key > page_candidates[0][0]:
+                    heapq.heapreplace(page_candidates, entry)
+            page_headers = [header for _, header in sorted(page_candidates, reverse=True)]
+            projects: list[ProjectRecord] = []
+            for header in page_headers:
+                project = self.project_store.get_project(str(header.get("project_id") or ""))
+                # Headers are a catalog optimization, never an authorization
+                # authority. Recheck the live record before exposing it.
+                if (
+                    project is None
+                    or project.status == ProjectStatus.ARCHIVED
+                    or not self._project_visible_to_owner(project, owner_user_id)
+                ):
+                    continue
+                projects.append(project)
+            summary_builder = self._lightweight_memory_summary if lightweight_view else self._memory_summary
+            summaries = [summary_builder(project, owner_user_id=owner_user_id) for project in projects]
+            has_more = after_boundary_count > len(page_headers)
+            cursor_header = page_headers[-1] if page_headers else None
+            next_cursor = (
+                _encode_project_list_cursor_values(
+                    str(cursor_header.get("updated_at") or ""),
+                    str(cursor_header.get("created_at") or ""),
+                    str(cursor_header.get("project_id") or ""),
+                )
+                if has_more and cursor_header
+                else None
+            )
+            return ProjectListResponse(
+                api_namespace=API_NAMESPACE,
+                route=f"{API_NAMESPACE}/projects",
+                total=total_count,
+                limit=bounded_limit,
+                projects=summaries,
+                templates=self.template_cards(),
+                metadata={**self._metadata(), "view": "summary" if lightweight_view else "full"},
+                has_more=has_more,
+                next_cursor=next_cursor,
+            )
         list_all_projects = getattr(self.project_store, "list_all_projects", None)
         all_projects = (
             list(list_all_projects())
@@ -2602,23 +2691,31 @@ class V3ProjectModeService:
                     for project_id_value in project_ids
                     if str(project_id_value or "").strip()
                 ))[:100]
-                list_all_projects = getattr(self.project_store, "list_all_projects", None)
-                all_projects = (
-                    list(list_all_projects())
-                    if callable(list_all_projects)
-                    else list(self.project_store.list_projects(limit=max(100, len(requested_project_ids))))
-                )
+                requested_project_id_set = set(requested_project_ids)
+                preview_projects = []
+                get_project = getattr(self.project_store, "get_project", None)
+                if callable(get_project):
+                    candidate_projects = [get_project(project_id) for project_id in requested_project_ids]
+                else:
+                    # Keep compatibility with older in-memory/test adapters;
+                    # production persistent stores use the direct ID lookup.
+                    candidate_projects = self.project_store.list_projects(
+                        limit=max(1, len(requested_project_ids))
+                    )
                 projects_by_id = {
                     str(project.project_id): project
-                    for project in all_projects
-                    if project.status != ProjectStatus.ARCHIVED
-                    and self._project_visible_to_owner(project, owner_user_id)
+                    for project in candidate_projects
+                    if project is not None
+                    and str(project.project_id) in requested_project_id_set
                 }
-                preview_projects = [
-                    projects_by_id[project_id_value]
-                    for project_id_value in requested_project_ids
-                    if project_id_value in projects_by_id
-                ]
+                for requested_project_id in requested_project_ids:
+                    project = projects_by_id.get(requested_project_id)
+                    if (
+                        project is not None
+                        and project.status != ProjectStatus.ARCHIVED
+                        and self._project_visible_to_owner(project, owner_user_id)
+                    ):
+                        preview_projects.append(project)
             else:
                 project_scan_limit = max(24, min(100, bounded_limit * 4))
                 preview_projects = [
@@ -3107,7 +3204,7 @@ class V3ProjectModeService:
                 except Exception:
                     snapshot["job_read_failures"].add(job_id)
                     job_status = None
-                snapshot["job_status_by_id"][job_id] = job_status
+                snapshot["job_status_by_id"][job_id] = self._project_output_job_status_projection(job_status)
                 if job_status is None:
                     snapshot["job_record_by_id"][job_id] = None
                     if use_project_index:
@@ -3118,7 +3215,7 @@ class V3ProjectModeService:
                 except Exception:
                     snapshot["job_read_failures"].add(job_id)
                     job_record = None
-                snapshot["job_record_by_id"][job_id] = job_record
+                snapshot["job_record_by_id"][job_id] = self._project_output_job_record_projection(job_record)
                 if use_project_index and not candidate_job_outputs_only:
                     # A project index miss is a bounded preview miss. Do not
                     # fall back to a full Job scan on the home surface.
@@ -3132,6 +3229,139 @@ class V3ProjectModeService:
                 else:
                     snapshot["records_by_job"].setdefault(job_id, [])
         return snapshot
+
+    @staticmethod
+    def _project_output_job_status_projection(status: Any) -> Any:
+        """Retain only fields used by output delivery and review projections."""
+
+        if status is None:
+            return None
+        source_metadata = dict(getattr(status, "metadata", None) or {})
+        metadata_keys = {
+            "expired_failure_artifact",
+            "output_store_restore_state",
+            "specialized_execution_summary",
+            "final_delivery",
+            "post_generation_review",
+            "post_generation_review_closure",
+            "review_certification",
+        }
+        metadata = {key: source_metadata[key] for key in metadata_keys if key in source_metadata}
+        final_delivery = metadata.get("final_delivery")
+        if isinstance(final_delivery, dict):
+            metadata["final_delivery"] = {
+                key: final_delivery[key]
+                for key in (
+                    "delivery_gate_applies",
+                    "automatic_delivery_available",
+                    "manual_confirmation_required",
+                    "final_delivery_status",
+                )
+                if key in final_delivery
+            }
+        review = metadata.get("post_generation_review")
+        if isinstance(review, dict):
+            review_projection = {
+                key: review[key]
+                for key in ("recommended_output_ids",)
+                if key in review
+            }
+            inspection_fields = (
+                "output_id",
+                "mode",
+                "verification_state",
+                "status",
+                "quality_assessment",
+                "quality_failure",
+                "evidence_state",
+                "review_reason",
+            )
+            for key in ("review_items", "inspections"):
+                values = review.get(key)
+                if isinstance(values, list):
+                    review_projection[key] = [
+                        {field: item[field] for field in inspection_fields if field in item}
+                        for item in values
+                        if isinstance(item, dict)
+                    ]
+            metadata["post_generation_review"] = review_projection
+        execution = metadata.get("specialized_execution_summary")
+        if isinstance(execution, dict):
+            metadata["specialized_execution_summary"] = {
+                key: execution[key]
+                for key in ("status", "final_delivery_withheld", "role_keys")
+                if key in execution
+            }
+        certification = metadata.get("review_certification")
+        if isinstance(certification, dict):
+            metadata["review_certification"] = {
+                key: certification[key]
+                for key in ("state",)
+                if key in certification
+            }
+            roles = certification.get("roles")
+            if isinstance(roles, list):
+                metadata["review_certification"]["roles"] = [
+                    {"review_mode": item["review_mode"]}
+                    for item in roles
+                    if isinstance(item, dict) and "review_mode" in item
+                ]
+        asset_series = [
+            SimpleNamespace(asset_id=str(getattr(item, "asset_id", "") or ""))
+            for item in (getattr(status, "asset_series", None) or [])
+            if str(getattr(item, "asset_id", "") or "").strip()
+        ]
+        candidates = [
+            SimpleNamespace(
+                candidate_id=str(getattr(item, "candidate_id", "") or ""),
+                output_id=str(getattr(item, "output_id", "") or ""),
+            )
+            for item in (getattr(status, "candidates", None) or [])
+            if str(getattr(item, "candidate_id", "") or "").strip()
+        ]
+        return SimpleNamespace(
+            job_id=str(getattr(status, "job_id", "") or ""),
+            status=getattr(status, "status", None),
+            metadata=metadata,
+            asset_series=asset_series,
+            candidates=candidates,
+        )
+
+    @staticmethod
+    def _project_output_job_record_projection(record: Any) -> dict[str, Any] | None:
+        """Keep only metadata consumed by project output authorization/review.
+
+        A durable Job may include large planning and retry histories. Project
+        output projection needs only these request metadata fields, so the
+        request snapshot must not retain the full Job object for every history
+        entry it visits.
+        """
+
+        if record is None:
+            return None
+        projected = record.get("_v3_project_output_request_metadata") if isinstance(record, dict) else None
+        if isinstance(projected, dict):
+            return {"_v3_project_output_request_metadata": dict(projected)}
+        request = getattr(record, "request", None)
+        metadata = dict(getattr(request, "metadata", None) or {})
+        return {
+            "_v3_project_output_request_metadata": {
+                key: metadata[key]
+                for key in _PROJECT_OUTPUT_JOB_METADATA_KEYS
+                if key in metadata
+            }
+        }
+
+    @staticmethod
+    def _project_output_job_request_metadata(record: Any) -> dict[str, Any]:
+        if record is None:
+            return {}
+        if isinstance(record, dict):
+            projected = record.get("_v3_project_output_request_metadata")
+            if isinstance(projected, dict):
+                return dict(projected)
+        request = getattr(record, "request", None)
+        return dict(getattr(request, "metadata", None) or {})
 
     @staticmethod
     def _standard_source_migration_blocked_status(
@@ -3606,7 +3836,13 @@ class V3ProjectModeService:
         """Fail closed after a process restart; planning is never replayed."""
 
         closed = 0
-        for project in self.project_store.list_all_projects():
+        iter_all_projects = getattr(self.project_store, "iter_all_projects", None)
+        projects = (
+            iter_all_projects()
+            if callable(iter_all_projects)
+            else self.project_store.list_all_projects()
+        )
+        for project in projects:
             operation = self._doc277_current_planning_operation(project)
             if operation is None or operation["state"] != "planning":
                 continue
@@ -9060,6 +9296,7 @@ class V3ProjectModeService:
                 job_status = job_status_by_id[job_id]
             else:
                 job_status = self.product_service.get_job(job_id)
+                job_status = self._project_output_job_status_projection(job_status)
                 if job_status_by_id is not None:
                     job_status_by_id[job_id] = job_status
             if job_status is None:
@@ -12179,6 +12416,7 @@ class V3ProjectModeService:
                     if job_status_by_id is not None:
                         job_status_by_id[clean_job_id] = None
                     continue
+                job_status = self._project_output_job_status_projection(job_status)
                 if job_status_by_id is not None:
                     job_status_by_id[clean_job_id] = job_status
             if job_status is None:
@@ -12197,11 +12435,12 @@ class V3ProjectModeService:
                         job_read_failures.add(clean_job_id)
                     job_record = None
                 if job_record_by_id is not None:
+                    job_record = self._project_output_job_record_projection(job_record)
                     job_record_by_id[clean_job_id] = job_record
             has_doc267_review_closure = (
                 job_record is not None
                 and self._doc267_review_withheld_closure_is_valid(
-                    dict(job_record.request.metadata or {}),
+                    self._project_output_job_request_metadata(job_record),
                     job_id=clean_job_id,
                 )
             )
@@ -13117,7 +13356,7 @@ class V3ProjectModeService:
     def _job_record_visible_to_owner(self, record: Any, owner_user_id: int | None) -> bool:
         if owner_user_id is None or record is None:
             return True
-        metadata = dict(getattr(getattr(record, "request", None), "metadata", None) or {})
+        metadata = V3ProjectModeService._project_output_job_request_metadata(record)
         record_owner_id = self._positive_owner_id(metadata.get("veyra_user_id"))
         return record_owner_id == owner_user_id
 
@@ -13137,7 +13376,7 @@ class V3ProjectModeService:
 
         if owner_user_id is None or record is None:
             return True
-        metadata = dict(getattr(getattr(record, "request", None), "metadata", None) or {})
+        metadata = V3ProjectModeService._project_output_job_request_metadata(record)
         raw_job_owner = metadata.get("veyra_user_id")
         record_owner_id = self._positive_owner_id(raw_job_owner)
         if record_owner_id is not None:

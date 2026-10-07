@@ -1867,7 +1867,7 @@ def test_v3_output_store_scoped_lookup_avoids_cold_full_history_deserialization(
     assert [record.output_id for record in store.list_by_project("project_scoped_b")] == [second.output_id]
 
 
-def test_v3_output_store_reuses_cached_index_until_the_storage_revision_changes(tmp_path, monkeypatch) -> None:
+def test_v3_output_store_checks_record_revisions_before_reusing_cached_index(tmp_path, monkeypatch) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     first = store.save_base64_output(
         job_id="job_cached_outputs",
@@ -1889,7 +1889,7 @@ def test_v3_output_store_reuses_cached_index_until_the_storage_revision_changes(
 
     assert [record.output_id for record in store.list_by_job(first.job_id)] == [first.output_id]
     assert [record.output_id for record in store.list_by_job(first.job_id)] == [first.output_id]
-    assert scans == 1
+    assert scans == 2
 
     second = store.save_base64_output(
         job_id="job_cached_outputs",
@@ -1901,7 +1901,137 @@ def test_v3_output_store_reuses_cached_index_until_the_storage_revision_changes(
     )
 
     assert {record.output_id for record in store.list_by_job(first.job_id)} == {first.output_id, second.output_id}
-    assert scans == 2
+    assert scans == 3
+
+
+def test_v3_output_store_bounds_record_and_validation_caches(tmp_path, monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.product_api.outputs as output_module
+
+    monkeypatch.setattr(output_module, "_OUTPUT_RECORD_CACHE_MAX_ENTRIES", 2)
+    monkeypatch.setattr(output_module, "_OUTPUT_VALIDATION_CACHE_MAX_ENTRIES", 2)
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    records = [
+        store.save_base64_output(
+            job_id=f"job_bounded_cache_{index}",
+            candidate_id=f"candidate_bounded_cache_{index}",
+            asset_id=f"asset_bounded_cache_{index}",
+            provider="test_provider",
+            model="test-model",
+            encoded_image=_png_base64(32, 24),
+        )
+        for index in range(5)
+    ]
+
+    for record in records:
+        assert store.get_output(record.output_id) is not None
+        store.file_for_variant(record.output_id, "preview")
+
+    assert len(store._scoped_records_by_id_cache) <= 2  # noqa: SLF001
+    assert len(store._record_file_revisions) <= 2  # noqa: SLF001
+    assert len(store._integrity_validation_cache) <= 2  # noqa: SLF001
+    assert len(store._image_validation_cache) <= 2  # noqa: SLF001
+
+
+def test_v3_output_store_does_not_retain_an_oversized_scoped_index(tmp_path, monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.product_api.outputs as output_module
+
+    monkeypatch.setattr(output_module, "_OUTPUT_SCOPED_INDEX_MAX_RECORDS", 2)
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    records = [
+        store.save_base64_output(
+            job_id="job_oversized_scoped_index",
+            candidate_id=f"candidate_oversized_index_{index}",
+            asset_id=f"asset_oversized_index_{index}",
+            provider="test_provider",
+            model="test-model",
+            encoded_image=_png_base64(32, 24),
+        )
+        for index in range(3)
+    ]
+
+    assert {record.output_id for record in store.list_by_job("job_oversized_scoped_index")} == {
+        record.output_id for record in records
+    }
+    assert store._scoped_index_revision is None  # noqa: SLF001
+    assert store._scoped_paths_by_job is None  # noqa: SLF001
+    assert store._scoped_paths_by_project is None  # noqa: SLF001
+
+
+def test_v3_output_store_streams_oversized_scope_lookup_without_a_full_path_map(
+    tmp_path, monkeypatch
+) -> None:
+    import alchemy_creative_agent_3_0.app.product_api.outputs as output_module
+
+    monkeypatch.setattr(output_module, "_OUTPUT_SCOPED_INDEX_MAX_RECORDS", 2)
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    records = [
+        store.save_base64_output(
+            job_id=f"job_stream_{index}",
+            candidate_id=f"candidate_stream_{index}",
+            asset_id=f"asset_stream_{index}",
+            provider="test_provider",
+            model="test-model",
+            encoded_image=_png_base64(32, 24),
+            metadata={"project_id": "project_stream_target" if index == 1 else f"project_{index}"},
+        )
+        for index in range(5)
+    ]
+
+    result = store.list_by_project("project_stream_target")
+
+    assert [record.output_id for record in result] == [records[1].output_id]
+    assert store._scoped_index_revision is None  # noqa: SLF001
+    assert store._scoped_paths_by_job is None  # noqa: SLF001
+    assert store._scoped_paths_by_project is None  # noqa: SLF001
+
+
+def test_v3_project_output_sentinel_limit_is_not_clamped_to_global_page_limit(
+    tmp_path, monkeypatch
+) -> None:
+    import alchemy_creative_agent_3_0.app.product_api.outputs as output_module
+
+    monkeypatch.setattr(output_module, "_OUTPUT_LIST_MAX_ENTRIES", 2)
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    records = [
+        store.save_base64_output(
+            job_id=f"job_project_limit_{index}",
+            candidate_id=f"candidate_project_limit_{index}",
+            asset_id=f"asset_project_limit_{index}",
+            provider="test_provider",
+            model="test-model",
+            encoded_image=_png_base64(32, 24),
+            metadata={"project_id": "project_limit"},
+        )
+        for index in range(3)
+    ]
+
+    assert {record.output_id for record in store.list_by_project("project_limit", limit=4097)} == {
+        record.output_id for record in records
+    }
+
+
+def test_v3_output_store_global_history_read_keeps_only_the_requested_page(tmp_path, monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.product_api.outputs as output_module
+
+    monkeypatch.setattr(output_module, "_OUTPUT_LIST_MAX_ENTRIES", 2)
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    records = [
+        store.save_base64_output(
+            job_id=f"job_bounded_history_{index}",
+            candidate_id=f"candidate_bounded_history_{index}",
+            asset_id=f"asset_bounded_history_{index}",
+            provider="test_provider",
+            model="test-model",
+            encoded_image=_png_base64(32, 24),
+        )
+        for index in range(5)
+    ]
+
+    page = store.list_outputs(limit=100)
+
+    assert len(page) == 2
+    assert {record.output_id for record in page}.issubset({record.output_id for record in records})
+    assert len(store._scoped_records_by_id_cache) == 0  # noqa: SLF001
 
 
 def test_v3_output_store_observes_a_write_from_another_store_instance(tmp_path) -> None:

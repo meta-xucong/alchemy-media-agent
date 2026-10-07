@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
+import heapq
 from io import BytesIO
 import json
 import os
@@ -13,7 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import threading
-from typing import Any
+from typing import Any, Iterable
 from uuid import uuid4
 
 from ..creative_core.doc281_output_plan_binding import (
@@ -27,6 +29,11 @@ _FORMAT_SUFFIXES = {"png": ".png", "jpeg": ".jpg", "jpg": ".jpg", "webp": ".webp
 _MIME_FORMATS = {"image/png": "png", "image/jpeg": "jpeg", "image/jpg": "jpeg", "image/webp": "webp"}
 _IMMUTABLE_OUTPUT_METADATA_KEYS = frozenset({"content_sha256", "source_integrity_id"})
 _CLOSURE_BOUND_OUTPUT_METADATA_KEYS = frozenset({"capability_execution_envelope", "output_index"})
+_OUTPUT_RECORD_CACHE_MAX_ENTRIES = 128
+_OUTPUT_VALIDATION_CACHE_MAX_ENTRIES = 256
+_OUTPUT_SCOPED_INDEX_MAX_RECORDS = 4096
+_OUTPUT_LIST_MAX_ENTRIES = 10000
+_OUTPUT_PROJECT_LIST_MAX_ENTRIES = 4097
 _SCOPED_INDEX_FIELD_PATTERN = re.compile(
     rb'"(?P<field>job_id|project_id)"\s*:\s*"(?P<value>(?:[^"\\]|\\.)*)"'
 )
@@ -63,22 +70,18 @@ class V3GeneratedOutputStore:
     def __init__(self, storage_root: str | Path | None = None) -> None:
         self.storage_root = Path(storage_root) if storage_root else _default_storage_root()
         self._cache_lock = threading.RLock()
-        self._records_cache_revision: tuple[int, int] | None = None
-        self._records_cache: list[V3GeneratedOutputRecord] | None = None
-        self._records_by_job_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
-        self._records_by_project_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
-        self._records_by_id_cache: dict[str, V3GeneratedOutputRecord] | None = None
         # Includes the per-file signature so out-of-band output.json edits
         # invalidate the byte-scan locator even when the root directory mtime
         # is unchanged.
         self._scoped_index_revision: tuple[Any, Any] | None = None
         self._scoped_paths_by_job: dict[str, tuple[Path, ...]] | None = None
         self._scoped_paths_by_project: dict[str, tuple[Path, ...]] | None = None
-        self._scoped_record_cache_revision: tuple[int, int] | None = None
-        self._scoped_records_by_id_cache: dict[str, V3GeneratedOutputRecord] = {}
-        self._record_file_revisions: dict[str, tuple[int, int, int]] = {}
-        self._integrity_validation_cache: dict[str, tuple[tuple[int, int, int], str | None, bool]] = {}
-        self._image_validation_cache: dict[str, tuple[tuple[int, int, int], bool]] = {}
+        self._scoped_records_by_id_cache: OrderedDict[str, V3GeneratedOutputRecord] = OrderedDict()
+        self._record_file_revisions: OrderedDict[str, tuple[int, int, int]] = OrderedDict()
+        self._integrity_validation_cache: OrderedDict[
+            str, tuple[tuple[int, int, int], str | None, bool]
+        ] = OrderedDict()
+        self._image_validation_cache: OrderedDict[str, tuple[tuple[int, int, int], bool]] = OrderedDict()
 
     def save_base64_output(
         self,
@@ -197,29 +200,25 @@ class V3GeneratedOutputStore:
     def get_output(self, output_id: str) -> V3GeneratedOutputRecord | None:
         if not _valid_output_id(output_id):
             return None
-        revision = self._storage_revision()
         path = self._record_path(output_id)
         file_revision = self._record_file_revision(path)
         with self._cache_lock:
-            cache_matches_file = (
-                file_revision is not None
-                and self._record_file_revisions.get(output_id) == file_revision
-            )
+            cached_record = self._scoped_records_by_id_cache.get(output_id)
             if (
-                cache_matches_file
-                and self._records_cache is not None
-                and revision == self._records_cache_revision
-                and self._records_by_id_cache is not None
+                cached_record is not None
+                and file_revision is not None
+                and self._record_file_revisions.get(output_id) == file_revision
             ):
-                return self._records_by_id_cache.get(output_id)
-            if cache_matches_file and revision == self._scoped_record_cache_revision:
-                scoped_record = self._scoped_records_by_id_cache.get(output_id)
-                if scoped_record is not None:
-                    return scoped_record
+                self._scoped_records_by_id_cache.move_to_end(output_id)
+                self._record_file_revisions.move_to_end(output_id)
+                return cached_record
+            self._scoped_records_by_id_cache.pop(output_id, None)
+            self._record_file_revisions.pop(output_id, None)
         if not path.exists():
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            with path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
             record = V3GeneratedOutputRecord(**data)
         except Exception:
             with self._cache_lock:
@@ -227,12 +226,19 @@ class V3GeneratedOutputStore:
                 self._record_file_revisions.pop(output_id, None)
             return None
         with self._cache_lock:
-            if revision != self._scoped_record_cache_revision:
-                self._scoped_record_cache_revision = revision
-                self._scoped_records_by_id_cache = {}
-            self._scoped_records_by_id_cache[output_id] = record
             if file_revision is not None:
-                self._record_file_revisions[output_id] = file_revision
+                _bounded_cache_set(
+                    self._scoped_records_by_id_cache,
+                    output_id,
+                    record,
+                    _OUTPUT_RECORD_CACHE_MAX_ENTRIES,
+                )
+                _bounded_cache_set(
+                    self._record_file_revisions,
+                    output_id,
+                    file_revision,
+                    _OUTPUT_RECORD_CACHE_MAX_ENTRIES,
+                )
         return record
 
     def claim_doc73_auto_identity_anchor(self, binding: dict) -> bool:
@@ -289,47 +295,44 @@ class V3GeneratedOutputStore:
         return dict(data) if isinstance(data, dict) else None
 
     def list_outputs(self, limit: int = 100) -> list[V3GeneratedOutputRecord]:
-        records = self._read_records_cached()
-        return records[: max(1, int(limit or 100))]
+        bounded_limit = _bounded_output_limit(limit, default=100)
+        return self._read_records_cached(bounded_limit)
 
     def list_by_job(self, job_id: str, limit: int | None = None) -> list[V3GeneratedOutputRecord]:
         target = str(job_id or "").strip()
         if not target:
             return []
-        revision = self._storage_revision()
-        with self._cache_lock:
-            if revision == self._records_cache_revision and self._records_by_job_cache is not None:
-                records = list(self._records_by_job_cache.get(target, []))
-                return records if limit is None else records[: max(1, int(limit or 1))]
-        by_job, _by_project = self._scoped_output_paths()
-        records = self._read_scoped_records(by_job.get(target, ()), job_id=target)
+        scoped_limit = None if limit is None else _bounded_output_limit(limit, default=1)
+        paths = self._scoped_output_paths(field="job_id", target=target)
+        records = self._read_scoped_records(paths, job_id=target, limit=scoped_limit)
         # An out-of-band edit can move an existing record to another job while
         # leaving the output directory revision unchanged. If the cached
         # candidate paths produced no exact match, rebuild the locator once so
         # the new authoritative job_id can be discovered. Normal repeated
-        # reads still stay on the cached path map and avoid a second scan.
+        # reads use the bounded path index when the catalog is small enough.
         if not records:
-            by_job, _by_project = self._scoped_output_paths(force_rescan=True)
-            records = self._read_scoped_records(by_job.get(target, ()), job_id=target)
-        return records if limit is None else records[: max(1, int(limit or 1))]
+            paths = self._scoped_output_paths(field="job_id", target=target, force_rescan=True)
+            records = self._read_scoped_records(paths, job_id=target, limit=scoped_limit)
+        return records
 
     def list_by_project(self, project_id: str, limit: int = 256) -> list[V3GeneratedOutputRecord]:
         target = str(project_id or "").strip()
         if not target:
             return []
-        revision = self._storage_revision()
-        with self._cache_lock:
-            if revision == self._records_cache_revision and self._records_by_project_cache is not None:
-                return list(self._records_by_project_cache.get(target, []))[: max(1, int(limit or 256))]
-        _by_job, by_project = self._scoped_output_paths()
-        records = self._read_scoped_records(by_project.get(target, ()), project_id=target)
+        bounded_limit = _bounded_output_limit(
+            limit, default=256, maximum=_OUTPUT_PROJECT_LIST_MAX_ENTRIES
+        )
+        paths = self._scoped_output_paths(field="project_id", target=target)
+        records = self._read_scoped_records(paths, project_id=target, limit=bounded_limit)
         # Match list_by_job: an in-place output.json edit may change the
         # authoritative project_id without changing the directory revision.
         # Rebuild only when the cached candidates produce no exact match.
         if not records:
-            _by_job, by_project = self._scoped_output_paths(force_rescan=True)
-            records = self._read_scoped_records(by_project.get(target, ()), project_id=target)
-        return records[: max(1, int(limit or 256))]
+            paths = self._scoped_output_paths(
+                field="project_id", target=target, force_rescan=True
+            )
+            records = self._read_scoped_records(paths, project_id=target, limit=bounded_limit)
+        return records
 
     def file_for_variant(self, output_id: str, variant: str) -> tuple[Path, str, str] | None:
         record = self.get_output(output_id)
@@ -486,15 +489,9 @@ class V3GeneratedOutputStore:
 
     def _invalidate_cache(self) -> None:
         with self._cache_lock:
-            self._records_cache_revision = None
-            self._records_cache = None
-            self._records_by_job_cache = None
-            self._records_by_project_cache = None
-            self._records_by_id_cache = None
             self._scoped_index_revision = None
             self._scoped_paths_by_job = None
             self._scoped_paths_by_project = None
-            self._scoped_record_cache_revision = None
             self._scoped_records_by_id_cache.clear()
             self._record_file_revisions.clear()
             self._integrity_validation_cache.clear()
@@ -516,10 +513,16 @@ class V3GeneratedOutputStore:
         with self._cache_lock:
             cached = self._integrity_validation_cache.get(key)
             if cached is not None and cached[:2] == (fingerprint, expected_sha):
+                self._integrity_validation_cache.move_to_end(key)
                 return cached[2]
         valid = _canonical_output_files_match_record(record, output_dir)
         with self._cache_lock:
-            self._integrity_validation_cache[key] = (fingerprint, expected_sha, valid)
+            _bounded_cache_set(
+                self._integrity_validation_cache,
+                key,
+                (fingerprint, expected_sha, valid),
+                _OUTPUT_VALIDATION_CACHE_MAX_ENTRIES,
+            )
         return valid
 
     def _image_is_valid_cached(self, path: Path) -> bool:
@@ -532,6 +535,7 @@ class V3GeneratedOutputStore:
         with self._cache_lock:
             cached = self._image_validation_cache.get(key)
             if cached is not None and cached[0] == fingerprint:
+                self._image_validation_cache.move_to_end(key)
                 return cached[1]
         try:
             _validate_image(path.read_bytes())
@@ -540,7 +544,12 @@ class V3GeneratedOutputStore:
         else:
             valid = True
         with self._cache_lock:
-            self._image_validation_cache[key] = (fingerprint, valid)
+            _bounded_cache_set(
+                self._image_validation_cache,
+                key,
+                (fingerprint, valid),
+                _OUTPUT_VALIDATION_CACHE_MAX_ENTRIES,
+            )
         return valid
 
     def _storage_revision(self) -> tuple[int, int] | None:
@@ -577,54 +586,69 @@ class V3GeneratedOutputStore:
             return None
         return int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size)
 
-    def _record_paths_signature(self) -> tuple[tuple[Path, ...], tuple[tuple[str, int, int], ...]]:
-        paths = sorted(self.storage_root.glob("v3_output_*/output.json"))
+    def _record_paths_signature(
+        self,
+    ) -> tuple[tuple[Path, ...], tuple[tuple[str, int, int, int], ...], bool]:
+        paths: list[Path] = []
         signature_items: list[tuple[str, int, int]] = []
-        for path in paths:
+        for path in self.storage_root.glob("v3_output_*/output.json"):
+            if len(paths) >= _OUTPUT_SCOPED_INDEX_MAX_RECORDS:
+                # Keep only a fixed-size sample. Large catalogs use a second,
+                # streaming query scan instead of building an O(N) index.
+                return tuple(paths), (), True
+            paths.append(path)
             try:
                 stat = path.stat()
             except OSError:
                 continue
-            signature_items.append((str(path), int(stat.st_mtime_ns), int(stat.st_size)))
-        return tuple(paths), tuple(signature_items)
+            signature_items.append(
+                (str(path), int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+            )
+        paths.sort()
+        signature_items.sort()
+        return tuple(paths), tuple(signature_items), False
 
     def _scoped_output_paths(
         self,
         *,
+        field: str,
+        target: str,
         force_rescan: bool = False,
-    ) -> tuple[dict[str, tuple[Path, ...]], dict[str, tuple[Path, ...]]]:
+    ) -> Iterable[Path]:
         """Locate scoped records without deserializing the full output history.
 
-        Project pages normally need only a small subset of output records. The
-        complete history index is intentionally retained for list/history
-        callers, but using it for every scoped lookup makes a cold process parse
+        Project pages normally need only a small subset of output records. A
+        small catalog index is retained for speed; larger indexes are used only
+        for the current request and are not kept by the store. Using a full
+        deserialized history for every scoped lookup makes a cold process parse
         every large legacy ``output.json`` before it can answer one project.
         The byte scan below only builds candidate paths. Callers still load each
         candidate through ``get_output`` and exact-match its authoritative
         fields before returning it.
         """
 
-        storage_revision = self._storage_revision()
-        if not force_rescan:
+        paths, signature, oversized = self._record_paths_signature()
+        if oversized:
             with self._cache_lock:
-                cached_revision = self._scoped_index_revision
-                if (
-                    cached_revision is not None
-                    and cached_revision[0] == storage_revision
-                    and self._scoped_paths_by_job is not None
-                    and self._scoped_paths_by_project is not None
-                ):
-                    return dict(self._scoped_paths_by_job), dict(self._scoped_paths_by_project)
+                self._scoped_index_revision = None
+                self._scoped_paths_by_job = None
+                self._scoped_paths_by_project = None
+            return self._iter_scoped_output_paths(field=field, target=target)
 
-        paths, signature = self._record_paths_signature()
+        storage_revision = self._storage_revision()
         revision = (storage_revision, signature)
         with self._cache_lock:
-            if (
+            if not force_rescan and (
                 revision == self._scoped_index_revision
                 and self._scoped_paths_by_job is not None
                 and self._scoped_paths_by_project is not None
             ):
-                return dict(self._scoped_paths_by_job), dict(self._scoped_paths_by_project)
+                index = (
+                    self._scoped_paths_by_job
+                    if field == "job_id"
+                    else self._scoped_paths_by_project
+                )
+                return index.get(target, ())
 
         by_job: dict[str, list[Path]] = {}
         by_project: dict[str, list[Path]] = {}
@@ -657,7 +681,26 @@ class V3GeneratedOutputStore:
             self._scoped_index_revision = revision
             self._scoped_paths_by_job = frozen_by_job
             self._scoped_paths_by_project = frozen_by_project
-        return dict(frozen_by_job), dict(frozen_by_project)
+        index = frozen_by_job if field == "job_id" else frozen_by_project
+        return index.get(target, ())
+
+    def _iter_scoped_output_paths(self, *, field: str, target: str):
+        """Yield matching paths one at a time for catalogs beyond the index bound."""
+
+        for path in self.storage_root.glob("v3_output_*/output.json"):
+            output_id = path.parent.name
+            if not _valid_output_id(output_id):
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            for match in _SCOPED_INDEX_FIELD_PATTERN.finditer(raw):
+                if match.group("field").decode("ascii") != field:
+                    continue
+                if _decode_scoped_index_value(match.group("value")) == target:
+                    yield path
+                    break
 
     def _read_scoped_records(
         self,
@@ -665,8 +708,10 @@ class V3GeneratedOutputStore:
         *,
         job_id: str | None = None,
         project_id: str | None = None,
+        limit: int | None = None,
     ) -> list[V3GeneratedOutputRecord]:
-        records: list[V3GeneratedOutputRecord] = []
+        records: list[tuple[str, int, V3GeneratedOutputRecord]] = []
+        sequence = 0
         for path in paths:
             record = self.get_output(path.parent.name)
             if record is None:
@@ -676,42 +721,35 @@ class V3GeneratedOutputStore:
             actual_project_id = str((record.metadata or {}).get("project_id") or "").strip()
             if project_id is not None and actual_project_id != project_id:
                 continue
-            records.append(record)
-        return sorted(records, key=lambda record: record.created_at or "", reverse=True)
+            entry = (str(record.created_at or ""), sequence, record)
+            sequence += 1
+            if limit is None:
+                records.append(entry)
+            elif len(records) < limit:
+                heapq.heappush(records, entry)
+            elif entry[:2] > records[0][:2]:
+                heapq.heapreplace(records, entry)
+        return [record for _created, _sequence, record in sorted(records, reverse=True)]
 
-    def _read_records_cached(self) -> list[V3GeneratedOutputRecord]:
-        revision = self._storage_revision()
-        with self._cache_lock:
-            if revision == self._records_cache_revision and self._records_cache is not None:
-                return list(self._records_cache)
+    def _read_records_cached(self, limit: int = 100) -> list[V3GeneratedOutputRecord]:
+        """Read a bounded newest-first page without retaining the full catalog."""
 
-        paths, _signature = self._record_paths_signature()
-
-        records: list[V3GeneratedOutputRecord] = []
-        for path in paths:
+        bounded_limit = _bounded_output_limit(limit, default=100)
+        newest: list[tuple[str, int, V3GeneratedOutputRecord]] = []
+        sequence = 0
+        for path in self.storage_root.glob("v3_output_*/output.json"):
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                records.append(V3GeneratedOutputRecord(**data))
+                with path.open("r", encoding="utf-8") as handle:
+                    record = V3GeneratedOutputRecord(**json.load(handle))
             except Exception:
                 continue
-        records = sorted(records, key=lambda record: record.created_at or "", reverse=True)
-        by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
-        by_project: dict[str, list[V3GeneratedOutputRecord]] = {}
-        by_id: dict[str, V3GeneratedOutputRecord] = {}
-        for record in records:
-            by_job.setdefault(str(record.job_id or ""), []).append(record)
-            by_id[str(record.output_id)] = record
-            project_id = str((record.metadata or {}).get("project_id") or "").strip()
-            if project_id:
-                by_project.setdefault(project_id, []).append(record)
-
-        with self._cache_lock:
-            self._records_cache_revision = revision
-            self._records_cache = list(records)
-            self._records_by_job_cache = {key: list(value) for key, value in by_job.items()}
-            self._records_by_project_cache = {key: list(value) for key, value in by_project.items()}
-            self._records_by_id_cache = dict(by_id)
-        return list(records)
+            entry = (str(record.created_at or ""), sequence, record)
+            sequence += 1
+            if len(newest) < bounded_limit:
+                heapq.heappush(newest, entry)
+            elif entry[:2] > newest[0][:2]:
+                heapq.heapreplace(newest, entry)
+        return [record for _created, _sequence, record in sorted(newest, reverse=True)]
 
 
 def download_route(output_id: str) -> str:
@@ -739,6 +777,23 @@ def _now_iso() -> str:
 
 def _valid_output_id(output_id: str) -> bool:
     return bool(_OUTPUT_ID_PATTERN.match(str(output_id or "")))
+
+
+def _bounded_output_limit(
+    value: Any, *, default: int, maximum: int | None = None
+) -> int:
+    try:
+        requested = int(value or default)
+    except (TypeError, ValueError):
+        requested = default
+    return max(1, min(requested, _OUTPUT_LIST_MAX_ENTRIES if maximum is None else maximum))
+
+
+def _bounded_cache_set(cache: OrderedDict, key: Any, value: Any, max_entries: int) -> None:
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > max_entries:
+        cache.popitem(last=False)
 
 
 def _decode_scoped_index_value(raw_value: bytes) -> str:

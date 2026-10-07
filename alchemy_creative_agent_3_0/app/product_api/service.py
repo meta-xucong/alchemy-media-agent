@@ -23,6 +23,7 @@ import re
 from time import sleep
 from typing import Any, Callable, Literal
 from uuid import uuid4
+from weakref import WeakValueDictionary
 
 from pydantic import ValidationError
 
@@ -952,8 +953,6 @@ class InMemoryProductJobStore:
 
 _PRODUCT_JOB_ID_PATTERN = re.compile(r"^job_[A-Za-z0-9_-]{1,128}$")
 _MCP_OPERATION_INDEX_SCHEMA = "v3_mcp_operation_index_v1"
-
-
 class PersistentProductJobStore(InMemoryProductJobStore):
     """Durable V3 Job records for Project Mode and restart-safe delivery.
 
@@ -972,6 +971,9 @@ class PersistentProductJobStore(InMemoryProductJobStore):
 
     def __init__(self, storage_root: str | Path | None = None) -> None:
         super().__init__()
+        # Preserve identity while an active caller holds a record, but avoid
+        # retaining historical Job objects after their request releases them.
+        self._records = WeakValueDictionary()
         self.storage_root = Path(storage_root) if storage_root else _default_product_job_storage_root()
         # Durable records are refreshed when their atomic-replace fingerprint
         # changes.  Project output reads ask for the same large Job several
@@ -989,7 +991,9 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         self._write_record(saved)
         revision = self._record_revision(saved.job_id)
         if revision is not None:
-            self._record_revisions[saved.job_id] = revision
+            self._cache_record(saved, revision)
+        else:
+            self._evict_cached_record(saved.job_id)
         self._index_mcp_operation_record(saved)
         return saved
 
@@ -1008,19 +1012,34 @@ class PersistentProductJobStore(InMemoryProductJobStore):
             and self._record_revisions.get(job_id) == revision
         ):
             return cached
+        if cached is not None:
+            self._evict_cached_record(job_id)
         restored = self._read_record(job_id)
         if restored is not None:
-            self._records[restored.job_id] = restored
             refreshed_revision = self._record_revision(restored.job_id)
             if refreshed_revision is not None:
-                self._record_revisions[restored.job_id] = refreshed_revision
+                self._cache_record(restored, refreshed_revision)
             return restored
         # The maintenance timer may remove an expired failure while this
         # process stays alive. A missing durable record must not resurrect its
         # cached copy into API history or Project Mode projections.
+        self._evict_cached_record(job_id)
+        return None
+
+    def _cache_record(self, record: ProductJobRecord, revision: tuple[int, int, int]) -> None:
+        """Weakly cache live records; durable files remain authoritative."""
+        job_id = record.job_id
+        self._records[job_id] = record
+        self._record_revisions[job_id] = revision
+        self._prune_record_revisions()
+
+    def _evict_cached_record(self, job_id: str) -> None:
         self._records.pop(job_id, None)
         self._record_revisions.pop(job_id, None)
-        return None
+
+    def _prune_record_revisions(self) -> None:
+        for job_id in set(self._record_revisions) - set(self._records):
+            self._record_revisions.pop(job_id, None)
 
     def list_recent(self, limit: int = 20) -> list[ProductJobRecord]:
         bounded_limit = max(1, min(int(limit or 20), 100))
@@ -1078,7 +1097,7 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         # Records created in the current process are already typed in memory;
         # include their exact operation binding without consulting the legacy
         # catalog. Durable IDs from the private index are re-read one at a time.
-        for job_id, record in self._records.items():
+        for job_id, record in list(self._records.items()):
             metadata = dict(record.request.metadata or {})
             if (
                 str(metadata.get("generation_channel") or "").strip().lower() == "mcp"
@@ -1110,7 +1129,7 @@ class PersistentProductJobStore(InMemoryProductJobStore):
             if path.exists():
                 path.unlink()
                 deleted += 1
-            self._record_revisions.pop(job_id, None)
+            self._evict_cached_record(job_id)
         return deleted
 
     def _load_all_records(self) -> None:
@@ -1122,10 +1141,9 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         for path in self.storage_root.glob("job_*.json"):
             restored = self._read_record(path.stem)
             if restored is not None:
-                self._records[restored.job_id] = restored
                 revision = self._record_revision(restored.job_id)
                 if revision is not None:
-                    self._record_revisions[restored.job_id] = revision
+                    self._cache_record(restored, revision)
 
     def _record_revision(self, job_id: str) -> tuple[int, int, int] | None:
         if not _valid_product_job_id(job_id):
