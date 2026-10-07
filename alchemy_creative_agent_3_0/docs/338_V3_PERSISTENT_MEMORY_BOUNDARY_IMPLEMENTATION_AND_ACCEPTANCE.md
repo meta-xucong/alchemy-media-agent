@@ -1,10 +1,12 @@
 # Doc338 — V3 Persistent Memory Boundary Implementation and Acceptance
 
-Status: baseline and follow-up code are pushed to `origin/main`; this documentation update is pending its separate commit. VPS deployment and runtime RSS acceptance remain pending.
+Status: baseline and follow-up code and documentation are pushed to `origin/main`. VPS deployment and runtime RSS acceptance remain pending.
 
 Baseline code commit: `2587864e` (`Bound V3 project and output memory`)
 
 Follow-up code commit: `2c1e98bf` (`Fix V3 project output owner projection`)
+
+Follow-up documentation commit: `d78f1174` (`Update V3 memory audit acceptance record`)
 
 ## 1. Objective
 
@@ -155,6 +157,7 @@ access.
   `origin/main` at `2c1e98bf`.
 - [x] Independent read-only A2 code audit passed.
 - [x] Development and acceptance record added in this document.
+- [x] Updated audit results committed and pushed to `origin/main`.
 - [x] Follow-up owner-scope, ordering, diagnostics, durable-count, and
   lazy-directory changes pass the documented regression run and independent
   A2 code audit.
