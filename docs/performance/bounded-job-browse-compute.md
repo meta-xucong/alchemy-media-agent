@@ -197,3 +197,71 @@ malformed records, caps, and small-read admission bypass.
 Browser/UI cases requiring Chromium were not run successfully because the
 browser executable was unavailable. This backend change does not alter the UI.
 No deployment, merge, provider call, or VPS qualification was performed.
+
+## Early project-scope correction model (2026-10-08)
+
+The authorization contract requires the ProjectRecord used for owner/status
+filtering to match the durable revision guarded across asynchronous reads.
+The initial guard instead sampled the file only after the service had loaded
+and authorized the object. A transfer, archive, replacement, or deletion in
+that interval could pair an old object with a new file revision (or absence).
+This is a read-scope freshness defect in the async owner driver, not a provider,
+projection-policy, or worker-decoding defect.
+
+The store's existing weak identity and cached revision remain authoritative
+for binding a loaded object to its source. The minimal repair is to require
+that exact identity, a nonmissing cached revision, and a matching current file
+revision at scope registration; otherwise close stale locals and use the
+existing fresh synchronous fallback. A new stat alone is not evidence that an
+already-loaded object belongs to that revision. Keep later checkpoint checks,
+all policy predicates, public schemas, and bounded worker behavior unchanged.
+No global scan, extra project decode, or lock across an await is needed.
+
+A same-identity in-place transfer/archive (saved or still live) also invalidates
+the earlier eligibility filter while leaving cache identity/revision valid.
+Scope registration therefore reapplies the existing owner visibility predicate
+and archive exclusion using the request owner. It does not invent an alternate
+authorization policy. Deterministic regressions cover these variants as well.
+
+### Correction verification
+
+These results supersede the earlier frozen-review conclusion for project-scope
+registration; the earlier 214/88 counts above are historical, not retests of
+this fix. The baseline was the exact fetched PR head
+`86f2f228fdfa945d36fe26f5d3259dc2d44ea6d0` in a separate cloud worktree.
+
+Before the code change, 23 of 27 new deterministic cases failed. Each starts
+with actual offline materialized outputs and injects the mutation immediately
+before the original `add_scope`, after project loading and owner filtering.
+The detail transfer leaked six outputs where a fresh synchronous request
+returned zero; deletion returned data where a fresh scoped lookup raised
+`KeyError`. Cases cover external owner transfer, archive, deletion, cache
+replacement (including unchanged owner with changed title), and saved/unsaved
+same-identity owner/archive changes across detail, global, and home preview.
+
+After the fix:
+
+- All **27 new regressions passed** (2.21 s), with exact fresh-sync response or
+  exception parity. Existing real-output normal-path tests cover one/two-worker
+  detail/global/home/delivery surfaces.
+- The combined related regression run passed **244 tests**, with **10 actual
+  Chromium-launch tests deselected**, in 37.72 s. The selection was the three
+  browse test files listed above plus Doc301, Doc311, output closure repair,
+  project mode, persistent-store memory bounds, and timeout recovery. This
+  selection includes three source-level UI contracts omitted in the historical
+  run, so its count is not simply the earlier total plus the new regressions.
+- An initial unrestricted run passed those same 244 tests and failed the ten
+  browser-launch cases solely because Chromium was not installed. Browser
+  execution remains unverified. Eight existing FastAPI startup-event
+  deprecation warnings remain.
+- Independent review reran compute plus acceptance (**71 passed**, overlapping
+  the combined run), reproduced the early races independently, checked both
+  worker-eligible and inline-only modes, and verified rejection of absent
+  cached identity/revision, deletion, and replacement during registration.
+  Normal cached identity and weak-reference release checks passed.
+- `git diff --check` and Python compilation passed. The fix adds constant-time
+  per-project cache/eligibility checks to the existing one-stat registration;
+  it adds no global scan, retained history, or additional project decode.
+
+No live provider, user computer, VPS, deployment, or merge was used. The
+opt-in default and deployment qualification requirements remain unchanged.

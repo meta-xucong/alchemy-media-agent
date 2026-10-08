@@ -182,3 +182,74 @@ def test_real_worker_crash_recovers_and_timeout_drains(monkeypatch):
     assert pool.admitted==0
     with pytest.raises(compute.BrowseComputeUnavailable):
         with pool.admit():pass
+
+
+@pytest.mark.parametrize('surface', ['detail', 'global', 'home_preview'])
+@pytest.mark.parametrize('case', ['owner', 'archive', 'delete', 'cached_replacement', 'same_owner_replacement',
+                                  'saved_owner', 'saved_archive', 'live_owner', 'live_archive'])
+def test_project_revision_is_bound_before_scope_registration(case, surface, tmp_path, monkeypatch):
+    from app import browse_reads
+    from app.browse_compute import BoundedBrowseCompute
+
+    service = _fixture(tmp_path)
+    pool = BoundedBrowseCompute(1)
+    project_id = 'project_benchmark_000'
+    kwargs = dict(
+        limit=60, owner_user_id=1, compact=True,
+        project_id=project_id if surface == 'detail' else None,
+        surface='home_preview' if surface == 'home_preview' else None,
+        project_ids=[project_id] if surface == 'home_preview' else None,
+    )
+    before = service.list_project_outputs(**kwargs)
+    assert before['items'], 'Use genuinely visible persisted outputs, not empty parity.'
+    original = browse_reads._ReadGuard.add_scope
+    changed = False
+    held = []
+
+    def register(guard, projects):
+        nonlocal changed
+        if not changed:
+            project = next(p for p in projects if p.project_id == project_id)
+            path = service.project_store._project_path(project_id)
+            assert service.project_store._projects.get(project_id) is project
+            changed = True
+            if case in {'saved_owner', 'live_owner', 'saved_archive', 'live_archive'}:
+                if case.endswith('owner'):
+                    project.metadata['veyra_user_id'] = 2
+                else:
+                    from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectStatus
+                    project.status = ProjectStatus.ARCHIVED
+                held.append(project)
+                if case.startswith('saved_'):
+                    service.project_store.save_project(project)
+            elif case == 'delete':
+                path.unlink()
+            elif case == 'archive':
+                _replace(path, lambda p: p.__setitem__('status', 'archived'))
+            elif case == 'same_owner_replacement':
+                _replace(path, lambda p: p.__setitem__('title', 'Replacement title'))
+                held.append(service.project_store.get_project(project_id))
+            else:
+                _replace(path, lambda p: p['metadata'].__setitem__('veyra_user_id', 2))
+                if case == 'cached_replacement':
+                    # Refreshing the cache must not bind the old object to the
+                    # replacement object's now-current cached revision.
+                    held.append(service.project_store.get_project(project_id))
+        return original(guard, projects)
+
+    monkeypatch.setattr(browse_reads._ReadGuard, 'add_scope', register)
+    try:
+        if case == 'delete' and surface == 'detail':
+            with pytest.raises(KeyError):
+                asyncio.run(browse_reads.run_output_browse(service, pool, **kwargs))
+            with pytest.raises(KeyError):
+                service.list_project_outputs(**kwargs)
+        else:
+            actual = asyncio.run(browse_reads.run_output_browse(service, pool, **kwargs))
+            expected = service.list_project_outputs(**kwargs)
+            assert actual == expected
+            if case != 'same_owner_replacement':
+                assert not actual['items']
+        assert changed
+    finally:
+        pool.shutdown()

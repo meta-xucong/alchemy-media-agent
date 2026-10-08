@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import pickle
 
 from alchemy_creative_agent_3_0.app.browse_protocol import BrowseScope, BrowseJobRead, BrowseCheckpoint
+from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectStatus
 from .browse_compute import MAX_SOURCE_BYTES, BrowseComputeUnavailable, file_revision
 
 
@@ -19,8 +20,9 @@ class _ReadScopeChanged(Exception):
 
 
 class _ReadGuard:
-    def __init__(self, service):
+    def __init__(self, service, owner_user_id):
         self.service = service
+        self.owner_user_id = owner_user_id
         self.paths = {}
         self.projects = []
         self.expiries = []
@@ -36,8 +38,22 @@ class _ReadGuard:
         return revision
 
     def add_scope(self, projects):
+        store = self.service.project_store
         for project in projects:
-            self.watch(self.service.project_store._project_path(project.project_id))
+            # Bind the already-authorized object to its original cached file
+            # version, not a newer revision first observed after authorization.
+            revision = store._project_revisions.get(project.project_id)
+            if store._projects.get(project.project_id) is not project or revision is None:
+                raise _ReadScopeChanged()
+            if self.watch(store._project_path(project.project_id)) != revision:
+                raise _ReadScopeChanged()
+            if (store._projects.get(project.project_id) is not project
+                or store._project_revisions.get(project.project_id) != revision
+                or project.status == ProjectStatus.ARCHIVED
+                or not self.service._project_visible_to_owner(project, self.owner_user_id)):
+                # A same-identity mutation/save may preserve cache freshness
+                # while invalidating the service's earlier eligibility check.
+                raise _ReadScopeChanged()
             self.projects.append((project, project.status, self.service._positive_owner_id(
                 dict(project.metadata or {}).get("veyra_user_id")), tuple(project.job_ids)))
 
@@ -100,7 +116,7 @@ async def run_output_browse(service, pool, **kwargs):
     with ExitStack() as admission:
         lease = None
         steps = service.iter_project_output_reads(**kwargs)
-        guard = _ReadGuard(service)
+        guard = _ReadGuard(service, kwargs.get("owner_user_id"))
         value = error = None
         try:
             while True:
