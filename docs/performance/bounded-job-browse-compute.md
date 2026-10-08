@@ -3,8 +3,9 @@
 ## Objective and scope
 
 Improve concurrent image browsing without changing the API, image delivery rules,
-JSON storage, or the single process that owns jobs and mutations. This is an
-opt-in CPU isolation seam, not a conversion to multiple Uvicorn workers.
+JSON storage, or the single process that owns jobs and mutations. This is a
+bounded CPU isolation seam with a two-worker default, not a conversion to
+multiple Uvicorn workers. Set the worker count to zero to disable the pool.
 
 The accelerated path is `GET /api/v3/creative-agent/project-outputs` for the
 full project image surface and the global output surface. Home-preview and
@@ -114,13 +115,15 @@ small Jobs, and more worker processes are not necessarily faster on two cores.
 
 ### Deployment acceptance is still required
 
-These cloud tests are not acceptance of the user's 2-core/2-GB VPS. Before
-activation, repeat the benchmark and representative real read-only traffic on
-that machine, including cold startup, active generation, concurrent owners,
-large histories, cancellation, worker loss, and memory pressure. Choose the
-worker count from successful request throughput and tail latency while leaving
-memory headroom for the API, generation, image handling, and the OS. Do not
-increase Uvicorn's worker count as part of this change.
+The current two-worker VPS setting is a user-authorized controlled trial; it is
+not proof of a production performance gain. Before raising the count above two
+or claiming this optimization is performance-accepted, repeat the benchmark
+and representative read-only traffic on that machine, including cold startup,
+active generation, concurrent owners, large histories, cancellation, worker
+loss, and memory pressure. Choose the count from successful request throughput
+and tail latency while leaving memory headroom for the API, generation, image
+handling, and the OS. Do not increase Uvicorn's worker count as part of this
+change.
 
 ## Recorded cloud results (2026-10-08)
 
@@ -268,8 +271,11 @@ After the fix:
   per-project cache/eligibility checks to the existing one-stat registration;
   it adds no global scan, retained history, or additional project decode.
 
-No live provider, user computer, VPS, deployment, or merge was used. The
-opt-in default and deployment qualification requirements remain unchanged.
+Historical scope note: that recorded run did not use a live provider, user
+computer, VPS, deployment, or merge. Its default-off recommendation was later
+superseded by the current two-worker controlled-trial default; deployment
+performance qualification remains required before increasing the count or
+making a performance claim.
 
 ## Output-snapshot provenance correction model (2026-10-08)
 
@@ -408,7 +414,8 @@ reads, and reconciliation. Reduced owner CPU alone is insufficient evidence
 of faster completion. Any batching or crossover-policy proposal must retain
 read-time provenance, final freshness validation, bounded physical admission,
 and full-result semantics, then demonstrate repeatable latency/throughput
-benefit and acceptable deployment memory before activation is reconsidered.
+benefit and acceptable deployment memory before worker counts are raised above
+the current controlled trial.
 
 
 ### Bounded low-observer control
@@ -438,6 +445,8 @@ attributed entirely to intrinsic product cost; neither an intrinsic regression
 nor a universal speedup is established. The historical 5–15% speedup claim
 remains superseded. **Performance acceptance remains NOT_ACCEPTED / HOLD
 because a repeatable end-to-end benefit and latency non-regression have not
-been demonstrated.** Keep workers at zero and the PR Draft; do not recommend
-activation or merge on this evidence. No further tuning or benchmark runs were
-performed after this bounded control.
+been demonstrated.** Keep the PR Draft and do not describe the change as a
+proven performance win. The user-authorized VPS trial uses two workers; higher
+counts remain gated on representative CPU, P95 latency, and process-tree RSS
+evidence. No further tuning or benchmark runs were performed after this bounded
+control.
