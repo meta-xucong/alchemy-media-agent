@@ -72,6 +72,127 @@ TERMINAL_IMAGE_STATUSES = {
 }
 
 
+def find_existing_image_job_for_request(
+    *,
+    session_id: str,
+    prompt: str,
+    asset_mode: str = "basic",
+    asset_ids: list[str] | None = None,
+    asset_intents: list[AssetIntent] | None = None,
+    count: int = 1,
+    size: str | None = None,
+    quality: str = "auto",
+    output_format: str = "png",
+    background: str | None = None,
+    moderation: str | None = None,
+    output_compression: int | None = None,
+    work_intensity: str | None = None,
+    provider_preference: str | None = None,
+    idempotency_key: str | None = None,
+    veyra_user_id: int | None = None,
+    external_asset_plan: dict | None = None,
+) -> GenerationJob | None:
+    """Return an existing idempotent job without creating or mutating a job.
+
+    The HTTP admission path uses this before acquiring a generation lease so
+    that replaying an active/completed request does not consume capacity.
+    Keep the derived key and capacity-retry fingerprint aligned with
+    ``submit_image_job`` below.
+    """
+
+    prompt = str(prompt or "").strip()
+    if not prompt:
+        return None
+    asset_mode = asset_mode or "basic"
+    asset_intents = asset_intents or []
+    asset_ids = asset_ids or []
+    advanced_asset_plan = None
+    if asset_mode == "advanced":
+        if asset_ids:
+            return None
+        try:
+            advanced_asset_plan = build_advanced_asset_plan(asset_intents, user_prompt=prompt)
+            asset_ids = [str(item["asset_id"]) for item in advanced_asset_plan.get("assets", [])]
+        except AssetPlanError:
+            return None
+    elif asset_mode == "lab_reference":
+        advanced_asset_plan = external_asset_plan
+        asset_ids = [str(item.get("asset_id")) for item in (advanced_asset_plan or {}).get("assets", []) if item.get("asset_id")]
+    elif asset_intents or external_asset_plan:
+        return None
+
+    work_intensity = work_intensity or settings.image_work_intensity
+    prompt_plan = build_prompt_plan(
+        prompt=prompt,
+        count=count,
+        size=size,
+        quality=quality,
+        output_format=output_format,
+        background=background,
+        moderation=moderation,
+        output_compression=output_compression,
+        asset_ids=asset_ids,
+    )
+    variables = {
+        **prompt_plan.variables,
+        "original_prompt": prompt,
+        "generation_prompt": prompt,
+    }
+    if work_intensity in {"passthrough", "lab_quality"}:
+        variables.update(
+            {
+                "work_intensity": "lab_quality",
+                "work_intensity_label": "Lab增强",
+                "planner": "alchemy_lab_quality",
+                "prompt_planning_pending": False,
+            }
+        )
+    else:
+        variables.update(
+            {
+                "pending_work_intensity": work_intensity,
+                "prompt_planning_pending": True,
+            }
+        )
+    prompt_plan = prompt_plan.model_copy(update={"variables": variables})
+    if check_generation_prompt(prompt):
+        return None
+
+    key = idempotency_key or _idempotency_key(
+        session_id,
+        prompt_plan.model_dump_json(),
+        asset_ids,
+        provider_preference,
+        work_intensity,
+        asset_mode,
+    )
+    existing = repository.get_job_by_idempotency_key(key)
+    if not existing:
+        return None
+    if existing.error and existing.error.code == "generation_capacity" and existing.error.retryable:
+        request_fingerprint = _image_request_fingerprint(
+            session_id=session_id,
+            prompt=prompt,
+            asset_mode=asset_mode,
+            asset_ids=asset_ids,
+            asset_intents=asset_intents,
+            count=count,
+            size=size,
+            quality=quality,
+            output_format=output_format,
+            background=background,
+            moderation=moderation,
+            output_compression=output_compression,
+            work_intensity=work_intensity,
+            provider_preference=provider_preference,
+            veyra_user_id=veyra_user_id,
+            asset_plan=advanced_asset_plan,
+        )
+        if existing.raw_response_summary.get("idempotency_request_fingerprint") == request_fingerprint:
+            return None
+    return existing
+
+
 async def submit_image_job(
     *,
     session_id: str,

@@ -99,7 +99,12 @@ from app.services.alchemy_lab_uploads_models import CreateLabUploadRequest, LabA
 from app.services.events import format_sse_events
 from app.services.access_bridge import build_access_headers
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
-from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
+from app.services.image_service import (
+    find_existing_image_job_for_request,
+    run_submitted_image_job,
+    submit_image_job,
+    submit_revise_image_job,
+)
 from app.services.generation_capacity import (
     GenerationCapacityExceeded,
     GenerationCapacityStorageBusy,
@@ -3053,6 +3058,26 @@ async def create_image_job_endpoint(
 ):
     user_id = _veyra_user_id_from_request(request, authorization)
     _require_job_assets_visible(request, body.asset_ids, body.asset_intents, authorization)
+    existing = find_existing_image_job_for_request(
+        session_id=body.session_id,
+        prompt=body.prompt,
+        asset_mode=body.asset_mode,
+        asset_ids=body.asset_ids,
+        asset_intents=body.asset_intents,
+        count=body.count,
+        size=body.size,
+        quality=body.quality,
+        output_format=body.output_format,
+        background=body.background,
+        moderation=body.moderation,
+        output_compression=body.output_compression,
+        work_intensity=body.work_intensity,
+        provider_preference=body.provider_preference,
+        idempotency_key=body.idempotency_key,
+        veyra_user_id=user_id,
+    )
+    if existing:
+        return existing
     lease = await _acquire_v1_request_capacity()
     transferred = False
     try:

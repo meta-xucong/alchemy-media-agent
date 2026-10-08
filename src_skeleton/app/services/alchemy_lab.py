@@ -41,7 +41,6 @@ from app.services.generation_capacity import (
     GenerationCapacityExceeded,
     GenerationCapacityStorageBusy,
     acquire_generation_capacity_async,
-    async_generation_capacity,
 )
 from app.services.utils import make_id, now_iso
 from app.storage import media_store
@@ -461,25 +460,43 @@ def limits() -> dict[str, int]:
 
 
 async def create_exploration_session(request: ExplorationRequest, *, veyra_user_id: int | None = None) -> ExplorationSession:
-    session = await prepare_exploration_session(request, veyra_user_id=veyra_user_id)
+    # Preserve request validation behavior under saturation: reject malformed
+    # style selections before attempting to acquire the shared work lease.
+    request = _normalize_request(request)
+    _validate_requested_style_count(request)
     try:
-        if _should_run_inline(session.request):
-            async with async_generation_capacity(
-                media_store.root,
-                limit=MAX_CONCURRENT_GENERATIONS,
-                namespace="lab-session",
-                lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
-            ):
-                return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
-        await _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
+        lease = await acquire_generation_capacity_async(
+            media_store.root,
+            limit=MAX_CONCURRENT_GENERATIONS,
+            namespace="lab-session",
+            lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+        )
     except GenerationCapacityExceeded:
-        # The session has not been returned to the caller, so discard only this
-        # unpublished in-memory placeholder; existing sessions are untouched.
-        lab_store.delete_unpublished(session.id)
         raise LabSessionCapacityExceeded("Alchemy Lab is busy. Please retry shortly.")
     except GenerationCapacityStorageBusy as exc:
-        lab_store.delete_unpublished(session.id)
         raise LabSessionStorageBusy("Alchemy Lab local storage is busy. Please retry shortly.") from exc
+
+    session: ExplorationSession | None = None
+    transferred = False
+    try:
+        # The shared SQLite lease covers intent planning as well as generation,
+        # bounding cross-session preflight work across local API/worker processes.
+        session = await prepare_exploration_session(request, veyra_user_id=veyra_user_id)
+        if _should_run_inline(session.request):
+            return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
+        await _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id, lease=lease)
+        transferred = True
+    except GenerationCapacityExceeded:
+        if session is not None:
+            lab_store.delete_unpublished(session.id)
+        raise LabSessionCapacityExceeded("Alchemy Lab is busy. Please retry shortly.")
+    except GenerationCapacityStorageBusy as exc:
+        if session is not None:
+            lab_store.delete_unpublished(session.id)
+        raise LabSessionStorageBusy("Alchemy Lab local storage is busy. Please retry shortly.") from exc
+    finally:
+        if not transferred:
+            await lease.release_async()
     return session
 
 
@@ -825,19 +842,27 @@ async def _ensure_session_prompts_enhanced(session: ExplorationSession) -> None:
     lab_store.save(session)
 
 
-async def _schedule_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> None:
-    lease = await acquire_generation_capacity_async(
-        media_store.root,
-        limit=MAX_CONCURRENT_GENERATIONS,
-        namespace="lab-session",
-        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
-    )
+async def _schedule_exploration_session(
+    session_id: str,
+    *,
+    veyra_user_id: int | None = None,
+    lease=None,
+) -> None:
+    owns_lease = lease is None
+    if lease is None:
+        lease = await acquire_generation_capacity_async(
+            media_store.root,
+            limit=MAX_CONCURRENT_GENERATIONS,
+            namespace="lab-session",
+            lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+        )
     try:
         task = asyncio.create_task(
             _run_exploration_session_with_lease(lease, session_id, veyra_user_id=veyra_user_id)
         )
     except BaseException:
-        await lease.release_async()
+        if owns_lease:
+            await lease.release_async()
         raise
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)

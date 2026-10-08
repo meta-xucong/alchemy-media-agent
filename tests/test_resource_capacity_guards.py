@@ -492,6 +492,107 @@ def test_v1_session_image_capacity_is_retryable_and_does_not_block_chat_or_video
     repository.reset()
 
 
+def test_v1_image_job_replays_bypass_full_capacity_but_new_payloads_do_not(tmp_path: Path, monkeypatch) -> None:
+    repository.reset()
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    runtime_settings = settings.model_copy(
+        update={"max_concurrent_image_generations": 1, "llm_prompt_planning_enabled": False}
+    )
+    monkeypatch.setattr(main_module, "settings", runtime_settings)
+    monkeypatch.setattr(image_service, "settings", runtime_settings)
+    provider_calls = 0
+
+    async def unexpected_provider_call(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("idempotent replay must not start provider work")
+
+    monkeypatch.setattr(image_service, "_run_image_request", unexpected_provider_call)
+    client = TestClient(v1_app, raise_server_exceptions=False)
+
+    active = asyncio.run(
+        image_service.submit_image_job(
+            session_id="session_idempotent_replay",
+            prompt="An offline fake image",
+            idempotency_key="active-replay-key",
+        )
+    )
+    implicit = asyncio.run(
+        image_service.submit_image_job(
+            session_id="session_implicit_replay",
+            prompt="An offline implicit-key image",
+        )
+    )
+    capacity_retry = asyncio.run(
+        image_service.submit_image_job(
+            session_id="session_capacity_retry_http",
+            prompt="A retryable capacity failure",
+            idempotency_key="capacity-retry-http-key",
+        )
+    )
+    assert active.job.status == JobStatus.generating
+    assert implicit.job.idempotency_key
+    capacity_retry.job.status = JobStatus.failed
+    capacity_retry.job.error = ProviderError(
+        code="generation_capacity",
+        message="Image generation is busy. Please retry shortly.",
+        retryable=True,
+        detail={"retry_after_seconds": 5},
+    )
+    repository.save_job(capacity_retry.job)
+
+    active_payload = {
+        "session_id": active.job.session_id,
+        "prompt": "An offline fake image",
+        "idempotency_key": "active-replay-key",
+    }
+    implicit_payload = {
+        "session_id": implicit.job.session_id,
+        "prompt": "An offline implicit-key image",
+    }
+    with generation_capacity(tmp_path, limit=1):
+        active_replay = client.post("/v1/image/jobs", json=active_payload)
+        assert active_replay.status_code == 200
+        assert active_replay.json()["id"] == active.job.id
+        assert active_replay.json()["status"] == "generating"
+
+        implicit_replay = client.post("/v1/image/jobs", json=implicit_payload)
+        assert implicit_replay.status_code == 200
+        assert implicit_replay.json()["id"] == implicit.job.id
+
+        active.job.status = JobStatus.ready
+        repository.save_job(active.job)
+        terminal_replay = client.post("/v1/image/jobs", json=active_payload)
+        assert terminal_replay.status_code == 200
+        assert terminal_replay.json()["id"] == active.job.id
+        assert terminal_replay.json()["status"] == "ready"
+
+        changed_payload = {**active_payload, "prompt": "A different payload under the same key"}
+        collision = client.post("/v1/image/jobs", json=changed_payload)
+        assert collision.status_code == 200
+        assert collision.json()["id"] == active.job.id
+
+        retry_payload = {
+            "session_id": capacity_retry.job.session_id,
+            "prompt": "A retryable capacity failure",
+            "idempotency_key": "capacity-retry-http-key",
+        }
+        retry_replay = client.post("/v1/image/jobs", json=retry_payload)
+        assert retry_replay.status_code == 429
+        assert retry_replay.json()["detail"]["retryable"] is True
+        assert repository.get_job(capacity_retry.job.id).status == JobStatus.failed
+
+        new_request = client.post(
+            "/v1/image/jobs",
+            json={"session_id": "session_new_request", "prompt": "A genuinely new image", "idempotency_key": "new-key"},
+        )
+        assert new_request.status_code == 429
+        assert new_request.headers["retry-after"] == "5"
+        assert new_request.json()["detail"]["retryable"] is True
+    assert provider_calls == 0
+    repository.reset()
+
+
 def test_v1_provider_timeout_does_not_prove_remote_work_stopped(tmp_path: Path) -> None:
     remote_still_running = threading.Event()
     finish_remote = threading.Event()
@@ -577,6 +678,67 @@ def test_lab_limits_active_sessions_and_releases_slot_on_completion(tmp_path: Pa
             pass
 
     asyncio.run(exercise())
+
+
+def test_lab_capacity_is_acquired_before_intent_planning_and_released_on_error(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(alchemy_lab.media_store, "root", tmp_path)
+    preflight_started = threading.Event()
+    continue_preflight = threading.Event()
+    prepare_calls = 0
+    fail_prepare = False
+
+    async def prepare(_request, *, veyra_user_id=None):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        if prepare_calls == 1:
+            preflight_started.set()
+            assert await asyncio.to_thread(continue_preflight.wait, 3)
+        if fail_prepare:
+            raise RuntimeError("offline planner failure")
+        return SimpleNamespace(id=f"lab_preflight_{prepare_calls}", request=_request)
+
+    async def run_inline(session_id, *, veyra_user_id=None):
+        return SimpleNamespace(id=session_id)
+
+    monkeypatch.setattr(alchemy_lab, "prepare_exploration_session", prepare)
+    monkeypatch.setattr(alchemy_lab, "_should_run_inline", lambda _request: True)
+    monkeypatch.setattr(alchemy_lab, "run_exploration_session", run_inline)
+    request = alchemy_lab.ExplorationRequest(idea="offline Lab capacity test", target_count=1)
+
+    async def exercise() -> None:
+        first = asyncio.create_task(alchemy_lab.create_exploration_session(request))
+        assert await asyncio.to_thread(preflight_started.wait, 2)
+        with pytest.raises(alchemy_lab.LabSessionCapacityExceeded):
+            await alchemy_lab.create_exploration_session(request)
+        assert prepare_calls == 1
+        continue_preflight.set()
+        assert (await first).id == "lab_preflight_1"
+
+        nonlocal fail_prepare
+        fail_prepare = True
+        with pytest.raises(RuntimeError, match="offline planner failure"):
+            await alchemy_lab.create_exploration_session(request)
+        with generation_capacity(tmp_path, limit=1, namespace="lab-session"):
+            pass
+
+    asyncio.run(exercise())
+
+
+def test_lab_rejects_oversized_style_selection_before_capacity_admission(monkeypatch) -> None:
+    request = alchemy_lab.ExplorationRequest(
+        idea="offline Lab validation test",
+        selected_style_ids=[f"style_{index}" for index in range(alchemy_lab.MAX_SELECTED_STYLES + 1)],
+    )
+
+    async def unexpected_capacity_acquisition(*_args, **_kwargs):
+        raise AssertionError("invalid request must be rejected before acquiring capacity")
+
+    monkeypatch.setattr(alchemy_lab, "acquire_generation_capacity_async", unexpected_capacity_acquisition)
+
+    with pytest.raises(ValueError, match="Choose no more than"):
+        asyncio.run(alchemy_lab.create_exploration_session(request))
 
 
 def test_lab_history_route_offloads_and_rejects_when_scan_capacity_is_full(monkeypatch) -> None:

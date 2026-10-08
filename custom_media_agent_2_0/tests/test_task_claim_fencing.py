@@ -199,6 +199,48 @@ def test_legacy_queue_schema_adds_claim_fencing_columns(tmp_path: Path, monkeypa
     assert {"claim_token", "claim_generation"} <= columns
 
 
+def test_legacy_queue_schema_migration_is_serialized_across_initializers(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "legacy_concurrent.sqlite3"
+    monkeypatch.setattr(
+        task_queue,
+        "settings",
+        replace(settings, task_queue_db_path=database_path, task_queue_busy_timeout_seconds=5.0),
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE v2_tasks (
+                task_id TEXT PRIMARY KEY, kind TEXT NOT NULL, run_id TEXT NOT NULL,
+                status TEXT NOT NULL, payload_json TEXT NOT NULL, queued_run_json TEXT NOT NULL,
+                result_json TEXT, error_json TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3, locked_by TEXT, locked_at TEXT,
+                not_before TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    start = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def initialize() -> None:
+        try:
+            start.wait(timeout=3)
+            task_queue.initialize_task_queue()
+        except BaseException as exc:
+            errors.append(exc)
+
+    workers = [threading.Thread(target=initialize) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(8)
+    assert all(not worker.is_alive() for worker in workers)
+    assert errors == []
+    with task_queue._connect() as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(v2_tasks)")}
+    assert {"claim_token", "claim_generation"} <= columns
+
+
 def test_claim_heartbeat_refreshes_active_attempt_before_recovery(tmp_path: Path, monkeypatch) -> None:
     _configure_queue(tmp_path, monkeypatch, timeout=3.0)
     _enqueue("run_heartbeat_fresh")
@@ -352,6 +394,84 @@ def test_lost_claim_during_preflight_is_rechecked_before_provider(tmp_path: Path
     assert row["status"] == "running"
     assert row["locked_by"] == "worker-replacement"
     assert row["claim_token"] == replacement.claim_token
+
+
+def test_lost_claim_during_insufficient_balance_preflight_writes_no_repository_records(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    from app.repositories import repository
+    from app.services import queue_worker
+
+    _configure_queue(tmp_path, monkeypatch, timeout=1.0)
+    repository.reset()
+    _enqueue("run_claim_lost_insufficient_balance")
+    preflight_started = threading.Event()
+    continue_preflight = threading.Event()
+    job_ids: list[str] = []
+
+    async def insufficient_balance_preflight(request, run_id):
+        preflight_started.set()
+        await asyncio.to_thread(continue_preflight.wait, 3)
+        run = queue_worker._veyra_balance_failed_run(request, run_id)
+        job_ids.extend(job.job_id for job in run.generation_jobs)
+        return run
+
+    class Runtime:
+        async def complete_queued_run(self, _request, _run_id: str):
+            raise AssertionError("lost claim must stop before creative provider work")
+
+    monkeypatch.setattr(queue_worker, "_preflight_veyra_balance", insufficient_balance_preflight)
+    result: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: result.append(queue_worker.process_next_task_once(Runtime(), "worker-old")),
+        daemon=True,
+    )
+    worker.start()
+    assert preflight_started.wait(3)
+    with task_queue._connect() as connection:
+        row = connection.execute(
+            "SELECT task_id FROM v2_tasks WHERE run_id = ?", ("run_claim_lost_insufficient_balance",)
+        ).fetchone()
+        connection.execute(
+            "UPDATE v2_tasks SET locked_at = ? WHERE task_id = ?",
+            ((utc_now() - timedelta(days=1)).isoformat(), row["task_id"]),
+        )
+    replacement = task_queue.claim_next_task("worker-replacement")
+    assert replacement is not None
+    continue_preflight.set()
+    worker.join(3)
+    assert not worker.is_alive()
+    assert result == [True]
+    assert len(job_ids) == 1
+    assert repository.get_image_job(job_ids[0]) is None
+    assert repository.get_creative_run("run_claim_lost_insufficient_balance") is None
+    repository.reset()
+
+
+def test_current_claim_persists_insufficient_balance_preflight_without_provider_work(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    from app.repositories import repository
+    from app.services import queue_worker
+
+    _configure_queue(tmp_path, monkeypatch)
+    repository.reset()
+    _enqueue("run_current_insufficient_balance")
+
+    async def insufficient_balance_preflight(request, run_id):
+        return queue_worker._veyra_balance_failed_run(request, run_id)
+
+    class Runtime:
+        async def complete_queued_run(self, _request, _run_id: str):
+            raise AssertionError("insufficient balance must stop before creative provider work")
+
+    monkeypatch.setattr(queue_worker, "_preflight_veyra_balance", insufficient_balance_preflight)
+    assert queue_worker.process_next_task_once(Runtime(), "worker-balance") is True
+    saved_run = repository.get_creative_run("run_current_insufficient_balance")
+    assert saved_run is not None and saved_run.status == "failed"
+    assert len(saved_run.generation_jobs) == 1
+    saved_job = repository.get_image_job(saved_run.generation_jobs[0].job_id)
+    assert saved_job is not None and saved_job.status == "failed"
+    assert task_queue.get_run_snapshot("run_current_insufficient_balance").status == "failed"
+    repository.reset()
 
 
 def test_lost_claim_during_provider_does_not_commit_job_output_history_or_charge(tmp_path: Path, monkeypatch) -> None:

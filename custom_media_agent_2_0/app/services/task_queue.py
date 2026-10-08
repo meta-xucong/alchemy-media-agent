@@ -61,6 +61,9 @@ _CURRENT_CLAIM: ContextVar[QueuedTask | None] = ContextVar("v2_current_task_clai
 def initialize_task_queue() -> None:
     settings.task_queue_db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
+        # API and standalone workers may initialize the same database at once.
+        # Serialize schema inspection and ALTERs so both cannot add one column.
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS v2_tasks (
@@ -92,6 +95,7 @@ def initialize_task_queue() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_v2_tasks_status_not_before_created ON v2_tasks(status, not_before, created_at)"
         )
+        conn.commit()
 
 
 async def initialize_task_queue_async() -> None:

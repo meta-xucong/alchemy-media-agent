@@ -78,6 +78,8 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                 raise ValueError(f"Unsupported task kind: {record.kind}")
             request = CreateCreativeRunRequest.model_validate(record.payload)
             run = asyncio.run(_preflight_veyra_balance(request, record.run_id))
+            if run is not None:
+                run = task_queue.persist_claimed_operation(lambda: _save_preflight_run(run))
             if not task_queue.task_claim_is_current(record):
                 logger.info("V2 task claim was superseded during preflight; provider work was skipped")
                 return True
@@ -210,7 +212,6 @@ def _veyra_balance_failed_run(request: CreateCreativeRunRequest, run_id: str) ->
         created_at=now,
         updated_at=now,
     )
-    repository.save_image_job(job)
     run = CreativeRun(
         run_id=run_id,
         status="failed",
@@ -223,6 +224,12 @@ def _veyra_balance_failed_run(request: CreateCreativeRunRequest, run_id: str) ->
         created_at=now,
         updated_at=now,
     )
+    return run
+
+
+def _save_preflight_run(run: CreativeRun) -> CreativeRun:
+    for job in run.generation_jobs:
+        repository.save_image_job(job)
     return repository.save_creative_run(run)
 
 
