@@ -20,7 +20,11 @@ async def run_history_scan(operation: Callable[..., T], *args: Any, **kwargs: An
     if not _slots.acquire(blocking=False):
         raise HTTPException(
             status_code=429,
-            detail={"error_code": "history_scan_capacity_full", "message": "History is busy; retry shortly."},
+            detail={
+                "error_code": "history_scan_capacity_full",
+                "message": "History is busy; retry shortly.",
+                "retryable": True,
+            },
             headers={"Retry-After": "2"},
         )
     task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))

@@ -14,7 +14,7 @@ import pytest
 
 from app.config import settings
 from app.repositories.memory import utc_now
-from app.schemas import CreativeRun
+from app.schemas import CreativeRun, FavoriteReferenceAssetRequest
 from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
 from app.services import task_queue as task_queue_service
 from app.services import generation_capacity as capacity_module
@@ -23,9 +23,10 @@ from app.services.generation_capacity import run_with_generation_capacity
 from app.services.task_queue import QueueCapacityExceeded, claim_next_task, enqueue_creative_task, task_queue_stats
 from app.services.image_history import list_image_history
 from app.main import _read_limited_request_body
-from app.main import _require_output_visible
+from app.main import _require_output_visible, history_reference_asset, output_download
 from app.repositories import repository
 from app.services import image_history as image_history_service
+from app.services import output_storage as output_storage_service
 from fastapi import HTTPException
 from starlette.requests import Request
 import json
@@ -47,6 +48,7 @@ def test_v2_history_scan_admission_is_bounded_and_holds_slot_after_cancel(monkey
         with pytest.raises(HTTPException) as full:
             await history_scan_module.run_history_scan(lambda: "unexpected")
         assert full.value.status_code == 429
+        assert full.value.detail["retryable"] is True
         first.cancel()
         await asyncio.sleep(0.03)
         with pytest.raises(HTTPException):
@@ -85,6 +87,67 @@ def test_v2_async_output_permission_fallback_scans_history_off_event_loop(monkey
         assert result["owner_id"] is None
 
     asyncio.run(exercise())
+
+
+def test_v2_reference_asset_work_uses_bounded_history_admission(monkeypatch) -> None:
+    started = threading.Event()
+    finish = threading.Event()
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr("app.main._require_output_visible", _async_public_output)
+    monkeypatch.setattr("app.main.list_favorite_ids", lambda **_kwargs: ["favorite-output"])
+
+    def slow_reference(*_args, **_kwargs):
+        started.set()
+        finish.wait(5)
+        return {"asset_id": "asset_fake"}
+
+    monkeypatch.setattr("app.main.create_reference_asset_from_history_output", slow_reference)
+    request = Request({"type": "http", "method": "POST", "path": "/api/v2/image/history/favorite-output/reference-asset", "headers": []})
+    body = FavoriteReferenceAssetRequest()
+
+    async def exercise() -> None:
+        task = asyncio.create_task(history_reference_asset("favorite-output", body, request))
+        assert await asyncio.to_thread(started.wait, 2)
+        with pytest.raises(HTTPException) as full:
+            await history_scan_module.run_history_scan(lambda: "unexpected")
+        assert full.value.status_code == 429 and full.value.detail["retryable"] is True
+        finish.set()
+        assert await task == {"asset_id": "asset_fake"}
+
+    asyncio.run(exercise())
+
+
+def test_v2_output_download_history_fallback_uses_bounded_scan(monkeypatch) -> None:
+    started = threading.Event()
+    finish = threading.Event()
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr("app.main._require_output_visible", _async_public_output)
+    monkeypatch.setattr(repository, "get_output", lambda _output_id: None)
+
+    def slow_history_item(_output_id: str):
+        started.set()
+        finish.wait(5)
+        return None
+
+    monkeypatch.setattr(output_storage_service, "_history_item", slow_history_item)
+    request = Request({"type": "http", "method": "GET", "path": "/api/v2/outputs/missing/download", "headers": []})
+
+    async def exercise() -> None:
+        download = asyncio.create_task(output_download("missing", request))
+        assert await asyncio.to_thread(started.wait, 2)
+        with pytest.raises(HTTPException) as full:
+            await history_scan_module.run_history_scan(lambda: "unexpected")
+        assert full.value.status_code == 429 and full.value.detail["retryable"] is True
+        finish.set()
+        with pytest.raises(HTTPException) as not_found:
+            await download
+        assert not_found.value.status_code == 404
+
+    asyncio.run(exercise())
+
+
+async def _async_public_output(*_args, **_kwargs):
+    return {"user_id": None, "is_admin": False, "owner_id": None}
 
 
 def _hold_generation_slot(data_dir: str, acquired, release) -> None:

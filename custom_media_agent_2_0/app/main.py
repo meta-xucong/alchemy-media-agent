@@ -886,7 +886,7 @@ async def image_history(
 @app.get("/api/v2/image/history/{output_id}/thumbnail")
 async def image_history_thumbnail(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    thumbnail = read_history_thumbnail(output_id)
+    thumbnail = await run_history_scan(read_history_thumbnail, output_id)
     if not thumbnail:
         raise HTTPException(status_code=404, detail={"error_code": "history_thumbnail_not_found", "message": "History thumbnail not found."})
     content, media_type = thumbnail
@@ -896,7 +896,7 @@ async def image_history_thumbnail(output_id: str, request: Request, authorizatio
 @app.get("/api/v2/image/history/{output_id}/preview")
 async def image_history_preview(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    preview = read_history_preview(output_id)
+    preview = await run_history_scan(read_history_preview, output_id)
     if not preview:
         raise HTTPException(status_code=404, detail={"error_code": "history_preview_not_found", "message": "History preview not found."})
     content, media_type = preview
@@ -906,7 +906,7 @@ async def image_history_preview(output_id: str, request: Request, authorization:
 @app.delete("/api/v2/image/history/{output_id}")
 async def delete_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
-    result = delete_image_history_item(output_id)
+    result = await run_history_scan(delete_image_history_item, output_id)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,
@@ -944,7 +944,8 @@ async def history_reference_asset(
             status_code=400,
             detail={"error_code": "history_output_not_favorite", "message": "Please star this V2 history output before using it as a continuation reference."},
         )
-    asset = create_reference_asset_from_history_output(
+    asset = await run_history_scan(
+        create_reference_asset_from_history_output,
         output_id,
         body,
         veyra_user_id=context.get("user_id"),
@@ -966,14 +967,15 @@ def get_image_job(job_id: str, request: Request, authorization: str = Header(def
 @app.get("/api/v2/outputs/{output_id}/download")
 async def output_download(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    output_file = resolve_output_file(output_id)
+    output_file = await run_history_scan(resolve_output_file, output_id)
     if output_file:
         path, media_type = output_file
         accelerated_url = await signed_v2_output_url(output_id=output_id, source_path=path)
         if accelerated_url:
             return RedirectResponse(accelerated_url, status_code=302, headers={"Cache-Control": "private, no-store"})
-        return Response(content=path.read_bytes(), media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
-    output = read_output_content(output_id)
+        content = await run_history_scan(path.read_bytes)
+        return Response(content=content, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+    output = await run_history_scan(read_output_content, output_id)
     if not output:
         raise HTTPException(status_code=404, detail={"error_code": "output_not_found", "message": "V2 output file not found."})
     content, media_type = output

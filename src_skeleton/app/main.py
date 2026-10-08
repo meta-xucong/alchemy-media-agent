@@ -3212,7 +3212,7 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
     )
     deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
     deleted_preview = media_store.delete_preview(output_id) or preview_existed
-    removed_records = media_store.delete_history_record(output_id)
+    removed_records = await run_history_scan(media_store.delete_history_record, output_id)
     removed_favorites = delete_favorite(output_id)
     if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})

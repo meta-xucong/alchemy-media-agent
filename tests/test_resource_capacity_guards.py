@@ -39,6 +39,7 @@ def test_v1_history_scan_admission_is_bounded_and_holds_slot_after_cancel(monkey
         with pytest.raises(HTTPException) as full:
             await history_scan_module.run_history_scan(lambda: "unexpected")
         assert full.value.status_code == 429
+        assert full.value.detail["retryable"] is True
         first.cancel()
         await asyncio.sleep(0.03)
         with pytest.raises(HTTPException):
