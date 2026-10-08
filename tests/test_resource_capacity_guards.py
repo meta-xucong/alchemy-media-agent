@@ -16,11 +16,13 @@ from app.services.generation_capacity import GenerationCapacityExceeded, generat
 from app.services import generation_capacity as capacity_module
 from app.services.generation_capacity import run_with_generation_capacity
 from app.services import history_scan_capacity as history_scan_module
-from app.main import _read_limited_request_body
+from app.main import _read_limited_request_body, _require_output_visible, delete_image_history_item, favorite_image_history_item
+from app.config import settings
 import app.services.alchemy_lab as alchemy_lab
 import app.services.image_service as image_service
 from app.repositories import repository
-from app.schemas import JobStatus, ProviderError
+from app.schemas import FavoriteImageRequest, JobStatus, ProviderError
+from app.main import media_store
 
 
 def test_v1_history_scan_admission_is_bounded_and_holds_slot_after_cancel(monkeypatch) -> None:
@@ -50,6 +52,81 @@ def test_v1_history_scan_admission_is_bounded_and_holds_slot_after_cancel(monkey
         assert await history_scan_module.run_history_scan(lambda: "available") == "available"
 
     asyncio.run(exercise())
+
+
+def test_v1_repo_miss_permission_and_favorite_history_fallback_use_scan_capacity(monkeypatch) -> None:
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr("app.main.settings", settings.model_copy(update={"veyra_auth_enabled": False}))
+    monkeypatch.setattr(repository, "get_output", lambda _output_id: None)
+    monkeypatch.setattr(
+        "app.main.set_favorite",
+        lambda output_id, favorite, veyra_user_id=None: {
+            "output_id": output_id,
+            "favorite": favorite,
+            "veyra_user_id": veyra_user_id,
+        },
+    )
+    request = Request({"type": "http", "method": "PUT", "path": "/v1/image/history/out_repo_miss/favorite", "headers": []})
+    calls = 0
+    started = threading.Event()
+    finish = threading.Event()
+    records = [{"id": "out_repo_miss", "veyra_user_id": 17}]
+
+    def list_records(*, limit=10000, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            finish.wait(5)
+        return records[:limit]
+
+    monkeypatch.setattr(media_store, "list_history_records", list_records)
+
+    async def exercise() -> None:
+        owner_lookup = asyncio.create_task(_require_output_visible(request, "out_repo_miss"))
+        assert await asyncio.to_thread(started.wait, 2)
+        with pytest.raises(HTTPException) as full:
+            await history_scan_module.run_history_scan(lambda: None)
+        assert full.value.status_code == 429 and full.value.detail["retryable"] is True
+        finish.set()
+        owner = await owner_lookup
+        assert owner["owner_id"] == 17
+        favorite = await favorite_image_history_item("out_repo_miss", FavoriteImageRequest(), request)
+        assert favorite == {"output_id": "out_repo_miss", "favorite": True, "veyra_user_id": None}
+        assert calls >= 3
+
+    asyncio.run(exercise())
+
+
+def test_v1_history_delete_rejection_precedes_all_mutations(monkeypatch) -> None:
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr("app.main._require_output_visible", _async_public_output_v1)
+    request = Request({"type": "http", "method": "DELETE", "path": "/v1/image/history/out_busy", "headers": []})
+    before = {"repository_output": True, "history_record": True, "original": True, "thumbnail": True, "preview": True}
+    after = dict(before)
+
+    def simulate_delete(_output_id: str):
+        after.update({key: False for key in after})
+        return {"ok": True}
+
+    monkeypatch.setattr("app.main._delete_v1_image_history_item_sync", simulate_delete)
+
+    async def exercise() -> None:
+        slot = history_scan_module._slots
+        assert slot.acquire(blocking=False)
+        try:
+            with pytest.raises(HTTPException) as full:
+                await delete_image_history_item("out_busy", request)
+            assert full.value.status_code == 429 and full.value.detail["retryable"] is True
+            assert after == before
+        finally:
+            slot.release()
+
+    asyncio.run(exercise())
+
+
+async def _async_public_output_v1(*_args, **_kwargs):
+    return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": None}
 
 
 def _hold_generation_slot(root: str, acquired, release) -> None:

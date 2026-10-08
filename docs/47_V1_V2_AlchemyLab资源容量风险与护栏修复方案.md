@@ -37,7 +37,7 @@
 1. **业务记录与缓存分层**：V1/V2 内存仓库、Lab session、历史 JSONL、队列终态、幂等证据和 Claude 决策没有完全覆盖的权威重载路径；本次不做 TTL/LRU 删除。先对并发、待处理工作和单次请求读取内存设硬边界；持久数据保留/归档周期另行决策。
 2. **并发权威**：受控生图入口共用本机 SQLite 持久化准入状态；V2 API 直达入口在同一事务中检查 durable queue，并让位于 queued/running 任务。超过 claim 超时且已耗尽尝试次数的 running task 在准入或 worker claim 事务中转为 failed，保留错误证据和任务行，以免永久占据队列优先级。进程内 semaphore 不是跨进程保证。活跃调用由 heartbeat lease 表示；普通异常在本地调用结束后释放，调用者取消时 shield 正在执行的 provider coroutine，并等待它结束后再释放。进程崩溃后只能在 lease TTL 到期后恢复本机准入，不能推断远端 provider 已停止。
 3. **积压权威**：V2 pending queue 上限由 SQLite 事务内的 active-row 检查与插入共同保证；过载返回明确可重试状态，不创建无界后台线程或替代队列。终态任务保留，直到用户批准明确保留策略。
-4. **历史读取**：读取/查询 JSONL 逐行处理，避免常规读取使用 `read_text().splitlines()` 的完整副本；V1/V2 采用 top-K 选择减少全量排序状态。V1/V2 async 历史端点、V2 权限回退、缩略图/预览、下载、参考图创建和删除的同步工作统一走线程池准入。每进程用可配置的非等待准入限制同时运行的扫描数，满载时返回带 `Retry-After`、`retryable=true` 的 429。为保持去重和准确 total，目前仍保留与唯一记录数成比例的 map；V1 聚合层也仍保留完整源记录。删除一条历史记录仍需完整读取并重写源 JSONL，虽已在线程池内执行并受同一并发上限约束，暂时仍是 O(N) 内存；严格有界删除还需可恢复的索引/改写协议，不能冒险丢掉并发追加的历史。严格有界的去重/total 需要可重建持久索引，本次不以截断破坏 API。
+4. **历史读取**：读取/查询 JSONL 逐行处理，避免常规读取使用 `read_text().splitlines()` 的完整副本；V1/V2 采用 top-K 选择减少全量排序状态。V1/V2 async 历史端点、V1 repo-miss 权限/收藏回退，以及 V2 权限回退、缩略图/预览、下载、参考图创建和删除的同步工作统一走线程池准入。删除 API 在取得准入前不执行任何输出/文件/收藏 mutation。每进程用可配置的非等待准入限制同时运行的扫描数，满载时返回带 `Retry-After`、`retryable=true` 的 429。为保持去重和准确 total，目前仍保留与唯一记录数成比例的 map；V1 聚合层也仍保留完整源记录。删除一条历史记录仍需完整读取并重写源 JSONL，虽已在线程池内执行并受同一并发上限约束，暂时仍是 O(N) 内存；严格有界删除还需可恢复的索引/改写协议，不能冒险丢掉并发追加的历史。严格有界的去重/total 需要可重建持久索引，本次不以截断破坏 API。
 5. **上传**：先检查声明长度，再以 `max+1` 分块读取拒绝超限 body；对 JSON base64 同时限制 wire 大小和解码后内容大小；拒绝时不写文件、不推进 asset 状态。
 6. **Lab 会话**：跨 session 的服务端并发值复用 V1 本机 SQLite lease；session 完成或实际本地生成协程结束后释放；调用者取消会等待协程结束，不删除终态 session。
 
@@ -49,7 +49,7 @@
 | V2 生图与队列 | 新增 `V2_MAX_CONCURRENT_IMAGE_GENERATIONS`（默认 1，范围 1–32），lease 表与 `task_queue_db_path` 共用；同步 creative/image/revision 路径纳入 lease。新增 `V2_TASK_QUEUE_MAX_PENDING`（默认 100），事务内限制 queued 行；running 行不计 pending。direct API 检查同一 DB 中的 queued/running 并让位，worker 使用同一 lease。队列满返回可重试 429；无容量返回可重试 429。 | 多 API/worker 进程必须挂载同一 SQLite 文件。终态队列行保留。容量满响应不会创建新 provider 工作。queue worker 的容量等待复用原 task/run，capacity retry 不消耗 attempts。 |
 | 取消与超时 | API caller 取消时 shield 本地 provider coroutine，等待该 coroutine结束后释放 lease；心跳临时 SQLite 异常会继续重试；进程崩溃则由 lease TTL 隔离后再回收。 | HTTP/provider client timeout 只表明本机客户端停止等待，不证明远端生成终止。lease 到期也只恢复本机准入，不对远端仍运行请求作并发承诺。VPS 需要 provider/gateway 的任务状态证据或容量余量策略另行验收。 |
 | 上传 | V1/V2 上传 route 按流读取，拒绝超出 wire/body 限值的请求；在解码/存储前返回 413。 | 反向代理仍应配置请求体上限，避免 body 到达应用前已被缓冲。 |
-| 历史 | V1/V2 JSONL 常规读取逐行处理；V1 output scan 与 V2/V1 排序使用 bounded top-K；V1/V2 async 历史端点及删除路径、V2 权限回退、缩略图/预览、下载、参考图创建都通过进程内有界准入移交线程池。默认 `HISTORY_SCAN_MAX_CONCURRENT=2`、`V2_HISTORY_SCAN_MAX_CONCURRENT=2`；满载返回 `429 history_scan_capacity_full`、`retryable=true` 和 `Retry-After: 2`。取消请求会等待线程任务结束后才归还准入。 | 此准入是每进程；多 worker 的总扫描上限等于每进程配置值乘 worker 数。精确去重/total 仍是 O(unique records)；V1 统一 history endpoint 仍持有全量聚合记录；V1/V2 历史删除仍 O(N) 读写。MemoryRepository、Claude decision cache、Lab terminal sessions、queue terminal rows 都未删除或改为有界持久加载。 |
+| 历史 | V1/V2 JSONL 常规读取逐行处理；V1 output scan 与 V2/V1 排序使用 bounded top-K；V1/V2 async 历史端点、repo-miss 权限/收藏回退及删除路径，V2 缩略图/预览、下载和参考图创建都通过进程内有界准入移交线程池。默认 `HISTORY_SCAN_MAX_CONCURRENT=2`、`V2_HISTORY_SCAN_MAX_CONCURRENT=2`；满载返回 `429 history_scan_capacity_full`、`retryable=true` 和 `Retry-After: 2`。取消请求会等待线程任务结束后才归还准入。 | 此准入是每进程；多 worker 的总扫描上限等于每进程配置值乘 worker 数。精确去重/total 仍是 O(unique records)；V1 统一 history endpoint 仍持有全量聚合记录；V1/V2 历史删除仍 O(N) 读写。MemoryRepository、Claude decision cache、Lab terminal sessions、queue terminal rows 都未删除或改为有界持久加载。 |
 | V2 终态恢复 | direct admission 与 `claim_next_task` 在共享 SQLite 事务内将超过 claim 超时且达到 `max_attempts` 的陈旧 running 行改为 failed，写入 `worker_recovery_exhausted`、`retryable=false`，清除锁字段但保留 task/run 快照和历史行。 | 扫描只处理明确陈旧且已耗尽尝试的任务；尚在超时窗口或仍可重试任务保持原有恢复语义。 |
 
 默认配置的 1 个 slot 是保守本地调用上限，不是 VPS 性能结论。`GENERATION_CAPACITY_LEASE_TTL_SECONDS` / `V2_GENERATION_CAPACITY_LEASE_TTL_SECONDS` 最低 960 秒，并自动高于已配置的相关 provider client timeout 加 60 秒；heartbeat 会在本地调用仍活跃且可及时访问 SQLite 时续租。若一个活进程的 heartbeat 持续无法写入并超过 lease TTL，另一进程可能在旧调用尚未结束时取得 lease；这属于共享 SQLite 租约无法 fencing 远端调用的故障边界，本地测试不证明此时仍是严格的全局并发上限。若 provider client 自身报告 timeout，调用已经在本机返回/结束，lease 可释放，但远端是否仍计算无法由本代码确认。V2 direct API 让位于 queue 只约束共享 DB 的同主机进程。
@@ -74,7 +74,7 @@
 
 ## 本轮验证记录
 
-- V1：`tests/test_resource_capacity_guards.py`：12 passed。覆盖跨进程准入、crash TTL、heartbeat 临时异常、取消后 provider 线程仍运行、客户端超时而 fake remote 仍在运行、上传 body 边界、Lab session 准入、同幂等键重试，以及历史扫描超载/取消边界。
+- V1：`tests/test_resource_capacity_guards.py`：14 passed。覆盖跨进程准入、crash TTL、heartbeat 临时异常、取消后 provider 线程仍运行、客户端超时而 fake remote 仍在运行、上传 body 边界、Lab session 准入、同幂等键重试、repo-miss 权限/收藏线程隔离和删除满载无副作用。
 - V1：`tests/test_api_smoke.py` 单独运行：85 passed。`tests/test_api_smoke.py tests/test_api_access_keys.py` 合计 123 passed、2 failed。为核实失败归属，同一解释器和依赖在 detached `3915b24d` 基线上重跑两项失败节点，基线同样 2 failed：V3 project-output mock 缺少 `project_headers` 参数，MCP adapter 测试继发同一 `TypeError`。这两项不是由本次改动引入；不在本任务修 V3。
 - V2：`tests/test_resource_capacity_guards.py`：16 passed，覆盖生图容量、queue crash/retry、历史超载/取消、权限回退及参考图/下载 repo-miss 路径不阻塞 event loop。
 - V2 定向 API 回归（direct capacity 429、queue 满、worker 原任务重试、上传超限/租户隔离、历史记录/分页、缩略图/预览/删除、媒体加速重定向及回退）：12 passed。

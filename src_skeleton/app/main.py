@@ -2645,29 +2645,32 @@ def _veyra_asset_context(request: Request, authorization: str = "") -> dict:
     return {"authenticated": True, "user_id": user_id, "is_admin": False}
 
 
-def _v1_output_owner_id(output_id: str) -> int | None:
+async def _v1_output_owner_id(output_id: str) -> int | None:
     output = repository.get_output(output_id)
     if output:
         owner_id = _history_output_veyra_user_id(output.metadata)
         if owner_id is not None:
             return owner_id
-    for record in media_store.list_history_records(limit=10000):
+    records = await run_history_scan(media_store.list_history_records, limit=10000)
+    for record in records:
         if record.get("id") == output_id:
             return _positive_int_or_none(record.get("veyra_user_id"))
     return None
 
 
-def _v1_history_output_exists(output_id: str) -> bool:
+async def _v1_history_output_exists(output_id: str) -> bool:
     output = repository.get_output(output_id)
     if output:
         job = repository.get_job(output.job_id)
         if job and not _is_non_v1_history_job(job):
             return True
         return False
-    for record in media_store.list_history_records(limit=10000):
+    history_records = await run_history_scan(media_store.list_history_records, limit=10000)
+    for record in history_records:
         if record.get("id") == output_id and not _is_non_v1_history_record(record):
             return True
-    for record in media_store.list_generated_output_records(limit=10000):
+    output_records = await run_history_scan(media_store.list_generated_output_records, limit=10000)
+    for record in output_records:
         if record.get("id") == output_id and not _is_non_v1_history_record(record):
             return True
     return False
@@ -2682,9 +2685,9 @@ def _is_lab_output_id(output_id: str) -> bool:
 
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
     if not settings.veyra_auth_enabled:
-        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v1_output_owner_id(output_id)}
+        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": await _v1_output_owner_id(output_id)}
     context = await _veyra_history_context(request, authorization)
-    owner_id = _v1_output_owner_id(output_id)
+    owner_id = await _v1_output_owner_id(output_id)
     if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
@@ -3199,9 +3202,7 @@ def list_v1_veyra_usage(request: Request, limit: int = Query(default=50, ge=1, l
     return list_veyra_usage(user_id, limit=limit)
 
 
-@app.delete("/v1/image/history/{output_id}")
-async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
-    await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
+def _delete_v1_image_history_item_sync(output_id: str) -> dict:
     output = repository.delete_output(output_id)
     thumbnail_existed = media_store.thumbnail_path(output_id).exists()
     preview_existed = media_store.preview_path(output_id).exists()
@@ -3212,7 +3213,7 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
     )
     deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
     deleted_preview = media_store.delete_preview(output_id) or preview_existed
-    removed_records = await run_history_scan(media_store.delete_history_record, output_id)
+    removed_records = media_store.delete_history_record(output_id)
     removed_favorites = delete_favorite(output_id)
     if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
@@ -3234,9 +3235,15 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
     }
 
 
+@app.delete("/v1/image/history/{output_id}")
+async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
+    return await run_history_scan(_delete_v1_image_history_item_sync, output_id)
+
+
 @app.put("/v1/image/history/{output_id}/favorite")
 async def favorite_image_history_item(output_id: str, body: FavoriteImageRequest, request: Request, authorization: str = Header(default="")):
-    if not _v1_history_output_exists(output_id):
+    if not await _v1_history_output_exists(output_id):
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=True)
     context = await _veyra_history_context(request, authorization)
