@@ -5,6 +5,7 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
+import heapq
 import httpx
 import json
 import logging
@@ -72,6 +73,7 @@ from app.schemas import (
 from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content, store_asset_content_bytes
 from app.services.alchemy_lab import (
     LAB_PROJECT_ID,
+    LabSessionCapacityExceeded,
     ExplorationRequest,
     FavoriteSelection,
     comparison_board,
@@ -97,6 +99,8 @@ from app.services.events import format_sse_events
 from app.services.access_bridge import build_access_headers
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
+from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
+from app.services.history_scan_capacity import run_history_scan
 from app.services.media_acceleration import signed_output_url as signed_v1_output_url
 from app.services.retention_settings import get_retention_settings, save_retention_settings
 from app.services.session_service import create_session, handle_message
@@ -2356,6 +2360,12 @@ async def create_rare_style_explorer_session(
     user_id = _veyra_user_id_from_request(request, authorization)
     try:
         session = await create_exploration_session(body, veyra_user_id=user_id)
+    except LabSessionCapacityExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            headers={"Retry-After": "5"},
+            detail={"code": "lab_capacity", "message": str(exc), "retryable": True, "retry_after_seconds": 5},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "invalid_exploration_request", "message": str(exc)}) from exc
     return {"session": public_exploration_session(session), "board": comparison_board(session), "async": session.status not in {"completed", "partial_success", "failed"}}
@@ -2635,29 +2645,32 @@ def _veyra_asset_context(request: Request, authorization: str = "") -> dict:
     return {"authenticated": True, "user_id": user_id, "is_admin": False}
 
 
-def _v1_output_owner_id(output_id: str) -> int | None:
+async def _v1_output_owner_id(output_id: str) -> int | None:
     output = repository.get_output(output_id)
     if output:
         owner_id = _history_output_veyra_user_id(output.metadata)
         if owner_id is not None:
             return owner_id
-    for record in media_store.list_history_records(limit=10000):
+    records = await run_history_scan(media_store.list_history_records, limit=10000)
+    for record in records:
         if record.get("id") == output_id:
             return _positive_int_or_none(record.get("veyra_user_id"))
     return None
 
 
-def _v1_history_output_exists(output_id: str) -> bool:
+async def _v1_history_output_exists(output_id: str) -> bool:
     output = repository.get_output(output_id)
     if output:
         job = repository.get_job(output.job_id)
         if job and not _is_non_v1_history_job(job):
             return True
         return False
-    for record in media_store.list_history_records(limit=10000):
+    history_records = await run_history_scan(media_store.list_history_records, limit=10000)
+    for record in history_records:
         if record.get("id") == output_id and not _is_non_v1_history_record(record):
             return True
-    for record in media_store.list_generated_output_records(limit=10000):
+    output_records = await run_history_scan(media_store.list_generated_output_records, limit=10000)
+    for record in output_records:
         if record.get("id") == output_id and not _is_non_v1_history_record(record):
             return True
     return False
@@ -2672,9 +2685,9 @@ def _is_lab_output_id(output_id: str) -> bool:
 
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
     if not settings.veyra_auth_enabled:
-        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v1_output_owner_id(output_id)}
+        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": await _v1_output_owner_id(output_id)}
     context = await _veyra_history_context(request, authorization)
-    owner_id = _v1_output_owner_id(output_id)
+    owner_id = await _v1_output_owner_id(output_id)
     if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
@@ -2909,11 +2922,20 @@ async def put_asset_content_endpoint(asset_id: str, request: Request, authorizat
     _require_asset_visible(request, asset_id, authorization)
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if content_type == "application/json":
-        body = AssetContentUploadRequest.model_validate(await request.json())
+        wire_limit = (settings.max_asset_upload_bytes * 4 + 2) // 3 + 64 * 1024
+        try:
+            payload = json.loads(await _read_limited_request_body(request, wire_limit))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail={"code": "invalid_asset_upload", "message": "Asset upload body must be valid JSON."}) from exc
+        body = AssetContentUploadRequest.model_validate(payload)
         asset = store_asset_content(asset_id, body)
     else:
         mime_type = request.headers.get("x-asset-mime-type") or content_type or None
-        asset = store_asset_content_bytes(asset_id, await request.body(), mime_type=mime_type)
+        asset = store_asset_content_bytes(
+            asset_id,
+            await _read_limited_request_body(request, settings.max_asset_upload_bytes),
+            mime_type=mime_type,
+        )
     if not asset:
         raise HTTPException(status_code=404, detail={"code": "asset_not_found", "message": "Asset not found."})
     if asset.status == "failed":
@@ -2926,6 +2948,30 @@ async def put_asset_content_endpoint(asset_id: str, request: Request, authorizat
             },
         )
     return asset
+
+
+async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail={"code": "asset_too_large", "message": f"Upload exceeds {max_bytes} bytes."},
+                )
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "asset_too_large", "message": f"Upload exceeds {max_bytes} bytes."},
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @app.get("/v1/assets/{asset_id}/content")
@@ -2985,38 +3031,72 @@ async def create_image_job_endpoint(
 ):
     user_id = _veyra_user_id_from_request(request, authorization)
     _require_job_assets_visible(request, body.asset_ids, body.asset_intents, authorization)
-    prepared = await submit_image_job(
-        session_id=body.session_id,
-        prompt=body.prompt,
-        asset_mode=body.asset_mode,
-        asset_ids=body.asset_ids,
-        asset_intents=body.asset_intents,
-        count=body.count,
-        size=body.size,
-        quality=body.quality,
-        output_format=body.output_format,
-        background=body.background,
-        moderation=body.moderation,
-        output_compression=body.output_compression,
-        work_intensity=body.work_intensity,
-        provider_preference=body.provider_preference,
-        idempotency_key=body.idempotency_key,
-        veyra_user_id=user_id,
+    lease = _acquire_v1_request_capacity()
+    transferred = False
+    try:
+        prepared = await submit_image_job(
+            session_id=body.session_id,
+            prompt=body.prompt,
+            asset_mode=body.asset_mode,
+            asset_ids=body.asset_ids,
+            asset_intents=body.asset_intents,
+            count=body.count,
+            size=body.size,
+            quality=body.quality,
+            output_format=body.output_format,
+            background=body.background,
+            moderation=body.moderation,
+            output_compression=body.output_compression,
+            work_intensity=body.work_intensity,
+            provider_preference=body.provider_preference,
+            idempotency_key=body.idempotency_key,
+            veyra_user_id=user_id,
+        )
+        if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
+            background_tasks.add_task(_run_submitted_image_job_with_lease, lease, prepared.job.id, prepared.request, edit=prepared.edit)
+            transferred = True
+        return prepared.job
+    finally:
+        if not transferred:
+            lease.__exit__(None, None, None)
+
+
+def _acquire_v1_request_capacity():
+    lease = generation_capacity(
+        media_store.root,
+        limit=settings.max_concurrent_image_generations,
+        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
     )
-    if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
-        background_tasks.add_task(run_submitted_image_job, prepared.job.id, prepared.request, edit=prepared.edit)
-    return prepared.job
+    try:
+        lease.__enter__()
+    except GenerationCapacityExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            headers={"Retry-After": "5"},
+            detail={"code": "generation_capacity", "message": "Image generation is busy. Please retry shortly.", "retryable": True, "retry_after_seconds": 5},
+        ) from exc
+    return lease
 
 
-@app.get("/v1/image/history")
-async def list_image_history(
-    request: Request,
-    session_id: str | None = None,
-    limit: int = Query(default=50, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
-    authorization: str = Header(default=""),
-):
-    veyra_context = await _veyra_history_context(request, authorization)
+async def _run_submitted_image_job_with_lease(lease, job_id, image_request, *, edit: bool = False):
+    try:
+        return await run_submitted_image_job(
+            job_id,
+            image_request,
+            edit=edit,
+            capacity_already_acquired=True,
+        )
+    finally:
+        lease.__exit__(None, None, None)
+
+
+def _list_image_history_sync(
+    *,
+    session_id: str | None,
+    limit: int,
+    offset: int,
+    veyra_context: dict,
+) -> ImageHistoryResponse:
     limit = min(limit, 200)
     favorite_ids = list_favorite_ids(
         veyra_user_id=_positive_int_or_none(veyra_context.get("user_id")),
@@ -3091,8 +3171,27 @@ async def list_image_history(
             items.append(ImageHistoryItem(**{**record, "favorite": record["id"] in favorite_ids}))
 
     items = [_with_veyra_history_access(item, veyra_context) for item in items if _history_visible_to_veyra(item, veyra_context)]
-    items.sort(key=_history_sort_key, reverse=True)
-    return ImageHistoryResponse(items=items[offset : offset + limit], total=len(items))
+    page_end = offset + limit
+    page = heapq.nlargest(page_end, items, key=_history_sort_key)
+    return ImageHistoryResponse(items=page[offset:page_end], total=len(items))
+
+
+@app.get("/v1/image/history")
+async def list_image_history(
+    request: Request,
+    session_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    authorization: str = Header(default=""),
+):
+    veyra_context = await _veyra_history_context(request, authorization)
+    return await run_history_scan(
+        _list_image_history_sync,
+        session_id=session_id,
+        limit=limit,
+        offset=offset,
+        veyra_context=veyra_context,
+    )
 
 
 @app.get("/v1/veyra/usage")
@@ -3103,9 +3202,7 @@ def list_v1_veyra_usage(request: Request, limit: int = Query(default=50, ge=1, l
     return list_veyra_usage(user_id, limit=limit)
 
 
-@app.delete("/v1/image/history/{output_id}")
-async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
-    await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
+def _delete_v1_image_history_item_sync(output_id: str) -> dict:
     output = repository.delete_output(output_id)
     thumbnail_existed = media_store.thumbnail_path(output_id).exists()
     preview_existed = media_store.preview_path(output_id).exists()
@@ -3138,9 +3235,15 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
     }
 
 
+@app.delete("/v1/image/history/{output_id}")
+async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
+    return await run_history_scan(_delete_v1_image_history_item_sync, output_id)
+
+
 @app.put("/v1/image/history/{output_id}/favorite")
 async def favorite_image_history_item(output_id: str, body: FavoriteImageRequest, request: Request, authorization: str = Header(default="")):
-    if not _v1_history_output_exists(output_id):
+    if not await _v1_history_output_exists(output_id):
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=True)
     context = await _veyra_history_context(request, authorization)
@@ -3165,12 +3268,19 @@ async def revise_image_job_endpoint(
     authorization: str = Header(default=""),
 ):
     await _require_output_visible(request, body.output_id, authorization, allow_legacy_public=True)
-    prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
-    if not prepared:
-        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
-    if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
-        background_tasks.add_task(run_submitted_image_job, prepared.job.id, prepared.request, edit=prepared.edit)
-    return prepared.job
+    lease = _acquire_v1_request_capacity()
+    transferred = False
+    try:
+        prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
+        if not prepared:
+            raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
+        if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
+            background_tasks.add_task(_run_submitted_image_job_with_lease, lease, prepared.job.id, prepared.request, edit=prepared.edit)
+            transferred = True
+        return prepared.job
+    finally:
+        if not transferred:
+            lease.__exit__(None, None, None)
 
 
 @app.get("/v1/providers")

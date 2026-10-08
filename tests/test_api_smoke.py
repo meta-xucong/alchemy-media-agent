@@ -19,6 +19,7 @@ from app.providers.base import ProviderRuntimeError
 from app.providers.mock_image import MockImageProvider
 from app.repositories import repository
 from app.services.alchemy_lab import lab_store
+from app.services.generation_capacity import generation_capacity
 from app.storage import media_store
 
 
@@ -262,6 +263,30 @@ def test_v1_image_job_rejects_blank_prompt():
     )
 
     assert response.status_code == 422
+
+
+def test_v1_image_job_rejects_when_capacity_is_full_before_creating_job():
+    client = TestClient(app)
+    session = client.post("/v1/sessions", json={"project_id": "proj_test", "title": "Capacity"})
+    assert session.status_code == 200
+    with generation_capacity(
+        media_store.root,
+        limit=settings.max_concurrent_image_generations,
+        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+    ):
+        response = client.post(
+            "/v1/image/jobs",
+            json={
+                "session_id": session.json()["id"],
+                "prompt": "A simple offline fake image.",
+                "count": 1,
+            },
+        )
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "5"
+    assert response.json()["detail"]["code"] == "generation_capacity"
+    assert response.json()["detail"]["retryable"] is True
+    assert repository.jobs == {}
 
 
 def test_alchemy_lab_lists_rare_style_presets():

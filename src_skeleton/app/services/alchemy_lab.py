@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.config import settings
 from app.repositories import repository
 from app.schemas import GenerationJob, JobStatus
 from app.services.alchemy_lab_quality import (
@@ -36,6 +37,7 @@ from app.services.alchemy_lab_reference_policy import (
 from app.services.alchemy_lab_reference_prompt import append_lab_reference_prompt
 from app.services.alchemy_lab_uploads_models import LabReferenceAssetInput
 from app.services.image_service import run_submitted_image_job, submit_image_job
+from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
 from app.services.utils import make_id, now_iso
 from app.storage import media_store
 
@@ -43,7 +45,7 @@ from app.storage import media_store
 MAX_SELECTED_STYLES = 8
 MAX_IMAGES_PER_STYLE = 4
 MAX_TOTAL_IMAGES = 12
-MAX_CONCURRENT_GENERATIONS = 1
+MAX_CONCURRENT_GENERATIONS = settings.max_concurrent_image_generations
 MAX_RETRIES_PER_VARIANT = 1
 MAX_GENERATION_INTERVAL_SECONDS = 60
 DEFAULT_GENERATION_INTERVAL_SECONDS = 8
@@ -52,6 +54,10 @@ TERMINAL_SESSION_STATUSES = {"completed", "partial_success", "failed"}
 LAB_PROJECT_ID = "alchemy_lab_rare_style_explorer"
 LAB_SOURCE_PREFIX = "alchemy_lab"
 RARE_STYLE_FEATURE_ID = "rare-style-explorer"
+
+
+class LabSessionCapacityExceeded(RuntimeError):
+    """Raised when all same-host Lab session slots are currently occupied."""
 
 STYLE_FAMILIES: dict[str, set[str]] = {
     "film": {"电影、电视与影像类型"},
@@ -306,6 +312,9 @@ class AlchemyLabStore:
     def get(self, session_id: str) -> ExplorationSession | None:
         return self.sessions.get(session_id)
 
+    def delete_unpublished(self, session_id: str) -> None:
+        self.sessions.pop(session_id, None)
+
     def reset(self) -> None:
         self.sessions.clear()
 
@@ -444,9 +453,21 @@ def limits() -> dict[str, int]:
 
 async def create_exploration_session(request: ExplorationRequest, *, veyra_user_id: int | None = None) -> ExplorationSession:
     session = await prepare_exploration_session(request, veyra_user_id=veyra_user_id)
-    if _should_run_inline(session.request):
-        return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
-    _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
+    try:
+        if _should_run_inline(session.request):
+            with generation_capacity(
+                media_store.root,
+                limit=MAX_CONCURRENT_GENERATIONS,
+                namespace="lab-session",
+                lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+            ):
+                return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
+        _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
+    except GenerationCapacityExceeded:
+        # The session has not been returned to the caller, so discard only this
+        # unpublished in-memory placeholder; existing sessions are untouched.
+        lab_store.delete_unpublished(session.id)
+        raise LabSessionCapacityExceeded("Alchemy Lab is busy. Please retry shortly.")
     return session
 
 
@@ -552,7 +573,7 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
                 )
                 job = prepared.job
                 if prepared.request and job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.provider_not_configured, JobStatus.rejected, JobStatus.canceled}:
-                    job = await run_submitted_image_job(job.id, prepared.request) or job
+                    job = await run_submitted_image_job(job.id, prepared.request, wait_for_capacity=True) or job
                 _attach_lab_history_metadata(job, session=session, variant=variant, prompt=prompt)
                 last_variant = _variant_from_job(variant, job, attempt=attempt)
                 if last_variant.error and _is_fatal_provider_error(last_variant.error):
@@ -793,9 +814,21 @@ async def _ensure_session_prompts_enhanced(session: ExplorationSession) -> None:
 
 
 def _schedule_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> None:
-    task = asyncio.create_task(_run_exploration_session_guarded(session_id, veyra_user_id=veyra_user_id))
+    lease = generation_capacity(
+        media_store.root,
+        limit=MAX_CONCURRENT_GENERATIONS,
+        namespace="lab-session",
+        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+    )
+    lease.__enter__()
+    try:
+        task = asyncio.create_task(_run_exploration_session_guarded(session_id, veyra_user_id=veyra_user_id))
+    except BaseException:
+        lease.__exit__(None, None, None)
+        raise
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(lambda _: lease.__exit__(None, None, None))
 
 
 async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: int | None = None) -> None:

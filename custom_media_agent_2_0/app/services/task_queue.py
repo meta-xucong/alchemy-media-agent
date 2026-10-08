@@ -3,17 +3,29 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from typing import Iterator
 
 from app.config import settings
 from app.repositories.memory import utc_now
 from app.schemas import CreativeRun
 from app.services.ids import new_id
+from app.services.generation_capacity import (
+    GenerationCapacityExceeded,
+    generation_capacity as _generation_capacity,
+    run_with_generation_capacity as _run_with_generation_capacity,
+    terminalize_exhausted_stale_tasks,
+)
 
 
 TaskStatus = str
+
+
+class QueueCapacityExceeded(RuntimeError):
+    """Raised when the durable V2 queue has no pending capacity."""
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,11 @@ def enqueue_creative_task(*, kind: str, request_payload: dict[str, Any], queued_
     now = utc_now().isoformat()
     task_id = new_id("task")
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        pending = conn.execute("SELECT COUNT(*) FROM v2_tasks WHERE status = 'queued'").fetchone()[0]
+        if int(pending) >= settings.task_queue_max_pending:
+            conn.rollback()
+            raise QueueCapacityExceeded("V2 task queue is full.")
         conn.execute(
             """
             INSERT INTO v2_tasks (
@@ -82,7 +99,35 @@ def enqueue_creative_task(*, kind: str, request_payload: dict[str, Any], queued_
                 now,
             ),
         )
+        conn.commit()
     return task_id
+
+
+@contextmanager
+def generation_capacity(*, request_kind: str = "direct") -> Iterator[None]:
+    """Hold a cross-process slot shared by API and queue-worker processes."""
+
+    with _generation_capacity(
+        Path(settings.task_queue_db_path),
+        limit=settings.max_concurrent_image_generations,
+        request_kind=request_kind,
+        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+        queue_recovery_timeout_seconds=settings.task_queue_claim_timeout_seconds,
+    ):
+        yield
+
+
+async def run_with_generation_capacity(operation, *, request_kind: str = "direct"):
+    """Run provider work under the shared lease, retaining it through cancellation."""
+
+    return await _run_with_generation_capacity(
+        operation,
+        database_path=Path(settings.task_queue_db_path),
+        limit=settings.max_concurrent_image_generations,
+        request_kind=request_kind,
+        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+        queue_recovery_timeout_seconds=settings.task_queue_claim_timeout_seconds,
+    )
 
 
 def claim_next_task(worker_id: str) -> QueuedTask | None:
@@ -92,6 +137,7 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
     stale_before = (now - timedelta(seconds=settings.task_queue_claim_timeout_seconds)).isoformat()
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        terminalize_exhausted_stale_tasks(conn, stale_before=stale_before, now_text=now_text)
         row = conn.execute(
             """
             SELECT * FROM v2_tasks
