@@ -464,6 +464,11 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
     # style selections before attempting to acquire the shared work lease.
     request = _normalize_request(request)
     _validate_requested_style_count(request)
+    if (request.style_id or "").strip() or request.selected_style_ids:
+        # Explicit style IDs can be checked from the local style catalog without
+        # planner/LLM work, so invalid requests keep their validation response
+        # even when Lab capacity is saturated.
+        _resolve_styles(request)
     try:
         lease = await acquire_generation_capacity_async(
             media_store.root,

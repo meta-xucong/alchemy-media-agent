@@ -741,6 +741,21 @@ def test_lab_rejects_oversized_style_selection_before_capacity_admission(monkeyp
         asyncio.run(alchemy_lab.create_exploration_session(request))
 
 
+def test_lab_rejects_unknown_explicit_style_before_capacity_admission(monkeypatch) -> None:
+    request = alchemy_lab.ExplorationRequest(
+        idea="offline Lab validation test",
+        style_id="unknown-style-id",
+    )
+
+    async def unexpected_capacity_acquisition(*_args, **_kwargs):
+        raise AssertionError("invalid request must be rejected before acquiring capacity")
+
+    monkeypatch.setattr(alchemy_lab, "acquire_generation_capacity_async", unexpected_capacity_acquisition)
+
+    with pytest.raises(ValueError, match="Unknown style preset"):
+        asyncio.run(alchemy_lab.create_exploration_session(request))
+
+
 def test_lab_history_route_offloads_and_rejects_when_scan_capacity_is_full(monkeypatch) -> None:
     from app.main import list_alchemy_lab_history
     from starlette.requests import Request
