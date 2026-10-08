@@ -1,4 +1,4 @@
-"""Bounded, opt-in Job deserialization processes. No API/store authority here.
+"""Bounded, lazily-started Job deserialization processes. No API/store authority here.
 
 Workers receive one trusted, revision-tagged local file at a time. They never
 construct a service/store, write records, recover jobs, or import app.main.
@@ -9,6 +9,7 @@ import asyncio
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
+import logging
 import multiprocessing
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import threading
 
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 class BrowseCapacityExceeded(RuntimeError):
@@ -26,6 +28,68 @@ class BrowseCapacityExceeded(RuntimeError):
 
 class BrowseComputeUnavailable(RuntimeError):
     pass
+
+
+def _read_cpu_quota(cgroup_root: Path) -> int | None:
+    """Return whole CPUs available from a finite cgroup quota, when present."""
+    try:
+        quota_text, period_text = (cgroup_root / "cpu.max").read_text(encoding="ascii").split()[:2]
+        if quota_text != "max":
+            quota, period = int(quota_text), int(period_text)
+            if quota > 0 and period > 0:
+                return max(1, quota // period)
+    except (OSError, UnicodeError, ValueError):
+        pass
+
+    for cpu_dir in (cgroup_root / "cpu", cgroup_root / "cpu,cpuacct", cgroup_root):
+        try:
+            quota = int((cpu_dir / "cpu.cfs_quota_us").read_text(encoding="ascii").strip())
+            period = int((cpu_dir / "cpu.cfs_period_us").read_text(encoding="ascii").strip())
+            if quota > 0 and period > 0:
+                return max(1, quota // period)
+        except (OSError, UnicodeError, ValueError):
+            continue
+    return None
+
+
+def effective_cpu_count(*, affinity_count: int | None = None, cgroup_root: Path = Path("/sys/fs/cgroup")) -> int:
+    """Resolve CPU affinity and Linux cgroup quota conservatively."""
+    if affinity_count is None:
+        get_affinity = getattr(os, "sched_getaffinity", None)
+        try:
+            affinity_count = len(get_affinity(0)) if get_affinity else (os.cpu_count() or 1)
+        except OSError:
+            affinity_count = os.cpu_count() or 1
+    available = max(1, int(affinity_count))
+    quota_count = _read_cpu_quota(Path(cgroup_root))
+    return min(available, quota_count) if quota_count is not None else available
+
+
+def resolve_browse_compute_workers(
+    raw_value: str | None,
+    *,
+    available_cpus: int,
+    default: int = 2,
+) -> int:
+    """Parse operator configuration and cap it to CPUs visible to the app."""
+    try:
+        requested = int(raw_value) if raw_value and raw_value.strip() else default
+    except (TypeError, ValueError):
+        logger.warning("Invalid V3_BROWSE_COMPUTE_WORKERS=%r; using default=%s", raw_value, default)
+        requested = default
+    if requested < 0:
+        logger.warning("Negative V3_BROWSE_COMPUTE_WORKERS=%r; using default=%s", raw_value, default)
+        requested = default
+    if requested == 0:
+        return 0
+    cpu_limit = max(1, int(available_cpus))
+    if requested > cpu_limit:
+        logger.info(
+            "Clamping V3_BROWSE_COMPUTE_WORKERS from %s to effective CPU count %s",
+            requested,
+            cpu_limit,
+        )
+    return min(requested, cpu_limit)
 
 
 def file_revision(path):
@@ -90,8 +154,8 @@ class BoundedBrowseCompute:
     consumed and released by the owner before the lease submits another read.
     """
     def __init__(self, workers: int = 1, *, max_pending: int | None = None, timeout: float = 30.0):
-        if workers not in (1, 2):
-            raise ValueError("browse workers must be 1 or 2")
+        if not isinstance(workers, int) or isinstance(workers, bool) or workers < 1:
+            raise ValueError("browse workers must be a positive integer")
         self.workers = workers
         self.max_pending = max_pending if max_pending is not None else workers + 1
         if not 1 <= self.max_pending <= workers + 1:

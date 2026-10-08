@@ -41,7 +41,13 @@ from alchemy_creative_agent_3_0.app.visual_assets import (
     PersistentVisualAssetCatalog,
     PersistentVisualAssetLibraryCatalog,
 )
-from app.browse_compute import BoundedBrowseCompute, BrowseCapacityExceeded, BrowseComputeUnavailable
+from app.browse_compute import (
+    BoundedBrowseCompute,
+    BrowseCapacityExceeded,
+    BrowseComputeUnavailable,
+    effective_cpu_count,
+    resolve_browse_compute_workers,
+)
 from app.browse_reads import run_output_browse
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
@@ -145,11 +151,17 @@ _v3_browse_header_executor = ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="v3-project-header",
 )
-# Off by default until the deployment's CPU/RSS acceptance checks pass.
-try:
-    _V3_BROWSE_COMPUTE_WORKERS = max(0, min(2, int(os.getenv("V3_BROWSE_COMPUTE_WORKERS", "0"))))
-except ValueError:
-    _V3_BROWSE_COMPUTE_WORKERS = 0
+# Defaults to two workers; explicit counts can scale with the container's CPUs.
+_V3_BROWSE_COMPUTE_CPU_LIMIT = effective_cpu_count()
+_V3_BROWSE_COMPUTE_WORKERS = resolve_browse_compute_workers(
+    os.getenv("V3_BROWSE_COMPUTE_WORKERS"),
+    available_cpus=_V3_BROWSE_COMPUTE_CPU_LIMIT,
+)
+logger.info(
+    "V3 browse compute configured: workers=%s effective_cpus=%s",
+    _V3_BROWSE_COMPUTE_WORKERS,
+    _V3_BROWSE_COMPUTE_CPU_LIMIT,
+)
 _v3_browse_compute = (
     BoundedBrowseCompute(_V3_BROWSE_COMPUTE_WORKERS)
     if _V3_BROWSE_COMPUTE_WORKERS else None

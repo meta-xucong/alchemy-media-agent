@@ -60,10 +60,13 @@ all historical Jobs or replace the weak live-record cache with a history cache.
 
 ## Bounds and lifecycle
 
-`V3_BROWSE_COMPUTE_WORKERS=0` is the default. `1` or `2` enables a reusable spawn
-pool. Invalid values disable it; values above two are clamped to two. Keep one
-API process. Set the value back to zero and restart for rollback; no migration
-or cleanup is needed.
+`V3_BROWSE_COMPUTE_WORKERS` defaults to `2`. Set it to `0` to disable the pool,
+or to any positive integer to request that many workers. Startup caps the
+requested count to the CPU affinity/cgroup quota visible to the container, so a
+larger VPS can use a larger explicit value without a source-code limit. Invalid
+or negative values fall back to the default. Keep one API process; multiple API
+processes would each create their own pool. Set the value to `0` and restart for
+rollback; no migration or cleanup is needed.
 
 Only cold Jobs of at least 1 MiB are eligible for process decoding; smaller files
 keep their original owner validation. This conservative byte threshold avoids
@@ -163,7 +166,9 @@ both accumulated CPU independently. Heavy two-worker throughput was roughly
 This is **not** a universal speedup: one worker was not consistently faster,
 ordinary reads remain inline, and some ordinary enabled runs were slower despite
 launching no children. The small samples do not establish production latency
-non-regression. Keep the default off until the actual workload is measured.
+non-regression. The historical recommendation to keep the default off is
+superseded by the current operator-selected default documented above; the
+performance evidence remains unaccepted.
 
 Worker startup and first reads also matter: eligible process warmups took about
 1.11–1.25 s in this run. Initial reconciliation remains on the owner and can
@@ -378,8 +383,9 @@ with one. The observer-control result below prevents attributing that entire
 measured slowdown to the product itself. Process
 decoding reduced owner CPU and heartbeat stalls while increasing sampled
 process-tree memory. Ordinary-path variation is noise despite no workers being
-spawned. Keep the opt-in default off. Earlier performance measurements above
-are historical and must not be presented as a current speedup guarantee.
+spawned. The earlier opt-in-default recommendation is historical and is
+superseded by the current configured default. Earlier performance measurements
+above are historical and must not be presented as a current speedup guarantee.
 
 Process startup and reconciliation remain outside the warm measurements;
 heavy detail worker warmups were approximately 1.12–1.39 seconds. Sampled RSS
@@ -387,10 +393,13 @@ excludes the fixture controller and is not a strict heap maximum. Actual VPS
 memory headroom, real image costs, cold first-open behavior, and concurrent
 generation still need separate deployment-specific qualification.
 
-**Performance acceptance: NOT_ACCEPTED / HOLD.** Leave
-`V3_BROWSE_COMPUTE_WORKERS=0`, keep the PR Draft, and do not recommend merge or
-activation on the strength of this correctness pass. This supersedes the
-historical 5–15% speedup interpretation. No further speculative tuning was
+**Performance acceptance: NOT_ACCEPTED / HOLD.** Correctness and CPU-count
+scaling do not establish a repeatable throughput or latency improvement. Keep
+the PR Draft and do not describe this as a proven performance win. The current
+VPS value of `2` is a user-authorized controlled trial; raising it further
+requires measured CPU, P95 latency, and process-tree RSS with representative
+histories. Roll back by setting the value to `0` and restarting. This supersedes
+the historical 5–15% speedup interpretation. No further speculative tuning was
 made in this correction.
 
 A next design iteration needs a measured end-to-end cost breakdown separating

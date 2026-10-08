@@ -78,7 +78,7 @@ def test_real_outputs_never_leak_across_worker_await(case,tmp_path,monkeypatch):
     finally:pool.shutdown()
 
 
-@pytest.mark.parametrize('workers',[1,2])
+@pytest.mark.parametrize('workers',[1,2,4])
 @pytest.mark.parametrize('surface',['global','detail','home_preview','delivery_preview'])
 def test_actual_output_surface_exact_response_parity(workers,surface,tmp_path):
     from app.browse_compute import BoundedBrowseCompute
