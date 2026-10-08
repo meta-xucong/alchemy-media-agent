@@ -1,0 +1,93 @@
+# V1 / V2 Queue Lease and Async Admission Correction
+
+Date: 2026-10-08
+Reference and target baseline: PR #26 head `7ef7e602ee215f4f5624ba2f7e3c55157709ba25`
+Scope: V1 session image admission and V1/V2 local SQLite generation/queue coordination. This document does not extend the V3 plan or authorize deployment.
+
+## Objective and correction model
+
+The complete task is to close the independently reviewed runtime defects on top of PR #26 while preserving normal API behavior, durable queue identity, retry semantics, and local capacity coordination. The current phase is implementation and deterministic regression coverage; passing it does not establish VPS capacity or production readiness.
+
+The code-level mismatch is that the V1 session-message image path can leak a capacity exception as a server error; V2 queue claims have no attempt-specific ownership token or active-task heartbeat; synchronous SQLite acquisition, enqueue, and cleanup can block async request loops; and V2 direct admission treats future retries and every running row alike, which can starve direct work or all spare slots.
+
+The owning layers are: V1 route error projection; V2 durable queue state and generation admission; and a bounded async persistence adapter at V1/V2 async boundaries. The existing SQLite queue remains the authority for V2 task state and V1/V2 SQLite leases remain local, same-filesystem coordination only. Attempts continue to represent retry budget; they are not claim identities. A random claim token fences each attempt. Task heartbeat remains active through preflight, provider work, and terminal persistence. Worker ownership is rechecked atomically before provider admission and on every state write.
+
+Queue ordering is explicit: due queued work and a fresh worker claim that has not acquired a generation slot take priority over new direct requests. A fresh running task that already holds a queue-associated generation slot consumes that slot but does not block spare slots in a multi-slot configuration. A queued retry with a future `not_before` does not block direct admission. Terminal rows do not block admission. Enqueue, claim, and direct/worker slot acquisition continue to serialize through the same SQLite database and immediate transactions.
+
+SQLite operations called from async routes use a finite, fail-fast offload admission bound. Saturation or local storage contention returns a retryable service-busy response. Cancellation waits for an in-flight local acquisition and releases any lease acquired after cancellation; operation cancellation retains its lease until the local provider coroutine finishes. Cleanup errors are logged and do not turn a successful generation into a retryable generation failure. These guards bound local threads and database work; they do not prove that a remote provider stopped or guarantee remote exactly-once execution.
+
+## Verified source evidence and boundary
+
+| Finding | Source evidence at the base | Evidence boundary |
+|---|---|---|
+| V1 session image exception projection | `src_skeleton/app/main.py` `send_message` directly awaits `handle_message`; `session_service.handle_message` awaits `create_image_job`; the service raises `GenerationCapacityExceeded` before saving a new job or invoking the provider. The route has no capacity mapping. | A source-level route defect; it does not establish a production incident. Chat and unsupported-video branches do not enter image generation. |
+| V2 worker ownership | `custom_media_agent_2_0/app/services/task_queue.py` claims and terminal writes use task ID/status only; `attempts` changes on claim and may decrement on a non-consuming retry. The task snapshot update only matches run ID/status. | A stale attempt can overwrite state after takeover in code; whether a live worker was actually stolen online is not established. |
+| V2 active claim recovery | The worker claim timestamp is not refreshed. Generation-capacity leases have a separate heartbeat; `QueueWorker.process_next_task_once` claims outside its exception boundary. Standalone startup uses a reusable default worker ID and releases all rows for that ID. | A task can be eligible for takeover while its provider lease remains live; a second standalone worker can requeue a peer's task. No online duplicate has been confirmed. |
+| V1/V2 async SQLite calls | V1/V2 async capacity wrappers enter and exit synchronous SQLite context managers. V2 async creative enqueue and lifespan initialization also call synchronous queue methods. V2 queue connections use a 30-second SQLite busy timeout; generation admission uses `BEGIN IMMEDIATE`. | Contention can stall an event loop up to the configured SQLite wait. This is a code-path property, not a measured latency or outage. |
+| V2 direct priority | `_reserve` currently blocks direct requests for every queued/running row, without checking `not_before` or whether an active queue task already owns a slot. | Future retries can block direct work; a running task can block spare slots. No production starvation measurement exists. |
+| V1 in-memory repository retention | `src_skeleton/app/repositories/memory.py` holds sessions, asset metadata, jobs, outputs, idempotency keys, and session events in process-local dictionaries. `reset` is the only broad removal operation. | These maps have no durable full-state reload path in this repository. Unbounded growth is source-confirmed; eviction would lose API history, session/event data, or idempotency evidence. |
+| V2 in-memory repository retention | `custom_media_agent_2_0/app/repositories/memory.py` holds runs, jobs, outputs, upload metadata, feedback, sync runs, and safety decisions in process-local dictionaries. Some queue state, output metadata, and upload content also have separate durable files/SQLite, but they do not reload every repository record. | Unbounded process-local growth is source-confirmed. The partial durable stores are not sufficient authority to safely evict all entries. |
+| History scans | V1 local history deduplicates every matching JSONL record before returning at most its requested history limit; the API also builds visible items before extracting the page. V2 scans and validates the full history JSONL, deduplicates by output ID, then pages. Both routes use bounded off-thread scan admission. | Event-loop blocking is guarded, but per-request disk work remains linear and deduplication memory grows with retained distinct outputs. No history retention/index migration was included. |
+| Upload size check | V1 `/v1/assets/{asset_id}/content` checks declared size and streams chunks with an actual byte counter before joining; raw uploads are capped at `MAX_ASSET_UPLOAD_BYTES`, and JSON/base64 has a corresponding bounded wire limit. | The proposed “read the whole body before the 12 MiB check” does not match the current source. Concurrent bounded uploads can still have a multi-copy peak; no upload-concurrency limit was changed here. |
+| Queue and Lab admission | V2 queue enqueue checks `V2_TASK_QUEUE_MAX_PENDING` (default 100) within an immediate transaction. Direct V2 routes use generation leases instead of an unbounded wait queue. Lab now obtains its shared SQLite generation lease before starting the session background task. | Pending generation is bounded/rejected; V2 terminal task rows and completed Lab session records are retained. They are not silently pruned. |
+| Provider boundary | OpenAI provider code can retry a request within a single local generation slot. | A local task token or SQLite lease cannot prove remote work count, remote cancellation, or paid exactly-once behavior. |
+
+## Frozen source mapping
+
+The source baseline for independent review is the immutable PR #26 commit above, not the mutable `main` checkout. The review manifest is the changed-path list in this commit. Source behavior remains the compatibility baseline for public request/response schemas, V1 chat/video branches, V2 task history and retry budget, and provider invocation after admission. User-authorized deltas are the V1 retryable capacity projection, attempt-specific V2 claim fencing and recovery, queue/direct admission ordering, and bounded async SQLite adapters. No V1 source is imported into V2.
+
+| Change group | Paths | Mapping and allowed delta |
+|---|---|---|
+| V1 route and Lab adapter | `src_skeleton/app/main.py`, `src_skeleton/app/services/alchemy_lab.py`, `src_skeleton/app/services/generation_capacity.py`, `src_skeleton/app/config.py`, `src_skeleton/.env.example` | Thin local adapters plus authorized retryable capacity projection; preserve non-image session behavior and Lab response shape. |
+| V1 evidence | `tests/test_api_smoke.py`, `tests/test_resource_capacity_guards.py` | Regression coverage only; fake image providers and isolated test data. |
+| V2 durable queue and capacity | `custom_media_agent_2_0/app/main.py`, `custom_media_agent_2_0/app/config.py`, `custom_media_agent_2_0/app/services/generation_capacity.py`, `custom_media_agent_2_0/app/services/queue_worker.py`, `custom_media_agent_2_0/app/services/task_queue.py`, `custom_media_agent_2_0/app/workers/task_queue_worker.py`, `custom_media_agent_2_0/deploy/systemd/alchemy-v2.env.example` | Additive persistence fields and authorized claim/admission correction; keep the V2 API schema, V2-only storage, retries, and task history. |
+| V2 evidence | `custom_media_agent_2_0/tests/test_resource_capacity_guards.py`, `custom_media_agent_2_0/tests/test_v2_api.py`, `custom_media_agent_2_0/tests/test_async_capacity_database.py`, `custom_media_agent_2_0/tests/test_task_claim_fencing.py` | Isolated SQLite, deterministic concurrency, and fake providers; the provider-sync API test explicitly selects its local seed source. |
+| Development record | `docs/50_V1_V2_Queue_Lease_And_Async_Admission_Fix.md` | Records source evidence, boundaries, migration/rollback, test results, and outstanding VPS acceptance. |
+
+## Implementation boundaries
+
+- Additive SQLite migration only: claim token/generation columns on `v2_tasks`; association columns on `resource_leases`. Preserve terminal queue rows, retry evidence, and all user history. Do not add TTL/LRU deletion or background queue cleanup.
+- Keep V2 independent of V1 modules and V1 storage. Keep V1 image session flow and Veyra ownership checks intact.
+- Preserve the V2 API response schemas and current retry budget. V1 image-session capacity exhaustion becomes HTTP 429 with `Retry-After: 5`, a stable `generation_capacity` error code, and `retryable=true`; chat/video behavior remains unchanged.
+- Default standalone and inline worker IDs become process-instance identities. Startup no longer releases rows by a reusable worker label. A claim is recoverable only after its heartbeat becomes stale; every takeover receives a new token.
+- Do not rewrite providers, infer remote cancellation, or claim cross-host/global capacity. API and workers must continue to share the configured `V2_TASK_QUEUE_DB_PATH` on the same host/filesystem.
+
+## Configuration
+
+- `RESOURCE_DB_ASYNC_WORKERS`: default `4`, clamped to `1..16`; bounds SQLite work offloaded by each V1 or V2 process. Each process has its own bound; this is not a cross-process or generation-capacity limit.
+- `V2_TASK_QUEUE_SQLITE_BUSY_TIMEOUT_SECONDS`: default `5`, clamped to `0.1..30`; bounds each V2 task-queue SQLite busy wait. It does not change claim/retry semantics.
+- Existing generation settings remain authoritative: V1 `MAX_CONCURRENT_IMAGE_GENERATIONS` and `GENERATION_CAPACITY_LEASE_TTL_SECONDS`; V2 `V2_MAX_CONCURRENT_IMAGE_GENERATIONS`, `V2_GENERATION_CAPACITY_LEASE_TTL_SECONDS`, `V2_TASK_QUEUE_CLAIM_TIMEOUT_SECONDS`, `V2_TASK_QUEUE_MAX_PENDING`, and `V2_TASK_QUEUE_MAX_ATTEMPTS`.
+- API and standalone V2 workers must use the same `V2_TASK_QUEUE_DB_PATH` on the same host/filesystem. A process-local semaphore cannot coordinate them. SQLite-backed admission coordinates processes only when they actually share that local database; it is not a cross-host guarantee.
+
+## Compatibility, migration, and rollback
+
+The schema change is additive and initialized with `CREATE TABLE IF NOT EXISTS` plus column checks; existing task identity, snapshots, result/error data, and terminal rows remain readable. Existing rows with no claim token are not eligible for token-fenced writes by the new worker; recovery waits for the configured stale-claim timeout and then creates a new claim token. Before a rolling deployment, stop or drain old worker processes: old code does not understand claim tokens and can still issue unfenced updates. This PR does not perform a VPS rollout or migration against live data.
+
+Rollback may restore the previous application code while leaving the extra SQLite columns in place. Do not delete or recreate the task database during rollback. If migration/worker rollout is later performed, preserve a database backup and validate queue recovery and shared-path configuration first.
+
+## Acceptance and remaining VPS validation
+
+Tests cover legacy schema migration; live claim heartbeat; forced takeover and stale complete/fail/retry/snapshot/release interleavings; unique worker identity and startup behavior; worker/provider/finalization fencing; due/future/terminal queue priority and spare slots; bounded async offload during SQLite locks; cancellation during acquisition and cleanup; cleanup failure after provider success; retryable overload responses; V1 session 429 before job/provider side effects; and chat/video behavior while image capacity is full.
+
+Use temporary SQLite databases, in-memory repositories, deterministic barriers, and fake providers. Do not call paid providers, inspect or pass secrets, or use live data. Run focused V1/V2 tests and the V2 API suite with a bounded hang diagnosis. Then obtain independent source-fidelity and implementation audits against the frozen final commit.
+
+Still requires a separately authorized VPS acceptance: verify API and standalone workers share the same local SQLite file; exercise rolling/drained worker migration and crash recovery; observe SQLite contention and queue freshness on the 2-core/2-GiB host; verify memory/process/thread bounds under representative traffic; and review provider gateway cancellation/retry semantics. Unit tests do not certify 2-core/2-GiB performance, remote generation count, or production reliability.
+
+### Retention decision still required
+
+This change deliberately does not evict V1/V2 repository records, V2 terminal queue rows, Lab sessions, idempotency evidence, or Claude decision-cache records. V1/V2 repository dictionaries and the Lab session dictionary have no complete authoritative durable reload path; deleting their entries would discard data, while adding a second partial cache authority would change recovery behavior. V2's persisted Claude decision cache is also an unbounded JSON object and has no index or eviction policy. History scans are offloaded and output-limited, but still traverse and deduplicate retained history. A follow-up retention decision must define which user-visible history and decision evidence may expire, how long idempotency must remain authoritative, and whether the canonical store should become disk-backed before adding bounded caches. Until then, these residual memory/disk-growth risks remain open and no retention-related test is claimed.
+
+## Verification record
+
+All runs below use temporary test data and fake providers. The provider-sync smoke test was changed to request `mode=seed`; the earlier default-mode run entered `httpx` response-body reading while fetching the GitHub archive and did not complete, so it was stopped and not counted. The Lab async-session regression uses a context-managed `TestClient`; an unscoped client let its per-request AnyIO portal close and canceled the in-memory background task, leaving the session `running`. The context-managed test passes with the production-like app lifespan kept alive.
+
+| Command (from the stated working directory) | Result |
+|---|---|
+| V1 API smoke (`src_skeleton/.venv` Python): `-m pytest -q tests/test_api_smoke.py --basetemp <temp> -p no:cacheprovider` | 85 passed, 4 deprecation warnings. |
+| V2 API (`custom_media_agent_2_0/.venv` Python): `-m pytest -q tests/test_v2_api.py --basetemp <temp> -p no:cacheprovider` | 176 passed, 1 dependency deprecation warning; provider sync used local seed mode. |
+| V1 focused (`src_skeleton/.venv` Python): `-m pytest -q tests/test_resource_capacity_guards.py --basetemp <temp> -p no:cacheprovider` | 21 passed, 4 deprecation warnings. |
+| V2 focused (`custom_media_agent_2_0/.venv` Python): `-m pytest -q tests/test_resource_capacity_guards.py tests/test_task_claim_fencing.py tests/test_async_capacity_database.py --basetemp <temp> -p no:cacheprovider` | 37 passed. |
+
+The initial V2 API-suite attempt used the default remote GitHub sync mode and did not complete; its 60-second faulthandler stack was in `httpx` response-body reading for `test_provider_sync_publishes_seed_cases`. That test now explicitly uses `mode=seed`, and the complete suite passes offline. The only non-passing test invocation is this abandoned network-dependent attempt; it is not counted above.
+
+Independent source-fidelity and implementation reviews, final commit, push, and Draft PR checks are recorded after their gates complete. No paid provider, live data, secret, VPS, merge, or deployment was used. VPS performance and recovery remain unverified.

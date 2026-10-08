@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import sqlite3
 import traceback
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 
 from app.agents import CreativeManagerRuntime
 from app.config import settings
@@ -10,7 +13,7 @@ from app.repositories import repository
 from app.repositories.memory import utc_now
 from app.schemas import CreateCreativeRunRequest, CreativeRun, ImageJob, ImagePromptPlan
 from app.services import task_queue
-from app.services.generation_capacity import GenerationCapacityExceeded
+from app.services.generation_capacity import GenerationCapacityExceeded, GenerationCapacityStorageBusy
 from app.services.ids import new_id
 from app.services.prompting import summarize_intent
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
@@ -21,17 +24,36 @@ _UPSTREAM_BALANCE_WAIT_SECONDS = 300.0
 _PROVIDER_RATE_LIMIT_WAIT_SECONDS = 180.0
 _GENERIC_RETRYABLE_WAIT_SECONDS = 120.0
 _MAX_WAIT_SECONDS = 900.0
+logger = logging.getLogger(__name__)
+
+
+def _worker_instance_id() -> str:
+    return f"v2-inline-{uuid.uuid4().hex}"
 
 
 @dataclass
 class QueueWorker:
     runtime: CreativeManagerRuntime
-    worker_id: str = "v2-inline-worker"
+    worker_id: str = field(default_factory=_worker_instance_id)
 
     async def run_forever(self, stop_event: asyncio.Event) -> None:
-        task_queue.initialize_task_queue()
         while not stop_event.is_set():
-            processed = await asyncio.to_thread(process_next_task_once, self.runtime, self.worker_id)
+            try:
+                await task_queue.initialize_task_queue_async()
+                break
+            except task_queue.QueueStorageBusy:
+                await asyncio.sleep(max(0.1, settings.task_queue_poll_interval_seconds))
+        while not stop_event.is_set():
+            try:
+                processed = await asyncio.to_thread(process_next_task_once, self.runtime, self.worker_id)
+            except task_queue.QueueStorageBusy:
+                processed = False
+                logger.warning("V2 task queue database is busy; worker will retry")
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    raise
+                processed = False
+                logger.warning("V2 task queue database is locked; worker will retry")
             if not processed:
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=settings.task_queue_poll_interval_seconds)
@@ -39,56 +61,109 @@ class QueueWorker:
                     continue
 
 
-def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str = "v2-worker") -> bool:
-    record = task_queue.claim_next_task(worker_id)
+def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | None = None) -> bool:
+    worker_id = worker_id or _worker_instance_id()
+    try:
+        record = task_queue.claim_next_task(worker_id)
+    except sqlite3.OperationalError as exc:
+        if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+            logger.warning("V2 task claim skipped because the queue database is locked")
+            return False
+        raise
     if record is None:
         return False
-    try:
-        if record.kind not in {"creative_run", "revision_run"}:
-            raise ValueError(f"Unsupported task kind: {record.kind}")
-        request = CreateCreativeRunRequest.model_validate(record.payload)
-        run = asyncio.run(_preflight_veyra_balance(request, record.run_id))
-        if run is None:
-            try:
-                run = asyncio.run(
-                    task_queue.run_with_generation_capacity(
-                        lambda: runtime.complete_queued_run(request, record.run_id),
-                        request_kind="worker",
-                    )
-                )
-            except GenerationCapacityExceeded:
-                snapshot = task_queue.get_run_snapshot(record.run_id)
-                if snapshot is None:
-                    task_queue.fail_task(record.task_id, "Generation capacity is busy; queued run snapshot was unavailable.")
-                else:
-                    task_queue.retry_task(
-                        record.task_id,
-                        "Image generation is busy. The task remains queued and will retry shortly.",
-                        snapshot,
-                        retry_delay_seconds=5,
-                        consume_attempt=False,
-                    )
+    with task_queue.claim_heartbeat(record) as claim_lost:
+        try:
+            if record.kind not in {"creative_run", "revision_run"}:
+                raise ValueError(f"Unsupported task kind: {record.kind}")
+            request = CreateCreativeRunRequest.model_validate(record.payload)
+            run = asyncio.run(_preflight_veyra_balance(request, record.run_id))
+            if not task_queue.task_claim_is_current(record):
+                logger.info("V2 task claim was superseded during preflight; provider work was skipped")
                 return True
-        retry_directive = _queued_run_retry_directive(run)
-        if retry_directive:
-            exhausted = retry_directive.consume_attempt and record.attempts >= record.max_attempts
-            snapshot = (
-                _retry_exhausted_run_snapshot(run, retry_directive.message)
-                if exhausted
-                else _waiting_run_snapshot(run, retry_directive.message)
-            )
-            message = snapshot.next_actions[0] if snapshot.next_actions else retry_directive.message
-            task_queue.retry_task(
-                record.task_id,
-                message,
-                snapshot,
-                retry_delay_seconds=retry_directive.retry_delay_seconds,
-                consume_attempt=retry_directive.consume_attempt,
-            )
-            return True
-        task_queue.complete_task(record.task_id, run)
-    except Exception as exc:
-        task_queue.fail_task(record.task_id, _format_error(exc))
+            if run is None:
+                try:
+                    run = asyncio.run(
+                        task_queue.run_with_generation_capacity(
+                            lambda: runtime.complete_queued_run(request, record.run_id),
+                            request_kind="worker",
+                            claim=record,
+                        )
+                    )
+                except GenerationCapacityExceeded:
+                    snapshot = task_queue.get_run_snapshot(record.run_id)
+                    if snapshot is None:
+                        task_queue.fail_task(
+                            record,
+                            "Generation capacity is busy; queued run snapshot was unavailable.",
+                        )
+                    else:
+                        task_queue.retry_task(
+                            record,
+                            "Image generation is busy. The task remains queued and will retry shortly.",
+                            snapshot,
+                            retry_delay_seconds=5,
+                            consume_attempt=False,
+                        )
+                    return True
+                except GenerationCapacityStorageBusy:
+                    snapshot = task_queue.get_run_snapshot(record.run_id)
+                    if snapshot is not None:
+                        task_queue.retry_task(
+                            record,
+                            "Local image generation storage is busy; the task will retry shortly.",
+                            snapshot,
+                            retry_delay_seconds=5,
+                            consume_attempt=False,
+                        )
+                    return True
+            if not task_queue.task_claim_is_current(record):
+                logger.info("V2 task claim was superseded during provider work; stale result was not persisted")
+                return True
+            retry_directive = _queued_run_retry_directive(run)
+            if retry_directive:
+                exhausted = retry_directive.consume_attempt and record.attempts >= record.max_attempts
+                snapshot = (
+                    _retry_exhausted_run_snapshot(run, retry_directive.message)
+                    if exhausted
+                    else _waiting_run_snapshot(run, retry_directive.message)
+                )
+                message = snapshot.next_actions[0] if snapshot.next_actions else retry_directive.message
+                task_queue.retry_task(
+                    record,
+                    message,
+                    snapshot,
+                    retry_delay_seconds=retry_directive.retry_delay_seconds,
+                    consume_attempt=retry_directive.consume_attempt,
+                )
+                return True
+            try:
+                task_queue.complete_task(record, run)
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                    logger.exception("V2 provider result was ready but task finalization hit a SQLite lock")
+                    return True
+                raise
+        except GenerationCapacityStorageBusy:
+            snapshot = task_queue.get_run_snapshot(record.run_id)
+            if snapshot is not None:
+                task_queue.retry_task(
+                    record,
+                    "Local image generation storage is busy; the task will retry shortly.",
+                    snapshot,
+                    retry_delay_seconds=5,
+                    consume_attempt=False,
+                )
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                logger.warning("V2 task processing deferred because the queue database is locked")
+                return True
+            raise
+        except Exception as exc:
+            if claim_lost.is_set() or not task_queue.task_claim_is_current(record):
+                logger.info("V2 task claim was superseded; stale failure was not persisted")
+                return True
+            task_queue.fail_task(record, _format_error(exc))
     return True
 
 

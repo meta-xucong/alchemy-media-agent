@@ -322,6 +322,7 @@ class Settings(BaseModel):
     runtime_env_path: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_AGENT_RUNTIME_ENV_FILE", ".env")))
     media_storage_root: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_STORAGE_ROOT", ".media_storage")))
     max_asset_upload_bytes: int = _int_env("MAX_ASSET_UPLOAD_BYTES", 12 * 1024 * 1024)
+    resource_db_async_workers: int = Field(default_factory=lambda: _int_env("RESOURCE_DB_ASYNC_WORKERS", 4), ge=1, le=16)
     history_scan_max_concurrent: int = Field(default_factory=lambda: _int_env("HISTORY_SCAN_MAX_CONCURRENT", 2), ge=1, le=16)
     max_concurrent_image_generations: int = Field(default_factory=lambda: _int_env("MAX_CONCURRENT_IMAGE_GENERATIONS", 1), ge=1, le=32)
     generation_capacity_lease_ttl_seconds: float = Field(

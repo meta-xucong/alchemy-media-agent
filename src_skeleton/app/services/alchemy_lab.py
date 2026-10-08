@@ -37,7 +37,12 @@ from app.services.alchemy_lab_reference_policy import (
 from app.services.alchemy_lab_reference_prompt import append_lab_reference_prompt
 from app.services.alchemy_lab_uploads_models import LabReferenceAssetInput
 from app.services.image_service import run_submitted_image_job, submit_image_job
-from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
+from app.services.generation_capacity import (
+    GenerationCapacityExceeded,
+    GenerationCapacityStorageBusy,
+    acquire_generation_capacity_async,
+    async_generation_capacity,
+)
 from app.services.utils import make_id, now_iso
 from app.storage import media_store
 
@@ -58,6 +63,10 @@ RARE_STYLE_FEATURE_ID = "rare-style-explorer"
 
 class LabSessionCapacityExceeded(RuntimeError):
     """Raised when all same-host Lab session slots are currently occupied."""
+
+
+class LabSessionStorageBusy(RuntimeError):
+    """Raised when bounded local SQLite admission is currently saturated."""
 
 STYLE_FAMILIES: dict[str, set[str]] = {
     "film": {"电影、电视与影像类型"},
@@ -455,19 +464,22 @@ async def create_exploration_session(request: ExplorationRequest, *, veyra_user_
     session = await prepare_exploration_session(request, veyra_user_id=veyra_user_id)
     try:
         if _should_run_inline(session.request):
-            with generation_capacity(
+            async with async_generation_capacity(
                 media_store.root,
                 limit=MAX_CONCURRENT_GENERATIONS,
                 namespace="lab-session",
                 lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
             ):
                 return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
-        _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
+        await _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
     except GenerationCapacityExceeded:
         # The session has not been returned to the caller, so discard only this
         # unpublished in-memory placeholder; existing sessions are untouched.
         lab_store.delete_unpublished(session.id)
         raise LabSessionCapacityExceeded("Alchemy Lab is busy. Please retry shortly.")
+    except GenerationCapacityStorageBusy as exc:
+        lab_store.delete_unpublished(session.id)
+        raise LabSessionStorageBusy("Alchemy Lab local storage is busy. Please retry shortly.") from exc
     return session
 
 
@@ -813,22 +825,29 @@ async def _ensure_session_prompts_enhanced(session: ExplorationSession) -> None:
     lab_store.save(session)
 
 
-def _schedule_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> None:
-    lease = generation_capacity(
+async def _schedule_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> None:
+    lease = await acquire_generation_capacity_async(
         media_store.root,
         limit=MAX_CONCURRENT_GENERATIONS,
         namespace="lab-session",
         lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
     )
-    lease.__enter__()
     try:
-        task = asyncio.create_task(_run_exploration_session_guarded(session_id, veyra_user_id=veyra_user_id))
+        task = asyncio.create_task(
+            _run_exploration_session_with_lease(lease, session_id, veyra_user_id=veyra_user_id)
+        )
     except BaseException:
-        lease.__exit__(None, None, None)
+        await lease.release_async()
         raise
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    task.add_done_callback(lambda _: lease.__exit__(None, None, None))
+
+
+async def _run_exploration_session_with_lease(lease, session_id: str, *, veyra_user_id: int | None = None) -> None:
+    try:
+        await _run_exploration_session_guarded(session_id, veyra_user_id=veyra_user_id)
+    finally:
+        await lease.release_async()
 
 
 async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: int | None = None) -> None:

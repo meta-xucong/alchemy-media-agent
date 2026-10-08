@@ -355,6 +355,7 @@ def test_v2_cancellation_keeps_slot_until_provider_thread_finishes(tmp_path: Pat
         assert await asyncio.to_thread(started.wait, 5)
         task.cancel()
         await asyncio.sleep(0.05)
+        task.cancel()
         with pytest.raises(GenerationCapacityExceeded):
             with generation_capacity(database_path, lease_ttl_seconds=1):
                 pass

@@ -10,12 +10,14 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
 from app.services import generation_capacity as capacity_module
 from app.services.generation_capacity import run_with_generation_capacity
 from app.services import history_scan_capacity as history_scan_module
+from app.main import app as v1_app
 from app.main import _read_limited_request_body, _require_output_visible, delete_image_history_item, favorite_image_history_item
 from app.config import settings
 import app.services.alchemy_lab as alchemy_lab
@@ -226,6 +228,7 @@ def test_v1_cancellation_keeps_slot_until_provider_thread_finishes(tmp_path: Pat
         assert await asyncio.to_thread(started.wait, 5)
         task.cancel()
         await asyncio.sleep(0.05)
+        task.cancel()
         with pytest.raises(GenerationCapacityExceeded):
             with generation_capacity(tmp_path, lease_ttl_seconds=1):
                 pass
@@ -236,6 +239,256 @@ def test_v1_cancellation_keeps_slot_until_provider_thread_finishes(tmp_path: Pat
             pass
 
     asyncio.run(exercise())
+
+
+def test_v1_async_admission_keeps_loop_responsive_during_sqlite_write_lock(tmp_path: Path, monkeypatch) -> None:
+    with generation_capacity(tmp_path):
+        pass
+    database_path = tmp_path / ".v1-resource-admission.sqlite3"
+    lock_connection = sqlite3.connect(database_path, timeout=5, isolation_level=None, check_same_thread=False)
+    lock_connection.execute("BEGIN IMMEDIATE")
+    reserve_started = threading.Event()
+    original_reserve = capacity_module._reserve
+
+    def observed_reserve(*args, **kwargs):
+        reserve_started.set()
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(capacity_module, "_reserve", observed_reserve)
+    calls = 0
+
+    async def provider() -> str:
+        nonlocal calls
+        calls += 1
+        return "fake-complete"
+
+    async def exercise() -> None:
+        admission = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(reserve_started.wait, 2)
+        loop_ticked = asyncio.Event()
+        asyncio.get_running_loop().call_soon(loop_ticked.set)
+        await asyncio.wait_for(loop_ticked.wait(), timeout=1)
+        lock_connection.rollback()
+        assert await admission == "fake-complete"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        lock_connection.close()
+    assert calls == 1
+
+
+def test_v1_cancellation_during_acquire_releases_late_lease(tmp_path: Path, monkeypatch) -> None:
+    acquire_started = threading.Event()
+    continue_acquire = threading.Event()
+    original_reserve = capacity_module._reserve
+
+    def held_reserve(*args, **kwargs):
+        acquire_started.set()
+        assert continue_acquire.wait(3)
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(capacity_module, "_reserve", held_reserve)
+    provider_calls = 0
+
+    async def provider() -> str:
+        nonlocal provider_calls
+        provider_calls += 1
+        return "unexpected"
+
+    async def exercise() -> None:
+        task = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(acquire_started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        continue_acquire.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert provider_calls == 0
+    with capacity_module._database(tmp_path / ".v1-resource-admission.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM resource_leases").fetchone()[0] == 0
+
+
+def test_v1_cancellation_during_cleanup_waits_for_release(tmp_path: Path, monkeypatch) -> None:
+    cleanup_started = threading.Event()
+    continue_cleanup = threading.Event()
+    original_release = capacity_module.GenerationLease._release_sync
+    provider_calls = 0
+
+    def held_release(lease):
+        cleanup_started.set()
+        assert continue_cleanup.wait(3)
+        return original_release(lease)
+
+    monkeypatch.setattr(capacity_module.GenerationLease, "_release_sync", held_release)
+
+    async def provider() -> str:
+        nonlocal provider_calls
+        provider_calls += 1
+        return "created-once"
+
+    async def exercise() -> None:
+        task = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(cleanup_started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        continue_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert provider_calls == 1
+    with capacity_module._database(tmp_path / ".v1-resource-admission.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM resource_leases").fetchone()[0] == 0
+
+
+def test_v1_successful_provider_is_not_retried_when_lease_cleanup_fails(tmp_path: Path, monkeypatch) -> None:
+    provider_calls = 0
+
+    def failed_cleanup(_lease):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(capacity_module.GenerationLease, "_release_sync", failed_cleanup)
+
+    async def provider() -> str:
+        nonlocal provider_calls
+        provider_calls += 1
+        return "created-once"
+
+    result = asyncio.run(run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10))
+    assert result == "created-once"
+    assert provider_calls == 1
+
+
+def test_v1_cleanup_waits_for_bounded_database_permit_without_blocking_loop(tmp_path: Path, monkeypatch) -> None:
+    class Gate:
+        def __init__(self):
+            self.semaphore = threading.BoundedSemaphore(1)
+            self.blocked = False
+            self.waiting = threading.Event()
+
+        def acquire(self, blocking=False):
+            if self.blocked:
+                self.waiting.set()
+                return False
+            return self.semaphore.acquire(blocking=blocking)
+
+        def release(self):
+            self.semaphore.release()
+
+    gate = Gate()
+    monkeypatch.setattr(capacity_module, "_ASYNC_DB_SLOTS", gate)
+
+    async def provider() -> str:
+        gate.blocked = True
+        return "created-once"
+
+    async def exercise() -> str:
+        task = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(gate.waiting.wait, 2)
+        gate.blocked = False
+        return await task
+
+    assert asyncio.run(exercise()) == "created-once"
+
+
+def test_v1_async_sqlite_offload_is_bounded_and_permit_survives_cancellation(monkeypatch) -> None:
+    monkeypatch.setattr(capacity_module, "_ASYNC_DB_SLOTS", threading.BoundedSemaphore(1))
+    worker_started = threading.Event()
+    finish_worker = threading.Event()
+
+    def blocking_operation() -> str:
+        worker_started.set()
+        assert finish_worker.wait(3)
+        return "done"
+
+    async def exercise() -> None:
+        first = asyncio.create_task(capacity_module.run_sqlite_async(blocking_operation))
+        assert await asyncio.to_thread(worker_started.wait, 2)
+        with pytest.raises(capacity_module.GenerationCapacityStorageBusy):
+            await capacity_module.run_sqlite_async(lambda: "should-not-run")
+        first.cancel()
+        await asyncio.sleep(0)
+        with pytest.raises(capacity_module.GenerationCapacityStorageBusy):
+            await capacity_module.run_sqlite_async(lambda: "permit-was-released-too-early")
+        finish_worker.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert await capacity_module.run_sqlite_async(lambda: "available") == "available"
+
+    asyncio.run(exercise())
+
+
+def test_v1_session_image_capacity_is_retryable_and_does_not_block_chat_or_video(tmp_path: Path, monkeypatch) -> None:
+    repository.reset()
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    monkeypatch.setattr(image_service.settings, "llm_prompt_planning_enabled", False)
+    provider_calls = 0
+
+    async def unexpected_provider_call(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("capacity rejection must happen before provider execution")
+
+    monkeypatch.setattr(image_service, "_run_image_request", unexpected_provider_call)
+    client = TestClient(v1_app, raise_server_exceptions=False)
+    created = client.post("/v1/sessions", json={"project_id": "resource-guard", "title": "Capacity"})
+    assert created.status_code == 200
+    session_id = created.json()["id"]
+    before_jobs = repository.list_jobs(job_type="image", session_id=session_id)
+
+    with generation_capacity(tmp_path, limit=1):
+        image = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"target": "image", "text": "Make a simple image", "preferences": {"count": 1}},
+        )
+        assert image.status_code == 429
+        assert image.headers["retry-after"] == "5"
+        assert image.json()["detail"]["code"] == "generation_capacity"
+        assert image.json()["detail"]["retryable"] is True
+        assert repository.list_jobs(job_type="image", session_id=session_id) == before_jobs
+        assert provider_calls == 0
+
+        chat = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"target": "auto", "text": "Hello", "preferences": {}},
+        )
+        video = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"target": "video", "text": "Create a video", "preferences": {}},
+        )
+        assert chat.status_code == 200 and chat.json()["job_ids"] == []
+        assert video.status_code == 200 and video.json()["job_ids"] == []
+        assert provider_calls == 0
+
+    slots = threading.BoundedSemaphore(1)
+    assert slots.acquire(blocking=False)
+    monkeypatch.setattr(capacity_module, "_ASYNC_DB_SLOTS", slots)
+    busy = client.post(
+        f"/v1/sessions/{session_id}/messages",
+        json={"target": "image", "text": "Make a simple image", "preferences": {"count": 1}},
+    )
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert busy.json()["detail"]["code"] == "local_database_busy"
+    assert busy.json()["detail"]["retryable"] is True
+    assert repository.list_jobs(job_type="image", session_id=session_id) == before_jobs
+    assert provider_calls == 0
+    slots.release()
+
+    repository.reset()
 
 
 def test_v1_provider_timeout_does_not_prove_remote_work_stopped(tmp_path: Path) -> None:
@@ -312,10 +565,10 @@ def test_lab_limits_active_sessions_and_releases_slot_on_completion(tmp_path: Pa
     monkeypatch.setattr(alchemy_lab, "_run_exploration_session_guarded", hold_session)
 
     async def exercise() -> None:
-        alchemy_lab._schedule_exploration_session("lab_active_1")
+        await alchemy_lab._schedule_exploration_session("lab_active_1")
         await asyncio.sleep(0)
         with pytest.raises(GenerationCapacityExceeded):
-            alchemy_lab._schedule_exploration_session("lab_active_2")
+            await alchemy_lab._schedule_exploration_session("lab_active_2")
         active = list(alchemy_lab._background_tasks)
         release.set()
         await asyncio.gather(*active)

@@ -1,31 +1,42 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import sqlite3
-from dataclasses import dataclass
+import threading
+import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
-from typing import Iterator
+from typing import Any, Iterator
 
 from app.config import settings
 from app.repositories.memory import utc_now
 from app.schemas import CreativeRun
-from app.services.ids import new_id
 from app.services.generation_capacity import (
     GenerationCapacityExceeded,
+    GenerationCapacityStorageBusy,
     generation_capacity as _generation_capacity,
+    run_sqlite_async,
     run_with_generation_capacity as _run_with_generation_capacity,
     terminalize_exhausted_stale_tasks,
 )
+from app.services.ids import new_id
 
 
+logger = logging.getLogger(__name__)
 TaskStatus = str
 
 
 class QueueCapacityExceeded(RuntimeError):
     """Raised when the durable V2 queue has no pending capacity."""
+
+
+class QueueStorageBusy(RuntimeError):
+    """Raised when bounded queue persistence is saturated or locked."""
 
 
 @dataclass(frozen=True)
@@ -36,6 +47,11 @@ class QueuedTask:
     payload: dict[str, Any]
     attempts: int
     max_attempts: int
+    worker_id: str
+    claim_token: str
+
+
+_CURRENT_CLAIM: ContextVar[QueuedTask | None] = ContextVar("v2_current_task_claim", default=None)
 
 
 def initialize_task_queue() -> None:
@@ -58,16 +74,27 @@ def initialize_task_queue() -> None:
                 locked_at TEXT,
                 not_before TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                claim_token TEXT,
+                claim_generation INTEGER NOT NULL DEFAULT 0
             )
             """
         )
         _ensure_column(conn, "v2_tasks", "not_before", "TEXT")
+        _ensure_column(conn, "v2_tasks", "claim_token", "TEXT")
+        _ensure_column(conn, "v2_tasks", "claim_generation", "INTEGER NOT NULL DEFAULT 0")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_tasks_run_id ON v2_tasks(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_tasks_status_created ON v2_tasks(status, created_at)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_v2_tasks_status_not_before_created ON v2_tasks(status, not_before, created_at)"
         )
+
+
+async def initialize_task_queue_async() -> None:
+    try:
+        await run_sqlite_async(initialize_task_queue)
+    except GenerationCapacityStorageBusy as exc:
+        raise QueueStorageBusy(str(exc)) from exc
 
 
 def enqueue_creative_task(*, kind: str, request_payload: dict[str, Any], queued_run: CreativeRun) -> str:
@@ -103,9 +130,18 @@ def enqueue_creative_task(*, kind: str, request_payload: dict[str, Any], queued_
     return task_id
 
 
+async def enqueue_creative_task_async(*, kind: str, request_payload: dict[str, Any], queued_run: CreativeRun) -> str:
+    try:
+        return await run_sqlite_async(
+            lambda: enqueue_creative_task(kind=kind, request_payload=request_payload, queued_run=queued_run)
+        )
+    except GenerationCapacityStorageBusy as exc:
+        raise QueueStorageBusy(str(exc)) from exc
+
+
 @contextmanager
-def generation_capacity(*, request_kind: str = "direct") -> Iterator[None]:
-    """Hold a cross-process slot shared by API and queue-worker processes."""
+def generation_capacity(*, request_kind: str = "direct", claim: QueuedTask | None = None) -> Iterator[None]:
+    """Hold a same-host slot coordinated with queue work in this database."""
 
     with _generation_capacity(
         Path(settings.task_queue_db_path),
@@ -113,12 +149,20 @@ def generation_capacity(*, request_kind: str = "direct") -> Iterator[None]:
         request_kind=request_kind,
         lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
         queue_recovery_timeout_seconds=settings.task_queue_claim_timeout_seconds,
+        task_id=claim.task_id if claim else None,
+        claim_token=claim.claim_token if claim else None,
+        worker_id=claim.worker_id if claim else None,
     ):
         yield
 
 
-async def run_with_generation_capacity(operation, *, request_kind: str = "direct"):
-    """Run provider work under the shared lease, retaining it through cancellation."""
+async def run_with_generation_capacity(
+    operation,
+    *,
+    request_kind: str = "direct",
+    claim: QueuedTask | None = None,
+):
+    """Run provider work under the local lease with task ownership rechecked."""
 
     return await _run_with_generation_capacity(
         operation,
@@ -127,6 +171,10 @@ async def run_with_generation_capacity(operation, *, request_kind: str = "direct
         request_kind=request_kind,
         lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
         queue_recovery_timeout_seconds=settings.task_queue_claim_timeout_seconds,
+        task_id=claim.task_id if claim else None,
+        claim_token=claim.claim_token if claim else None,
+        worker_id=claim.worker_id if claim else None,
+        before_operation=(lambda: task_claim_is_current(claim)) if request_kind == "worker" and claim else None,
     )
 
 
@@ -135,6 +183,7 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
     now = utc_now()
     now_text = now.isoformat()
     stale_before = (now - timedelta(seconds=settings.task_queue_claim_timeout_seconds)).isoformat()
+    new_claim_token = uuid.uuid4().hex
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         terminalize_exhausted_stale_tasks(conn, stale_before=stale_before, now_text=now_text)
@@ -142,14 +191,9 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
             """
             SELECT * FROM v2_tasks
             WHERE
-                (
-                    status = 'queued'
-                    AND (not_before IS NULL OR not_before <= ?)
-                )
+                (status = 'queued' AND (not_before IS NULL OR not_before <= ?))
                 OR (
-                    status = 'running'
-                    AND locked_at IS NOT NULL
-                    AND locked_at < ?
+                    status = 'running' AND locked_at IS NOT NULL AND locked_at < ?
                     AND attempts < max_attempts
                 )
             ORDER BY created_at ASC
@@ -160,15 +204,32 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
         if row is None:
             conn.commit()
             return None
+
         attempts = int(row["attempts"]) + 1
-        conn.execute(
+        old_status = str(row["status"])
+        cursor = conn.execute(
             """
             UPDATE v2_tasks
-            SET status = 'running', attempts = ?, locked_by = ?, locked_at = ?, not_before = NULL, updated_at = ?
-            WHERE task_id = ?
+            SET status = 'running', attempts = ?, locked_by = ?, locked_at = ?, not_before = NULL,
+                claim_token = ?, claim_generation = claim_generation + 1, updated_at = ?
+            WHERE task_id = ? AND status = ? AND COALESCE(locked_at, '') = ?
+              AND COALESCE(claim_token, '') = ?
             """,
-            (attempts, worker_id, now_text, now_text, row["task_id"]),
+            (
+                attempts,
+                worker_id,
+                now_text,
+                new_claim_token,
+                now_text,
+                row["task_id"],
+                old_status,
+                str(row["locked_at"] or ""),
+                str(row["claim_token"] or ""),
+            ),
         )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return None
         conn.commit()
     return QueuedTask(
         task_id=str(row["task_id"]),
@@ -177,138 +238,235 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
         payload=_json_loads(row["payload_json"]),
         attempts=attempts,
         max_attempts=int(row["max_attempts"]),
+        worker_id=worker_id,
+        claim_token=new_claim_token,
     )
 
 
-def release_worker_running_tasks(worker_id: str) -> int:
-    initialize_task_queue()
+def refresh_task_claim(claim: QueuedTask) -> bool:
+    now = utc_now().isoformat()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE v2_tasks SET locked_at = ?, updated_at = ?
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (now, now, claim.task_id, claim.worker_id, claim.claim_token),
+        )
+        return cursor.rowcount == 1
+
+
+def task_claim_is_current(claim: QueuedTask | None) -> bool:
+    if claim is None:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM v2_tasks
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (claim.task_id, claim.worker_id, claim.claim_token),
+        ).fetchone()
+    return row is not None
+
+
+def claim_heartbeat_interval_seconds() -> float:
+    return max(0.01, min(30.0, float(settings.task_queue_claim_timeout_seconds) / 3.0))
+
+
+@contextmanager
+def claim_heartbeat(claim: QueuedTask, *, interval_seconds: float | None = None) -> Iterator[threading.Event]:
+    """Renew a claim through preflight, provider work, and terminal DB writes."""
+
+    stop = threading.Event()
+    lost = threading.Event()
+    interval = max(0.01, float(interval_seconds or claim_heartbeat_interval_seconds()))
+
+    def heartbeat_loop() -> None:
+        while not stop.wait(interval):
+            try:
+                if not refresh_task_claim(claim):
+                    lost.set()
+                    return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    logger.exception("V2 task claim heartbeat failed")
+                continue
+            except Exception:
+                logger.exception("V2 task claim heartbeat failed")
+                continue
+
+    heartbeat = threading.Thread(
+        target=heartbeat_loop,
+        name=f"v2-task-claim-{claim.task_id[-8:]}",
+        daemon=True,
+    )
+    heartbeat.start()
+    token: Token[QueuedTask | None] = _CURRENT_CLAIM.set(claim)
+    try:
+        yield lost
+    finally:
+        _CURRENT_CLAIM.reset(token)
+        stop.set()
+        heartbeat.join()
+
+
+def release_task(claim: QueuedTask) -> bool:
+    now = utc_now().isoformat()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            UPDATE v2_tasks
+            SET status = 'queued', locked_by = NULL, locked_at = NULL, claim_token = NULL,
+                not_before = NULL, updated_at = ?
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (now, claim.task_id, claim.worker_id, claim.claim_token),
+        )
+        conn.commit()
+    return cursor.rowcount == 1
+
+
+def complete_task(claim: QueuedTask, run: CreativeRun) -> bool:
+    now = utc_now().isoformat()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            UPDATE v2_tasks
+            SET status = 'completed', result_json = ?, error_json = NULL,
+                locked_by = NULL, locked_at = NULL, claim_token = NULL, not_before = NULL, updated_at = ?
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (_json_dumps(run.model_dump(mode="json")), now, claim.task_id, claim.worker_id, claim.claim_token),
+        )
+        conn.commit()
+    return cursor.rowcount == 1
+
+
+def update_task_snapshot(run: CreativeRun, *, claim: QueuedTask | None = None) -> bool:
+    active_claim = claim or _CURRENT_CLAIM.get()
+    if active_claim is None:
+        return False
     now = utc_now().isoformat()
     with _connect() as conn:
         cursor = conn.execute(
             """
             UPDATE v2_tasks
-            SET status = 'queued', locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
-            WHERE status = 'running' AND locked_by = ?
-            """,
-            (now, worker_id),
-        )
-        return int(cursor.rowcount or 0)
-
-
-def complete_task(task_id: str, run: CreativeRun) -> None:
-    now = utc_now().isoformat()
-    with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE v2_tasks
-            SET status = 'completed', result_json = ?, error_json = NULL,
-                locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
-            WHERE task_id = ?
-            """,
-            (_json_dumps(run.model_dump(mode="json")), now, task_id),
-        )
-
-
-def update_task_snapshot(run: CreativeRun) -> None:
-    initialize_task_queue()
-    now = utc_now().isoformat()
-    with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE v2_tasks
             SET queued_run_json = ?, updated_at = ?
-            WHERE run_id = ? AND status IN ('queued', 'running')
+            WHERE task_id = ? AND run_id = ? AND status = 'running'
+              AND locked_by = ? AND claim_token = ?
             """,
-            (_json_dumps(run.model_dump(mode="json")), now, run.run_id),
+            (
+                _json_dumps(run.model_dump(mode="json")),
+                now,
+                active_claim.task_id,
+                run.run_id,
+                active_claim.worker_id,
+                active_claim.claim_token,
+            ),
         )
+        return conn.total_changes == 1
 
 
-def fail_task(task_id: str, error: str, run: CreativeRun | None = None) -> None:
+def fail_task(claim: QueuedTask, error: str, run: CreativeRun | None = None) -> bool:
     now = utc_now().isoformat()
+    run_json = _json_dumps(run.model_dump(mode="json")) if run else None
     with _connect() as conn:
-        row = conn.execute("SELECT attempts, max_attempts FROM v2_tasks WHERE task_id = ?", (task_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT attempts, max_attempts FROM v2_tasks
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (claim.task_id, claim.worker_id, claim.claim_token),
+        ).fetchone()
         if row is None:
-            return
+            conn.commit()
+            return False
         can_retry = int(row["attempts"]) < int(row["max_attempts"])
         status = "queued" if can_retry else "failed"
-        run_json = _json_dumps(run.model_dump(mode="json")) if run else None
-        if can_retry:
-            conn.execute(
-                """
-                UPDATE v2_tasks
-                SET status = ?, queued_run_json = COALESCE(?, queued_run_json), result_json = NULL, error_json = ?,
-                    locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
-                WHERE task_id = ?
-                """,
-                (
-                    status,
-                    run_json,
-                    _json_dumps({"message": error, "retryable": True}),
-                    now,
-                    task_id,
-                ),
-            )
-            return
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE v2_tasks
-            SET status = ?, result_json = COALESCE(?, result_json), error_json = ?,
-                locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
-            WHERE task_id = ?
+            SET status = ?, queued_run_json = CASE WHEN ? = 'queued' THEN COALESCE(?, queued_run_json) ELSE queued_run_json END,
+                result_json = CASE WHEN ? = 'failed' THEN COALESCE(?, result_json) ELSE NULL END,
+                error_json = ?, locked_by = NULL, locked_at = NULL, claim_token = NULL,
+                not_before = NULL, updated_at = ?
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
             """,
             (
                 status,
+                status,
                 run_json,
-                _json_dumps({"message": error, "retryable": False}),
+                status,
+                run_json,
+                _json_dumps({"message": error, "retryable": can_retry}),
                 now,
-                task_id,
+                claim.task_id,
+                claim.worker_id,
+                claim.claim_token,
             ),
         )
+        conn.commit()
+    return cursor.rowcount == 1
 
 
 def retry_task(
-    task_id: str,
+    claim: QueuedTask,
     error: str,
     run: CreativeRun,
     *,
     retry_delay_seconds: float,
     consume_attempt: bool = False,
-) -> None:
+) -> bool:
     now_dt = utc_now()
     now = now_dt.isoformat()
     delay = max(0.0, float(retry_delay_seconds))
     not_before = (now_dt + timedelta(seconds=delay)).isoformat() if delay else None
     with _connect() as conn:
-        row = conn.execute("SELECT attempts, max_attempts FROM v2_tasks WHERE task_id = ?", (task_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT attempts, max_attempts FROM v2_tasks
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (claim.task_id, claim.worker_id, claim.claim_token),
+        ).fetchone()
         if row is None:
-            return
+            conn.commit()
+            return False
         attempts = int(row["attempts"])
         if not consume_attempt:
             attempts = max(0, attempts - 1)
         can_retry = (attempts < int(row["max_attempts"])) or not consume_attempt
         if not can_retry:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE v2_tasks
                 SET status = 'failed', attempts = ?, result_json = ?, error_json = ?,
-                    locked_by = NULL, locked_at = NULL, not_before = NULL, updated_at = ?
-                WHERE task_id = ?
+                    locked_by = NULL, locked_at = NULL, claim_token = NULL, not_before = NULL, updated_at = ?
+                WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
                 """,
                 (
                     attempts,
                     _json_dumps(run.model_dump(mode="json")),
                     _json_dumps({"message": error, "retryable": False}),
                     now,
-                    task_id,
+                    claim.task_id,
+                    claim.worker_id,
+                    claim.claim_token,
                 ),
             )
-            return
-        conn.execute(
+            conn.commit()
+            return cursor.rowcount == 1
+        cursor = conn.execute(
             """
             UPDATE v2_tasks
             SET status = 'queued', attempts = ?, queued_run_json = ?, result_json = NULL, error_json = ?,
-                locked_by = NULL, locked_at = NULL, not_before = ?, updated_at = ?
-            WHERE task_id = ?
+                locked_by = NULL, locked_at = NULL, claim_token = NULL, not_before = ?, updated_at = ?
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
             """,
             (
                 attempts,
@@ -323,9 +481,13 @@ def retry_task(
                 ),
                 not_before,
                 now,
-                task_id,
+                claim.task_id,
+                claim.worker_id,
+                claim.claim_token,
             ),
         )
+        conn.commit()
+    return cursor.rowcount == 1
 
 
 def get_run_snapshot(run_id: str) -> CreativeRun | None:
@@ -334,10 +496,7 @@ def get_run_snapshot(run_id: str) -> CreativeRun | None:
         row = conn.execute(
             """
             SELECT status, queued_run_json, result_json, error_json
-            FROM v2_tasks
-            WHERE run_id = ?
-            ORDER BY created_at DESC
-            LIMIT 1
+            FROM v2_tasks WHERE run_id = ? ORDER BY created_at DESC LIMIT 1
             """,
             (run_id,),
         ).fetchone()
@@ -380,11 +539,21 @@ def clear_task_queue() -> None:
     initialize_task_queue()
 
 
+@contextmanager
+def claimed_task(claim: QueuedTask) -> Iterator[None]:
+    token = _CURRENT_CLAIM.set(claim)
+    try:
+        yield
+    finally:
+        _CURRENT_CLAIM.reset(token)
+
+
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(Path(settings.task_queue_db_path), timeout=30, isolation_level=None)
+    timeout = max(0.1, min(30.0, float(settings.task_queue_busy_timeout_seconds)))
+    conn = sqlite3.connect(Path(settings.task_queue_db_path), timeout=timeout, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
     return conn
 
 

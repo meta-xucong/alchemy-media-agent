@@ -1,20 +1,32 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 import threading
 import time
 import uuid
-import asyncio
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Awaitable, Callable, Iterator, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterator, TypeVar
+
+from app.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class GenerationCapacityExceeded(RuntimeError):
     """Raised when all cross-process V1 generation leases are occupied."""
 
 
+class GenerationCapacityStorageBusy(RuntimeError):
+    """Raised when bounded local SQLite admission cannot proceed promptly."""
+
+
 T = TypeVar("T")
+_NO_RESULT = object()
+_ASYNC_DB_SLOTS = threading.BoundedSemaphore(max(1, min(16, int(settings.resource_db_async_workers))))
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -30,6 +42,76 @@ def _database(path: Path) -> Iterator[sqlite3.Connection]:
         yield connection
     finally:
         connection.close()
+
+
+def _is_sqlite_busy(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and any(
+        token in str(exc).lower() for token in ("locked", "busy")
+    )
+
+
+async def _wait_task_to_finish(task: asyncio.Task[T]) -> T:
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except BaseException:
+            break
+    return task.result()
+
+
+async def run_sqlite_async(
+    operation: Callable[[], T],
+    *,
+    on_cancel_result: Callable[[T], Any] | None = None,
+    wait_for_slot: bool = False,
+) -> T:
+    """Run local SQLite work on a bounded thread, retaining its permit after cancellation."""
+
+    while not _ASYNC_DB_SLOTS.acquire(blocking=False):
+        if not wait_for_slot:
+            raise GenerationCapacityStorageBusy("V1 local database work is busy; please retry shortly.")
+        await asyncio.sleep(0.01)
+
+    def invoke() -> T:
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if _is_sqlite_busy(exc):
+                raise GenerationCapacityStorageBusy("V1 local database work is busy; please retry shortly.") from exc
+            raise
+
+    worker = asyncio.create_task(asyncio.to_thread(invoke))
+    permit_released = False
+
+    def release_permit() -> None:
+        nonlocal permit_released
+        if not permit_released:
+            permit_released = True
+            _ASYNC_DB_SLOTS.release()
+
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError as cancelled:
+        result: T | object = _NO_RESULT
+        try:
+            result = await _wait_task_to_finish(worker)
+        except BaseException:
+            pass
+        release_permit()
+        if on_cancel_result is not None and result is not _NO_RESULT and result is not None:
+            cleanup = asyncio.create_task(run_sqlite_async(lambda: on_cancel_result(result), wait_for_slot=True))
+            try:
+                await _wait_task_to_finish(cleanup)
+            except BaseException:
+                logger.exception("V1 late SQLite reservation cleanup failed after caller cancellation")
+        raise cancelled
+    finally:
+        if worker.done():
+            release_permit()
+        else:
+            worker.add_done_callback(lambda _task: release_permit())
 
 
 def _ensure_table(connection: sqlite3.Connection) -> None:
@@ -95,6 +177,82 @@ def _heartbeat(path: Path, namespace: str, slot: int, token: str, ttl: float, st
             continue
 
 
+class GenerationLease:
+    def __init__(self, path: Path, namespace: str, slot: int, token: str, stop: threading.Event, heartbeat: threading.Thread):
+        self.path = path
+        self.namespace = namespace
+        self.slot = slot
+        self.token = token
+        self.stop = stop
+        self.heartbeat = heartbeat
+        self._release_lock = threading.Lock()
+        self._released = False
+
+    def _release_sync(self) -> bool:
+        with self._release_lock:
+            if self._released:
+                return True
+            self._released = True
+        self.stop.set()
+        self.heartbeat.join(timeout=1.0)
+        with _database(self.path) as connection:
+            connection.execute(
+                "DELETE FROM resource_leases WHERE namespace = ? AND slot = ? AND owner_token = ?",
+                (self.namespace, self.slot, self.token),
+            )
+        return True
+
+    async def release_async(self) -> bool:
+        cleanup = asyncio.create_task(run_sqlite_async(self._release_sync, wait_for_slot=True))
+        try:
+            return await asyncio.shield(cleanup)
+        except asyncio.CancelledError as cancelled:
+            try:
+                await _wait_task_to_finish(cleanup)
+            except BaseException:
+                logger.exception("V1 generation lease cleanup failed during caller cancellation")
+            raise cancelled
+        except Exception:
+            logger.exception("V1 generation lease cleanup failed; the lease will expire by TTL")
+            return False
+
+    def release_sync(self) -> bool:
+        try:
+            return self._release_sync()
+        except Exception:
+            logger.exception("V1 generation lease cleanup failed; the lease will expire by TTL")
+            return False
+
+
+def _normalized_namespace(namespace: str) -> str:
+    return "".join(char for char in str(namespace).lower() if char.isalnum() or char == "-") or "generation"
+
+
+def _start_lease(path: Path, namespace: str, slot: int, token: str, ttl: float) -> GenerationLease:
+    stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_heartbeat,
+        args=(path, namespace, slot, token, ttl, stop),
+        name=f"v1-capacity-{namespace}-{slot}",
+        daemon=True,
+    )
+    heartbeat.start()
+    return GenerationLease(path, namespace, slot, token, stop, heartbeat)
+
+
+def _reserve_lease(root: Path, *, limit: int, namespace: str, lease_ttl_seconds: float) -> GenerationLease:
+    safe_limit = max(1, min(int(limit), 32))
+    safe_namespace = _normalized_namespace(namespace)
+    ttl = max(0.1, float(lease_ttl_seconds))
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / ".v1-resource-admission.sqlite3"
+    reserved = _reserve(path, safe_namespace, safe_limit, ttl)
+    if reserved is None:
+        raise GenerationCapacityExceeded("V1 image generation capacity is currently full.")
+    slot, token = reserved
+    return _start_lease(path, safe_namespace, slot, token, ttl)
+
+
 @contextmanager
 def generation_capacity(
     root: Path,
@@ -102,43 +260,55 @@ def generation_capacity(
     limit: int = 1,
     namespace: str = "generation",
     lease_ttl_seconds: float = 960.0,
-) -> Iterator[None]:
-    """Acquire a heartbeat-renewed local SQLite lease across processes.
+) -> Iterator[GenerationLease]:
+    """Acquire a heartbeat-renewed local SQLite lease across processes."""
 
-    A crashed process leaves a lease in place until its TTL expires. Normal
-    completion releases it; async callers use run_with_generation_capacity to
-    keep it through cancellation. This coordinates only processes sharing this
-    local filesystem and cannot report whether remote provider work terminated.
-    """
+    lease = _reserve_lease(root, limit=limit, namespace=namespace, lease_ttl_seconds=lease_ttl_seconds)
+    try:
+        yield lease
+    finally:
+        lease.release_sync()
 
+
+async def acquire_generation_capacity_async(
+    root: Path,
+    *,
+    limit: int = 1,
+    namespace: str = "generation",
+    lease_ttl_seconds: float = 960.0,
+) -> GenerationLease:
     safe_limit = max(1, min(int(limit), 32))
-    safe_namespace = "".join(char for char in str(namespace).lower() if char.isalnum() or char == "-") or "generation"
+    safe_namespace = _normalized_namespace(namespace)
     ttl = max(0.1, float(lease_ttl_seconds))
-    root.mkdir(parents=True, exist_ok=True)
     path = root / ".v1-resource-admission.sqlite3"
-    reserved = _reserve(path, safe_namespace, safe_limit, ttl)
+    root.mkdir(parents=True, exist_ok=True)
+    reserved = await run_sqlite_async(
+        lambda: _reserve(path, safe_namespace, safe_limit, ttl),
+        on_cancel_result=lambda result: _release_reserved_lease(path, safe_namespace, result),
+    )
     if reserved is None:
         raise GenerationCapacityExceeded("V1 image generation capacity is currently full.")
-
     slot, token = reserved
-    stop = threading.Event()
-    heartbeat = threading.Thread(
-        target=_heartbeat,
-        args=(path, safe_namespace, slot, token, ttl, stop),
-        name=f"v1-capacity-{safe_namespace}-{slot}",
-        daemon=True,
-    )
-    heartbeat.start()
+    return _start_lease(path, safe_namespace, slot, token, ttl)
+
+
+def _release_reserved_lease(path: Path, namespace: str, reservation: tuple[int, str]) -> bool:
+    slot, token = reservation
+    with _database(path) as connection:
+        connection.execute(
+            "DELETE FROM resource_leases WHERE namespace = ? AND slot = ? AND owner_token = ?",
+            (namespace, slot, token),
+        )
+    return True
+
+
+@asynccontextmanager
+async def async_generation_capacity(root: Path, **kwargs: Any) -> AsyncIterator[GenerationLease]:
+    lease = await acquire_generation_capacity_async(root, **kwargs)
     try:
-        yield
+        yield lease
     finally:
-        stop.set()
-        heartbeat.join(timeout=1.0)
-        with _database(path) as connection:
-            connection.execute(
-                "DELETE FROM resource_leases WHERE namespace = ? AND slot = ? AND owner_token = ?",
-                (safe_namespace, slot, token),
-            )
+        await lease.release_async()
 
 
 async def run_with_generation_capacity(
@@ -151,23 +321,21 @@ async def run_with_generation_capacity(
     wait_for_capacity: bool = False,
     capacity_wait_seconds: float = 900.0,
 ) -> T:
-    """Run an async provider flow while retaining its local lease through cancellation.
-
-    Shielding keeps the provider coroutine alive if its caller is cancelled; the
-    caller still receives cancellation after the provider coroutine actually
-    returns, so the lease cannot be released while that local work is running.
-    """
+    """Run an async provider flow while retaining its local lease through cancellation."""
 
     deadline = time.monotonic() + max(0.0, float(capacity_wait_seconds))
     while True:
         try:
-            with generation_capacity(
+            lease = await acquire_generation_capacity_async(
                 root,
                 limit=limit,
                 namespace=namespace,
                 lease_ttl_seconds=lease_ttl_seconds,
-            ):
+            )
+            try:
                 return await run_with_existing_generation_capacity(operation)
+            finally:
+                await lease.release_async()
         except GenerationCapacityExceeded:
             if not wait_for_capacity or time.monotonic() >= deadline:
                 raise
