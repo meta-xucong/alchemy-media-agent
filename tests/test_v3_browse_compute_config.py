@@ -134,26 +134,26 @@ def test_effective_cpu_count_ignores_unlimited_or_invalid_quota(tmp_path):
     assert effective_cpu_count(affinity_count=6, cgroup_root=tmp_path) == 6
 
 
-def test_browse_compute_admission_tracks_workers_with_six_bounded_waiters():
+def test_browse_compute_admission_tracks_workers_with_eight_bounded_waiters():
     single_worker = BoundedBrowseCompute(1)
     pool = BoundedBrowseCompute(4)
     try:
-        assert single_worker.max_pending == 7
+        assert single_worker.max_pending == 9
         assert pool.workers == 4
-        assert pool.max_pending == 8
+        assert pool.max_pending == 10
     finally:
         single_worker.shutdown()
         pool.shutdown()
 
 
-def test_two_workers_admit_eight_browse_requests_and_bound_the_ninth():
+def test_two_workers_admit_ten_browse_requests_and_bound_the_eleventh():
     pool = BoundedBrowseCompute(2)
     try:
-        assert pool.max_pending == 8
+        assert pool.max_pending == 10
         with ExitStack() as admitted:
-            for _ in range(8):
+            for _ in range(10):
                 admitted.enter_context(pool.admit())
-            assert pool.admitted == 8
+            assert pool.admitted == 10
             with pytest.raises(BrowseCapacityExceeded):
                 with pool.admit():
                     pass
@@ -162,7 +162,7 @@ def test_two_workers_admit_eight_browse_requests_and_bound_the_ninth():
         pool.shutdown()
 
 
-@pytest.mark.parametrize(("workers", "max_pending"), [(1, 8), (2, 9), (4, 9)])
+@pytest.mark.parametrize(("workers", "max_pending"), [(1, 10), (2, 11), (4, 11)])
 def test_browse_admission_cannot_exceed_worker_or_global_bound(workers, max_pending):
-    with pytest.raises(ValueError, match="min\\(workers \\+ 6, 8\\)"):
+    with pytest.raises(ValueError, match="min\\(workers \\+ 8, 10\\)"):
         BoundedBrowseCompute(workers, max_pending=max_pending)

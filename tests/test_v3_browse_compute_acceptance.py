@@ -161,15 +161,15 @@ def test_real_process_cancellation_preserves_physical_queue_bound(monkeypatch):
     finally:pool.shutdown()
 
 
-def test_eight_concurrent_browse_reads_keep_exact_results(tmp_path):
+def test_twelve_concurrent_browse_reads_admit_ten_and_reject_two(tmp_path):
     from scripts.benchmark_v3_browse_compute import make_fixture
-    from app.browse_compute import BoundedBrowseCompute
+    from app.browse_compute import BoundedBrowseCompute, BrowseCapacityExceeded
     from app.browse_reads import run_output_browse
-    make_fixture(tmp_path,projects=8,history_rows=4,job_history_rows=4)
+    make_fixture(tmp_path,projects=12,history_rows=4,job_history_rows=4)
     service=_service(tmp_path);pool=BoundedBrowseCompute(2)
     requests=[
         dict(limit=60,owner_user_id=1+index%2,compact=True,project_id=f'project_benchmark_{index:03d}')
-        for index in range(8)
+        for index in range(12)
     ]
     expected=[service.list_project_outputs(**kwargs) for kwargs in requests]
     assert all(len(result['items'])==6 for result in expected)
@@ -180,13 +180,22 @@ def test_eight_concurrent_browse_reads_keep_exact_results(tmp_path):
             observed_admission.append(pool.admitted)
             yield lease
     pool.admit=tracked_admit
+    async def read(kwargs):
+        try:
+            return await run_output_browse(service,pool,**kwargs)
+        except BrowseCapacityExceeded:
+            return None
     async def exercise():
-        return await asyncio.gather(*(run_output_browse(service,pool,**kwargs) for kwargs in requests))
+        return await asyncio.gather(*(read(kwargs) for kwargs in requests))
     try:
         actual=asyncio.run(exercise())
     finally:pool.shutdown()
-    assert actual==expected
-    assert max(observed_admission)==8
+    accepted=[index for index,result in enumerate(actual) if result is not None]
+    rejected=[index for index,result in enumerate(actual) if result is None]
+    assert len(accepted)==10
+    assert len(rejected)==2
+    assert all(actual[index]==expected[index] for index in accepted)
+    assert max(observed_admission)==10
     assert pool.admitted==0
 
 
