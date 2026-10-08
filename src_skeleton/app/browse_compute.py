@@ -138,7 +138,10 @@ def _read_cpu_quota(
             if quota is not None:
                 limits.append(quota)
 
-    # Retain a conservative fallback for containers that hide proc cgroup data.
+    if locations:
+        return min(limits) if limits else None
+
+    # Retain a fallback only when proc/mount data cannot identify this process's cgroup.
     for directory in (Path(cgroup_root), Path(cgroup_root) / "cpu", Path(cgroup_root) / "cpu,cpuacct"):
         for cgroup_v2 in (True, False):
             quota = _quota_at(directory, cgroup_v2=cgroup_v2)

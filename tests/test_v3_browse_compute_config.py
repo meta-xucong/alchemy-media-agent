@@ -60,6 +60,33 @@ def test_effective_cpu_count_reads_nested_cgroup_and_stricter_ancestor(tmp_path)
     ) == 2
 
 
+def test_effective_cpu_count_ignores_unrelated_legacy_fallback_when_cgroup_is_mapped(tmp_path):
+    cgroup_root = tmp_path / "cgroup"
+    service = cgroup_root / "system.slice" / "api.service"
+    service.mkdir(parents=True)
+    (service / "cpu.max").write_text("400000 100000\n", encoding="ascii")
+
+    # This legacy-looking path is unrelated to the process's mapped cgroup.
+    unrelated = cgroup_root / "cpu"
+    unrelated.mkdir()
+    (unrelated / "cpu.max").write_text("100000 100000\n", encoding="ascii")
+
+    proc_cgroup = tmp_path / "proc-cgroup"
+    proc_cgroup.write_text("0::/system.slice/api.service\n", encoding="ascii")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "42 31 0:26 / /sys/fs/cgroup ro,nosuid - cgroup2 cgroup rw\n",
+        encoding="ascii",
+    )
+
+    assert effective_cpu_count(
+        affinity_count=8,
+        cgroup_root=cgroup_root,
+        proc_cgroup_path=proc_cgroup,
+        mountinfo_path=mountinfo,
+    ) == 4
+
+
 def test_effective_cpu_count_reads_nested_cgroup_v1_cpu_controller(tmp_path):
     cgroup_root = tmp_path / "cgroup"
     cpu_root = cgroup_root / "cpu,cpuacct"
