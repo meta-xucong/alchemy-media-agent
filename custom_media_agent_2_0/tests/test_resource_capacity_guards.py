@@ -18,13 +18,73 @@ from app.schemas import CreativeRun
 from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
 from app.services import task_queue as task_queue_service
 from app.services import generation_capacity as capacity_module
+from app.services import history_scan_capacity as history_scan_module
 from app.services.generation_capacity import run_with_generation_capacity
 from app.services.task_queue import QueueCapacityExceeded, claim_next_task, enqueue_creative_task, task_queue_stats
 from app.services.image_history import list_image_history
 from app.main import _read_limited_request_body
+from app.main import _require_output_visible
+from app.repositories import repository
+from app.services import image_history as image_history_service
 from fastapi import HTTPException
 from starlette.requests import Request
 import json
+
+
+def test_v2_history_scan_admission_is_bounded_and_holds_slot_after_cancel(monkeypatch) -> None:
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow_scan() -> str:
+        started.set()
+        finish.wait(5)
+        return "done"
+
+    async def exercise() -> None:
+        first = asyncio.create_task(history_scan_module.run_history_scan(slow_scan))
+        assert await asyncio.to_thread(started.wait, 2)
+        with pytest.raises(HTTPException) as full:
+            await history_scan_module.run_history_scan(lambda: "unexpected")
+        assert full.value.status_code == 429
+        first.cancel()
+        await asyncio.sleep(0.03)
+        with pytest.raises(HTTPException):
+            await history_scan_module.run_history_scan(lambda: "unexpected")
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert await history_scan_module.run_history_scan(lambda: "available") == "available"
+
+    asyncio.run(exercise())
+
+
+def test_v2_async_output_permission_fallback_scans_history_off_event_loop(monkeypatch, tmp_path: Path) -> None:
+    started = threading.Event()
+    finish = threading.Event()
+    monkeypatch.setattr("app.main.settings", replace(settings, veyra_auth_enabled=False))
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(repository, "get_output", lambda _output_id: None)
+
+    def slow_lookup(_output_id: str):
+        started.set()
+        finish.wait(5)
+        return None
+
+    monkeypatch.setattr(image_history_service, "get_image_history_item", slow_lookup)
+    request = Request({"type": "http", "method": "GET", "path": "/api/v2/outputs/missing", "headers": []})
+
+    async def exercise() -> None:
+        lookup = asyncio.create_task(_require_output_visible(request, "missing"))
+        assert await asyncio.to_thread(started.wait, 2)
+        with pytest.raises(HTTPException) as full:
+            await history_scan_module.run_history_scan(lambda: "unexpected")
+        assert full.value.status_code == 429
+        finish.set()
+        result = await lookup
+        assert result["owner_id"] is None
+
+    asyncio.run(exercise())
 
 
 def _hold_generation_slot(data_dir: str, acquired, release) -> None:
@@ -111,6 +171,50 @@ def test_v2_stale_running_task_recovers_same_durable_identity(tmp_path: Path, mo
     assert recovered.task_id == first.task_id
     assert recovered.run_id == first.run_id
     assert recovered.attempts == 2
+
+
+def test_v2_exhausted_stale_task_is_terminalized_and_releases_direct_priority(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "queue.sqlite3"
+    monkeypatch.setattr(
+        "app.services.task_queue.settings",
+        replace(
+            settings,
+            task_queue_db_path=database_path,
+            task_queue_max_attempts=1,
+            task_queue_claim_timeout_seconds=0.01,
+            max_concurrent_image_generations=1,
+        ),
+    )
+    run = _queued_run("run_recovery_exhausted")
+    enqueue_creative_task(kind="creative_run", request_payload={"user_prompt": "offline recovery"}, queued_run=run)
+    claimed = claim_next_task("last-attempt-worker")
+    assert claimed is not None
+    assert claimed.attempts == claimed.max_attempts == 1
+    with task_queue_service._connect() as connection:
+        stale_locked_at = (utc_now() - timedelta(seconds=1)).isoformat()
+        connection.execute(
+            "UPDATE v2_tasks SET locked_at = ? WHERE task_id = ?",
+            (stale_locked_at, claimed.task_id),
+        )
+
+    # A dead worker on its final attempt must not hold queue priority forever.
+    with task_queue_service.generation_capacity(request_kind="direct"):
+        pass
+
+    with task_queue_service._connect() as connection:
+        row = connection.execute(
+            "SELECT status, error_json, locked_by, locked_at FROM v2_tasks WHERE task_id = ?",
+            (claimed.task_id,),
+        ).fetchone()
+    assert row is not None
+    assert row["status"] == "failed"
+    assert row["locked_by"] is None and row["locked_at"] is None
+    error = json.loads(row["error_json"])
+    assert error["error_code"] == "worker_recovery_exhausted"
+    assert error["retryable"] is False
+    snapshot = task_queue_service.get_run_snapshot(run.run_id)
+    assert snapshot is not None and snapshot.status == "failed"
+    assert "final allowed attempt" in snapshot.next_actions[0]
 
 
 def test_v2_capacity_release_after_exception(tmp_path: Path) -> None:

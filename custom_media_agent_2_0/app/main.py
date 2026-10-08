@@ -52,6 +52,7 @@ from app.services.generation import create_image_job
 from app.services.favorites import list_favorite_ids, set_favorite
 from app.services.history_reference_assets import create_reference_asset_from_history_output
 from app.services.image_history import delete_image_history_item, list_image_history
+from app.services.history_scan_capacity import run_history_scan
 from app.services.history_thumbnails import read_history_preview, read_history_thumbnail
 from app.services.ids import new_id
 from app.services.media_acceleration import signed_output_url as signed_v2_output_url
@@ -290,9 +291,10 @@ async def veyra_history(
     authorization: str = Header(default=""),
 ):
     if not settings.veyra_auth_enabled:
-        return list_image_history(limit=limit, offset=offset, veyra_user_id=None, include_legacy_public=True, include_all=True)
+        return await run_history_scan(list_image_history, limit=limit, offset=offset, veyra_user_id=None, include_legacy_public=True, include_all=True)
     context = await _veyra_request_context(request, authorization)
-    return list_image_history(
+    return await run_history_scan(
+        list_image_history,
         limit=limit,
         offset=offset,
         veyra_user_id=context["user_id"],
@@ -486,13 +488,13 @@ def _image_job_with_veyra_user(body: CreateImageJobRequest, request: Request, au
     return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_request(request, authorization)})
 
 
-def _v2_output_owner_id(output_id: str) -> int | None:
+async def _v2_output_owner_id(output_id: str) -> int | None:
     output = repository.get_output(output_id)
     metadata = output.metadata if output else {}
     if not metadata:
         from app.services.image_history import get_image_history_item
 
-        item = get_image_history_item(output_id)
+        item = await run_history_scan(get_image_history_item, output_id)
         metadata = item.metadata if item else {}
     try:
         owner_id = int((metadata or {}).get("veyra_user_id") or 0)
@@ -503,9 +505,9 @@ def _v2_output_owner_id(output_id: str) -> int | None:
 
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
     if not settings.veyra_auth_enabled:
-        return {"user_id": None, "is_admin": False, "owner_id": _v2_output_owner_id(output_id)}
+        return {"user_id": None, "is_admin": False, "owner_id": await _v2_output_owner_id(output_id)}
     context = await _veyra_request_context(request, authorization)
-    owner_id = _v2_output_owner_id(output_id)
+    owner_id = await _v2_output_owner_id(output_id)
     if context["is_admin"] or owner_id == context["user_id"] or (allow_legacy_public and owner_id is None):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
@@ -869,9 +871,9 @@ async def image_history(
     authorization: str = Header(default=""),
 ):
     if not settings.veyra_auth_enabled:
-        return await asyncio.to_thread(list_image_history, limit, offset=offset)
+        return await run_history_scan(list_image_history, limit, offset=offset)
     context = await _veyra_request_context(request, authorization)
-    return await asyncio.to_thread(
+    return await run_history_scan(
         list_image_history,
         limit,
         offset=offset,
@@ -919,7 +921,7 @@ async def favorite_history_item(output_id: str, body: FavoriteImageRequest, requ
     if not repository.get_output(output_id):
         from app.services.image_history import get_image_history_item
 
-        if not get_image_history_item(output_id):
+        if not await run_history_scan(get_image_history_item, output_id):
             raise HTTPException(status_code=404, detail={"error_code": "history_output_not_found", "message": "V2 history output not found."})
     return set_favorite(output_id, body.favorite, veyra_user_id=context.get("user_id"))
 

@@ -15,11 +15,40 @@ from starlette.requests import Request
 from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
 from app.services import generation_capacity as capacity_module
 from app.services.generation_capacity import run_with_generation_capacity
+from app.services import history_scan_capacity as history_scan_module
 from app.main import _read_limited_request_body
 import app.services.alchemy_lab as alchemy_lab
 import app.services.image_service as image_service
 from app.repositories import repository
 from app.schemas import JobStatus, ProviderError
+
+
+def test_v1_history_scan_admission_is_bounded_and_holds_slot_after_cancel(monkeypatch) -> None:
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow_scan() -> str:
+        started.set()
+        finish.wait(5)
+        return "done"
+
+    async def exercise() -> None:
+        first = asyncio.create_task(history_scan_module.run_history_scan(slow_scan))
+        assert await asyncio.to_thread(started.wait, 2)
+        with pytest.raises(HTTPException) as full:
+            await history_scan_module.run_history_scan(lambda: "unexpected")
+        assert full.value.status_code == 429
+        first.cancel()
+        await asyncio.sleep(0.03)
+        with pytest.raises(HTTPException):
+            await history_scan_module.run_history_scan(lambda: "unexpected")
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert await history_scan_module.run_history_scan(lambda: "available") == "available"
+
+    asyncio.run(exercise())
 
 
 def _hold_generation_slot(root: str, acquired, release) -> None:

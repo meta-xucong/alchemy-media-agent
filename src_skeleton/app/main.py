@@ -100,6 +100,7 @@ from app.services.access_bridge import build_access_headers
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
 from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
 from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
+from app.services.history_scan_capacity import run_history_scan
 from app.services.media_acceleration import signed_output_url as signed_v1_output_url
 from app.services.retention_settings import get_retention_settings, save_retention_settings
 from app.services.session_service import create_session, handle_message
@@ -3181,7 +3182,7 @@ async def list_image_history(
     authorization: str = Header(default=""),
 ):
     veyra_context = await _veyra_history_context(request, authorization)
-    return await asyncio.to_thread(
+    return await run_history_scan(
         _list_image_history_sync,
         session_id=session_id,
         limit=limit,

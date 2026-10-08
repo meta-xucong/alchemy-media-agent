@@ -17,6 +17,7 @@ from app.services.generation_capacity import (
     GenerationCapacityExceeded,
     generation_capacity as _generation_capacity,
     run_with_generation_capacity as _run_with_generation_capacity,
+    terminalize_exhausted_stale_tasks,
 )
 
 
@@ -111,6 +112,7 @@ def generation_capacity(*, request_kind: str = "direct") -> Iterator[None]:
         limit=settings.max_concurrent_image_generations,
         request_kind=request_kind,
         lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+        queue_recovery_timeout_seconds=settings.task_queue_claim_timeout_seconds,
     ):
         yield
 
@@ -124,6 +126,7 @@ async def run_with_generation_capacity(operation, *, request_kind: str = "direct
         limit=settings.max_concurrent_image_generations,
         request_kind=request_kind,
         lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+        queue_recovery_timeout_seconds=settings.task_queue_claim_timeout_seconds,
     )
 
 
@@ -134,6 +137,7 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
     stale_before = (now - timedelta(seconds=settings.task_queue_claim_timeout_seconds)).isoformat()
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        terminalize_exhausted_stale_tasks(conn, stale_before=stale_before, now_text=now_text)
         row = conn.execute(
             """
             SELECT * FROM v2_tasks
