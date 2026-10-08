@@ -1,4 +1,4 @@
-# V1、V2 与 Alchemy Lab 资源容量风险及护栏修复方案
+# V1、V2 与 Alchemy Lab 资源容量护栏修复（非完整内存治理）
 
 日期：2026-10-08
 
@@ -85,5 +85,14 @@
 ## 用户决策与剩余边界
 
 默认保留业务历史，不自动删除。仍留存且本次没有解决的增长面：V1/V2 MemoryRepository 的 session/job/output/idempotency/event/feedback 元数据；V1 聚合历史的全量记录和 dedupe set；V1/V2 JSONL 精确去重 map；V1/V2 历史删除操作暂存的全文件内容；Claude 决策 cache 的全文件读取与保存；Alchemy Lab 已完成 session；V2 durable queue 终态任务行。常规历史扫描已去掉全文件字符串/行数组副本、使用 top-K、限制同时执行数并从 V1/V2 async routes 移出事件循环，但不是严格 O(1) 内存分页。要安全限制这些剩余项，需要先确定可重载持久权威源、归档周期、恢复承诺、幂等/审计保留和管理员权限；当前无线上故障测量，不能据此优先删除。
+
+### 长期数据的代码依据与下一阶段最小方案
+
+- V1 `MemoryRepository` 将 sessions/assets/jobs/outputs/idempotency index/events 放在进程字典/列表中（`src_skeleton/app/repositories/memory.py`）；代码没有从数据库或文件重新装载这些记录的恢复路径。
+- V2 `InMemoryV2Repository` 将 creative runs/image jobs/outputs/uploads/feedback/safety decisions 放在进程字典中（`custom_media_agent_2_0/app/repositories/memory.py`）。 durable task queue 只保存 queued task/run snapshot，不等于上述全部业务对象的完整、可重建仓库。
+- Alchemy Lab `AlchemyLabStore.sessions` 是全局字典；只有 `delete_unpublished` 和显式 `reset` 会移除 session，完成的 session 没有自动保留期限或压缩路径（`src_skeleton/app/services/alchemy_lab.py`）。
+- Claude decision cache 持续把 cache key 到完整 decision/metadata 写入单个 JSON 文件，并在查询时整体 `read_text`/`json.loads`（`custom_media_agent_2_0/app/services/claude_orchestrator.py`）；没有 TTL/LRU 或独立持久索引。
+
+下一阶段最小开发顺序应先提供权威持久化和重载，再谈有界缓存/归档：先为 V1/V2 业务仓库与 Lab session 定义 SQLite schema、写入迁移及启动重载，证明租户归属、幂等恢复、worker 重启和用户继续流程；再把 Claude decision JSON 读取改为有索引的逐键查找，但保留完整决策记录，除非另行确定保留期；最后设计队列终态与 Lab session 的可配置归档。迁移完成前不对唯一内存状态做 TTL/LRU，避免丢失 job/session 身份、幂等证据、上传元数据、访问控制及恢复状态。这个迁移会改变持久化和重启语义，超出本次仅加容量护栏的最小修复范围，故在本 PR 中明确保留为未完成工作。
 
 总目标仍未达到最终生产验收：本轮修复已覆盖源码内可安全实施的本机准入、队列、上传和历史扫描路径；完整 V2 API 文件、线上 VPS 共享卷/部署拓扑、内存峰值及远端 provider 终止状态均未验收。Draft PR 需在独立审查后提交，仍不合并、不部署。
