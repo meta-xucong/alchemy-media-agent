@@ -10,6 +10,12 @@ class BrowseScope:
 
 
 @dataclass(frozen=True)
+class BrowseOutputs:
+    """Bind every prefetched output, including rows without a candidate Job."""
+    records: list[Any]
+
+
+@dataclass(frozen=True)
 class BrowseJobRead:
     job_id: str
     output_records: list[Any] | None

@@ -225,8 +225,13 @@ class V3GeneratedOutputStore:
                 self._scoped_records_by_id_cache.pop(output_id, None)
                 self._record_file_revisions.pop(output_id, None)
             return None
+        # Read provenance belongs to this exact object, not the bounded LRU.
+        # Keep it outside dataclass fields so persistence/public JSON is unchanged.
+        # A concurrent replacement must never label old bytes with a new revision.
+        read_revision = file_revision if self._record_file_revision(path) == file_revision else None
+        object.__setattr__(record, "_read_provenance", (str(path), read_revision))
         with self._cache_lock:
-            if file_revision is not None:
+            if read_revision is not None:
                 _bounded_cache_set(
                     self._scoped_records_by_id_cache,
                     output_id,

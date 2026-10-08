@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 import pickle
 
-from alchemy_creative_agent_3_0.app.browse_protocol import BrowseScope, BrowseJobRead, BrowseCheckpoint
+from alchemy_creative_agent_3_0.app.browse_protocol import BrowseScope, BrowseOutputs, BrowseJobRead, BrowseCheckpoint
 from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectStatus
 from .browse_compute import MAX_SOURCE_BYTES, BrowseComputeUnavailable, file_revision
 
@@ -61,11 +61,19 @@ class _ReadGuard:
         output_store = self.service.product_service.output_store
         self.job_ids.add(job_id)
         self.watch(output_store._job_closure_path(job_id))
+        self.add_output_records(records)
+
+    def add_output_records(self, records):
+        output_store = self.service.product_service.output_store
         from alchemy_creative_agent_3_0.app.product_api.outputs import _valid_output_id, _FORMAT_SUFFIXES
         for record in records or ():
             if not _valid_output_id(record.output_id):
                 raise _ReadScopeChanged()
-            self.watch(output_store._record_path(record.output_id))
+            path = output_store._record_path(record.output_id)
+            provenance = getattr(record, "_read_provenance", None)
+            if (provenance is None or provenance[0] != str(path)
+                or provenance[1] is None or self.watch(path) != provenance[1]):
+                raise _ReadScopeChanged()
             # Match the output store's canonical original, not a historical
             # metadata path that could point outside the output directory.
             self.watch(output_store.storage_root / record.output_id /
@@ -128,6 +136,9 @@ async def run_output_browse(service, pool, **kwargs):
                 value = error = None
                 if isinstance(step, BrowseScope):
                     guard.add_scope(step.projects)
+                    continue
+                if isinstance(step, BrowseOutputs):
+                    guard.add_output_records(step.records)
                     continue
                 if isinstance(step, BrowseCheckpoint):
                     if lease is not None:
