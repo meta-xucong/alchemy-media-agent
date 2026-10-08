@@ -13,6 +13,7 @@ import logging
 import multiprocessing
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import pickle
 import re
 import threading
@@ -30,30 +31,130 @@ class BrowseComputeUnavailable(RuntimeError):
     pass
 
 
-def _read_cpu_quota(cgroup_root: Path) -> int | None:
-    """Return whole CPUs available from a finite cgroup quota, when present."""
+def _decode_mountinfo_path(value: str) -> str:
+    return value.replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\")
+
+
+def _cgroup_relative_path(process_path: str, mount_root: str) -> PurePosixPath | None:
+    process = PurePosixPath(process_path)
+    root = PurePosixPath(mount_root)
+    if process == PurePosixPath("/"):
+        return PurePosixPath(".")
+    if ".." in process.parts or ".." in root.parts:
+        return None
     try:
-        quota_text, period_text = (cgroup_root / "cpu.max").read_text(encoding="ascii").split()[:2]
-        if quota_text != "max":
+        relative = process.relative_to(root)
+    except ValueError:
+        return None
+    return relative
+
+
+def _parse_cpu_cgroup_locations(cgroup_text: str, mountinfo_text: str):
+    v2_path = None
+    v1_cpu_path = None
+    for line in cgroup_text.splitlines():
+        try:
+            hierarchy, controllers, path = line.split(":", 2)
+        except ValueError:
+            continue
+        if hierarchy == "0" and not controllers:
+            v2_path = path
+        elif "cpu" in controllers.split(","):
+            v1_cpu_path = path
+
+    mounts = []
+    for line in mountinfo_text.splitlines():
+        try:
+            left, right = line.split(" - ", 1)
+            before = left.split()
+            after = right.split()
+            mount_root = _decode_mountinfo_path(before[3])
+            mount_point = _decode_mountinfo_path(before[4])
+            filesystem = after[0]
+            super_options = set(after[2].split(",")) if len(after) > 2 else set()
+        except (IndexError, ValueError):
+            continue
+        if filesystem == "cgroup2" and v2_path:
+            relative = _cgroup_relative_path(v2_path, mount_root)
+            if relative is not None:
+                mounts.append((mount_point, relative, True))
+        elif filesystem == "cgroup" and "cpu" in super_options and v1_cpu_path:
+            relative = _cgroup_relative_path(v1_cpu_path, mount_root)
+            if relative is not None:
+                mounts.append((mount_point, relative, False))
+    return mounts
+
+
+def _mountpoint_directory(mount_point: str, cgroup_root: Path) -> Path:
+    root = Path(cgroup_root)
+    if root == Path("/sys/fs/cgroup"):
+        return Path(mount_point)
+    mount = PurePosixPath(mount_point)
+    standard_root = PurePosixPath("/sys/fs/cgroup")
+    try:
+        relative = mount.relative_to(standard_root)
+    except ValueError:
+        relative = PurePosixPath(mount.name)
+    return root.joinpath(*relative.parts)
+
+
+def _quota_at(directory: Path, *, cgroup_v2: bool) -> int | None:
+    try:
+        if cgroup_v2:
+            quota_text, period_text = (directory / "cpu.max").read_text(encoding="ascii").split()[:2]
+            if quota_text == "max":
+                return None
             quota, period = int(quota_text), int(period_text)
-            if quota > 0 and period > 0:
-                return max(1, quota // period)
+        else:
+            quota = int((directory / "cpu.cfs_quota_us").read_text(encoding="ascii").strip())
+            period = int((directory / "cpu.cfs_period_us").read_text(encoding="ascii").strip())
+        if quota > 0 and period > 0:
+            return max(1, quota // period)
     except (OSError, UnicodeError, ValueError):
         pass
-
-    for cpu_dir in (cgroup_root / "cpu", cgroup_root / "cpu,cpuacct", cgroup_root):
-        try:
-            quota = int((cpu_dir / "cpu.cfs_quota_us").read_text(encoding="ascii").strip())
-            period = int((cpu_dir / "cpu.cfs_period_us").read_text(encoding="ascii").strip())
-            if quota > 0 and period > 0:
-                return max(1, quota // period)
-        except (OSError, UnicodeError, ValueError):
-            continue
     return None
 
 
-def effective_cpu_count(*, affinity_count: int | None = None, cgroup_root: Path = Path("/sys/fs/cgroup")) -> int:
-    """Resolve CPU affinity and Linux cgroup quota conservatively."""
+def _read_cpu_quota(
+    cgroup_root: Path,
+    *,
+    proc_cgroup_path: Path = Path("/proc/self/cgroup"),
+    mountinfo_path: Path = Path("/proc/self/mountinfo"),
+) -> int | None:
+    """Read the tightest quota from the current cgroup and each ancestor."""
+    limits = []
+    try:
+        locations = _parse_cpu_cgroup_locations(
+            proc_cgroup_path.read_text(encoding="utf-8"),
+            mountinfo_path.read_text(encoding="utf-8"),
+        )
+    except (OSError, UnicodeError):
+        locations = []
+    for mount_point, relative, cgroup_v2 in locations:
+        mount_dir = _mountpoint_directory(mount_point, cgroup_root)
+        for length in range(len(relative.parts), -1, -1):
+            directory = mount_dir.joinpath(*relative.parts[:length])
+            quota = _quota_at(directory, cgroup_v2=cgroup_v2)
+            if quota is not None:
+                limits.append(quota)
+
+    # Retain a conservative fallback for containers that hide proc cgroup data.
+    for directory in (Path(cgroup_root), Path(cgroup_root) / "cpu", Path(cgroup_root) / "cpu,cpuacct"):
+        for cgroup_v2 in (True, False):
+            quota = _quota_at(directory, cgroup_v2=cgroup_v2)
+            if quota is not None:
+                limits.append(quota)
+    return min(limits) if limits else None
+
+
+def effective_cpu_count(
+    *,
+    affinity_count: int | None = None,
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+    proc_cgroup_path: Path = Path("/proc/self/cgroup"),
+    mountinfo_path: Path = Path("/proc/self/mountinfo"),
+) -> int:
+    """Resolve CPU affinity and the tightest applicable Linux cgroup quota."""
     if affinity_count is None:
         get_affinity = getattr(os, "sched_getaffinity", None)
         try:
@@ -61,7 +162,11 @@ def effective_cpu_count(*, affinity_count: int | None = None, cgroup_root: Path 
         except OSError:
             affinity_count = os.cpu_count() or 1
     available = max(1, int(affinity_count))
-    quota_count = _read_cpu_quota(Path(cgroup_root))
+    quota_count = _read_cpu_quota(
+        Path(cgroup_root),
+        proc_cgroup_path=Path(proc_cgroup_path),
+        mountinfo_path=Path(mountinfo_path),
+    )
     return min(available, quota_count) if quota_count is not None else available
 
 
