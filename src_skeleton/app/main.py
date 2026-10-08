@@ -41,6 +41,8 @@ from alchemy_creative_agent_3_0.app.visual_assets import (
     PersistentVisualAssetCatalog,
     PersistentVisualAssetLibraryCatalog,
 )
+from app.browse_compute import BoundedBrowseCompute, BrowseCapacityExceeded, BrowseComputeUnavailable
+from app.browse_reads import run_output_browse
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
 from app.repositories import repository
@@ -143,6 +145,23 @@ _v3_browse_header_executor = ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="v3-project-header",
 )
+# Off by default until the deployment's CPU/RSS acceptance checks pass.
+try:
+    _V3_BROWSE_COMPUTE_WORKERS = max(0, min(2, int(os.getenv("V3_BROWSE_COMPUTE_WORKERS", "0"))))
+except ValueError:
+    _V3_BROWSE_COMPUTE_WORKERS = 0
+_v3_browse_compute = (
+    BoundedBrowseCompute(_V3_BROWSE_COMPUTE_WORKERS)
+    if _V3_BROWSE_COMPUTE_WORKERS else None
+)
+
+
+@app.on_event("shutdown")
+async def _shutdown_v3_browse_compute():
+    if _v3_browse_compute is not None:
+        await asyncio.to_thread(_v3_browse_compute.shutdown)
+
+
 _v3_browse_header_gate_lock = threading.Lock()
 _v3_browse_header_admitted = 0
 _v3_browse_header_active = 0
@@ -1527,6 +1546,25 @@ async def v3_project_outputs_endpoint(
             for value in str(project_ids).split(",")
             if value.strip()
         ))[:100]
+    if _v3_browse_compute is not None and str(surface or "").strip().lower() not in {"home_preview", "delivery_preview"}:
+        try:
+            return await run_output_browse(
+                v3_route_handlers.project_service, _v3_browse_compute,
+                limit=limit, owner_user_id=user_id, compact=compact,
+                project_id=project_id, surface=surface, project_ids=requested_project_ids,
+            )
+        except (BrowseCapacityExceeded, BrowseComputeUnavailable) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "v3_browse_read_capacity_exceeded", "message": "Project images are busy; please retry."},
+                headers={"Retry-After": "1"},
+            ) from exc
+        except Exception as exc:
+            # Preserve the existing V3 public error mapper without rerunning
+            # a handler that may already have performed owner-side writes.
+            def raise_original():
+                raise exc
+            return _run_v3_handler(raise_original)
     return _run_v3_handler(
         v3_route_handlers.get_project_outputs,
         limit,

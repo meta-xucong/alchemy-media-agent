@@ -953,6 +953,63 @@ class InMemoryProductJobStore:
 
 _PRODUCT_JOB_ID_PATTERN = re.compile(r"^job_[A-Za-z0-9_-]{1,128}$")
 _MCP_OPERATION_INDEX_SCHEMA = "v3_mcp_operation_index_v1"
+def deserialize_product_job_record(
+    payload: object, *, schema_version: str = "v3_product_job_record_v1",
+) -> ProductJobRecord | None:
+    """Pure JSON-to-record validation shared by owner reads and compute workers."""
+    if not isinstance(payload, dict) or payload.get("schema_version") != schema_version:
+        return None
+    try:
+        return ProductJobRecord(
+            request=CreateCreativeJobRequest.model_validate(payload["request"]),
+            status=ProductJobStatusValue(payload["status"]),
+            job_id_value=str(payload["job_id"]),
+            planning_result=(
+                PlanningResult.model_validate(payload["planning_result"])
+                if isinstance(payload.get("planning_result"), dict)
+                else None
+            ),
+            generation_result=(
+                PlanningResult.model_validate(payload["generation_result"])
+                if isinstance(payload.get("generation_result"), dict)
+                else None
+            ),
+            scenario_resolution=(
+                ScenarioPackResolution.model_validate(payload["scenario_resolution"])
+                if isinstance(payload.get("scenario_resolution"), dict)
+                else None
+            ),
+            capability_run=(
+                CapabilityRunResult.model_validate(payload["capability_run"])
+                if isinstance(payload.get("capability_run"), dict)
+                else None
+            ),
+            selected_result=(
+                SelectedResult.model_validate(payload["selected_result"])
+                if isinstance(payload.get("selected_result"), dict)
+                else None
+            ),
+            lifecycle=(
+                JobLifecycleRecord.model_validate(payload["lifecycle"])
+                if isinstance(payload.get("lifecycle"), dict)
+                else None
+            ),
+            ecommerce_authority_snapshot=(
+                ProductApiEcommerceAuthoritySnapshot.from_payload(
+                    payload["ecommerce_authority_snapshot"]
+                )
+                if isinstance(payload.get("ecommerce_authority_snapshot"), dict)
+                else None
+            ),
+            balance_estimate=dict(payload.get("balance_estimate") or {}),
+            warnings=[str(item) for item in payload.get("warnings") or []],
+            created_at=str(payload.get("created_at") or _utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or _utc_now_iso()),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 class PersistentProductJobStore(InMemoryProductJobStore):
     """Durable V3 Job records for Project Mode and restart-safe delivery.
 
@@ -1266,57 +1323,7 @@ class PersistentProductJobStore(InMemoryProductJobStore):
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        if not isinstance(payload, dict) or payload.get("schema_version") != self.schema_version:
-            return None
-        try:
-            return ProductJobRecord(
-                request=CreateCreativeJobRequest.model_validate(payload["request"]),
-                status=ProductJobStatusValue(payload["status"]),
-                job_id_value=str(payload["job_id"]),
-                planning_result=(
-                    PlanningResult.model_validate(payload["planning_result"])
-                    if isinstance(payload.get("planning_result"), dict)
-                    else None
-                ),
-                generation_result=(
-                    PlanningResult.model_validate(payload["generation_result"])
-                    if isinstance(payload.get("generation_result"), dict)
-                    else None
-                ),
-                scenario_resolution=(
-                    ScenarioPackResolution.model_validate(payload["scenario_resolution"])
-                    if isinstance(payload.get("scenario_resolution"), dict)
-                    else None
-                ),
-                capability_run=(
-                    CapabilityRunResult.model_validate(payload["capability_run"])
-                    if isinstance(payload.get("capability_run"), dict)
-                    else None
-                ),
-                selected_result=(
-                    SelectedResult.model_validate(payload["selected_result"])
-                    if isinstance(payload.get("selected_result"), dict)
-                    else None
-                ),
-                lifecycle=(
-                    JobLifecycleRecord.model_validate(payload["lifecycle"])
-                    if isinstance(payload.get("lifecycle"), dict)
-                    else None
-                ),
-                ecommerce_authority_snapshot=(
-                    ProductApiEcommerceAuthoritySnapshot.from_payload(
-                        payload["ecommerce_authority_snapshot"]
-                    )
-                    if isinstance(payload.get("ecommerce_authority_snapshot"), dict)
-                    else None
-                ),
-                balance_estimate=dict(payload.get("balance_estimate") or {}),
-                warnings=[str(item) for item in payload.get("warnings") or []],
-                created_at=str(payload.get("created_at") or _utc_now_iso()),
-                updated_at=str(payload.get("updated_at") or _utc_now_iso()),
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
+        return deserialize_product_job_record(payload, schema_version=self.schema_version)
 
     def _write_record(self, record: ProductJobRecord) -> None:
         if not _valid_product_job_id(record.job_id):

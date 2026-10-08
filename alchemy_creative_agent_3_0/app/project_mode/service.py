@@ -15,10 +15,11 @@ from pathlib import Path
 import re
 import threading
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Generator
 from uuid import uuid4
 
 from ..app_shell.routes import API_NAMESPACE
+from ..browse_protocol import BrowseScope, BrowseJobRead, BrowseCheckpoint, drive_browse_reads
 from ..creative_core.doc281_output_plan_binding import (
     DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
     validate_doc73_binding,
@@ -2577,6 +2578,22 @@ class V3ProjectModeService:
         surface: str | None = None,
         project_ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        return drive_browse_reads(
+            self.iter_project_output_reads(
+                limit, owner_user_id, compact, project_id, surface, project_ids,
+            ),
+            getattr(self, "product_service", None),
+        )
+
+    def iter_project_output_reads(
+        self,
+        limit: int = 60,
+        owner_user_id: int | None = None,
+        compact: bool = False,
+        project_id: str | None = None,
+        surface: str | None = None,
+        project_ids: list[str] | None = None,
+    ) -> Generator[Any, Any, dict[str, Any]]:
         bounded_limit = max(1, min(int(limit or 60), 200))
         requested_surface = str(surface or "").strip().lower()
         items: list[dict[str, Any]] = []
@@ -2617,12 +2634,12 @@ class V3ProjectModeService:
                 # prevents a read-only image request from parsing every
                 # no-output Job (and then parsing output-bearing Jobs again
                 # for review/history projections).
-                read_snapshot = self._project_output_read_snapshot(
+                read_snapshot = (yield from self._project_output_read_snapshot_steps(
                     [project],
                     use_project_index=True,
                     prefetch_job_state=True,
                     candidate_job_outputs_only=True,
-                )
+                ))
                 self._reconcile_project_outputs(
                     project,
                     output_records_by_job=read_snapshot["records_by_job"],
@@ -2727,7 +2744,7 @@ class V3ProjectModeService:
                     if project.status != ProjectStatus.ARCHIVED
                     and self._project_visible_to_owner(project, owner_user_id)
                 ]
-            snapshot = self._project_output_read_snapshot(
+            snapshot = (yield from self._project_output_read_snapshot_steps(
                 preview_projects,
                 use_project_index=True,
                 # Home must read Job state lazily through the existing
@@ -2737,7 +2754,7 @@ class V3ProjectModeService:
                 prefetch_job_state=False,
                 include_declared_job_output_fallback=True,
                 project_index_limit=_HOME_PREVIEW_MAX_INDEX_RECORDS,
-            )
+            ))
             project_output_counts: dict[str, int] = {}
             project_review_counts: dict[str, int] = {}
             project_history_counts: dict[str, int] = {}
@@ -2948,7 +2965,7 @@ class V3ProjectModeService:
             if project.status != ProjectStatus.ARCHIVED
             and self._project_visible_to_owner(project, owner_user_id)
         ]
-        snapshot = self._project_output_read_snapshot(output_projects)
+        snapshot = (yield from self._project_output_read_snapshot_steps(output_projects))
         for project in output_projects:
             output_projection_project = self._project_with_indexed_output_jobs(project)
             items.extend(
@@ -3013,6 +3030,26 @@ class V3ProjectModeService:
         include_declared_job_output_fallback: bool = False,
         project_index_limit: int = _HOME_PREVIEW_MAX_INDEX_RECORDS,
     ) -> dict[str, dict[str, Any]]:
+        return drive_browse_reads(
+            self._project_output_read_snapshot_steps(
+                projects, use_project_index=use_project_index,
+                prefetch_job_state=prefetch_job_state,
+                candidate_job_outputs_only=candidate_job_outputs_only,
+                include_declared_job_output_fallback=include_declared_job_output_fallback,
+                project_index_limit=project_index_limit,
+            ), getattr(self, "product_service", None),
+        )
+
+    def _project_output_read_snapshot_steps(
+        self,
+        projects: list[ProjectRecord],
+        *,
+        use_project_index: bool = False,
+        prefetch_job_state: bool = True,
+        candidate_job_outputs_only: bool = False,
+        include_declared_job_output_fallback: bool = False,
+        project_index_limit: int = _HOME_PREVIEW_MAX_INDEX_RECORDS,
+    ) -> Generator[Any, Any, dict[str, dict[str, Any]]]:
         """Build one request-scoped Job/output read snapshot.
 
         The snapshot is disposable and never becomes an authority. It keeps
@@ -3024,6 +3061,7 @@ class V3ProjectModeService:
         not hidden.
         """
 
+        yield BrowseScope(tuple(projects))
         snapshot: dict[str, dict[str, Any]] = {
             "records_by_project": {},
             "records_by_job": {},
@@ -3066,6 +3104,7 @@ class V3ProjectModeService:
                     project_id = str(project.project_id or "").strip()
                     if project_id:
                         snapshot["project_index_complete"][project_id] = False
+            yield BrowseCheckpoint()
             return snapshot
 
         for project in projects:
@@ -3334,9 +3373,8 @@ class V3ProjectModeService:
                 job_record = None
                 try:
                     if callable(get_job_read_snapshot):
-                        job_status, job_record = get_job_read_snapshot(
-                            job_id,
-                            output_records=snapshot["records_by_job"].get(job_id),
+                        job_status, job_record = yield BrowseJobRead(
+                            job_id, snapshot["records_by_job"].get(job_id),
                         )
                     else:
                         job_status = get_job(job_id)
@@ -3356,6 +3394,8 @@ class V3ProjectModeService:
                         snapshot["job_read_failures"].add(job_id)
                         job_record = None
                 snapshot["job_record_by_id"][job_id] = self._project_output_job_record_projection(job_record)
+                job_record = None
+                job_status = None
                 if use_project_index and not candidate_job_outputs_only:
                     # A project index miss is a bounded preview miss. Do not
                     # fall back to a full Job scan on the home surface.
@@ -3372,6 +3412,7 @@ class V3ProjectModeService:
                         snapshot["records_by_job"][job_id] = []
                 else:
                     snapshot["records_by_job"].setdefault(job_id, [])
+        yield BrowseCheckpoint()
         return snapshot
 
     @staticmethod
