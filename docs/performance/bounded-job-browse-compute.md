@@ -265,3 +265,170 @@ After the fix:
 
 No live provider, user computer, VPS, deployment, or merge was used. The
 opt-in default and deployment qualification requirements remain unchanged.
+
+## Output-snapshot provenance correction model (2026-10-08)
+
+Output metadata prefetched for later Jobs (and project-linked records with no
+candidate Job read) must retain the disk revision that produced each object.
+Previously, the per-Job guard sampled output.json only when that Job reached
+its suspension point. An in-place external owner repair or metadata deletion
+during an earlier worker read could therefore bind an old object to a newer
+revision or absence. The async response exposed six outputs while a fresh
+synchronous response exposed five. This is a shared persistence/read-boundary
+freshness defect; output ownership, Job expiry/recovery, and final-delivery
+predicates remain the existing authorities.
+
+The minimal complete repair has two parts: each loaded output carries private,
+nonserialized read provenance, preserved on cache hits and beyond LRU eviction;
+and every batch/fallback output read emits an owner-only registration event
+before suspension or consumption. The async guard binds that evidence to the
+current canonical path and rejects missing, changed, or unbound provenance.
+Pre/post decode revisions must agree before a record receives usable evidence.
+A new stat is only supporting evidence, never authority for old decoded bytes.
+The synchronous driver ignores registration events and retains existing domain
+read/error behavior. Scope changes close the generator and restart through the
+fresh synchronous authority, outside the generator's domain-error handlers.
+
+This includes project-linked orphan outputs, lazy compatibility reads, and
+post-Job completion reads. Registration and final checkpoint validation are
+linear in the output records/paths already visited, with no per-Job whole-scope
+rescan, extra output decode, new global cache, or altered full-detail limit.
+Read evidence lives only as long as its existing record object and does not
+change persisted/public dataclass fields. Original-file, Project, Job, expiry,
+and closure guards remain in force. No provider or delivery policy changes.
+
+### Output-snapshot correction verification
+
+The tested code/test commit is `77d36e37a57c90ebb94cb434dbd0a43b8f025170`
+(tree `3b4db53525997f512016746b5f4689c2596fe503`), based on fetched PR head
+`befc0834f0ef889cbc70f87f6fb4eb75fa2e9d41`. Subsequent edits to this section
+are documentation-only. These results supersede the earlier snapshot-safety
+conclusion and are not additive to the historical test counts above.
+
+- The untouched baseline failed **10 of 12** deterministic matrix cases.
+  Later output owner transfer/deletion during an actual earlier Job worker
+  wait leaked stale records in detail/global, with large or small later Jobs.
+  Project-linked orphan rows exposed the same bug in detail history: five
+  formal items plus one history item should become five formal and no history.
+- All **22 new repository regressions passed**. They cover those cases,
+  registration gaps before the first await, external replacement/deletion,
+  refreshed cache identities, live same-object metadata, combined-index
+  fallback, bounded-LRU eviction without synchronous restart, unchanged
+  persisted/public fields, and mutation during output JSON decoding. Fixtures
+  contain real offline materialized images; parity is not empty-response-only.
+- Independent final acceptance passed **285 Python tests**, with **10 actual
+  Chromium-launch cases deselected** and eight existing FastAPI deprecation
+  warnings (92.15 seconds). This is the existing 244-test backend selection,
+  the 22 new tests, 17 external auditor cases, and two independent two-worker
+  capacity cases. The repository-only portion is 266 tests; the external
+  cases are independent simulation evidence, not additional checked-in tests.
+  Separately, **19 Node VM/source frontend tests passed**. Rendered browser UI
+  remains unverified because Chromium is absent.
+- The independent capacity cases verified two distinct executing child PIDs,
+  three physically retained admitted tasks after timeout/cancellation, 1,000
+  further admissions rejected, later drainage to zero, and rejection after
+  shutdown. Existing ownership, expiry/recovery, closure, full-history output,
+  and persistent-memory regressions remained green.
+- `git diff --check` and Python compilation passed. Default checkout storage
+  inventories were unchanged. No provider, user computer, VPS, merge, or
+  deployment was used.
+
+Run the existing backend selection above with
+`tests/test_v3_browse_output_snapshot.py` added. The frontend source/VM checks
+are `node --test tests/v3_browse_cpu_optimization.test.mjs
+ tests/v3_frontend_terminal_contract.test.mjs
+ tests/v3_mobile_terminal_contract.test.mjs` (one shell command).
+
+### Fresh performance qualification: no speedup established
+
+A fresh independent run on the corrected tree repeated worker order
+`0,1,2,2,1,0` for ordinary and heavy detail (five rounds, ten measured requests
+per run), plus `0,1,2` for a heavy global smoke (two rounds). All **132 measured
+requests and 30 warmup requests succeeded**; every measured response pair
+matched the disabled baseline. Runtime roots were isolated and default
+checkout storage was unchanged. There was no scope or child-decode fallback.
+Ordinary Jobs stayed inline; heavy detail decoded 60 Jobs per ten requests,
+heavy global 288 per four requests. Both workers accumulated CPU.
+
+The Linux cloud host had nine CPUs and about 9.73 GiB reported memory. The
+benchmark restricted endpoint/descendant CPU affinity to CPUs 0 and 1, but
+**did not impose a 2 GiB memory limit**. The fixture used 24 projects, 144 Jobs,
+16-pixel PNGs, and the real direct async endpoint without HTTP or providers.
+Ordinary Jobs were approximately 223 KB; heavy Jobs approximately 1.78 MB.
+A temporary observer retained every response pair and hashed them after the
+timing interval. This adds small retained response-object memory; hash CPU is
+outside timing. No benchmark instrumentation changed production code.
+
+| Workload | Workers | Requests/s | p95 ms | Maximum heartbeat gap ms | Sampled process-tree MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ordinary detail | 0 | 38.02–38.88 | 57–59 | 57–59 | 93–101 |
+| Ordinary detail | 1 | 34.24–39.35 | 54–65 | 54–65 | 99–101 |
+| Ordinary detail | 2 | 38.47–38.97 | 57–58 | 57–58 | 96 |
+| Heavy detail | 0 | 10.03–10.60 | 229–239 | 229–239 | 97–102 |
+| Heavy detail | 1 | 7.56–8.46 | 298–334 | 63–75 | 186–187 |
+| Heavy detail | 2 | 8.68–8.97 | 293–351 | 80–114 | 249–250 |
+| Heavy global smoke | 0 | 0.764 | 2640 | 2641 | 143 |
+| Heavy global smoke | 1 | 0.631 | 3205 | 253 | 223 |
+| Heavy global smoke | 2 | 0.766 | 2819 | 228 | 285 |
+
+These monitored results **do not establish throughput improvement or latency
+non-regression**. In these monitored runs, heavy detail was slower with one or
+two workers; global throughput roughly matched disabled with two and was lower
+with one. The observer-control result below prevents attributing that entire
+measured slowdown to the product itself. Process
+decoding reduced owner CPU and heartbeat stalls while increasing sampled
+process-tree memory. Ordinary-path variation is noise despite no workers being
+spawned. Keep the opt-in default off. Earlier performance measurements above
+are historical and must not be presented as a current speedup guarantee.
+
+Process startup and reconciliation remain outside the warm measurements;
+heavy detail worker warmups were approximately 1.12–1.39 seconds. Sampled RSS
+excludes the fixture controller and is not a strict heap maximum. Actual VPS
+memory headroom, real image costs, cold first-open behavior, and concurrent
+generation still need separate deployment-specific qualification.
+
+**Performance acceptance: NOT_ACCEPTED / HOLD.** Leave
+`V3_BROWSE_COMPUTE_WORKERS=0`, keep the PR Draft, and do not recommend merge or
+activation on the strength of this correctness pass. This supersedes the
+historical 5–15% speedup interpretation. No further speculative tuning was
+made in this correction.
+
+A next design iteration needs a measured end-to-end cost breakdown separating
+worker decode, per-Job submission/IPC, owner unpickle, output catalog/integrity
+reads, and reconciliation. Reduced owner CPU alone is insufficient evidence
+of faster completion. Any batching or crossover-policy proposal must retain
+read-time provenance, final freshness validation, bounded physical admission,
+and full-result semantics, then demonstrate repeatable latency/throughput
+benefit and acceptable deployment memory before activation is reconsidered.
+
+
+### Bounded low-observer control
+
+One additional control removed the whole-`/proc` 10 ms sampling thread and the
+2 ms heartbeat from the temporary benchmark copy, leaving the same two-CPU
+affinity, heavy-detail fixture, and every-round response comparison. This
+checks whether observer scheduling/GIL contention contributes to the monitored
+results; it does not change production code. Worker order was `0,2,2,0`, with
+ten rounds and 20 measured requests per run.
+
+| Workers, in run order | Requests/s | p95 ms | Owner CPU seconds per 20 requests |
+| --- | ---: | ---: | ---: |
+| 0 | 9.719 | 269.1 | 2.056 |
+| 2 | 9.718 | 232.6 | 0.770 |
+| 2 | 9.283 | 312.8 | 0.826 |
+| 0 | 9.215 | 277.9 | 2.170 |
+
+All **80 additional measured requests and eight warmups** succeeded, with zero
+errors, every measured response pair matching the disabled baseline, isolated
+runtime roots, and unchanged checkout storage. This control intentionally
+provides no memory or heartbeat measurement.
+
+Two-worker throughput overlapped disabled throughput (approximately parity),
+and p95 moved in both directions. The monitored slowdown therefore cannot be
+attributed entirely to intrinsic product cost; neither an intrinsic regression
+nor a universal speedup is established. The historical 5–15% speedup claim
+remains superseded. **Performance acceptance remains NOT_ACCEPTED / HOLD
+because a repeatable end-to-end benefit and latency non-regression have not
+been demonstrated.** Keep workers at zero and the PR Draft; do not recommend
+activation or merge on this evidence. No further tuning or benchmark runs were
+performed after this bounded control.

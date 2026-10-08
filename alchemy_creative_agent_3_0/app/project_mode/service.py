@@ -19,7 +19,7 @@ from typing import Any, Generator
 from uuid import uuid4
 
 from ..app_shell.routes import API_NAMESPACE
-from ..browse_protocol import BrowseScope, BrowseJobRead, BrowseCheckpoint, drive_browse_reads
+from ..browse_protocol import BrowseScope, BrowseOutputs, BrowseJobRead, BrowseCheckpoint, drive_browse_reads
 from ..creative_core.doc281_output_plan_binding import (
     DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
     validate_doc73_binding,
@@ -3136,6 +3136,7 @@ class V3ProjectModeService:
                         )
                     except TypeError:
                         project_records = list(batch_list(project_id, declared_job_ids))
+                    yield BrowseOutputs(project_records)
                     batch_project_index_loaded = True
                     if use_project_index and not prefetch_job_state:
                         snapshot["project_index_complete"][project_id] = (
@@ -3172,6 +3173,7 @@ class V3ProjectModeService:
                         project_records = list(list_by_project(project_id, limit=4097))
                     except TypeError:
                         project_records = list(list_by_project(project_id))
+                    yield BrowseOutputs(project_records)
                     snapshot["records_by_project"][project_id] = project_records
                     snapshot["project_index_complete"][project_id] = False
                     project_link_fallback_loaded = True
@@ -3198,6 +3200,7 @@ class V3ProjectModeService:
                     try:
                         bounded_index_limit = max(1, int(project_index_limit or _HOME_PREVIEW_MAX_INDEX_RECORDS))
                         project_records = list(list_by_project(project_id, limit=bounded_index_limit + 1))
+                        yield BrowseOutputs(project_records)
                         # ``list_by_project`` is a bounded locator.  Read one
                         # sentinel record so an exact-count home response
                         # cannot call a truncated index "complete".
@@ -3254,6 +3257,7 @@ class V3ProjectModeService:
                             break
                         try:
                             fallback_records = read_job_outputs(fallback_job_id, bounded=True)
+                            yield BrowseOutputs(fallback_records)
                         except Exception:
                             declared_job_scan_complete = False
                             continue
@@ -3320,6 +3324,7 @@ class V3ProjectModeService:
                                 job_id,
                                 bounded=not prefetch_job_state,
                             )
+                            yield BrowseOutputs(job_outputs)
                             existing_job_outputs = snapshot["records_by_job"].get(job_id, [])
                             seen_job_output_ids = {
                                 str(getattr(item, "output_id", "") or "").strip()
@@ -3408,6 +3413,7 @@ class V3ProjectModeService:
                 ):
                     try:
                         snapshot["records_by_job"][job_id] = list(list_by_job(job_id))
+                        yield BrowseOutputs(snapshot["records_by_job"][job_id])
                     except Exception:
                         snapshot["records_by_job"][job_id] = []
                 else:
