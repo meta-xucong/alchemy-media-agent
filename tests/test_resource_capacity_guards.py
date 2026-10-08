@@ -18,6 +18,7 @@ from app.services import generation_capacity as capacity_module
 from app.services.generation_capacity import run_with_generation_capacity
 from app.services import history_scan_capacity as history_scan_module
 from app.main import app as v1_app
+import app.main as main_module
 from app.main import _read_limited_request_body, _require_output_visible, delete_image_history_item, favorite_image_history_item
 from app.config import settings
 import app.services.alchemy_lab as alchemy_lab
@@ -574,6 +575,51 @@ def test_lab_limits_active_sessions_and_releases_slot_on_completion(tmp_path: Pa
         await asyncio.gather(*active)
         with generation_capacity(tmp_path, limit=1, namespace="lab-session"):
             pass
+
+    asyncio.run(exercise())
+
+
+def test_lab_history_route_offloads_and_rejects_when_scan_capacity_is_full(monkeypatch) -> None:
+    from app.main import list_alchemy_lab_history
+    from starlette.requests import Request
+
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    started = threading.Event()
+    finish = threading.Event()
+    observed: list[tuple[int | None, bool, int]] = []
+
+    def slow_history(*, limit, include_mock, veyra_user_id, is_admin):
+        observed.append((veyra_user_id, is_admin, threading.get_ident()))
+        started.set()
+        assert finish.wait(5)
+        return {"items": [], "total": limit}
+
+    async def history_context(_request, _authorization):
+        return {"user_id": 23, "is_admin": False}
+
+    monkeypatch.setattr(main_module, "list_lab_history", slow_history)
+    monkeypatch.setattr(main_module, "_veyra_history_context", history_context)
+    request = Request({"type": "http", "method": "GET", "path": "/api/lab/history", "headers": []})
+
+    async def exercise() -> None:
+        event_loop_thread = threading.get_ident()
+        first = asyncio.create_task(
+            list_alchemy_lab_history(request, limit=80, include_mock=True, authorization="test")
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        loop_ticked = asyncio.Event()
+        asyncio.get_running_loop().call_soon(loop_ticked.set)
+        await asyncio.wait_for(loop_ticked.wait(), timeout=1)
+        with pytest.raises(HTTPException) as full:
+            await list_alchemy_lab_history(request, limit=80, include_mock=True, authorization="test")
+        assert full.value.status_code == 429
+        assert full.value.detail["retryable"] is True
+        finish.set()
+        response = await first
+        assert response == {"items": [], "total": 80}
+        assert len(observed) == 1
+        assert observed[0][:2] == (23, False)
+        assert observed[0][2] != event_loop_thread
 
     asyncio.run(exercise())
 

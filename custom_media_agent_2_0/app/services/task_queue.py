@@ -39,6 +39,10 @@ class QueueStorageBusy(RuntimeError):
     """Raised when bounded queue persistence is saturated or locked."""
 
 
+class StaleTaskClaim(RuntimeError):
+    """Raised when a superseded worker tries to commit task-owned output."""
+
+
 @dataclass(frozen=True)
 class QueuedTask:
     task_id: str
@@ -268,6 +272,47 @@ def task_claim_is_current(claim: QueuedTask | None) -> bool:
             (claim.task_id, claim.worker_id, claim.claim_token),
         ).fetchone()
     return row is not None
+
+
+def current_claim() -> QueuedTask | None:
+    return _CURRENT_CLAIM.get()
+
+
+def ensure_current_claim(claim: QueuedTask | None = None) -> None:
+    active_claim = claim or current_claim()
+    if active_claim is not None and not task_claim_is_current(active_claim):
+        raise StaleTaskClaim("The V2 task claim was superseded before output commit.")
+
+
+def persist_claimed_operation(operation):
+    """Commit local task-owned effects only while this claim fences queue takeover.
+
+    Keep the transaction around local persistence only. Provider and billing
+    network calls must happen outside this lock.
+    """
+
+    claim = current_claim()
+    if claim is None:
+        return operation()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT 1 FROM v2_tasks
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (claim.task_id, claim.worker_id, claim.claim_token),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            raise StaleTaskClaim("The V2 task claim was superseded before output commit.")
+        try:
+            result = operation()
+            conn.commit()
+            return result
+        except BaseException:
+            conn.rollback()
+            raise
 
 
 def claim_heartbeat_interval_seconds() -> float:

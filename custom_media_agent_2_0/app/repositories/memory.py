@@ -103,6 +103,12 @@ class InMemoryV2Repository:
     def get_image_job(self, job_id: str) -> ImageJob | None:
         return self.image_jobs.get(job_id)
 
+    def delete_image_job(self, job_id: str) -> ImageJob | None:
+        job = self.image_jobs.get(job_id)
+        if job is None or job.status != "running" or job.outputs:
+            return None
+        return self.image_jobs.pop(job_id, None)
+
     def get_output(self, output_id: str) -> ImageOutput | None:
         return self.outputs.get(output_id)
 

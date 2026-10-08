@@ -104,6 +104,76 @@ def test_superseded_claim_cannot_mutate_new_attempt(tmp_path: Path, monkeypatch,
     assert snapshot is not None and snapshot.run_id == run_id
 
 
+def test_v2_queued_billing_idempotency_is_stable_across_worker_job_ids(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.services import generation
+
+    _configure_queue(tmp_path, monkeypatch)
+    _enqueue("run_billing_idempotency")
+    claim = task_queue.claim_next_task("worker-billing")
+    assert claim is not None
+    rule = SimpleNamespace(key="alchemy:v2")
+
+    with task_queue.claimed_task(claim):
+        first_attempt = generation._billing_idempotency_key(rule, "job_attempt_one")
+        second_attempt = generation._billing_idempotency_key(rule, "job_attempt_two")
+        first_reference = generation._billing_reference_id("job_attempt_one")
+        second_reference = generation._billing_reference_id("job_attempt_two")
+
+    assert first_attempt == second_attempt == f"alchemy:v2:task:{claim.task_id}"
+    assert first_reference == second_reference == claim.task_id
+    assert generation._billing_idempotency_key(rule, "job_direct") == "alchemy:v2:image:job_direct"
+    assert generation._billing_reference_id("job_direct") == "job_direct"
+
+
+def test_claim_write_fence_prevents_takeover_during_local_commit(tmp_path: Path, monkeypatch) -> None:
+    _configure_queue(tmp_path, monkeypatch)
+    _enqueue("run_claim_commit_fence")
+    claim = task_queue.claim_next_task("worker-commit")
+    assert claim is not None
+
+    commit_started = threading.Event()
+    allow_commit = threading.Event()
+    takeover_finished = threading.Event()
+    committed: list[str] = []
+    replacement_claims = []
+
+    def local_commit() -> str:
+        commit_started.set()
+        assert allow_commit.wait(3)
+        committed.append("saved")
+        return "saved"
+
+    def persist() -> None:
+        with task_queue.claimed_task(claim):
+            assert task_queue.persist_claimed_operation(local_commit) == "saved"
+
+    def take_over() -> None:
+        _make_stale(claim)
+        replacement_claims.append(task_queue.claim_next_task("worker-replacement-commit"))
+        takeover_finished.set()
+
+    persister = threading.Thread(target=persist, daemon=True)
+    persister.start()
+    assert commit_started.wait(2)
+    takeover = threading.Thread(target=take_over, daemon=True)
+    takeover.start()
+    try:
+        assert not takeover_finished.wait(0.1)
+    finally:
+        allow_commit.set()
+    persister.join(3)
+    takeover.join(3)
+
+    assert not persister.is_alive()
+    assert not takeover.is_alive()
+    assert committed == ["saved"]
+    assert takeover_finished.is_set()
+    assert replacement_claims[0] is not None
+    assert replacement_claims[0].claim_token != claim.claim_token
+
+
 def test_legacy_queue_schema_adds_claim_fencing_columns(tmp_path: Path, monkeypatch) -> None:
     database_path = tmp_path / "legacy.sqlite3"
     monkeypatch.setattr(
@@ -282,6 +352,158 @@ def test_lost_claim_during_preflight_is_rechecked_before_provider(tmp_path: Path
     assert row["status"] == "running"
     assert row["locked_by"] == "worker-replacement"
     assert row["claim_token"] == replacement.claim_token
+
+
+def test_lost_claim_during_provider_does_not_commit_job_output_history_or_charge(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    import base64
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from app.providers.images.base import V2ImageProviderOutput, V2ImageProviderResult
+    from app.repositories import repository
+    from app.schemas import CreateImageJobRequest, ImagePromptPlan
+    from app.services import generation, image_history, output_storage, queue_worker, veyra_usage
+
+    database_path = tmp_path / "provider-fence.sqlite3"
+    runtime_settings = replace(
+        settings,
+        task_queue_db_path=database_path,
+        task_queue_claim_timeout_seconds=30.0,
+        task_queue_max_attempts=4,
+        task_queue_max_pending=20,
+        max_concurrent_image_generations=1,
+        storage_dir=tmp_path / "storage",
+        image_history_path=tmp_path / "image_history.jsonl",
+        veyra_usage_path=tmp_path / "veyra_usage.jsonl",
+        persist_image_history=True,
+        veyra_auth_enabled=True,
+    )
+    monkeypatch.setattr(task_queue, "settings", runtime_settings)
+    monkeypatch.setattr(queue_worker, "settings", runtime_settings)
+    monkeypatch.setattr(generation, "settings", runtime_settings)
+    monkeypatch.setattr(output_storage, "settings", runtime_settings)
+    monkeypatch.setattr(image_history, "settings", runtime_settings)
+    monkeypatch.setattr(veyra_usage, "settings", runtime_settings)
+    task_queue.initialize_task_queue()
+    repository.reset()
+
+    run_id = "run_claim_lost_during_provider"
+    queued_run = _run(run_id)
+    task_queue.enqueue_creative_task(
+        kind="creative_run",
+        request_payload={"user_prompt": "offline fake"},
+        queued_run=queued_run,
+    )
+
+    provider_started = threading.Event()
+    finish_provider = threading.Event()
+    provider_image = BytesIO()
+    Image.new("RGB", (16, 16), "white").save(provider_image, format="PNG")
+    encoded_png = base64.b64encode(provider_image.getvalue()).decode("ascii")
+
+    class FakeProvider:
+        name = "fake_image"
+
+        async def generate(self, _request):
+            provider_started.set()
+            await asyncio.to_thread(finish_provider.wait, 5)
+            return V2ImageProviderResult(
+                provider=self.name,
+                model="fake-image-v1",
+                outputs=[V2ImageProviderOutput(b64_json=encoded_png, mime_type="image/png", format="png")],
+            )
+
+    monkeypatch.setattr(generation, "get_v2_image_provider", lambda _hint: asyncio.sleep(0, result=FakeProvider()))
+    monkeypatch.setattr(generation, "_ensure_veyra_balance", lambda **_kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(
+        generation,
+        "get_billing_rule",
+        lambda _key: SimpleNamespace(key="alchemy:v2", enabled=True, charge_amount=1.0, source="alchemy"),
+    )
+    monkeypatch.setattr(generation, "_should_bill_veyra", lambda *_args, **_kwargs: True)
+    debit_calls: list[dict] = []
+
+    class FakeBillingClient:
+        async def debit(self, **kwargs):
+            debit_calls.append(kwargs)
+            return SimpleNamespace(
+                user_id=17,
+                amount=1.0,
+                balance_after=9.0,
+                idempotency_key=kwargs["idempotency_key"],
+                replayed=False,
+            )
+
+    monkeypatch.setattr(generation, "VeyraSub2APIClient", FakeBillingClient)
+
+    claim_by_worker = {}
+    original_claim = task_queue.claim_next_task
+
+    def observe_claim(worker_id: str):
+        claim = original_claim(worker_id)
+        if claim is not None:
+            claim_by_worker[worker_id] = claim
+        return claim
+
+    monkeypatch.setattr(task_queue, "claim_next_task", observe_claim)
+    monkeypatch.setattr(task_queue, "claim_heartbeat_interval_seconds", lambda: 30.0)
+
+    class Runtime:
+        async def complete_queued_run(self, _request, active_run_id: str):
+            image_request = CreateImageJobRequest(
+                run_id=active_run_id,
+                prompt_plan=ImagePromptPlan(
+                    plan_id="plan_claim_loss_provider",
+                    mode="smart_enhance",
+                    prompt="Offline fake provider output.",
+                ),
+                provider_hint="fake_image",
+                veyra_user_id=17,
+            )
+            running_job = await generation.create_running_image_job(image_request)
+            job = await generation.create_image_job(
+                image_request,
+                job_id=running_job.job_id,
+                created_at=running_job.created_at,
+            )
+            return _run(active_run_id).model_copy(update={"status": "completed", "generation_jobs": [job]})
+
+    result: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: result.append(queue_worker.process_next_task_once(Runtime(), "worker-old-provider")),
+        daemon=True,
+    )
+    worker.start()
+    try:
+        assert provider_started.wait(3)
+        old_claim = claim_by_worker["worker-old-provider"]
+        _make_stale(old_claim)
+        replacement = original_claim("worker-replacement-provider")
+        assert replacement is not None
+    finally:
+        finish_provider.set()
+
+    worker.join(5)
+    assert not worker.is_alive()
+    assert result == [True]
+    assert debit_calls == []
+    assert repository.image_jobs == {}
+    assert repository.outputs == {}
+    assert not runtime_settings.image_history_path.exists()
+    output_root = runtime_settings.storage_dir / "outputs"
+    assert not output_root.exists() or next(output_root.iterdir(), None) is None
+    with task_queue._connect() as connection:
+        row = connection.execute(
+            "SELECT status, locked_by, claim_token, result_json FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row["status"] == "running"
+    assert row["locked_by"] == "worker-replacement-provider"
+    assert row["claim_token"] == replacement.claim_token
+    assert row["result_json"] is None
 
 
 def test_default_worker_instances_have_distinct_ids_and_claim_lock_errors_recover(tmp_path: Path, monkeypatch) -> None:

@@ -2294,7 +2294,13 @@ async def list_alchemy_lab_history(
 ):
     context = await _veyra_history_context(request, authorization)
     limit = min(limit, 200)
-    return list_lab_history(limit=limit, include_mock=include_mock, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
+    return await run_history_scan(
+        list_lab_history,
+        limit=limit,
+        include_mock=include_mock,
+        veyra_user_id=context.get("user_id"),
+        is_admin=context.get("is_admin", False),
+    )
 
 
 @app.post("/api/lab/uploads")
