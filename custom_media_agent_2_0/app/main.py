@@ -69,7 +69,15 @@ from app.services.veyra_billing_settings import (
     update_billing_settings,
 )
 from app.services.queue_worker import QueueWorker
-from app.services.task_queue import enqueue_creative_task, get_run_snapshot, initialize_task_queue, task_queue_stats
+from app.services.task_queue import (
+    QueueCapacityExceeded,
+    enqueue_creative_task,
+    run_with_generation_capacity,
+    get_run_snapshot,
+    initialize_task_queue,
+    task_queue_stats,
+)
+from app.services.generation_capacity import GenerationCapacityExceeded
 from app.services.uploaded_assets import (
     complete_uploaded_asset,
     create_uploaded_asset,
@@ -152,6 +160,32 @@ async def _prewarm_case_search_index() -> None:
 
 
 app = FastAPI(title="Custom Media Agent 2.0 API", version=settings.version, lifespan=lifespan)
+
+
+def _generation_capacity_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": "5"},
+        detail={
+            "error_code": "generation_capacity",
+            "message": "Image generation is busy. Please retry shortly.",
+            "retryable": True,
+            "retry_after_seconds": 5,
+        },
+    )
+
+
+def _task_queue_capacity_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": "30"},
+        detail={
+            "error_code": "task_queue_full",
+            "message": "The image task queue is full. Please retry shortly.",
+            "retryable": True,
+            "retry_after_seconds": 30,
+        },
+    )
 if settings.cors_allow_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -480,7 +514,12 @@ async def _require_output_visible(request: Request, output_id: str, authorizatio
 @app.post("/api/v2/creative/runs", status_code=202)
 async def create_creative_run(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
     _require_creative_asset_count(body.assets)
-    return await creative_manager.run(_with_veyra_user(body, request, authorization))
+    try:
+        return await run_with_generation_capacity(
+            lambda: creative_manager.run(_with_veyra_user(body, request, authorization))
+        )
+    except GenerationCapacityExceeded as exc:
+        raise _generation_capacity_http_error() from exc
 
 
 @app.post("/api/v2/creative/runs/async", status_code=202)
@@ -488,7 +527,11 @@ async def create_creative_run_async(body: CreateCreativeRunRequest, request: Req
     _require_creative_asset_count(body.assets)
     body = _with_veyra_user(body, request, authorization)
     queued = creative_manager.queue_run(body)
-    enqueue_creative_task(kind="creative_run", request_payload=body.model_dump(mode="json"), queued_run=queued)
+    try:
+        enqueue_creative_task(kind="creative_run", request_payload=body.model_dump(mode="json"), queued_run=queued)
+    except QueueCapacityExceeded as exc:
+        repository.delete_creative_run(queued.run_id)
+        raise _task_queue_capacity_http_error() from exc
     return queued
 
 
@@ -503,11 +546,20 @@ async def put_upload_content(asset_id: str, request: Request, authorization: str
     _require_uploaded_asset_visible(request, asset_id, authorization)
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if content_type == "application/json":
-        body = AssetContentUploadRequest.model_validate(await request.json())
+        wire_limit = (settings.max_uploaded_asset_bytes * 4 + 2) // 3 + 64 * 1024
+        try:
+            payload = json.loads(await _read_limited_request_body(request, wire_limit))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail={"error_code": "invalid_asset_upload", "message": "Asset upload body must be valid JSON."}) from exc
+        body = AssetContentUploadRequest.model_validate(payload)
         asset = store_uploaded_asset_content(asset_id, body)
     else:
         mime_type = request.headers.get("x-asset-mime-type") or content_type or None
-        asset = store_uploaded_asset_bytes(asset_id, await request.body(), mime_type=mime_type)
+        asset = store_uploaded_asset_bytes(
+            asset_id,
+            await _read_limited_request_body(request, settings.max_uploaded_asset_bytes),
+            mime_type=mime_type,
+        )
     if not asset:
         raise HTTPException(status_code=404, detail={"error_code": "asset_not_found", "message": "Uploaded asset not found."})
     if asset.status == "failed":
@@ -520,6 +572,30 @@ async def put_upload_content(asset_id: str, request: Request, authorization: str
             },
         )
     return asset
+
+
+async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail={"error_code": "asset_too_large", "message": f"Upload exceeds {max_bytes} bytes."},
+                )
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={"error_code": "asset_too_large", "message": f"Upload exceeds {max_bytes} bytes."},
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @app.post("/api/v2/uploads/{asset_id}/complete")
@@ -777,7 +853,12 @@ def provider_sync_run(provider_id: str, sync_run_id: str, request: Request, auth
 
 @app.post("/api/v2/image/jobs", status_code=202)
 async def image_job(body: CreateImageJobRequest, request: Request, authorization: str = Header(default="")):
-    return await create_image_job(_image_job_with_veyra_user(body, request, authorization))
+    try:
+        return await run_with_generation_capacity(
+            lambda: create_image_job(_image_job_with_veyra_user(body, request, authorization))
+        )
+    except GenerationCapacityExceeded as exc:
+        raise _generation_capacity_http_error() from exc
 
 
 @app.get("/api/v2/image/history", response_model=ImageHistoryResponse)
@@ -788,10 +869,11 @@ async def image_history(
     authorization: str = Header(default=""),
 ):
     if not settings.veyra_auth_enabled:
-        return list_image_history(limit=limit, offset=offset)
+        return await asyncio.to_thread(list_image_history, limit, offset=offset)
     context = await _veyra_request_context(request, authorization)
-    return list_image_history(
-        limit=limit,
+    return await asyncio.to_thread(
+        list_image_history,
+        limit,
         offset=offset,
         veyra_user_id=context["user_id"],
         include_legacy_public=True,
@@ -922,7 +1004,10 @@ async def output_revision(output_id: str, body: CreateRevisionRunRequest, reques
             status_code=404,
             detail={"error_code": code, "message": "Revision source output or job not found."},
         ) from exc
-    return await creative_manager.run(request)
+    try:
+        return await run_with_generation_capacity(lambda: creative_manager.run(request))
+    except GenerationCapacityExceeded as exc:
+        raise _generation_capacity_http_error() from exc
 
 
 @app.post("/api/v2/outputs/{output_id}/revisions/async", status_code=202)
@@ -937,5 +1022,9 @@ async def output_revision_async(output_id: str, body: CreateRevisionRunRequest, 
             detail={"error_code": code, "message": "Revision source output or job not found."},
         ) from exc
     queued = creative_manager.queue_run(request)
-    enqueue_creative_task(kind="revision_run", request_payload=request.model_dump(mode="json"), queued_run=queued)
+    try:
+        enqueue_creative_task(kind="revision_run", request_payload=request.model_dump(mode="json"), queued_run=queued)
+    except QueueCapacityExceeded as exc:
+        repository.delete_creative_run(queued.run_id)
+        raise _task_queue_capacity_http_error() from exc
     return queued

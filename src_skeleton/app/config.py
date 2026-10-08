@@ -322,6 +322,17 @@ class Settings(BaseModel):
     runtime_env_path: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_AGENT_RUNTIME_ENV_FILE", ".env")))
     media_storage_root: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_STORAGE_ROOT", ".media_storage")))
     max_asset_upload_bytes: int = _int_env("MAX_ASSET_UPLOAD_BYTES", 12 * 1024 * 1024)
+    max_concurrent_image_generations: int = Field(default_factory=lambda: _int_env("MAX_CONCURRENT_IMAGE_GENERATIONS", 1), ge=1, le=32)
+    generation_capacity_lease_ttl_seconds: float = Field(
+        default_factory=lambda: max(
+            960.0,
+            _float_env("GENERATION_CAPACITY_LEASE_TTL_SECONDS", 960.0),
+            _float_env("OPENAI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", 900.0) + 60.0,
+            _float_env("GEMINI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", 900.0) + 60.0,
+            _float_env("OPENAI_IMAGE_EDIT_REQUEST_TIMEOUT_SECONDS", 420.0) + 60.0,
+        ),
+        ge=960.0,
+    )
     max_asset_upload_count: int = _int_env("MAX_ASSET_UPLOAD_COUNT", 6)
     veyra_auth_enabled: bool = os.getenv("VEYRA_AUTH_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     veyra_sub2api_base_url: str = os.getenv("VEYRA_SUB2API_BASE_URL", "http://127.0.0.1:8080")

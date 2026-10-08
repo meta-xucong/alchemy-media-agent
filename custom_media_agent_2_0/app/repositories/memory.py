@@ -91,6 +91,9 @@ class InMemoryV2Repository:
     def get_creative_run(self, run_id: str) -> CreativeRun | None:
         return self.creative_runs.get(run_id)
 
+    def delete_creative_run(self, run_id: str) -> CreativeRun | None:
+        return self.creative_runs.pop(run_id, None)
+
     def save_image_job(self, job: ImageJob) -> ImageJob:
         self.image_jobs[job.job_id] = job
         for output in job.outputs:

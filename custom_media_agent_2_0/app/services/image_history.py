@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import heapq
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -58,48 +59,55 @@ def list_image_history(
         include_all=include_all,
     )
     records_by_output: dict[str, ImageHistoryItem] = {}
-    for line in settings.image_history_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = ImageHistoryItem.model_validate(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not include_all and veyra_user_id is not None:
-            owner_id = _veyra_user_id(item.metadata)
-            if owner_id != veyra_user_id and not (include_legacy_public and owner_id is None):
+    with settings.image_history_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
                 continue
-        elif not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
-            continue
-        item = _with_veyra_history_access(
-            _normalize_thumbnail_url(item),
-            veyra_user_id=veyra_user_id,
-            include_all=include_all,
-        )
-        item = item.model_copy(update={"favorite": item.output_id in favorite_ids})
-        existing = records_by_output.get(item.output_id)
-        if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):
-            records_by_output[item.output_id] = item
-    items = sorted(records_by_output.values(), key=lambda item: (_timestamp(item.created_at), item.job_id), reverse=True)
+            try:
+                item = ImageHistoryItem.model_validate(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not include_all and veyra_user_id is not None:
+                owner_id = _veyra_user_id(item.metadata)
+                if owner_id != veyra_user_id and not (include_legacy_public and owner_id is None):
+                    continue
+            elif not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
+                continue
+            item = _with_veyra_history_access(
+                _normalize_thumbnail_url(item),
+                veyra_user_id=veyra_user_id,
+                include_all=include_all,
+            )
+            item = item.model_copy(update={"favorite": item.output_id in favorite_ids})
+            existing = records_by_output.get(item.output_id)
+            if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):
+                records_by_output[item.output_id] = item
     safe_offset = max(0, offset)
-    return ImageHistoryResponse(items=items[safe_offset : safe_offset + limit], total=len(items))
+    page_end = safe_offset + max(0, limit)
+    items = heapq.nlargest(
+        page_end,
+        records_by_output.values(),
+        key=lambda item: (_timestamp(item.created_at), item.job_id),
+    )
+    return ImageHistoryResponse(items=items[safe_offset:page_end], total=len(records_by_output))
 
 
 def get_image_history_item(output_id: str) -> ImageHistoryItem | None:
     if not settings.image_history_path.exists():
         return None
     newest: ImageHistoryItem | None = None
-    for line in settings.image_history_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = ImageHistoryItem.model_validate(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if item.output_id != output_id:
-            continue
-        if newest is None or _timestamp(item.updated_at) >= _timestamp(newest.updated_at):
-            newest = item
+    with settings.image_history_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                item = ImageHistoryItem.model_validate(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if item.output_id != output_id:
+                continue
+            if newest is None or _timestamp(item.updated_at) >= _timestamp(newest.updated_at):
+                newest = item
     return newest
 
 

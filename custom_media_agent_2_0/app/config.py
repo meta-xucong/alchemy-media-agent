@@ -93,6 +93,9 @@ class Settings:
     task_queue_poll_interval_seconds: float = 1.0
     task_queue_claim_timeout_seconds: float = 900.0
     task_queue_max_attempts: int = 3
+    task_queue_max_pending: int = 100
+    max_concurrent_image_generations: int = 1
+    generation_capacity_lease_ttl_seconds: float = 960.0
     output_review_agent_enabled: bool = False
     output_review_agent_model: str | None = None
     case_intelligence_provider: str = "rules"
@@ -249,6 +252,15 @@ def load_settings() -> Settings:
         task_queue_poll_interval_seconds=float(os.getenv("V2_TASK_QUEUE_POLL_INTERVAL_SECONDS", "1.0")),
         task_queue_claim_timeout_seconds=float(os.getenv("V2_TASK_QUEUE_CLAIM_TIMEOUT_SECONDS", "900")),
         task_queue_max_attempts=max(1, int(os.getenv("V2_TASK_QUEUE_MAX_ATTEMPTS", "3"))),
+        task_queue_max_pending=max(1, int(os.getenv("V2_TASK_QUEUE_MAX_PENDING", "100"))),
+        max_concurrent_image_generations=max(1, min(32, int(os.getenv("V2_MAX_CONCURRENT_IMAGE_GENERATIONS", "1")))),
+        generation_capacity_lease_ttl_seconds=max(
+            960.0,
+            float(os.getenv("V2_GENERATION_CAPACITY_LEASE_TTL_SECONDS", "960")),
+            float(os.getenv("V2_OPENAI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", "900")) + 60.0,
+            float(os.getenv("V2_GEMINI_IMAGE_TIMEOUT_SECONDS", "900")) + 60.0,
+            float(os.getenv("V2_DOUBAO_IMAGE_TIMEOUT_SECONDS", "300")) + 60.0,
+        ),
         output_review_agent_enabled=os.getenv("V2_OUTPUT_REVIEW_AGENT_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
         output_review_agent_model=os.getenv("V2_OUTPUT_REVIEW_AGENT_MODEL") or None,

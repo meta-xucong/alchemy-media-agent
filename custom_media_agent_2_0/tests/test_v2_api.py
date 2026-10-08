@@ -3727,6 +3727,67 @@ def test_openai_image_high_resolution_timeout_is_900_seconds() -> None:
         )
 
 
+def test_direct_image_job_returns_retryable_capacity_response_before_provider_call() -> None:
+    client = fresh_client()
+    body = {
+        "run_id": "run_capacity_direct",
+        "prompt_plan": {"plan_id": "plan_capacity_direct", "mode": "smart_enhance", "prompt": "offline capacity test"},
+    }
+    with task_queue_service.generation_capacity():
+        response = client.post("/api/v2/image/jobs", json=body)
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "5"
+    assert response.json()["detail"]["error_code"] == "generation_capacity"
+    assert response.json()["detail"]["retryable"] is True
+    assert repository.image_jobs == {}
+
+
+def test_v2_queue_capacity_returns_retryable_429_and_removes_unpublished_run() -> None:
+    client = fresh_client()
+    original_limit = settings.task_queue_max_pending
+    object.__setattr__(settings, "task_queue_max_pending", 1)
+    try:
+        payload = {"user_prompt": "Create a simple offline fake image.", "output": {"count": 1}}
+        first = client.post("/api/v2/creative/runs/async", json=payload)
+        second = client.post("/api/v2/creative/runs/async", json=payload)
+        assert first.status_code == 202
+        assert second.status_code == 429
+        assert second.headers["retry-after"] == "30"
+        assert second.json()["detail"]["error_code"] == "task_queue_full"
+        assert second.json()["detail"]["retryable"] is True
+        assert len(repository.creative_runs) == 1
+        assert task_queue_service.task_queue_stats()["counts"] == {"queued": 1}
+    finally:
+        object.__setattr__(settings, "task_queue_max_pending", original_limit)
+
+
+def test_v2_worker_capacity_retry_reuses_same_durable_task() -> None:
+    client = fresh_client()
+    class RuntimeShouldNotRun:
+        async def complete_queued_run(self, request, run_id: str) -> CreativeRun:
+            raise AssertionError("worker must retain task when generation capacity is unavailable")
+
+    with task_queue_service.generation_capacity():
+        response = client.post(
+            "/api/v2/creative/runs/async",
+            json={"user_prompt": "Create a simple offline fake image.", "output": {"count": 1}},
+        )
+        assert response.status_code == 202
+        run_id = response.json()["run_id"]
+        with task_queue_service._connect() as connection:
+            original_task = connection.execute("SELECT task_id FROM v2_tasks WHERE run_id = ?", (run_id,)).fetchone()[0]
+        assert queue_worker_service.process_next_task_once(RuntimeShouldNotRun(), "capacity-worker") is True
+
+    with task_queue_service._connect() as connection:
+        row = connection.execute(
+            "SELECT task_id, status, attempts FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row["task_id"] == original_task
+    assert row["status"] == "queued"
+    assert row["attempts"] == 0
+
+
 def test_openai_image_timeout_error_is_retryable_with_detail() -> None:
     object.__setattr__(settings, "openai_image_timeout_seconds", 240.0)
 

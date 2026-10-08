@@ -10,6 +10,7 @@ from app.repositories import repository
 from app.repositories.memory import utc_now
 from app.schemas import CreateCreativeRunRequest, CreativeRun, ImageJob, ImagePromptPlan
 from app.services import task_queue
+from app.services.generation_capacity import GenerationCapacityExceeded
 from app.services.ids import new_id
 from app.services.prompting import summarize_intent
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
@@ -46,7 +47,28 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str = "v2
         if record.kind not in {"creative_run", "revision_run"}:
             raise ValueError(f"Unsupported task kind: {record.kind}")
         request = CreateCreativeRunRequest.model_validate(record.payload)
-        run = asyncio.run(_preflight_veyra_balance(request, record.run_id)) or asyncio.run(runtime.complete_queued_run(request, record.run_id))
+        run = asyncio.run(_preflight_veyra_balance(request, record.run_id))
+        if run is None:
+            try:
+                run = asyncio.run(
+                    task_queue.run_with_generation_capacity(
+                        lambda: runtime.complete_queued_run(request, record.run_id),
+                        request_kind="worker",
+                    )
+                )
+            except GenerationCapacityExceeded:
+                snapshot = task_queue.get_run_snapshot(record.run_id)
+                if snapshot is None:
+                    task_queue.fail_task(record.task_id, "Generation capacity is busy; queued run snapshot was unavailable.")
+                else:
+                    task_queue.retry_task(
+                        record.task_id,
+                        "Image generation is busy. The task remains queued and will retry shortly.",
+                        snapshot,
+                        retry_delay_seconds=5,
+                        consume_attempt=False,
+                    )
+                return True
         retry_directive = _queued_run_retry_directive(run)
         if retry_directive:
             exhausted = retry_directive.consume_attempt and record.attempts >= record.max_attempts

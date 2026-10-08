@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import heapq
 import json
 import re
 from datetime import datetime, timezone
@@ -142,37 +143,39 @@ class LocalMediaStore:
         if not self.history_file.exists():
             return []
         records_by_output: dict[str, dict[str, Any]] = {}
-        for line in self.history_file.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            output_id = record.get("id")
-            if not output_id:
-                continue
-            if session_id and record.get("session_id") != session_id:
-                continue
-            output_format = record.get("format") or "png"
-            path = self.output_path(job_id=record.get("job_id", ""), output_id=output_id, output_format=output_format)
-            if not path.exists():
-                continue
-            record["source"] = "manifest"
-            record["thumbnail_url"] = self.thumbnail_url(output_id)
-            record["preview_url"] = self.preview_url(output_id)
-            record["url"] = f"/v1/outputs/{output_id}/download"
-            existing = records_by_output.get(output_id)
-            if existing is None or _record_timestamp(record) >= _record_timestamp(existing):
-                records_by_output[output_id] = record
-        records = sorted(records_by_output.values(), key=_record_timestamp, reverse=True)
-        return records[:limit]
+        with self.history_file.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                output_id = record.get("id")
+                if not output_id:
+                    continue
+                if session_id and record.get("session_id") != session_id:
+                    continue
+                output_format = record.get("format") or "png"
+                path = self.output_path(job_id=record.get("job_id", ""), output_id=output_id, output_format=output_format)
+                if not path.exists():
+                    continue
+                record["source"] = "manifest"
+                record["thumbnail_url"] = self.thumbnail_url(output_id)
+                record["preview_url"] = self.preview_url(output_id)
+                record["url"] = f"/v1/outputs/{output_id}/download"
+                existing = records_by_output.get(output_id)
+                if existing is None or _record_timestamp(record) >= _record_timestamp(existing):
+                    records_by_output[output_id] = record
+        return heapq.nlargest(max(0, limit), records_by_output.values(), key=_record_timestamp)
 
     def list_generated_output_records(self, *, limit: int = 50) -> list[dict[str, Any]]:
         outputs_root = self.generated_root
-        if not outputs_root.exists():
+        safe_limit = max(0, limit)
+        if not outputs_root.exists() or safe_limit == 0:
             return []
-        records: list[dict[str, Any]] = []
+        best: list[tuple[float, int, dict[str, Any]]] = []
+        sequence = 0
         for path in outputs_root.glob("job_*/*"):
             if not path.is_file() or path.name.startswith("."):
                 continue
@@ -187,8 +190,7 @@ class LocalMediaStore:
                 updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
             except OSError:
                 continue
-            records.append(
-                {
+            record = {
                     "id": output_id,
                     "job_id": job_id,
                     "url": f"/v1/outputs/{output_id}/download",
@@ -203,9 +205,14 @@ class LocalMediaStore:
                     "updated_at": updated_at,
                     "source": "filesystem",
                 }
-            )
-        records.sort(key=_record_timestamp, reverse=True)
-        return records[:limit]
+            entry = (_record_timestamp(record), sequence, record)
+            sequence += 1
+            if len(best) < safe_limit:
+                heapq.heappush(best, entry)
+            elif entry[:2] > best[0][:2]:
+                heapq.heapreplace(best, entry)
+        best.sort(key=lambda entry: entry[:2], reverse=True)
+        return [entry[2] for entry in best]
 
     def delete_output_file(self, *, output_id: str, job_id: str | None = None, output_format: str | None = None) -> bool:
         target: Path | None = None

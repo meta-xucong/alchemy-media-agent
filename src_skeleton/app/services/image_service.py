@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from app.providers.base import ProviderRuntimeError
@@ -29,6 +32,11 @@ from app.services.asset_planning import (
     validate_asset_plan_with_provider,
 )
 from app.services.evaluation import score_image_output
+from app.services.generation_capacity import (
+    GenerationCapacityExceeded,
+    run_with_existing_generation_capacity,
+    run_with_generation_capacity,
+)
 from app.services.prompting import apply_patch_to_plan, build_prompt_plan, build_revision_patch
 from app.services.safety import check_generation_prompt
 from app.services.utils import make_id, now_iso
@@ -188,8 +196,46 @@ async def submit_image_job(
         work_intensity,
         asset_mode,
     )
+    request = ImageGenerationRequest(
+        prompt_plan=prompt_plan,
+        asset_ids=asset_ids,
+        asset_mode=asset_mode,
+        asset_intents=asset_intents,
+        asset_plan=advanced_asset_plan,
+        provider_preference=provider_preference,
+        idempotency_key=key,
+        trace_id=trace_id,
+        veyra_user_id=veyra_user_id,
+    )
+    request_fingerprint = _image_request_fingerprint(
+        session_id=session_id,
+        prompt=prompt,
+        asset_mode=asset_mode,
+        asset_ids=asset_ids,
+        asset_intents=asset_intents,
+        count=count,
+        size=size,
+        quality=quality,
+        output_format=output_format,
+        background=background,
+        moderation=moderation,
+        output_compression=output_compression,
+        work_intensity=work_intensity,
+        provider_preference=provider_preference,
+        veyra_user_id=veyra_user_id,
+        asset_plan=advanced_asset_plan,
+    )
     existing = repository.get_job_by_idempotency_key(key)
     if existing:
+        if existing.error and existing.error.code == "generation_capacity" and existing.error.retryable:
+            if existing.raw_response_summary.get("idempotency_request_fingerprint") != request_fingerprint:
+                return PreparedImageJob(existing)
+            existing.status = JobStatus.generating
+            existing.error = None
+            existing.updated_at = now_iso()
+            saved = repository.save_job(existing)
+            _emit_image_events(saved)
+            return PreparedImageJob(saved, request, edit=False)
         return PreparedImageJob(existing)
     job.idempotency_key = key
     job.status = JobStatus.generating
@@ -206,23 +252,54 @@ async def submit_image_job(
         "asset_mode": asset_mode,
         "asset_plan": advanced_asset_plan,
         "provider_input_plan": advanced_asset_plan.get("provider_input_plan") if advanced_asset_plan else None,
+        "idempotency_request_fingerprint": request_fingerprint,
         "async_submission": True,
     }
     job.updated_at = now_iso()
-    request = ImageGenerationRequest(
-        prompt_plan=prompt_plan,
-        asset_ids=asset_ids,
-        asset_mode=asset_mode,
-        asset_intents=asset_intents,
-        asset_plan=advanced_asset_plan,
-        provider_preference=provider_preference,
-        idempotency_key=key,
-        trace_id=trace_id,
-        veyra_user_id=veyra_user_id,
-    )
     saved = repository.save_job(job)
     _emit_image_events(saved)
     return PreparedImageJob(saved, request, edit=False)
+
+
+def _image_request_fingerprint(
+    *,
+    session_id: str,
+    prompt: str,
+    asset_mode: str,
+    asset_ids: list[str],
+    asset_intents: list[AssetIntent],
+    count: int,
+    size: str | None,
+    quality: str,
+    output_format: str,
+    background: str | None,
+    moderation: str | None,
+    output_compression: int | None,
+    work_intensity: str,
+    provider_preference: str | None,
+    veyra_user_id: int | None,
+    asset_plan: dict | None,
+) -> str:
+    payload = {
+        "session_id": session_id,
+        "prompt": prompt,
+        "asset_mode": asset_mode,
+        "asset_ids": asset_ids,
+        "asset_intents": [item.model_dump(mode="json") for item in asset_intents],
+        "count": count,
+        "size": size,
+        "quality": quality,
+        "output_format": output_format,
+        "background": background,
+        "moderation": moderation,
+        "output_compression": output_compression,
+        "work_intensity": work_intensity,
+        "provider_preference": provider_preference,
+        "veyra_user_id": veyra_user_id,
+        "asset_plan": asset_plan,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 async def create_image_job(
@@ -366,7 +443,12 @@ async def create_image_job(
         trace_id=trace_id,
         veyra_user_id=veyra_user_id,
     )
-    return await _run_image_request(job, request, edit=False)
+    return await run_with_generation_capacity(
+        lambda: _run_image_request(job, request, edit=False),
+        root=media_store.root,
+        limit=settings.max_concurrent_image_generations,
+        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+    )
 
 
 async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> GenerationJob | None:
@@ -400,7 +482,12 @@ async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_us
         source_output_id=request.output_id,
         veyra_user_id=veyra_user_id,
     )
-    return await _run_image_request(revision, image_request, edit=True)
+    return await run_with_generation_capacity(
+        lambda: _run_image_request(revision, image_request, edit=True),
+        root=media_store.root,
+        limit=settings.max_concurrent_image_generations,
+        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+    )
 
 
 async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> PreparedImageJob | None:
@@ -557,7 +644,15 @@ def _int_or_none(value) -> int | None:
     return parsed
 
 
-async def run_submitted_image_job(job_id: str, request: ImageGenerationRequest, *, edit: bool = False) -> GenerationJob | None:
+async def run_submitted_image_job(
+    job_id: str,
+    request: ImageGenerationRequest,
+    *,
+    edit: bool = False,
+    wait_for_capacity: bool = False,
+    capacity_wait_seconds: float = 900.0,
+    capacity_already_acquired: bool = False,
+) -> GenerationJob | None:
     job = repository.get_job(job_id)
     if not job:
         return None
@@ -566,18 +661,34 @@ async def run_submitted_image_job(job_id: str, request: ImageGenerationRequest, 
     try:
         if not edit:
             job, request = await _prepare_submitted_image_run(job, request)
-        return await _run_image_request(job, request, edit=edit)
+        operation = lambda: _run_image_request(job, request, edit=edit)
+        if capacity_already_acquired:
+            return await run_with_existing_generation_capacity(operation)
+        return await run_with_generation_capacity(
+            operation,
+            root=media_store.root,
+            limit=settings.max_concurrent_image_generations,
+            lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+            wait_for_capacity=wait_for_capacity,
+            capacity_wait_seconds=capacity_wait_seconds,
+        )
     except Exception as exc:
         logger.exception("V1 image background job failed: %s", job_id)
         failed = repository.get_job(job_id) or job
+        capacity_limited = isinstance(exc, GenerationCapacityExceeded)
         failed.status = JobStatus.failed
         failed.error = ProviderError(
-            code="background_job_failed",
-            message="V1 image background job failed.",
+            code="generation_capacity" if capacity_limited else "background_job_failed",
+            message=(
+                "Image generation is busy. Please retry shortly."
+                if capacity_limited
+                else "V1 image background job failed."
+            ),
             retryable=True,
             detail={
                 "error_type": type(exc).__name__,
                 "message": str(exc)[:1000],
+                **({"retry_after_seconds": 5} if capacity_limited else {}),
             },
         )
         failed.updated_at = now_iso()
