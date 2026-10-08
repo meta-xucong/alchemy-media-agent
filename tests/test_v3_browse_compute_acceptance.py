@@ -141,7 +141,7 @@ def test_real_process_cancellation_preserves_physical_queue_bound(monkeypatch):
     import time
     from app import browse_compute as compute
     monkeypatch.setattr(compute,'decode_job_file',_sleep_worker)
-    pool=compute.BoundedBrowseCompute(1,timeout=10)
+    pool=compute.BoundedBrowseCompute(1,max_pending=3,timeout=10)
     async def one():
         with pool.admit() as lease:return await lease.read_job('.5','unused',(0,0,0))
     async def exercise():
@@ -161,17 +161,15 @@ def test_real_process_cancellation_preserves_physical_queue_bound(monkeypatch):
     finally:pool.shutdown()
 
 
-def test_four_concurrent_browse_reads_keep_exact_results(tmp_path):
+def test_eight_concurrent_browse_reads_keep_exact_results(tmp_path):
     from scripts.benchmark_v3_browse_compute import make_fixture
     from app.browse_compute import BoundedBrowseCompute
     from app.browse_reads import run_output_browse
-    make_fixture(tmp_path,projects=4,history_rows=4,job_history_rows=4)
+    make_fixture(tmp_path,projects=8,history_rows=4,job_history_rows=4)
     service=_service(tmp_path);pool=BoundedBrowseCompute(2)
     requests=[
-        dict(limit=60,owner_user_id=1,compact=True,project_id='project_benchmark_000'),
-        dict(limit=60,owner_user_id=2,compact=True,project_id='project_benchmark_001'),
-        dict(limit=60,owner_user_id=1,compact=True,project_id='project_benchmark_002'),
-        dict(limit=60,owner_user_id=2,compact=True,project_id='project_benchmark_003'),
+        dict(limit=60,owner_user_id=1+index%2,compact=True,project_id=f'project_benchmark_{index:03d}')
+        for index in range(8)
     ]
     expected=[service.list_project_outputs(**kwargs) for kwargs in requests]
     assert all(len(result['items'])==6 for result in expected)
@@ -188,7 +186,7 @@ def test_four_concurrent_browse_reads_keep_exact_results(tmp_path):
         actual=asyncio.run(exercise())
     finally:pool.shutdown()
     assert actual==expected
-    assert max(observed_admission)==4
+    assert max(observed_admission)==8
     assert pool.admitted==0
 
 

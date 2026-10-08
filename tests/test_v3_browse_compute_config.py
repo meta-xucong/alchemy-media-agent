@@ -134,26 +134,31 @@ def test_effective_cpu_count_ignores_unlimited_or_invalid_quota(tmp_path):
     assert effective_cpu_count(affinity_count=6, cgroup_root=tmp_path) == 6
 
 
-def test_browse_compute_accepts_more_than_two_workers_without_starting_children():
+def test_browse_compute_admission_tracks_workers_with_six_bounded_waiters():
     pool = BoundedBrowseCompute(4)
     try:
         assert pool.workers == 4
-        assert pool.max_pending == 6
+        assert pool.max_pending == 10
     finally:
         pool.shutdown()
 
 
-def test_two_workers_admit_four_browse_requests_and_bound_the_fifth():
+def test_two_workers_admit_eight_browse_requests_and_bound_the_ninth():
     pool = BoundedBrowseCompute(2)
     try:
-        assert pool.max_pending == 4
+        assert pool.max_pending == 8
         with ExitStack() as admitted:
-            for _ in range(4):
+            for _ in range(8):
                 admitted.enter_context(pool.admit())
-            assert pool.admitted == 4
+            assert pool.admitted == 8
             with pytest.raises(BrowseCapacityExceeded):
                 with pool.admit():
                     pass
         assert pool.admitted == 0
     finally:
         pool.shutdown()
+
+
+def test_browse_admission_cannot_exceed_workers_plus_six():
+    with pytest.raises(ValueError, match="workers \\+ 6"):
+        BoundedBrowseCompute(2, max_pending=9)
