@@ -1,6 +1,7 @@
 """Non-vacuous independent async browse acceptance with real offline outputs."""
 from __future__ import annotations
 import asyncio,json,os
+from contextlib import contextmanager
 from pathlib import Path
 import pytest
 
@@ -144,20 +145,51 @@ def test_real_process_cancellation_preserves_physical_queue_bound(monkeypatch):
     async def one():
         with pool.admit() as lease:return await lease.read_job('.5','unused',(0,0,0))
     async def exercise():
-        tasks=[asyncio.create_task(one()) for _ in range(2)]
-        await asyncio.sleep(.03);assert pool.admitted==2
+        tasks=[asyncio.create_task(one()) for _ in range(3)]
+        await asyncio.sleep(.03);assert pool.admitted==3
         for task in tasks:task.cancel()
         await asyncio.gather(*tasks,return_exceptions=True)
-        assert pool.admitted==2
+        assert pool.admitted==3
         for _ in range(1000):
             with pytest.raises(compute.BrowseCapacityExceeded):
                 with pool.admit():pass
-        assert len(pool._executor._pending_work_items)<=2
+        assert len(pool._executor._pending_work_items)<=3
         deadline=time.monotonic()+10
         while pool.admitted and time.monotonic()<deadline:await asyncio.sleep(.02)
         assert pool.admitted==0
     try:asyncio.run(exercise())
     finally:pool.shutdown()
+
+
+def test_four_concurrent_browse_reads_keep_exact_results(tmp_path):
+    from scripts.benchmark_v3_browse_compute import make_fixture
+    from app.browse_compute import BoundedBrowseCompute
+    from app.browse_reads import run_output_browse
+    make_fixture(tmp_path,projects=4,history_rows=4,job_history_rows=4)
+    service=_service(tmp_path);pool=BoundedBrowseCompute(2)
+    requests=[
+        dict(limit=60,owner_user_id=1,compact=True,project_id='project_benchmark_000'),
+        dict(limit=60,owner_user_id=2,compact=True,project_id='project_benchmark_001'),
+        dict(limit=60,owner_user_id=1,compact=True,project_id='project_benchmark_002'),
+        dict(limit=60,owner_user_id=2,compact=True,project_id='project_benchmark_003'),
+    ]
+    expected=[service.list_project_outputs(**kwargs) for kwargs in requests]
+    assert all(len(result['items'])==6 for result in expected)
+    original_admit=pool.admit;observed_admission=[]
+    @contextmanager
+    def tracked_admit():
+        with original_admit() as lease:
+            observed_admission.append(pool.admitted)
+            yield lease
+    pool.admit=tracked_admit
+    async def exercise():
+        return await asyncio.gather(*(run_output_browse(service,pool,**kwargs) for kwargs in requests))
+    try:
+        actual=asyncio.run(exercise())
+    finally:pool.shutdown()
+    assert actual==expected
+    assert max(observed_admission)==4
+    assert pool.admitted==0
 
 
 def test_real_worker_crash_recovers_and_timeout_drains(monkeypatch):

@@ -75,7 +75,11 @@ IPC overhead on ordinary histories; byte size is not a guarantee of CPU cost.
 Admission is acquired lazily at the first eligible read, so an all-small request
 does not consume pool capacity or receive a pool-overload error.
 
-At most `workers + 1` eligible requests are admitted, with one submitted Job per request.
+At most `workers + 2` eligible requests are admitted, with one submitted Job per request.
+The two extra slots are a bounded burst queue: with the default two workers,
+four heavy browse requests may be accepted, while the fifth receives the existing
+retryable 503 response. This increases admitted concurrency, not compute
+throughput; requests beyond the two active workers wait in the executor queue.
 Both source JSON and serialized return payload are capped at 4 MiB per Job.
 A worker decodes one Job at a time, and the owner consumes/releases each decoded
 record before requesting the next. Byte caps are not a claim that Python heap
