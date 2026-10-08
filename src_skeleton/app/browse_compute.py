@@ -265,9 +265,12 @@ class BoundedBrowseCompute:
         if not isinstance(workers, int) or isinstance(workers, bool) or workers < 1:
             raise ValueError("browse workers must be a positive integer")
         self.workers = workers
-        self.max_pending = max_pending if max_pending is not None else workers + 1
-        if not 1 <= self.max_pending <= workers + 1:
-            raise ValueError("browse admission must be between 1 and workers + 1")
+        # Keep two bounded request slots beyond active workers so a short
+        # burst from four users can queue on a two-core host without creating
+        # an unbounded executor backlog.
+        self.max_pending = max_pending if max_pending is not None else workers + 2
+        if not 1 <= self.max_pending <= workers + 2:
+            raise ValueError("browse admission must be between 1 and workers + 2")
         self.timeout = timeout
         self._lock = threading.Lock()
         self._executor = None

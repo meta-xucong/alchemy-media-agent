@@ -1,10 +1,13 @@
 """Worker sizing respects operator settings and container CPU limits."""
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import pytest
 
 from app.browse_compute import (
     BoundedBrowseCompute,
+    BrowseCapacityExceeded,
     effective_cpu_count,
     resolve_browse_compute_workers,
 )
@@ -135,6 +138,22 @@ def test_browse_compute_accepts_more_than_two_workers_without_starting_children(
     pool = BoundedBrowseCompute(4)
     try:
         assert pool.workers == 4
-        assert pool.max_pending == 5
+        assert pool.max_pending == 6
+    finally:
+        pool.shutdown()
+
+
+def test_two_workers_admit_four_browse_requests_and_bound_the_fifth():
+    pool = BoundedBrowseCompute(2)
+    try:
+        assert pool.max_pending == 4
+        with ExitStack() as admitted:
+            for _ in range(4):
+                admitted.enter_context(pool.admit())
+            assert pool.admitted == 4
+            with pytest.raises(BrowseCapacityExceeded):
+                with pool.admit():
+                    pass
+        assert pool.admitted == 0
     finally:
         pool.shutdown()
