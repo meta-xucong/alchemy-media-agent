@@ -236,3 +236,18 @@ The regression set uses temporary SQLite databases and local fake/no providers. 
 | The two independent-process stress cases plus bounded-timeout and connection-under-reader cases, with `-s -q` | 4 passed. New database: 30 initialization calls, 2 bounded WAL retry loops, 0 failures. Legacy upgrade: 30 calls, 0 retry loops, 0 failures. |
 
 The attempted 2-core/2-GiB VPS acceptance, process-crash/restart behavior on VPS, sustained throughput/memory measurement, real provider generation, merge, and deployment remain unrun. Passing offline regressions do not establish those properties or production readiness.
+
+### PR #27 stale-claim spare-slot test stability addendum (2026-10-09)
+
+No production code changed in this addendum. The initial combined-suite result reported by independent review was **55 passed, 1 failed** in `test_exhausted_stale_claim_terminalization_preserves_existing_lease_spare_slot`; the review also reported that the case passed alone and in five consecutive reruns. In this fixture, `timeout=0.01` applied the 10ms stale-claim cutoff to the still-active final-attempt claim that held the first lease as well as to the second claim under test. `_make_stale()` already marks that second claim explicitly by setting `locked_at` to one day earlier, so the 10ms threshold was unnecessary and let scheduler delay make the active claim appear exhausted and stale before direct admission.
+
+The test now uses a one-hour recovery timeout. Its explicit one-day-old stale timestamp remains beyond that cutoff, while the active claim has a scheduling-tolerant freshness window. Assertions remain unchanged: the exhausted stale claim is terminalized and cleared, the active claim's lease remains present while direct work takes the spare slot, and only the active lease remains after direct work exits. This isolates the condition under test without relaxing production protection or hiding the original reported failure.
+
+| Verification | Result |
+|---|---|
+| Initial combined result from independent review, before this test-only adjustment | 55 passed, 1 failed: `test_exhausted_stale_claim_terminalization_preserves_existing_lease_spare_slot`. |
+| That exact case in this checkout before adjustment | 1 passed; confirms the reported failure is timing-sensitive. |
+| That exact case after adjustment, five separate Python/pytest invocations | 5 runs, each 1 passed. |
+| `tests/test_resource_capacity_guards.py tests/test_task_claim_fencing.py tests/test_async_capacity_database.py -p no:cacheprovider -q`, repeated in three separate invocations with distinct temporary roots | 3 runs, each 56 passed (168 total test executions). |
+
+The test-only runs use temporary local state and no real provider. V1 evidence (37 focused tests and 85 API smoke tests) is carried forward from the prior verification record and was not rerun. VPS, performance, merge, and deployment acceptance remain outside this addendum.

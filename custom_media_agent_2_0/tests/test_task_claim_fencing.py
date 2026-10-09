@@ -1223,7 +1223,7 @@ def test_fresh_final_attempt_claim_blocks_direct_until_worker_acquires_lease(tmp
 
 
 def test_exhausted_stale_claim_terminalization_preserves_existing_lease_spare_slot(tmp_path: Path, monkeypatch) -> None:
-    database_path = _configure_queue(tmp_path, monkeypatch, timeout=0.01, slots=2)
+    database_path = _configure_queue(tmp_path, monkeypatch, timeout=3600.0, slots=2)
     monkeypatch.setattr(task_queue, "settings", replace(task_queue.settings, task_queue_max_attempts=1))
     _enqueue("run_active_lease_spare_slot")
     active_claim = task_queue.claim_next_task("worker-holding-lease")
