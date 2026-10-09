@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from app import main
 from app.repositories import repository
-from app.schemas import Session
+from app.schemas import GenerationJob, GenerationOutput, JobStatus, Session
 from app.services import session_service
 from app.storage import media_store
 
@@ -112,6 +112,60 @@ def test_v1_session_owner_is_server_assigned_and_enforced_for_sse_and_writes(tmp
     assert repository.list_events(session_id) == [
         {"event": "private.test", "data": {"value": "owner-only"}}
     ]
+
+
+def test_v1_image_job_read_obeys_associated_session_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    _enable_auth(monkeypatch)
+    session_id = "session_private_job_read"
+    job_id = "job_private_job_read"
+    now = "2026-10-10T00:00:00Z"
+    repository.save_session(Session(
+        id=session_id,
+        project_id="project_private_job_read",
+        created_at=now,
+        veyra_user_id=41,
+    ))
+    repository.save_job(GenerationJob(
+        id=job_id,
+        session_id=session_id,
+        job_type="image",
+        status=JobStatus.ready,
+        trace_id="trace_private_job_read",
+        created_at=now,
+        updated_at=now,
+        outputs=[GenerationOutput(
+            id="private_job_output",
+            job_id=job_id,
+            url="/v1/outputs/private_job_output/download",
+            metadata={"veyra_user_id": 41},
+        )],
+    ))
+    client = TestClient(main.app)
+
+    owner_response = client.get(
+        f"/v1/image/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {_token(41)}"},
+    )
+    foreign_response = client.get(
+        f"/v1/image/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {_token(77)}"},
+    )
+    admin_response = client.get(
+        f"/v1/image/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {_token(99)}"},
+    )
+
+    assert owner_response.status_code == 200
+    assert owner_response.json()["session_id"] == session_id
+    assert foreign_response.status_code == 404
+    assert "private_job_output" not in foreign_response.text
+    assert admin_response.status_code == 200
+
+    monkeypatch.setattr(main.settings, "veyra_auth_enabled", False)
+    local_response = client.get(f"/v1/image/jobs/{job_id}")
+    assert local_response.status_code == 200
 
 
 def test_v1_legacy_ownerless_session_is_admin_read_only_and_auth_off_stays_compatible(tmp_path, monkeypatch):

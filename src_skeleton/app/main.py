@@ -3721,11 +3721,11 @@ async def favorite_image_history_item(output_id: str, body: FavoriteImageRequest
 
 
 @app.get("/v1/image/jobs/{job_id}")
-def get_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+async def get_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
     job = repository.get_job(job_id)
     if not job or job.job_type != "image":
         raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Image job not found."})
+    await _require_v1_session_access(request, job.session_id, authorization)
     return job
 
 
