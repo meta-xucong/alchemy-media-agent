@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ _UPSTREAM_BALANCE_WAIT_SECONDS = 300.0
 _PROVIDER_RATE_LIMIT_WAIT_SECONDS = 180.0
 _GENERIC_RETRYABLE_WAIT_SECONDS = 120.0
 _MAX_WAIT_SECONDS = 900.0
+_FINALIZATION_RETRIES = 3
+_FINALIZATION_RETRY_DELAY_SECONDS = 0.05
 logger = logging.getLogger(__name__)
 
 
@@ -77,6 +80,11 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
             if record.kind not in {"creative_run", "revision_run"}:
                 raise ValueError(f"Unsupported task kind: {record.kind}")
             request = CreateCreativeRunRequest.model_validate(record.payload)
+            run = task_queue.get_success_checkpoint(record)
+            if run is not None:
+                run = task_queue.restore_success_checkpoint(run)
+                _complete_task_with_bounded_retry(record, run)
+                return True
             run = asyncio.run(_preflight_veyra_balance(request, record.run_id))
             if run is not None:
                 run = task_queue.persist_claimed_operation(lambda: _save_preflight_run(run))
@@ -119,6 +127,9 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                             consume_attempt=False,
                         )
                     return True
+            checkpoint = task_queue.get_success_checkpoint(record)
+            if checkpoint is not None:
+                run = task_queue.restore_success_checkpoint(checkpoint)
             if not task_queue.task_claim_is_current(record):
                 logger.info("V2 task claim was superseded during provider work; stale result was not persisted")
                 return True
@@ -139,13 +150,7 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                     consume_attempt=retry_directive.consume_attempt,
                 )
                 return True
-            try:
-                task_queue.complete_task(record, run)
-            except sqlite3.OperationalError as exc:
-                if "locked" in str(exc).lower() or "busy" in str(exc).lower():
-                    logger.exception("V2 provider result was ready but task finalization hit a SQLite lock")
-                    return True
-                raise
+            _complete_task_with_bounded_retry(record, run)
         except GenerationCapacityStorageBusy:
             snapshot = task_queue.get_run_snapshot(record.run_id)
             if snapshot is not None:
@@ -167,6 +172,23 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                 return True
             task_queue.fail_task(record, _format_error(exc))
     return True
+
+
+def _complete_task_with_bounded_retry(claim: task_queue.QueuedTask, run: CreativeRun) -> bool:
+    for attempt in range(_FINALIZATION_RETRIES):
+        try:
+            return task_queue.complete_task(claim, run)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            if attempt + 1 == _FINALIZATION_RETRIES:
+                logger.error(
+                    "V2 task result was ready, but terminal queue finalization remained busy after %s attempts",
+                    _FINALIZATION_RETRIES,
+                )
+                return False
+            time.sleep(_FINALIZATION_RETRY_DELAY_SECONDS * (attempt + 1))
+    return False
 
 
 @dataclass(frozen=True)

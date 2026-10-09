@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -329,6 +331,36 @@ class AlchemyLabStore:
 
 lab_store = AlchemyLabStore(sessions={})
 _background_tasks: set[asyncio.Task] = set()
+logger = logging.getLogger(__name__)
+
+
+class _LabSessionLeaseOwner:
+    """Transfer one lease to a scheduled session, including pre-start cancellation."""
+
+    def __init__(self, lease) -> None:
+        self.lease = lease
+        self._lock = threading.Lock()
+        self._started = False
+        self._prestart_cleanup_scheduled = False
+        self._release_started = False
+
+    def mark_started(self) -> None:
+        with self._lock:
+            self._started = True
+
+    def schedule_prestart_cleanup(self) -> bool:
+        with self._lock:
+            if self._started or self._prestart_cleanup_scheduled:
+                return False
+            self._prestart_cleanup_scheduled = True
+            return True
+
+    async def release_once(self) -> bool:
+        with self._lock:
+            if self._release_started:
+                return False
+            self._release_started = True
+        return await self.lease.release_async()
 
 
 FALLBACK_STYLE_PRESETS = [
@@ -861,23 +893,52 @@ async def _schedule_exploration_session(
             namespace="lab-session",
             lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
         )
+    owner = _LabSessionLeaseOwner(lease)
     try:
         task = asyncio.create_task(
-            _run_exploration_session_with_lease(lease, session_id, veyra_user_id=veyra_user_id)
+            _run_exploration_session_with_lease(owner, session_id, veyra_user_id=veyra_user_id)
         )
     except BaseException:
         if owns_lease:
-            await lease.release_async()
+            await owner.release_once()
         raise
     _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    loop = asyncio.get_running_loop()
+
+    def on_runner_done(completed: asyncio.Task) -> None:
+        _background_tasks.discard(completed)
+        if not owner.schedule_prestart_cleanup():
+            return
+        try:
+            cleanup = loop.create_task(owner.release_once())
+        except RuntimeError:
+            logger.exception("Alchemy Lab could not schedule pre-start lease cleanup; the lease will expire by TTL")
+            return
+        _background_tasks.add(cleanup)
+
+        def on_cleanup_done(cleanup_task: asyncio.Task) -> None:
+            _background_tasks.discard(cleanup_task)
+            if not cleanup_task.cancelled():
+                error = cleanup_task.exception()
+                if error is not None:
+                    logger.error("Alchemy Lab pre-start lease cleanup failed: %s", error)
+
+        cleanup.add_done_callback(on_cleanup_done)
+
+    task.add_done_callback(on_runner_done)
 
 
-async def _run_exploration_session_with_lease(lease, session_id: str, *, veyra_user_id: int | None = None) -> None:
+async def _run_exploration_session_with_lease(
+    owner: _LabSessionLeaseOwner,
+    session_id: str,
+    *,
+    veyra_user_id: int | None = None,
+) -> None:
+    owner.mark_started()
     try:
         await _run_exploration_session_guarded(session_id, veyra_user_id=veyra_user_id)
     finally:
-        await lease.release_async()
+        await owner.release_once()
 
 
 async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: int | None = None) -> None:

@@ -144,6 +144,7 @@ async def create_image_job(
 
     fallback_error = None
     try:
+        _ensure_claim_before_provider_request(job_id)
         result = await provider.generate(
             V2ImageProviderRequest(
                 run_id=request.run_id,
@@ -154,6 +155,7 @@ async def create_image_job(
     except V2ImageProviderNotConfiguredError as exc:
         if _can_fallback_to_mock(request.provider_hint):
             fallback_provider = await get_v2_image_provider("mock_image")
+            _ensure_claim_before_provider_request(job_id)
             result = await fallback_provider.generate(
                 V2ImageProviderRequest(
                     run_id=request.run_id,
@@ -167,6 +169,7 @@ async def create_image_job(
     except V2ImageProviderError as exc:
         if _can_fallback_to_mock(request.provider_hint):
             fallback_provider = await get_v2_image_provider("mock_image")
+            _ensure_claim_before_provider_request(job_id)
             result = await fallback_provider.generate(
                 V2ImageProviderRequest(
                     run_id=request.run_id,
@@ -222,7 +225,10 @@ async def create_image_job(
         return saved
 
     try:
-        return task_queue.persist_claimed_operation(persist_result)
+        return task_queue.persist_claimed_operation(
+            persist_result,
+            on_persisted=task_queue.checkpoint_completed_generation,
+        )
     except task_queue.StaleTaskClaim:
         _discard_uncommitted_running_job(job_id)
         raise
@@ -457,6 +463,14 @@ def _discard_uncommitted_running_job(job_id: str) -> None:
     job = repository.get_image_job(job_id)
     if job is not None and job.status == "running" and not job.outputs:
         repository.delete_image_job(job_id)
+
+
+def _ensure_claim_before_provider_request(job_id: str) -> None:
+    try:
+        task_queue.ensure_current_claim()
+    except task_queue.StaleTaskClaim:
+        _discard_uncommitted_running_job(job_id)
+        raise
 
 
 def _billing_idempotency_key(billing_rule, job_id: str) -> str:

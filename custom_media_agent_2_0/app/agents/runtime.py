@@ -73,6 +73,9 @@ class CreativeManagerRuntime:
         return repository.save_creative_run(run)
 
     async def complete_queued_run(self, request: CreateCreativeRunRequest, run_id: str) -> CreativeRun:
+        checkpoint = task_queue.get_success_checkpoint()
+        if checkpoint is not None:
+            return task_queue.restore_success_checkpoint(checkpoint)
         existing = repository.get_creative_run(run_id)
         try:
             return await self._run_deterministic_manager(

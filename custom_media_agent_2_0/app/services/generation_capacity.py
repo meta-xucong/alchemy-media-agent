@@ -148,13 +148,19 @@ def terminalize_exhausted_stale_tasks(
     stale_before: str,
     now_text: str,
 ) -> int:
-    """Preserve exhausted crashed tasks as failed rows so they stop blocking admission."""
+    """Fail exhausted crashed tasks unless a committed success can be recovered."""
 
     exists = connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'v2_tasks'"
     ).fetchone()
     if not exists:
         return 0
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(v2_tasks)").fetchall()}
+    checkpoint_clause = (
+        "AND (success_checkpoint_json IS NULL OR success_checkpoint_json = '')"
+        if "success_checkpoint_json" in columns
+        else ""
+    )
     error_json = json.dumps(
         {
             "error_code": "worker_recovery_exhausted",
@@ -164,12 +170,13 @@ def terminalize_exhausted_stale_tasks(
         separators=(",", ":"),
     )
     cursor = connection.execute(
-        """
+        f"""
         UPDATE v2_tasks
         SET status = 'failed', error_json = ?, locked_by = NULL, locked_at = NULL,
             claim_token = NULL, not_before = NULL, updated_at = ?
         WHERE status = 'running' AND locked_at IS NOT NULL AND locked_at < ?
           AND attempts >= max_attempts
+          {checkpoint_clause}
         """,
         (error_json, now_text, stale_before),
     )

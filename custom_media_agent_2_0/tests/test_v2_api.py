@@ -3530,6 +3530,7 @@ def test_creative_run_async_entry_is_pollable() -> None:
     assert run["run_id"] == queued["run_id"]
     assert run["status"] == "completed"
     assert run["prompt_plan"]
+    assert len(run["generation_jobs"]) == 1
     assert run["generation_jobs"][0]["outputs"]
 
     completed_status = client.get("/api/v2/task-queue/status").json()

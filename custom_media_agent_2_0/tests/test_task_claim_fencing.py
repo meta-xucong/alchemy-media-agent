@@ -196,7 +196,7 @@ def test_legacy_queue_schema_adds_claim_fencing_columns(tmp_path: Path, monkeypa
     task_queue.initialize_task_queue()
     with task_queue._connect() as connection:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(v2_tasks)")}
-    assert {"claim_token", "claim_generation"} <= columns
+    assert {"claim_token", "claim_generation", "success_checkpoint_json"} <= columns
 
 
 def test_legacy_queue_schema_migration_is_serialized_across_initializers(tmp_path: Path, monkeypatch) -> None:
@@ -623,6 +623,445 @@ def test_lost_claim_during_provider_does_not_commit_job_output_history_or_charge
     assert row["status"] == "running"
     assert row["locked_by"] == "worker-replacement-provider"
     assert row["claim_token"] == replacement.claim_token
+    assert row["result_json"] is None
+
+
+def test_lost_claim_during_balance_preflight_skips_provider_request(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.providers.images.base import V2ImageProviderResult
+    from app.repositories import repository
+    from app.schemas import CreateImageJobRequest, ImagePromptPlan
+    from app.services import generation
+
+    runtime_settings = replace(
+        settings,
+        task_queue_db_path=tmp_path / "balance-preflight.sqlite3",
+        task_queue_claim_timeout_seconds=30.0,
+        task_queue_max_attempts=4,
+        task_queue_max_pending=20,
+        storage_dir=tmp_path / "storage",
+        image_history_path=tmp_path / "image_history.jsonl",
+        veyra_usage_path=tmp_path / "veyra_usage.jsonl",
+        persist_image_history=True,
+        veyra_auth_enabled=True,
+    )
+    monkeypatch.setattr(task_queue, "settings", runtime_settings)
+    monkeypatch.setattr(generation, "settings", runtime_settings)
+    task_queue.initialize_task_queue()
+    repository.reset()
+
+    run_id = "run_claim_lost_during_balance_preflight"
+    _enqueue(run_id)
+    old_claim = task_queue.claim_next_task("worker-old-balance")
+    assert old_claim is not None
+    replacement_claims = []
+    provider_calls = 0
+
+    class FakeProvider:
+        name = "fake_image"
+
+        async def generate(self, _request):
+            nonlocal provider_calls
+            provider_calls += 1
+            return V2ImageProviderResult(provider=self.name, model="fake-v1", outputs=[])
+
+    async def take_over_during_balance_check(**_kwargs):
+        _make_stale(old_claim)
+        replacement_claims.append(task_queue.claim_next_task("worker-new-balance"))
+
+    monkeypatch.setattr(generation, "get_v2_image_provider", lambda _hint: asyncio.sleep(0, result=FakeProvider()))
+    monkeypatch.setattr(generation, "_ensure_veyra_balance", take_over_during_balance_check)
+    monkeypatch.setattr(generation, "_should_bill_veyra", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        generation,
+        "get_billing_rule",
+        lambda _key: SimpleNamespace(key="alchemy:v2", enabled=True, charge_amount=1.0, source="alchemy"),
+    )
+
+    request = CreateImageJobRequest(
+        run_id=run_id,
+        prompt_plan=ImagePromptPlan(plan_id="plan_preflight_fence", mode="smart_enhance", prompt="offline fake"),
+        provider_hint="fake_image",
+        veyra_user_id=17,
+    )
+    with task_queue.claimed_task(old_claim):
+        with pytest.raises(task_queue.StaleTaskClaim):
+            asyncio.run(generation.create_image_job(request, job_id="job_preflight_fence"))
+
+    assert replacement_claims and replacement_claims[0] is not None
+    assert provider_calls == 0
+    assert repository.get_image_job("job_preflight_fence") is None
+    assert repository.outputs == {}
+
+
+def test_success_checkpoint_restores_all_completed_jobs_without_generation_or_rebilling(tmp_path: Path, monkeypatch) -> None:
+    from app.repositories import repository
+    from app.schemas import CreativeRun, ImageJob, ImageOutput, ImagePromptPlan
+    from app.services import queue_worker
+
+    _configure_queue(tmp_path, monkeypatch)
+    run_id = "run_checkpoint_multijob"
+    _enqueue(run_id)
+    claim = task_queue.claim_next_task("worker-checkpoint-source")
+    assert claim is not None
+    repository.reset()
+    now = utc_now()
+    plan = ImagePromptPlan(
+        plan_id="plan_checkpoint",
+        mode="smart_enhance",
+        prompt="effective offline fake after prompt transforms",
+    )
+    source_plan = plan.model_copy(update={"prompt": "pre-transform offline fake"})
+    usage_path = tmp_path / "veyra_usage.jsonl"
+    usage_record = '{"idempotency_key":"alchemy:v2:task:' + claim.task_id + '","user_id":17}\n'
+    usage_path.write_text(usage_record, encoding="utf-8")
+
+    def completed_job(job_id: str, output_id: str) -> ImageJob:
+        output = ImageOutput(
+            output_id=output_id,
+            job_id=job_id,
+            url=f"/api/v2/outputs/{output_id}/download",
+            metadata={
+                "veyra_user_id": 17,
+                "veyra_billing": {"idempotency_key": f"alchemy:v2:task:{claim.task_id}"},
+            },
+            created_at=now,
+        )
+        return ImageJob(
+            job_id=job_id,
+            run_id=run_id,
+            status="completed",
+            provider_id="fake_image",
+            model="fake-v1",
+            prompt_plan=plan,
+            outputs=[output],
+            created_at=now,
+            updated_at=now,
+        )
+
+    first_job = completed_job("job_checkpoint_1", "out_checkpoint_1")
+    second_running = ImageJob(
+        job_id="job_checkpoint_2",
+        run_id=run_id,
+        status="running",
+        provider_id="fake_image",
+        model="fake-v1",
+        prompt_plan=plan,
+        created_at=now,
+        updated_at=now,
+    )
+    second_job = completed_job("job_checkpoint_2", "out_checkpoint_2")
+    generating_run = _run(run_id).model_copy(
+        update={"prompt_plan": source_plan, "generation_jobs": [first_job, second_running]}
+    )
+    checkpoint_time = now + timedelta(seconds=1)
+
+    with task_queue.claimed_task(claim):
+        task_queue.persist_claimed_operation(lambda: repository.save_image_job(first_job))
+        assert task_queue.update_task_snapshot(generating_run, claim=claim)
+        monkeypatch.setattr(task_queue, "utc_now", lambda: checkpoint_time)
+        task_queue.persist_claimed_operation(
+            lambda: repository.save_image_job(second_job),
+            on_persisted=task_queue.checkpoint_completed_generation,
+        )
+        checkpoint = task_queue.get_success_checkpoint(claim)
+    assert checkpoint is not None
+    assert [job.job_id for job in checkpoint.generation_jobs] == [first_job.job_id, second_job.job_id]
+    assert checkpoint.prompt_plan == plan
+    assert checkpoint.updated_at == checkpoint_time
+
+    with task_queue._connect() as connection:
+        checkpoint_json = connection.execute(
+            "SELECT success_checkpoint_json FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()["success_checkpoint_json"]
+        envelope = task_queue._json_loads(checkpoint_json)
+        envelope["generation_job_ids"] = envelope["generation_job_ids"][:1]
+        envelope["generation_output_ids"] = {
+            first_job.job_id: envelope["generation_output_ids"][first_job.job_id]
+        }
+        envelope["run"]["generation_jobs"] = envelope["run"]["generation_jobs"][:1]
+        connection.execute(
+            "UPDATE v2_tasks SET success_checkpoint_json = ? WHERE run_id = ?",
+            (task_queue._json_dumps(envelope), run_id),
+        )
+    with task_queue.claimed_task(claim):
+        with pytest.raises(ValueError, match="authoritative queued run snapshot"):
+            task_queue.get_success_checkpoint(claim)
+    fallback_snapshot = task_queue.get_run_snapshot(run_id)
+    assert fallback_snapshot is not None and fallback_snapshot.status == "generating"
+    assert [job.job_id for job in fallback_snapshot.generation_jobs] == [first_job.job_id, second_running.job_id]
+    with task_queue._connect() as connection:
+        connection.execute(
+            "UPDATE v2_tasks SET success_checkpoint_json = ? WHERE run_id = ?",
+            (checkpoint_json, run_id),
+        )
+
+    finalize_calls = 0
+
+    def finalization_stays_busy(_claim, _run):
+        nonlocal finalize_calls
+        finalize_calls += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    original_complete = task_queue.complete_task
+    monkeypatch.setattr(task_queue, "complete_task", finalization_stays_busy)
+    monkeypatch.setattr(queue_worker.time, "sleep", lambda _delay: None)
+    assert queue_worker._complete_task_with_bounded_retry(claim, checkpoint) is False
+    assert finalize_calls == queue_worker._FINALIZATION_RETRIES == 3
+    monkeypatch.setattr(task_queue, "complete_task", original_complete)
+    with task_queue._connect() as connection:
+        pending_recovery = connection.execute(
+            "SELECT status, success_checkpoint_json, result_json FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert pending_recovery["status"] == "running"
+    assert pending_recovery["success_checkpoint_json"]
+    assert pending_recovery["result_json"] is None
+    assert task_queue.get_run_snapshot(run_id).status == "completed"
+
+    _make_stale(claim)
+    repository.reset()  # Simulate process-local projection loss after a worker restart.
+
+    async def should_not_preflight(*_args, **_kwargs):
+        raise AssertionError("checkpoint recovery must not repeat billing preflight")
+
+    class Runtime:
+        async def complete_queued_run(self, *_args, **_kwargs):
+            raise AssertionError("checkpoint recovery must not repeat orchestration or generation")
+
+    monkeypatch.setattr(queue_worker, "_preflight_veyra_balance", should_not_preflight)
+    assert queue_worker.process_next_task_once(Runtime(), "worker-checkpoint-recovery") is True
+
+    recovered_run = repository.get_creative_run(run_id)
+    assert recovered_run is not None and recovered_run.status == "completed"
+    assert [job.job_id for job in recovered_run.generation_jobs] == [first_job.job_id, second_job.job_id]
+    assert set(repository.image_jobs) == {first_job.job_id, second_job.job_id}
+    assert set(repository.outputs) == {"out_checkpoint_1", "out_checkpoint_2"}
+    assert repository.get_output("out_checkpoint_2").metadata["veyra_user_id"] == 17
+    assert repository.get_output("out_checkpoint_2").metadata["veyra_billing"]["idempotency_key"] == (
+        f"alchemy:v2:task:{claim.task_id}"
+    )
+    assert usage_path.read_text(encoding="utf-8") == usage_record
+    assert task_queue.get_run_snapshot(run_id).status == "completed"
+    with task_queue._connect() as connection:
+        row = connection.execute(
+            "SELECT status, success_checkpoint_json, result_json FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row["status"] == "completed"
+    assert row["success_checkpoint_json"] is None
+    assert row["result_json"]
+
+
+def test_image_generation_persists_checkpoint_with_completed_job(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    from app.providers.images.base import V2ImageProviderResult
+    from app.repositories import repository
+    from app.schemas import CreateImageJobRequest, ImageJob, ImagePromptPlan
+    from app.services import generation
+
+    database_path = _configure_queue(tmp_path, monkeypatch)
+    runtime_settings = replace(settings, task_queue_db_path=database_path)
+    monkeypatch.setattr(generation, "settings", runtime_settings)
+    repository.reset()
+    run_id = "run_generation_checkpoint"
+    _enqueue(run_id)
+    claim = task_queue.claim_next_task("worker-generation-checkpoint")
+    assert claim is not None
+    now = utc_now()
+    plan = ImagePromptPlan(plan_id="plan_generation_checkpoint", mode="smart_enhance", prompt="offline fake")
+    running_job = ImageJob(
+        job_id="job_generation_checkpoint",
+        run_id=run_id,
+        status="running",
+        provider_id="fake_image",
+        model="fake-v1",
+        prompt_plan=plan,
+        created_at=now,
+        updated_at=now,
+    )
+
+    class FakeProvider:
+        name = "fake_image"
+
+        async def generate(self, _request):
+            return V2ImageProviderResult(provider=self.name, model="fake-v1", outputs=[])
+
+    monkeypatch.setattr(generation, "get_v2_image_provider", lambda _hint: asyncio.sleep(0, result=FakeProvider()))
+    monkeypatch.setattr(generation, "_should_bill_veyra", lambda *_args, **_kwargs: False)
+    request = CreateImageJobRequest(run_id=run_id, prompt_plan=plan, provider_hint="fake_image")
+    generating_run = _run(run_id).model_copy(update={"generation_jobs": [running_job]})
+
+    with task_queue.claimed_task(claim):
+        assert task_queue.update_task_snapshot(generating_run, claim=claim)
+        job = asyncio.run(generation.create_image_job(request, job_id=running_job.job_id, created_at=now))
+        checkpoint = task_queue.get_success_checkpoint(claim)
+
+    assert job.status == "completed"
+    assert checkpoint is not None and checkpoint.status == "completed"
+    assert len(checkpoint.generation_jobs) == 1
+    assert checkpoint.generation_jobs[0].job_id == running_job.job_id
+
+
+def test_multijob_checkpoint_waits_until_every_generation_job_is_complete(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    from app.repositories import repository
+    from app.schemas import ImageJob, ImageOutput, ImagePromptPlan
+
+    _configure_queue(tmp_path, monkeypatch)
+    run_id = "run_checkpoint_partial_multijob"
+    _enqueue(run_id)
+    claim = task_queue.claim_next_task("worker-checkpoint-partial")
+    assert claim is not None
+    now = utc_now()
+    plan = ImagePromptPlan(plan_id="plan_partial_checkpoint", mode="smart_enhance", prompt="offline fake")
+    first = ImageJob(
+        job_id="job_partial_1",
+        run_id=run_id,
+        status="completed",
+        provider_id="fake_image",
+        model="fake-v1",
+        prompt_plan=plan,
+        created_at=now,
+        updated_at=now,
+    )
+    current_running = ImageJob(
+        job_id="job_partial_2",
+        run_id=run_id,
+        status="running",
+        provider_id="fake_image",
+        model="fake-v1",
+        prompt_plan=plan,
+        created_at=now,
+        updated_at=now,
+    )
+    still_queued = ImageJob(
+        job_id="job_partial_3",
+        run_id=run_id,
+        status="queued",
+        provider_id="fake_image",
+        model="fake-v1",
+        prompt_plan=plan,
+        created_at=now,
+        updated_at=now,
+    )
+    completed_current = current_running.model_copy(update={"status": "completed", "updated_at": now})
+    generating_run = _run(run_id).model_copy(update={"generation_jobs": [first, current_running, still_queued]})
+    repository.reset()
+
+    with task_queue.claimed_task(claim):
+        assert task_queue.update_task_snapshot(generating_run, claim=claim)
+        task_queue.persist_claimed_operation(
+            lambda: repository.save_image_job(completed_current),
+            on_persisted=task_queue.checkpoint_completed_generation,
+        )
+        assert task_queue.get_success_checkpoint(claim) is None
+    with task_queue._connect() as connection:
+        row = connection.execute(
+            "SELECT success_checkpoint_json FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row["success_checkpoint_json"] is None
+    truncated_run = _run(run_id).model_copy(
+        update={"status": "completed", "generation_jobs": [first, completed_current]}
+    )
+    envelope = json.loads(task_queue._encode_success_checkpoint(truncated_run))
+    envelope["run"]["generation_jobs"] = envelope["run"]["generation_jobs"][:1]
+    with pytest.raises(ValueError, match="manifest does not match"):
+        task_queue._decode_success_checkpoint(task_queue._json_dumps(envelope))
+    valid_output = ImageOutput(
+        output_id="out_partial_checkpoint",
+        job_id=completed_current.job_id,
+        url="/api/v2/outputs/out_partial_checkpoint/download",
+        created_at=now,
+    )
+    valid_run = _run(run_id).model_copy(
+        update={
+            "status": "completed",
+            "generation_jobs": [completed_current.model_copy(update={"outputs": [valid_output]})],
+        }
+    )
+    truncated_outputs = json.loads(task_queue._encode_success_checkpoint(valid_run))
+    truncated_outputs["run"]["generation_jobs"][0].pop("outputs")
+    with pytest.raises(ValueError, match="output manifest does not match"):
+        task_queue._decode_success_checkpoint(task_queue._json_dumps(truncated_outputs))
+
+    invalid_output = valid_output.model_copy(update={"job_id": "different_job"})
+    invalid_run = _run(run_id).model_copy(
+        update={
+            "status": "completed",
+            "generation_jobs": [completed_current.model_copy(update={"outputs": [invalid_output]})],
+        }
+    )
+    with pytest.raises(ValueError, match="output from another job"):
+        task_queue._decode_success_checkpoint(task_queue._encode_success_checkpoint(invalid_run))
+
+
+def test_worker_bounded_finalization_retries_sqlite_busy(tmp_path: Path, monkeypatch) -> None:
+    from app.services import queue_worker
+
+    _configure_queue(tmp_path, monkeypatch)
+    calls = 0
+
+    def complete_once_locked(claim, run):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return True
+
+    monkeypatch.setattr(task_queue, "complete_task", complete_once_locked)
+    monkeypatch.setattr(queue_worker.time, "sleep", lambda _delay: None)
+    claim = task_queue.QueuedTask(
+        task_id="task_finalize_retry",
+        kind="creative_run",
+        run_id="run_finalize_retry",
+        payload={},
+        attempts=1,
+        max_attempts=3,
+        worker_id="worker-finalize",
+        claim_token="claim-finalize",
+    )
+    assert queue_worker._complete_task_with_bounded_retry(claim, _run(claim.run_id)) is True
+    assert calls == 3
+
+
+def test_corrupt_success_checkpoint_never_fabricates_completion(tmp_path: Path, monkeypatch) -> None:
+    from app.repositories import repository
+    from app.services import queue_worker
+
+    _configure_queue(tmp_path, monkeypatch)
+    run_id = "run_checkpoint_corrupt"
+    _enqueue(run_id)
+    claim = task_queue.claim_next_task("worker-checkpoint-corrupt-source")
+    assert claim is not None
+    with task_queue.claimed_task(claim):
+        assert task_queue.get_success_checkpoint(claim) is None
+    _make_stale(claim)
+    with task_queue._connect() as connection:
+        connection.execute(
+            "UPDATE v2_tasks SET success_checkpoint_json = ? WHERE task_id = ?",
+            ("{corrupt-json", claim.task_id),
+        )
+
+    class Runtime:
+        async def complete_queued_run(self, *_args, **_kwargs):
+            raise AssertionError("corrupt checkpoint must stop before orchestration or generation")
+
+    assert queue_worker.process_next_task_once(Runtime(), "worker-checkpoint-corrupt-recovery") is True
+    assert repository.get_creative_run(run_id) is None
+    with task_queue._connect() as connection:
+        row = connection.execute(
+            "SELECT status, success_checkpoint_json, result_json FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row["status"] == "queued"
+    assert row["success_checkpoint_json"] == "{corrupt-json"
     assert row["result_json"] is None
 
 

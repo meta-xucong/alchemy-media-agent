@@ -680,6 +680,89 @@ def test_lab_limits_active_sessions_and_releases_slot_on_completion(tmp_path: Pa
     asyncio.run(exercise())
 
 
+def test_lab_prestart_cancellation_releases_lease_once(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(alchemy_lab.media_store, "root", tmp_path)
+    runner_started = asyncio.Event()
+
+    class CountingLease:
+        def __init__(self) -> None:
+            self.release_calls = 0
+
+        async def release_async(self) -> bool:
+            self.release_calls += 1
+            return True
+
+    async def hold_runner(*_args, **_kwargs):
+        runner_started.set()
+
+    monkeypatch.setattr(alchemy_lab, "_run_exploration_session_guarded", hold_runner)
+    lease = CountingLease()
+
+    async def exercise() -> None:
+        preexisting = set(alchemy_lab._background_tasks)
+        await alchemy_lab._schedule_exploration_session("lab_prestart_cancel", lease=lease)
+        runner = next(task for task in alchemy_lab._background_tasks if task not in preexisting)
+        runner.cancel()
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+        for _ in range(8):
+            cleanup_tasks = [task for task in alchemy_lab._background_tasks if task not in preexisting and task is not runner]
+            if cleanup_tasks:
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+            if lease.release_calls:
+                break
+            await asyncio.sleep(0)
+        assert not runner_started.is_set()
+        assert lease.release_calls == 1
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("exit_kind", ["normal", "error", "cancel_after_start"])
+def test_lab_started_session_releases_transferred_lease_once(tmp_path: Path, monkeypatch, exit_kind: str) -> None:
+    monkeypatch.setattr(alchemy_lab.media_store, "root", tmp_path)
+    runner_started = asyncio.Event()
+
+    class CountingLease:
+        def __init__(self) -> None:
+            self.release_calls = 0
+
+        async def release_async(self) -> bool:
+            self.release_calls += 1
+            return True
+
+    async def runner(*_args, **_kwargs):
+        runner_started.set()
+        if exit_kind == "error":
+            raise RuntimeError("offline runner failure")
+        if exit_kind == "cancel_after_start":
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(alchemy_lab, "_run_exploration_session_guarded", runner)
+    lease = CountingLease()
+
+    async def exercise() -> None:
+        preexisting = set(alchemy_lab._background_tasks)
+        await alchemy_lab._schedule_exploration_session(f"lab_started_{exit_kind}", lease=lease)
+        session_task = next(task for task in alchemy_lab._background_tasks if task not in preexisting)
+        if exit_kind == "error":
+            with pytest.raises(RuntimeError, match="offline runner failure"):
+                await session_task
+        elif exit_kind == "cancel_after_start":
+            await asyncio.wait_for(runner_started.wait(), timeout=1)
+            session_task.cancel()
+            session_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await session_task
+        else:
+            await session_task
+        assert runner_started.is_set()
+        assert lease.release_calls == 1
+
+    asyncio.run(exercise())
+
+
 def test_lab_capacity_is_acquired_before_intent_planning_and_released_on_error(tmp_path: Path, monkeypatch) -> None:
     from types import SimpleNamespace
 

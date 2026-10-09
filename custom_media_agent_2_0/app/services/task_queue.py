@@ -11,7 +11,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from app.config import settings
 from app.repositories.memory import utc_now
@@ -29,6 +29,7 @@ from app.services.ids import new_id
 
 logger = logging.getLogger(__name__)
 TaskStatus = str
+_SUCCESS_CHECKPOINT_VERSION = 2
 
 
 class QueueCapacityExceeded(RuntimeError):
@@ -83,13 +84,15 @@ def initialize_task_queue() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 claim_token TEXT,
-                claim_generation INTEGER NOT NULL DEFAULT 0
+                claim_generation INTEGER NOT NULL DEFAULT 0,
+                success_checkpoint_json TEXT
             )
             """
         )
         _ensure_column(conn, "v2_tasks", "not_before", "TEXT")
         _ensure_column(conn, "v2_tasks", "claim_token", "TEXT")
         _ensure_column(conn, "v2_tasks", "claim_generation", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "v2_tasks", "success_checkpoint_json", "TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_tasks_run_id ON v2_tasks(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_tasks_status_created ON v2_tasks(status, created_at)")
         conn.execute(
@@ -202,7 +205,10 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
                 (status = 'queued' AND (not_before IS NULL OR not_before <= ?))
                 OR (
                     status = 'running' AND locked_at IS NOT NULL AND locked_at < ?
-                    AND attempts < max_attempts
+                    AND (
+                        attempts < max_attempts
+                        OR (success_checkpoint_json IS NOT NULL AND success_checkpoint_json <> '')
+                    )
                 )
             ORDER BY created_at ASC
             LIMIT 1
@@ -213,7 +219,8 @@ def claim_next_task(worker_id: str) -> QueuedTask | None:
             conn.commit()
             return None
 
-        attempts = int(row["attempts"]) + 1
+        has_success_checkpoint = bool(row["success_checkpoint_json"])
+        attempts = int(row["attempts"]) if has_success_checkpoint else int(row["attempts"]) + 1
         old_status = str(row["status"])
         cursor = conn.execute(
             """
@@ -288,7 +295,11 @@ def ensure_current_claim(claim: QueuedTask | None = None) -> None:
         raise StaleTaskClaim("The V2 task claim was superseded before output commit.")
 
 
-def persist_claimed_operation(operation):
+def persist_claimed_operation(
+    operation: Callable[[], Any],
+    *,
+    on_persisted: Callable[[sqlite3.Connection, Any], None] | None = None,
+):
     """Commit local task-owned effects only while this claim fences queue takeover.
 
     Keep the transaction around local persistence only. Provider and billing
@@ -312,11 +323,116 @@ def persist_claimed_operation(operation):
             raise StaleTaskClaim("The V2 task claim was superseded before output commit.")
         try:
             result = operation()
+            if on_persisted is not None:
+                on_persisted(conn, result)
             conn.commit()
             return result
         except BaseException:
             conn.rollback()
             raise
+
+
+def checkpoint_completed_generation(connection: sqlite3.Connection, job) -> None:
+    """Persist a complete task snapshot after its final image job is durable.
+
+    A task with more than one generation job is checkpointed only when every
+    job in its current run snapshot is completed. This prevents a partial
+    generation from becoming a terminal success.
+    """
+
+    if getattr(job, "status", None) != "completed":
+        return
+    claim = current_claim()
+    if claim is None:
+        return
+    row = connection.execute(
+        """
+        SELECT queued_run_json FROM v2_tasks
+        WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+        """,
+        (claim.task_id, claim.worker_id, claim.claim_token),
+    ).fetchone()
+    if row is None:
+        raise StaleTaskClaim("The V2 task claim was superseded before success checkpoint persistence.")
+    snapshot = CreativeRun.model_validate(_json_loads(row["queued_run_json"]))
+    if snapshot.run_id != job.run_id or snapshot.status != "generating":
+        return
+    jobs = list(snapshot.generation_jobs)
+    match_indexes = [index for index, existing in enumerate(jobs) if existing.job_id == job.job_id]
+    if len(match_indexes) != 1:
+        # A generation result that is not represented in the complete task
+        # snapshot cannot prove task completion.
+        return
+    jobs[match_indexes[0]] = job
+    if not jobs or any(item.status != "completed" for item in jobs):
+        return
+    completed = snapshot.model_copy(
+        update={
+            "status": "completed",
+            "generation_jobs": jobs,
+            "prompt_plan": jobs[0].prompt_plan if jobs else snapshot.prompt_plan,
+            "next_actions": ["Review generated outputs and select a favorite or request revisions."],
+            "updated_at": utc_now(),
+        }
+    )
+    _validate_success_checkpoint_run(completed, expected_snapshot=snapshot)
+    cursor = connection.execute(
+        """
+        UPDATE v2_tasks SET success_checkpoint_json = ?, updated_at = ?
+        WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+        """,
+        (
+            _encode_success_checkpoint(completed),
+            utc_now().isoformat(),
+            claim.task_id,
+            claim.worker_id,
+            claim.claim_token,
+        ),
+    )
+    if cursor.rowcount != 1:
+        raise StaleTaskClaim("The V2 task claim was superseded before success checkpoint persistence.")
+
+
+def get_success_checkpoint(claim: QueuedTask | None = None) -> CreativeRun | None:
+    active_claim = claim or current_claim()
+    if active_claim is None:
+        return None
+    initialize_task_queue()
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT success_checkpoint_json, queued_run_json FROM v2_tasks
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (active_claim.task_id, active_claim.worker_id, active_claim.claim_token),
+        ).fetchone()
+    if row is None:
+        raise StaleTaskClaim("The V2 task claim was superseded before success checkpoint recovery.")
+    raw = row["success_checkpoint_json"]
+    if not raw:
+        return None
+    expected_snapshot = CreativeRun.model_validate(_json_loads(row["queued_run_json"]))
+    recovered = _decode_success_checkpoint(raw, expected_snapshot=expected_snapshot)
+    if recovered.run_id != active_claim.run_id:
+        raise ValueError("The V2 task success checkpoint does not belong to the claimed run.")
+    return recovered
+
+
+def restore_success_checkpoint(run: CreativeRun) -> CreativeRun:
+    """Rehydrate in-memory V2 projections from a claim-fenced durable checkpoint."""
+
+    from app.repositories import repository
+
+    claim = current_claim()
+    if claim is None or claim.run_id != run.run_id:
+        raise StaleTaskClaim("A V2 success checkpoint can only be restored by its active task claim.")
+
+    def restore() -> CreativeRun:
+        for job in run.generation_jobs:
+            repository.save_image_job(job)
+        return repository.save_creative_run(run)
+
+    return persist_claimed_operation(restore)
 
 
 def claim_heartbeat_interval_seconds() -> float:
@@ -385,7 +501,8 @@ def complete_task(claim: QueuedTask, run: CreativeRun) -> bool:
             """
             UPDATE v2_tasks
             SET status = 'completed', result_json = ?, error_json = NULL,
-                locked_by = NULL, locked_at = NULL, claim_token = NULL, not_before = NULL, updated_at = ?
+                success_checkpoint_json = NULL, locked_by = NULL, locked_at = NULL,
+                claim_token = NULL, not_before = NULL, updated_at = ?
             WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
             """,
             (_json_dumps(run.model_dump(mode="json")), now, claim.task_id, claim.worker_id, claim.claim_token),
@@ -544,15 +661,27 @@ def get_run_snapshot(run_id: str) -> CreativeRun | None:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT status, queued_run_json, result_json, error_json
+            SELECT status, queued_run_json, result_json, success_checkpoint_json, error_json
             FROM v2_tasks WHERE run_id = ? ORDER BY created_at DESC LIMIT 1
             """,
             (run_id,),
         ).fetchone()
     if row is None:
         return None
-    raw = row["result_json"] or row["queued_run_json"]
-    payload = _json_loads(raw)
+    queued_payload = _json_loads(row["queued_run_json"])
+    if row["result_json"]:
+        payload = _json_loads(row["result_json"])
+    elif row["success_checkpoint_json"]:
+        try:
+            expected_snapshot = CreativeRun.model_validate(queued_payload)
+            payload = _decode_success_checkpoint(
+                row["success_checkpoint_json"],
+                expected_snapshot=expected_snapshot,
+            ).model_dump(mode="json")
+        except Exception:
+            payload = queued_payload
+    else:
+        payload = queued_payload
     if row["status"] == "failed" and not row["result_json"]:
         error = _json_loads(row["error_json"]) if row["error_json"] else {}
         payload = {
@@ -615,6 +744,88 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_typ
 
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _encode_success_checkpoint(run: CreativeRun) -> str:
+    return _json_dumps(
+        {
+            "version": _SUCCESS_CHECKPOINT_VERSION,
+            "generation_job_ids": [job.job_id for job in run.generation_jobs],
+            "generation_output_ids": {
+                job.job_id: [output.output_id for output in job.outputs]
+                for job in run.generation_jobs
+            },
+            "run": run.model_dump(mode="json"),
+        }
+    )
+
+
+def _decode_success_checkpoint(
+    raw: str | bytes,
+    *,
+    expected_snapshot: CreativeRun | None = None,
+) -> CreativeRun:
+    payload = _json_loads(raw)
+    if payload.get("version") != _SUCCESS_CHECKPOINT_VERSION:
+        raise ValueError("The V2 task success checkpoint version is missing or unsupported.")
+    expected_job_ids = payload.get("generation_job_ids")
+    if (
+        not isinstance(expected_job_ids, list)
+        or not expected_job_ids
+        or any(not isinstance(job_id, str) for job_id in expected_job_ids)
+        or len(set(expected_job_ids)) != len(expected_job_ids)
+    ):
+        raise ValueError("The V2 task success checkpoint has no complete generation-job manifest.")
+    expected_output_ids = payload.get("generation_output_ids")
+    if not isinstance(expected_output_ids, dict):
+        raise ValueError("The V2 task success checkpoint has no complete generation-output manifest.")
+    run_payload = payload.get("run")
+    if not isinstance(run_payload, dict):
+        raise ValueError("The V2 task success checkpoint has no run result.")
+    recovered = CreativeRun.model_validate(run_payload)
+    actual_job_ids = [job.job_id for job in recovered.generation_jobs]
+    if actual_job_ids != expected_job_ids:
+        raise ValueError("The V2 task success checkpoint generation-job manifest does not match the result.")
+    actual_output_ids = {
+        job.job_id: [output.output_id for output in job.outputs]
+        for job in recovered.generation_jobs
+    }
+    if actual_output_ids != expected_output_ids:
+        raise ValueError("The V2 task success checkpoint generation-output manifest does not match the result.")
+    _validate_success_checkpoint_run(recovered, expected_snapshot=expected_snapshot)
+    return recovered
+
+
+def _validate_success_checkpoint_run(
+    run: CreativeRun,
+    *,
+    expected_snapshot: CreativeRun | None = None,
+) -> None:
+    if run.status != "completed" or not run.generation_jobs:
+        raise ValueError("The V2 task success checkpoint is incomplete and cannot be recovered as success.")
+    job_ids = [job.job_id for job in run.generation_jobs]
+    if len(set(job_ids)) != len(job_ids):
+        raise ValueError("The V2 task success checkpoint contains duplicate generation jobs.")
+    if any(job.status != "completed" for job in run.generation_jobs):
+        raise ValueError("The V2 task success checkpoint contains an unfinished generation job.")
+    if any(job.run_id != run.run_id for job in run.generation_jobs):
+        raise ValueError("The V2 task success checkpoint contains a job from another run.")
+    output_ids: list[str] = []
+    for job in run.generation_jobs:
+        for output in job.outputs:
+            if output.job_id != job.job_id:
+                raise ValueError("The V2 task success checkpoint contains an output from another job.")
+            output_ids.append(output.output_id)
+    if len(set(output_ids)) != len(output_ids):
+        raise ValueError("The V2 task success checkpoint contains duplicate output IDs.")
+    if expected_snapshot is not None:
+        if expected_snapshot.run_id != run.run_id:
+            raise ValueError("The V2 task success checkpoint does not match the queued run snapshot.")
+        expected_ids = [job.job_id for job in expected_snapshot.generation_jobs]
+        if not expected_ids or len(set(expected_ids)) != len(expected_ids) or job_ids != expected_ids:
+            raise ValueError(
+                "The V2 task success checkpoint job manifest does not match the authoritative queued run snapshot."
+            )
 
 
 def _json_loads(payload: str | bytes | None) -> dict[str, Any]:
