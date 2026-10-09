@@ -637,6 +637,200 @@ def _request_with_body(body: bytes, *, content_length: str | None = None) -> Req
     return Request(scope, receive)
 
 
+def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: Path, monkeypatch) -> None:
+    from app.schemas import GenerationJob, JobStatus
+    from app.services.image_service import PreparedImageJob
+
+    lease_ttl_seconds = 0.6
+    monkeypatch.setattr(main_module.media_store, "root", tmp_path)
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        settings.model_copy(
+            update={
+                "veyra_auth_enabled": False,
+                "max_concurrent_image_generations": 1,
+                "generation_capacity_lease_ttl_seconds": lease_ttl_seconds,
+            }
+        ),
+    )
+    monkeypatch.setattr(main_module, "find_existing_image_job_for_request", lambda **_kwargs: None)
+
+    runner_started = asyncio.Event()
+    timeline: list[str] = []
+
+    async def fake_run_submitted_image_job(*_args, **_kwargs):
+        timeline.append("runner-started")
+        runner_started.set()
+
+    job = GenerationJob(
+        id="job_prestart_cancel",
+        session_id="session_prestart_cancel",
+        job_type="image",
+        status=JobStatus.generating,
+        trace_id="trace_prestart_cancel",
+        created_at="2026-10-09T00:00:00Z",
+        updated_at="2026-10-09T00:00:00Z",
+    )
+
+    async def fake_submit_image_job(**_kwargs):
+        return PreparedImageJob(job=job, request=object())
+
+    monkeypatch.setattr(main_module, "run_submitted_image_job", fake_run_submitted_image_job)
+    monkeypatch.setattr(main_module, "submit_image_job", fake_submit_image_job)
+
+    database_path = tmp_path / ".v1-resource-admission.sqlite3"
+
+    def read_lease_row():
+        with sqlite3.connect(database_path) as connection:
+            return connection.execute(
+                "SELECT namespace, slot, owner_token, lease_until, heartbeat_at FROM resource_leases"
+            ).fetchone()
+
+    def delete_test_lease_rows():
+        if not database_path.exists():
+            return
+        with sqlite3.connect(database_path) as connection:
+            connection.execute("DELETE FROM resource_leases WHERE namespace = 'generation'")
+
+    async def exercise() -> None:
+        request_messages = [
+            {
+                "type": "http.request",
+                "body": b'{"session_id":"session_prestart_cancel","prompt":"offline prestart cancellation"}',
+                "more_body": False,
+            }
+        ]
+        body_send_entered = asyncio.Event()
+        allow_body_send_to_return = asyncio.Event()
+        body_send_cancelled = asyncio.Event()
+
+        class ControlledResponseSend:
+            def __init__(self, app, *, entered, allow_to_return, cancelled):
+                self.app = app
+                self.entered = entered
+                self.allow_to_return = allow_to_return
+                self.cancelled = cancelled
+
+            async def __call__(self, scope, receive, send):
+                async def controlled_send(message):
+                    if message["type"] == "http.response.body" and not message.get("more_body", False):
+                        timeline.append("final-body-send-entered")
+                        self.entered.set()
+                        try:
+                            await self.allow_to_return.wait()
+                        except asyncio.CancelledError:
+                            self.cancelled.set()
+                            raise
+                        timeline.append("final-body-send-returned")
+                    await send(message)
+
+                await self.app(scope, receive, controlled_send)
+
+        from starlette.middleware import Middleware
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        # Keep the production API-access BaseHTTPMiddleware in the stack and
+        # insert this send barrier inside it, before Starlette runs response
+        # background tasks. An outer ASGI send barrier is too late here because
+        # the existing BaseHTTPMiddleware can emit the body before the socket send.
+        original_user_middleware = v1_app.user_middleware
+        assert any(middleware.cls is BaseHTTPMiddleware for middleware in original_user_middleware)
+        monkeypatch.setattr(
+            v1_app,
+            "user_middleware",
+            [
+                *original_user_middleware,
+                Middleware(
+                    ControlledResponseSend,
+                    entered=body_send_entered,
+                    allow_to_return=allow_body_send_to_return,
+                    cancelled=body_send_cancelled,
+                ),
+            ],
+        )
+        monkeypatch.setattr(v1_app, "middleware_stack", None)
+
+        async def receive():
+            if request_messages:
+                return request_messages.pop(0)
+            await asyncio.Event().wait()
+
+        async def send(_message):
+            return None
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 123),
+            "root_path": "",
+            "path": "/v1/image/jobs",
+            "raw_path": b"/v1/image/jobs",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"testserver"),
+                (b"content-type", b"application/json"),
+            ],
+            "state": {},
+        }
+        request_task = asyncio.create_task(v1_app(scope, receive, send))
+        try:
+            await asyncio.wait_for(body_send_entered.wait(), timeout=3)
+            assert not runner_started.is_set(), timeline
+
+            first_row = read_lease_row()
+            assert first_row is not None
+            assert first_row[0:2] == ("generation", 0)
+            first_deadline, first_heartbeat = first_row[3:5]
+            assert first_deadline > time.time()
+
+            heartbeat_deadline = time.monotonic() + 2
+            latest_row = first_row
+            while latest_row[4] <= first_heartbeat and time.monotonic() < heartbeat_deadline:
+                await asyncio.sleep(0.025)
+                latest_row = read_lease_row()
+                assert latest_row is not None
+            assert latest_row[4] > first_heartbeat
+            assert latest_row[3] > first_deadline
+            assert not runner_started.is_set()
+
+            request_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request_task
+
+            assert body_send_cancelled.is_set()
+            assert not runner_started.is_set()
+            try:
+                new_lease = await capacity_module.acquire_generation_capacity_async(
+                    tmp_path,
+                    limit=1,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                )
+            except GenerationCapacityExceeded as exc:
+                raise AssertionError(
+                    f"pre-start request cancellation left its SQLite lease active: {read_lease_row()!r}"
+                ) from exc
+            try:
+                row = read_lease_row()
+                assert row is not None
+                assert row[2] == new_lease.token
+            finally:
+                await new_lease.release_async()
+        finally:
+            allow_body_send_to_return.set()
+            if not request_task.done():
+                request_task.cancel()
+            await asyncio.gather(request_task, return_exceptions=True)
+            delete_test_lease_rows()
+            await asyncio.sleep(max(0.05, lease_ttl_seconds / 3) + 0.05)
+
+    asyncio.run(exercise())
+
+
 def test_v1_limited_body_rejects_oversized_declared_length_before_read() -> None:
     request = _request_with_body(b"ignored", content_length="9")
     with pytest.raises(HTTPException) as error:

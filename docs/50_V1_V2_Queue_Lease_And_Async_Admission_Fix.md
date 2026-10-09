@@ -176,3 +176,18 @@ The independent review found no blocker and noted one low-priority coverage gap:
 | `tests/test_task_claim_fencing.py::test_legacy_queue_schema_migration_is_serialized_across_initializers -p no:cacheprovider` | 1 passed in isolation. |
 
 These runs used the same test-only pytest temporary-directory bootstrap described above, with unique `--basetemp` directories. The isolated migration result is separate from the combined set because that two-thread test has previously shown an intermittent SQLite lock under parallel collection. No migration code changed. The offline result does not establish VPS capacity, multiprocess/provider behavior, or production readiness.
+
+### V1 pre-runner ASGI cancellation addendum (2026-10-09)
+
+The earlier V1 diagnostic cancelled requests only after the background runner had entered. Its result did not establish the before-runner case. A focused follow-up exercised the actual `/v1/image/jobs` route and the existing API-access `BaseHTTPMiddleware`, with a test-only ASGI send barrier inserted inside that middleware on the final response-body send. The route had already acquired and transferred a real SQLite lease, while the test verified the runner's first instruction had not executed. The lease row had a live TTL and its heartbeat advanced while the response send was held.
+
+The unmodified implementation reproduced the defect: cancelling the outer ASGI request while the inner response send was held left the SQLite lease row active and renewing its TTL, and a new slot could not be acquired. An outer socket-send barrier alone was insufficient because the API-access `BaseHTTPMiddleware` allowed the background runner to start before that outer send was reached.
+
+The V1 fix records the acquired lease in the request ASGI scope and installs a small ASGI cleanup middleware inside the API-access middleware. If response delivery or the inner application is cancelled or raises before the background task starts, the cleanup middleware calls the existing shielded `GenerationLease.release_async()`. Normal runner completion still releases through its existing `finally`; lease acquisition, SQLite schema, TTL, and public responses are unchanged. The regression verifies cancellation before runner start, cleanup of the SQLite lease, and successful acquisition of the next slot.
+
+| Command | Result |
+|---|---|
+| `tests/test_resource_capacity_guards.py::test_v1_asgi_cancel_before_background_runner_releases_real_lease -p no:cacheprovider` against the pre-fix source | Failed as expected: the ASGI runner had not started, but cancellation left the active SQLite lease and blocked the next slot. |
+| Same focused test after the V1 cleanup fix | 1 passed, 5 framework deprecation warnings. |
+
+This test used only temporary SQLite state and a fake submitted-job runner; it made no provider calls. The prior after-start probe remains valid for its timing, while the pre-start gap is now covered. No full suite, previously verified V2 cases, VPS, performance, merge, or deployment was rerun as part of this addendum.

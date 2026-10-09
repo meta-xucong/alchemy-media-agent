@@ -132,6 +132,31 @@ from app.runtime_paths import (
 )
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
+
+
+_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY = "_v1_request_capacity_lease"
+
+
+class _V1RequestCapacityLeaseCleanupMiddleware:
+    """Release a transferred V1 lease if ASGI response delivery is cancelled."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await self.app(scope, receive, send)
+        except BaseException:
+            lease = scope.get("state", {}).get(_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY)
+            if lease is not None:
+                await lease.release_async()
+            raise
+
+
+# The access middleware is installed below and wraps this ASGI cleanup guard.
+# Keep the guard inside it so cancellation during response transmission can
+# still release a lease whose Starlette background task has not started.
+app.add_middleware(_V1RequestCapacityLeaseCleanupMiddleware)
 logger = logging.getLogger(__name__)
 
 
@@ -3079,6 +3104,7 @@ async def create_image_job_endpoint(
     if existing:
         return existing
     lease = await _acquire_v1_request_capacity()
+    _track_v1_request_capacity_lease(request, lease)
     transferred = False
     try:
         prepared = await submit_image_job(
@@ -3119,6 +3145,10 @@ async def _acquire_v1_request_capacity():
         raise _v1_generation_capacity_http_error() from exc
     except GenerationCapacityStorageBusy as exc:
         raise _v1_local_database_busy_http_error() from exc
+
+
+def _track_v1_request_capacity_lease(request: Request, lease) -> None:
+    request.scope.setdefault("state", {})[_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY] = lease
 
 
 def _v1_generation_capacity_http_error() -> HTTPException:
@@ -3338,6 +3368,7 @@ async def revise_image_job_endpoint(
 ):
     await _require_output_visible(request, body.output_id, authorization, allow_legacy_public=True)
     lease = await _acquire_v1_request_capacity()
+    _track_v1_request_capacity_lease(request, lease)
     transferred = False
     try:
         prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
