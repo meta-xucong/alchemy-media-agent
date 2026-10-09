@@ -118,6 +118,11 @@ class _StreamingJSONReader:
                 if not self._fill():
                     raise ValueError("Legacy V2 favorites file ended before its JSON value was complete.") from None
             else:
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    token_may_continue = end >= len(self.buffer) or self.buffer[end] in "0123456789.eE"
+                    if token_may_continue and not self.eof:
+                        self._fill()
+                        continue
                 self.position = end
                 return value
 

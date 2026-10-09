@@ -310,3 +310,95 @@ V1/V2 生成及 creative-run 路径跨越 Provider 前后的任务建立、幂�
 - 独立 A2：PASS，独立复算相同指纹；检查 `BEGIN IMMEDIATE` owner 串行化及相邻权限、收藏、Lab checkpoint、V1 删除、V1/V2 SQLite cancellation 路径，并以临时 SQLite 双线程复现确认最终两份记录 owner 均为 41。审计环境没有 pytest，A2 未执行测试套件；本机测试证据见上文。
 - 本机局部测试：V1 删除/收藏/SQLite 容量/迁移 11 passed；V1 历史 owner API 6 passed；Lab 恢复/缓存/快照 11 passed；V2 收藏迁移/留存/SQLite 容量 7 passed；并发 stale-owner 回归连续 5 次通过。各组存在重叠，不相加为全仓套件。完整 V1 smoke、浏览器、Provider、生产数据、VPS/RSS 与性能未验证。
 - 双审仅放行更新 Draft PR #28，不放行合并、部署或数据切换。旧进程易失数据导出/对账、完整 V1 smoke/浏览器覆盖和 VPS 迁移与运行验收仍是独立上线门槛。
+
+### 增量复审收尾（2026-10-09，基线 9c325b21）
+
+#### 修正模型
+
+增量复审指出三项归属/删除问题和一个 JSON 数字边界问题。三项权限问题的共同根因是不同入口把 outputs 行、Job 内嵌副本、history 索引与文件是否存在当成互不相关的 owner 来源；某个副本缺失或清理中断时，ownerless 不得自动解释成公共。修正后的统一优先级为：规范化 outputs 行中的明确 owner 优先；没有该证据时按 output ID 精确查 history 索引中的明确 owner（不受列表页窗口限制，且不要求图片文件存在）；两者都没有明确 owner 时才回退检查旧 Job-only 记录，同一回退层出现冲突则拒绝授权。历史列表投影采用相同优先级，确保列表、下载和删除使用相同 owner 判定。常规规范化私有图片可以直接由 outputs 行完成鉴权，不再逐请求扫描所有 Job/历史行。删除完成前保留 repository/Job 或 history 的授权锚点，使 history-only 旧记录在文件已删除后仍可由原 owner 重试。`preserve_output_owner` 在单一事务中同步 outputs 行及 ownerless 的 Job 内嵌副本。
+
+收藏解析器只在数字 token 可能跨过当前读取块时补读并重新解析；不恢复每项解析后无条件预读 64 KiB 的行为。V1、V2 使用相同边界规则。
+
+#### 新增回归与验证边界
+
+- 历史 API：较新缺图 manifest 仍有明确私有 owner 时，其他账户的历史列表不返回该 ID，下载返回 403；真实文件恢复候选仍携带 owner。另覆盖 10,001 条历史中排在列表窗口之外的私有记录仍按 ID 正确拒绝跨账号下载、规范 outputs owner 优先于 stale Job 副本、Job-only 同层 owner 冲突时历史和下载均 fail-closed，以及 history owner 覆盖旧 Job 投影时列表与下载一致。
+- 删除重试：故障注入使最后的收藏清理遇 SQLite busy；文件已消失后 history-only owner 仍可识别，其他用户不能读取，原 owner 重试完成幂等清理。repository output 存在的中断用例也断言 Job 内嵌 owner 已同步。
+- V1/V2 收藏解析：数字 token 从 64 KiB 分块边界中间开始，必须作为完整合法 JSON 数字解析；此前多条小记录缓冲上界测试继续保留。
+- 本机执行：V1 删除/收藏/迁移/SQLite 容量/历史边界/Lab 相关套件 37 passed；V2 收藏迁移/留存/SQLite 容量及相关套件 15 passed；V1 公开 API owner/删除定向用例 7 passed；V2 数字边界专项 2 passed。分组有交集，不合并成一个总数。完整 V1 `test_api_smoke.py` 曾启动但未完成，不能记为通过；有 FastAPI/Starlette 生命周期弃用警告。
+- Python 编译和 `git diff --check` 通过。未运行真实 Provider、浏览器、生产数据迁移或 VPS/RSS/性能验收。
+- 当前候选指纹为 `30193274431c04f0c339d9c12dd904c0cc39a8618a09378acf8dde81648281d2`，覆盖相对 `origin/main` 的 39 个变更/新增 Python 文件；排序与散列算法和本节前述规则一致，文档与 `PROGRESS.md` 不计入。此前所有 fingerprint 审计回执对本次源码/测试修改均失效。
+- 旧 Job-only fallback 仍需扫描 Job 记录以发现没有规范 output/history 锚点的历史归属冲突；常规规范 outputs owner 和精确 history owner 路径不做全表扫描。该 fallback 的实际延迟未做生产基准，PR #28 在独立审计完成前保持 Draft，不合并、不部署。
+
+#### 10,001 条历史权限边界修正（2026-10-09）
+
+前一候选 `30193274431c04f0c339d9c12dd904c0cc39a8618a09378acf8dde81648281d2` 被独立 A2 复审拒绝：owner resolver 仍用 10,000 条倒序列表查找历史 owner，造成第 10,001 条私有记录可能降级为 public；同时每个图片鉴权都扫描全部 Job 和最多 10,000 条 history。该候选不得作为可接受版本。
+
+修正为：有明确 owner 的规范 outputs 行直接完成鉴权；否则通过 `v1_history_records.output_id` 主键精确查找 history manifest，含缺图记录且不受列表窗口限制；只有两者都没有明确 owner 时，才扫描旧 Job-only 记录以保持冲突 fail-closed。历史列表的临时 owner 证据表增加来源优先级：规范 outputs owner 优先于 history owner，history owner 优先于 Job 副本；同一回退层的不同显式 owner 仍 fail-closed。列表、下载和删除共用该 authority 顺序。这个修正未引入常驻 owner 缓存或新数据库。
+
+新增回归将私有目标放在 10,001 条索引记录的最旧端，并通过真实下载 API 验证非 owner 得到 403、owner 成功；另验证规范 outputs owner 覆盖 stale Job、history owner 覆盖 stale Job 时列表/下载一致、Job-only 冲突仍拒绝，以及删除中断后非 owner 不能删除或读取。
+
+本轮定向验证：V1 persistence/history/favorites/SQLite/Lab 37 passed；V1 owner/history/download API 8 passed；V2 favorites/retention/SQLite 15 passed。组间重叠，不相加。编译和 `git diff --check` 通过。完整 V1 smoke、浏览器、Provider、生产数据和 VPS 未验证。旧 Job-only 无规范 output/history 行仍需全 Job 回退扫描；正常规范 owner 或精确 history owner 不扫描整批记录。
+
+修正后的 Python 源码/测试 fingerprint：`d98c5a4e660cf9863726662fa1462a2d32d1d6576ae1437a2a38c5e051003299`，39 个相对 `origin/main` 的变更/新增 Python 文件。文档与 `PROGRESS.md` 排除。该版本需重新取得 Source Fidelity A2 和独立 Audit A2；此前收据全部过期。审计双通过后只更新 Draft PR #28，不合并、不部署。
+
+#### 历史列表投影的增量修正
+
+在审计派发前的本机重跑中发现两个未覆盖边界：其一，下载鉴权虽已按 output ID 精确查询 history，但 filesystem 恢复进入历史列表时仍只依赖当前 10,000 条列表窗口，可能让更旧的私有 manifest 失去 owner 约束；其二，同源重复 Job 中 ownerless 副本先到时，会在归属纠正后留下该副本的 `job_id`，而不是与明确 owner 相符的投影。
+
+历史列表的候选暂存现在在请求期按 output ID 解析规范 outputs owner，其缺失时精确读取 history 索引（包含文件不存在的行），再使用 Job-only 副本作为低优先级兼容证据。下载与列表采用同一 owner 来源顺序。临时去重记录还保留候选原 owner 是否匹配最终权威 owner；同一来源优先级下，匹配权威 owner 的候选优先，避免 ownerless 副本覆盖有效 Job 投影。该匹配标记仅存在于请求期 SQLite 临时表，不进入持久记录或 API 响应。
+
+10,001 条历史回归现在验证最旧端私有记录在文件恢复列表和下载端均不会暴露给其他账户，且 owner 能看到被恢复的图片。重复 Job 顺序用例验证返回的 owner 与 `job_id` 投影均稳定。最终增量测试证据为：V1 persistence/history/favorites/SQLite/Lab 37 passed；V1 owner/history/download API 12 passed；V2 favorites/migration/SQLite 14 passed；变更 Python compileall 与 `git diff --check` 通过。完整 V1 smoke、浏览器、Provider、生产数据、VPS/RSS 与性能仍未验收。
+
+由于上述 Python 变更，前一节 `d98c5a4e` fingerprint 及所有此前审计收据均失效。当前版本需重新冻结完整 PR Python 改动集 fingerprint，并通过独立 Source Fidelity A2 与普通 Audit A2。审计未完成前 PR #28 仍保持 Draft，不合并、不部署。
+
+#### 同级历史归属冲突保护
+
+针对同一 output ID 的历史清单记录，索引只保留最新展示行并不足以证明 owner 唯一。独立 A2 复现了“旧记录 owner=41、图片文件存在；新记录 owner=77、图片文件缺失”的跨账号下载：最新索引行覆盖旧 owner 后，按 output ID 回退找到旧文件并把文件交给 user 77。该版本因此被拒绝。
+
+现在单独持久化 `v1_history_owner_evidence(output_id, owner_id, owner_conflict)`。每次历史记录 upsert 都累计明确 owner 证据；若同一历史来源出现不同 owner，冲突位只能被设为 true，不会被较新的行覆盖。旧安装在首次使用时从现存 append-only JSONL 逐行回填该索引，并以持久迁移标记避免每次扫描；不把全部 owner 放进 Python 内存。按 ID 的 history 查询同时返回内部冲突证据。输出列表的历史投影和下载鉴权遇到该同级冲突均 fail-closed；明确的规范 outputs owner 仍按更高 authority 决定可见性。成功删除 history 行时，同一数据库事务也删除对应 owner evidence；前序清理失败时 owner/conflict 锚点继续保留，供幂等重试与安全拒绝使用。
+
+新增隔离 API 回归模拟升级前已有最新索引但没有 owner-evidence 表：回填扫描发现 JSONL 中 owner 41/77 冲突，普通账户双方均不能在列表看到图片或下载文件，且响应不包含旧文件内容。此项是新的持久化索引迁移，部署前仍应在临时副本/备份环境确认现存 `outputs.jsonl` 可读及一次性扫描耗时；不得用线上真实库做探索性测试。
+
+本候选本地定向验证：V1 persistence/history/favorites/SQLite/Lab 37 passed；V1 owner/history/download API 13 passed；V2 favorites/migration/SQLite 14 passed；变更 Python compileall 和 `git diff --check` 通过。全量 V1 smoke、浏览器、生产旧库回填、VPS、RSS/性能仍未验证。前一个 `636def67` 指纹的 Source Fidelity A2 曾 PASS，但普通 A2 随后发现上述 P1；两份收据都不能放行当前修改。新的完整 Python fingerprint 必须同时取得 Source Fidelity A2 与普通 Audit A2 PASS，PR #28 仍保持 Draft。
+
+当前候选 fingerprint：`45754d8d23c8682a7281a8c0c185fd808d54d2803b79a972a0d69a7ab76360ae`，39 个相对 `origin/main` 的变更/新增 Python 路径；路径 UTF-8 排序，按“相对路径 + NUL + 每文件小写 SHA256 十六进制 + NUL”计算，文档与 `PROGRESS.md` 排除。只有此版本的 Source Fidelity A2 与普通 Audit A2 双 PASS 才能作为更新 Draft PR #28 的放行依据。
+
+#### 删除重试及历史查询成本收尾（2026-10-09）
+
+对 `9c325b21` 的增量复审还发现：JSONL 已替换但 SQLite 删除遇 busy 时，重试虽然删除了剩余索引，返回值却只看 JSONL 删除数，导致清理完成后仍报告 404；另有按图片逐项开数据库连接导致的请求成本放大。当前 `delete_history_record` 以 JSONL 行数和 SQLite 受影响行数的较大值报告删除结果。失败注入测试验证首次请求 503、非 owner 重试 403、原 owner 重试成功。owner evidence 与 history 行仍在同一成功事务删除，失败期间保留权限依据。
+
+历史列表现在在一次请求中复用 repository SQLite 连接，精确 output/history owner 读取使用调用方连接；解析后的 authority 存入请求临时 SQLite，避免为每个图片重复开库，也不引入进程级持久缓存。24 项历史候选的连接计数回归验证该边界。V1/V2 收藏解析器对跨 64 KiB 边界的 JSON 数字 token 仅在可能未完整时补读，再完整解析。
+
+最新相关回归结果：V1 persistence/history/favorites/SQLite/Lab 38 passed；V1 history owner/API 14 passed；V2 favorites/migration/SQLite 14 passed。分组有重叠。变更 Python compileall、`git diff --check` 通过。完整 V1 smoke、浏览器、真实 Provider、旧生产库回填耗时、VPS RSS/CPU/P95 未验证。此前 `45754d…` Audit A2 的删除重试问题已修，但所有旧审计收据均因源码/测试变化失效；需冻结新 fingerprint 并通过新一轮 Source Fidelity A2 与独立 Audit A2 后，才可更新 Draft PR #28。仍不合并、不部署。
+
+#### 跨 Job 重复输出的删除闭环（2026-10-09）
+
+对 `13fda1a0…` 的 Source Fidelity A2 又发现旧库可能在第二个 Job.outputs 中保留相同 output ID 的 ownerless 副本，并在该 Job 目录保留同 ID 图片。此前 `preserve_output_owner` 和最终删除只处理规范 output.job_id；规范 output/history 清理完成后，旧副本会成为 ownerless 唯一证据，下载文件回退可找到另一 Job 文件。该候选被拒绝。
+
+删除闭环现按 output ID 工作：清理文件时遍历生成目录，删除该 ID 所有受支持图片格式的副本；`preserve_output_owner` 在事务中遍历所有持久 Job，对仍 ownerless 的同 ID 投影补上经授权确认的 owner；最终 `delete_output_with_event` 在同一事务删除规范 output 并从全部 Job 投影移除同 ID 副本。文件删除中途失败时 history/repository 锚点尚未清理；最后数据库事务失败时，先前保存的 owner 仍留在规范 output 与所有 Job 副本中，原 owner 可重试，其他账户不会因缺少文件而获得公共回退。
+
+新增旧库回归直接写入 `save_job` 规范化逻辑之前可能留下的 ownerless duplicate，确认规范目录和重复目录文件都删除、重复 Job.outputs 清空，且删除后下载不能返回图片；现有中途事务故障测试扩展为跨 Job duplicate，验证失败状态给副本补归属，原用户重试最终清理重复文件与记录。新用例在修复前复现为失败（重复图片残留），修复后通过。
+
+最新局部结果：V1 持久化/历史/收藏/SQLite/Lab 39 passed；V1 历史 owner/API 14 passed；V2 收藏/迁移/SQLite 8 passed。分组不相加。完整浏览器、全量 V1 smoke、真实 Provider、旧生产库迁移耗时、VPS 资源仍未验证。上一指纹 `13fda1a0…` 的 A2 双审均失败/失效；该跨 Job 修复后所有代码审计收据需重新获取，PR #28 仍保持 Draft。
+
+当前候选 Python 源码/测试指纹为 `796eefbfe3b160d3dcb43486f9f87af2cf2e604203a9d7db31777c0abb2f2bdb`，覆盖相对 `origin/main` 的 39 个变更/新增 Python 文件；使用 UTF-8 相对路径排序，并按“相对路径 + NUL + 每文件小写 SHA256(raw bytes) 十六进制 + NUL”计算。文档与 `PROGRESS.md` 不在该指纹内，但属于 Source Fidelity 审阅范围。只有对此精确候选的 Source Fidelity A2 和独立 Audit A2 双 PASS 才允许更新 Draft PR #28；不授权合并或部署。
+
+#### 仅 history/Job 记录的迁移前删除边界
+
+后续 A2 又验证了没有规范 `outputs` 行的迁移前形态：owner=41 的 history 记录关联到 ownerless Job.outputs 和本地图片。删除 bundle 原先只在规范 output 存在时传播 owner，且最终 repository 删除仅在 output 行存在时调用，导致文件与 history 已清除但 Job 投影残留。现已将授权 owner 传播与 Job 投影清理扩展为按 output ID 执行，不依赖规范 output 行存在；`preserve_output_owner` 在缺少规范行时仍给旧 Job 副本补归属，最终删除事务即使没有规范 output 行也会从全部 Job 中移除该 ID。配套回归在修复前因残留 Job.outputs 失败，修复后通过。
+
+更新后的局部验证：V1 persistence/history/favorites/SQLite/Lab 40 passed；V1 history owner/API 14 passed；V2 favorites/migration/SQLite 8 passed。分组重叠。`796eefbf…` 已因上述源码/测试变化失效，需要再冻结新 Python 指纹并重新通过 Source Fidelity A2、独立 Audit A2；完整 V1 smoke、浏览器、真实 Provider、生产库迁移与 VPS 性能仍未验证。PR #28 保持 Draft，不合并、不部署。
+
+该候选的 Python 源码/测试指纹为 `6d550e063430d3de58609443209c7820466709a873461c01348ae031647c9dc5`，覆盖 39 个相对 `origin/main` 变更/新增的 Python 文件；按路径 UTF-8 排序并使用“相对路径 + NUL + 每文件小写 SHA256(raw bytes) 十六进制 + NUL”计算，文档和 `PROGRESS.md` 不纳入散列。该文档和测试证据作为 Source Fidelity 审阅材料。此候选只有重新取得 Source Fidelity A2 与独立 Audit A2 双 PASS 后，才可更新 Draft PR #28。
+
+#### 最终清理顺序修正（2026-10-09）
+
+Source Fidelity A2 对 `6d550e0…` 继续发现：删除 history 行和 owner evidence 发生在 repository/Job 清理之前；若后者失败，旧 Job 副本上的另一 owner 可能暂时成为权限依据。最终顺序现调整为：移除所有文件副本及缩略图/预览，清理收藏，再在 SQLite 事务中删除规范 output 与全部 Job 投影，最后删除 history 行及 owner evidence。这样 repository 清理失败时 history owner 仍是权威；而 history 删除遇锁失败时，已清理的 repository 不会留下 Job 副本，持久 history owner 仍可供原用户重试。
+
+新增故障交错使用 history-only 旧记录、Job owner=77 与 history owner=41，注入 repository 清理失败，验证 history owner 仍解析为 41、错误账户不能接管删除，原 owner 可重试完成。已有 JSONL 替换后 SQLite busy 用例现在证明 repository/Job 已清理但 history owner 锚仍在，原 owner 重试成功。历史 output 存在/缺失、跨 Job duplicate 文件与 Job 副本两种删除用例均通过。
+
+当前最终局部结果：V1 persistence/history/favorites/SQLite/Lab 41 passed；V1 history owner/API 14 passed；V2 favorites/migration/SQLite 8 passed；变更 Python compileall 与 `git diff --check` 通过。FastAPI/Starlette 生命周期弃用告警仍存在；完整 V1 smoke、浏览器、真实 Provider、旧库生产迁移、VPS RSS/CPU/P95 未验证。此前 `8590db1c` 前候选的审计收据已失效，须对下列新 fingerprint 重新完成 Source Fidelity A2 和独立 Audit A2。
+
+当前 Python 源码/测试指纹：`8590db1c057978f8b4698c189cb4b56d181c442dd76fb85c662721bd20e0b32f`，39 个相对 `origin/main` 的变更/新增 Python 文件，路径 UTF-8 排序，散列格式为“相对路径 + NUL + 每文件小写 SHA256(raw bytes) 十六进制 + NUL”；文档/PROGRESS 不计入指纹。双审仅放行更新 Draft PR #28，不授权合并或部署。
+
+最终只读审计收据：Source Fidelity A2 PASS 与独立 Audit A2 PASS，均复算同一 `8590db1c…` 指纹；未修改源码。A2 额外执行 V1 history/delete/favorites/migration/SQLite/Lab 33 passed、V1 owner/history API 14 passed、V2 favorites/migration/SQLite 14 passed；本机单独执行的相邻组为 41/14/8 passed，组间重叠，各自报告、不相加。A2 标记路由溯源 `ROUTE_UNVERIFIED`。双审允许更新 Draft PR #28；不构成完整 V1 smoke、浏览器、Provider、生产旧库迁移或 VPS RSS/CPU/P95 验收，也不授权合并/部署。

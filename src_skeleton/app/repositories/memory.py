@@ -128,21 +128,41 @@ class MemoryRepository:
     def get_output(self, output_id: str) -> GenerationOutput | None:
         return self.outputs.get(output_id)
 
+    def get_output_on(self, connection, output_id: str) -> GenerationOutput | None:
+        payload = self.outputs.get_record_json_on(connection, output_id)
+        return GenerationOutput.model_validate_json(payload) if payload is not None else None
+
+    def _rewrite_output_copies_on(self, connection, output_id: str, *, owner_id: int | None = None) -> None:
+        """Update or remove every legacy Job projection for one output ID."""
+        for job in self.jobs.iter_jobs():
+            if not any(item.id == output_id for item in job.outputs):
+                continue
+            if owner_id is None:
+                outputs = [item for item in job.outputs if item.id != output_id]
+            else:
+                outputs = []
+                for item in job.outputs:
+                    if item.id != output_id or self._output_owner_id(item) is not None:
+                        outputs.append(item)
+                        continue
+                    metadata = dict(item.metadata or {})
+                    metadata["veyra_user_id"] = owner_id
+                    outputs.append(item.model_copy(update={"metadata": metadata}))
+            if outputs != job.outputs:
+                self.jobs.put_on(connection, job.id, job.model_copy(update={"outputs": outputs}))
+
     def delete_output(self, output_id: str) -> GenerationOutput | None:
         connection = connect(self.database_path)
         try:
             connection.execute("BEGIN IMMEDIATE")
             output_json = self.outputs.get_record_json_on(connection, output_id)
             if output_json is None:
+                self._rewrite_output_copies_on(connection, output_id)
                 connection.commit()
                 return None
             output = GenerationOutput.model_validate_json(output_json)
-            job_json = self.jobs.get_record_json_on(connection, output.job_id)
             self.outputs.delete_on(connection, output_id)
-            if job_json:
-                job = GenerationJob.model_validate_json(job_json)
-                job.outputs = [item for item in job.outputs if item.id != output_id]
-                self.jobs.put_on(connection, job.id, job)
+            self._rewrite_output_copies_on(connection, output_id)
             connection.commit()
             return output
         except Exception:
@@ -158,6 +178,7 @@ class MemoryRepository:
             connection.execute("BEGIN IMMEDIATE")
             output_json = self.outputs.get_record_json_on(connection, output_id)
             if output_json is None:
+                self._rewrite_output_copies_on(connection, output_id)
                 connection.commit()
                 return None
             output = GenerationOutput.model_validate_json(output_json)
@@ -166,9 +187,8 @@ class MemoryRepository:
             session_id = None
             if job_json:
                 job = GenerationJob.model_validate_json(job_json)
-                job.outputs = [item for item in job.outputs if item.id != output_id]
-                self.jobs.put_on(connection, job.id, job)
                 session_id = job.session_id
+            self._rewrite_output_copies_on(connection, output_id)
             if session_id:
                 connection.execute(
                     "INSERT INTO v1_events(session_id, event_type, payload) VALUES(?, ?, ?)",
@@ -203,6 +223,7 @@ class MemoryRepository:
             connection.execute("BEGIN IMMEDIATE")
             output_json = self.outputs.get_record_json_on(connection, output_id)
             if output_json is None:
+                self._rewrite_output_copies_on(connection, output_id, owner_id=verified_owner_id)
                 connection.commit()
                 return None
             output = GenerationOutput.model_validate_json(output_json)
@@ -213,8 +234,10 @@ class MemoryRepository:
                 current_owner_id = 0
             if current_owner_id <= 0:
                 metadata["veyra_user_id"] = verified_owner_id
-                output.metadata = metadata
+                output = output.model_copy(update={"metadata": metadata})
                 self.outputs.put_on(connection, output_id, output)
+            canonical_owner_id = self._output_owner_id(output) or verified_owner_id
+            self._rewrite_output_copies_on(connection, output_id, owner_id=canonical_owner_id)
             connection.commit()
             return output
         except Exception:

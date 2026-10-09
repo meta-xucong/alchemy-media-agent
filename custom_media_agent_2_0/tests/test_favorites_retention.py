@@ -1,7 +1,17 @@
+import io
 import json
 from types import SimpleNamespace
 
 import app.services.favorites as favorites
+
+
+def test_favorites_reader_waits_for_number_token_split_at_chunk_boundary():
+    token = "12345678901234567890"
+    number_start = 64 * 1024 - 4
+    payload = "[" + (" " * (number_start - 1)) + token + ",0]"
+    reader = favorites._StreamingJSONReader(io.StringIO(payload))
+
+    assert list(reader.array_items()) == [int(token), 0]
 
 
 def test_favorites_import_is_streamed_and_queries_are_scoped(tmp_path, monkeypatch):

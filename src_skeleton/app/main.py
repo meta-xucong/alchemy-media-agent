@@ -55,6 +55,7 @@ from app.config import persist_runtime_settings_to_env, settings, update_runtime
 from app.providers.registry import registry
 from app.repositories import repository
 from app.repositories.sqlite_calls import SQLiteStorageBusy, sqlite_calls
+from app.repositories.sqlite_json import connect
 from app.schemas import (
     AssetContentUploadRequest,
     AssetIntent,
@@ -2690,16 +2691,51 @@ def _veyra_asset_context(request: Request, authorization: str = "") -> dict:
     return {"authenticated": True, "user_id": user_id, "is_admin": False}
 
 
-def _v1_output_owner_id(output_id: str) -> int | None:
+def _v1_output_owner_state(output_id: str) -> tuple[int | None, bool]:
     output = repository.get_output(output_id)
-    if output:
-        owner_id = _history_output_veyra_user_id(output.metadata)
-        if owner_id is not None:
-            return owner_id
-    for record in media_store.list_history_records(limit=10000):
-        if record.get("id") == output_id:
-            return _positive_int_or_none(record.get("veyra_user_id"))
-    return None
+    output_owner = _history_output_veyra_user_id(output.metadata) if output else None
+    if output_owner is not None:
+        return output_owner, False
+
+    history_record = media_store.get_history_record(output_id, include_missing=True)
+    if history_record and history_record.get("_veyra_owner_conflict"):
+        return None, True
+    history_owner = (
+        _positive_int_or_none(history_record.get("veyra_user_id"))
+        if history_record
+        else None
+    )
+    if history_owner is not None:
+        return history_owner, False
+
+    owners: set[int] = set()
+    job_iterator = getattr(repository, "iter_jobs", None)
+    jobs = (
+        job_iterator(job_type="image")
+        if callable(job_iterator)
+        else iter(repository.list_jobs(job_type="image"))
+    )
+    for job in jobs:
+        for nested in job.outputs:
+            if nested.id != output_id:
+                continue
+            owner_id = _history_output_veyra_user_id(nested.metadata)
+            if owner_id is not None:
+                owners.add(owner_id)
+    # Ownership is evidence about the output ID, not evidence that its file
+    # currently exists. A failed delete or missing newer copy must not turn a
+    # private output into legacy-public content.
+    # Ownerless repository/history projections can still have a private owner
+    # in an old nested Job. The indexed manifest lookup above makes this
+    # compatibility scan unnecessary for ordinary canonical private outputs
+    # and prevents history age/page limits from affecting authorization.
+    if len(owners) > 1:
+        return None, True
+    return (next(iter(owners)) if owners else None), False
+
+
+def _v1_output_owner_id(output_id: str) -> int | None:
+    return _v1_output_owner_state(output_id)[0]
 
 
 def _v1_history_output_exists(output_id: str) -> bool:
@@ -2728,7 +2764,7 @@ def _is_lab_output_id(output_id: str) -> bool:
 def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = None) -> dict[str, object]:
     """Perform one retryable history-output cleanup under a single admitted worker slot."""
     output = repository.get_output(output_id)
-    if output and owner_id is not None:
+    if owner_id is not None:
         output = repository.preserve_output_owner(output_id, owner_id) or output
     thumbnail_existed = media_store.thumbnail_path(output_id).exists()
     preview_existed = media_store.preview_path(output_id).exists()
@@ -2744,8 +2780,11 @@ def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = N
     # record) as an authorization anchor until all preceding idempotent cleanup
     # has succeeded. A failed call can then be retried by the same owner.
     removed_favorites = delete_favorite(output_id)
+    removed_output = repository.delete_output_with_event(output_id)
+    # Repository/Job projections are removed while the durable history owner
+    # evidence still protects the ID. If the history delete then hits SQLITE_BUSY,
+    # the remaining history row remains sufficient for the original owner to retry.
     removed_records = media_store.delete_history_record(output_id)
-    removed_output = repository.delete_output_with_event(output_id) if output else None
     if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
         raise HTTPException(
             status_code=404,
@@ -2765,11 +2804,26 @@ def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = N
 
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
     if not settings.veyra_auth_enabled:
-        owner_id = await _run_sqlite_api_call(_v1_output_owner_id, output_id)
-        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": owner_id}
+        owner_id, owner_conflict = await _run_sqlite_api_call(_v1_output_owner_state, output_id)
+        return {
+            "authenticated": False,
+            "user_id": None,
+            "is_admin": False,
+            "owner_id": owner_id,
+            "owner_conflict": owner_conflict,
+        }
     context = await _veyra_history_context(request, authorization)
-    owner_id = await _run_sqlite_api_call(_v1_output_owner_id, output_id)
-    if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None):
+    owner_id, owner_conflict = await _run_sqlite_api_call(_v1_output_owner_state, output_id)
+    if owner_conflict:
+        raise HTTPException(
+            status_code=403,
+            detail={"error_code": "veyra_output_forbidden", "message": "Output ownership is conflicting."},
+        )
+    if context.get("is_admin"):
+        return {**context, "owner_id": owner_id}
+    if not owner_conflict and (
+        owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None)
+    ):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
 
@@ -3112,6 +3166,8 @@ def _list_image_history_sync(
     # Keep the request scratch DB beside durable media data. The platform's
     # default temp directory may be a memory-backed filesystem on Linux.
     media_store.root.mkdir(parents=True, exist_ok=True)
+    media_store._ensure_history_index()
+    owner_connection = connect(repository.database_path)
     with tempfile.TemporaryDirectory(prefix="v1-image-history-", dir=media_store.root) as scratch:
         connection = sqlite3.connect(Path(scratch) / "page.sqlite3")
         connection.execute("PRAGMA journal_mode=OFF")
@@ -3126,11 +3182,24 @@ def _list_image_history_sync(
                 payload TEXT NOT NULL,
                 owner_id INTEGER,
                 owner_conflict INTEGER NOT NULL DEFAULT 0,
-                source_priority INTEGER NOT NULL
+                source_priority INTEGER NOT NULL,
+                owner_match INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX history_page_order_idx
                 ON history_items(sort_timestamp DESC, job_id DESC, output_id DESC, sequence ASC);
             CREATE TABLE blocked_output_ids (output_id TEXT PRIMARY KEY);
+            CREATE TABLE owner_evidence (
+                output_id TEXT PRIMARY KEY,
+                owner_id INTEGER,
+                owner_conflict INTEGER NOT NULL DEFAULT 0,
+                authority_rank INTEGER NOT NULL DEFAULT 99
+            );
+            CREATE TABLE resolved_authority (
+                output_id TEXT PRIMARY KEY,
+                owner_id INTEGER,
+                owner_conflict INTEGER NOT NULL DEFAULT 0,
+                authority_rank INTEGER NOT NULL DEFAULT 99
+            );
             """
         )
 
@@ -3145,21 +3214,137 @@ def _list_image_history_sync(
                 "SELECT 1 FROM blocked_output_ids WHERE output_id=?", (output_id,)
             ).fetchone() is not None
 
+        def record_owner_evidence(
+            output_id: str,
+            owner_id: int | None,
+            *,
+            authority_rank: int = 2,
+        ) -> None:
+            if owner_id is None:
+                return
+            existing = connection.execute(
+                "SELECT owner_id, owner_conflict, authority_rank FROM owner_evidence WHERE output_id=?",
+                (output_id,),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO owner_evidence(output_id, owner_id, authority_rank) VALUES(?, ?, ?)",
+                    (output_id, owner_id, authority_rank),
+                )
+            elif authority_rank < int(existing[2]):
+                connection.execute(
+                    "UPDATE owner_evidence SET owner_id=?, owner_conflict=0, authority_rank=? "
+                    "WHERE output_id=?",
+                    (owner_id, authority_rank, output_id),
+                )
+                connection.execute(
+                    "UPDATE history_items SET owner_id=?, owner_conflict=0 WHERE output_id=?",
+                    (owner_id, output_id),
+                )
+                connection.execute(
+                    "UPDATE history_items SET owner_match=0 WHERE output_id=?", (output_id,)
+                )
+            elif authority_rank == int(existing[2]) and not existing[1] and int(existing[0]) != owner_id:
+                connection.execute(
+                    "UPDATE owner_evidence SET owner_conflict=1 WHERE output_id=?",
+                    (output_id,),
+                )
+                connection.execute(
+                    "UPDATE history_items SET owner_conflict=1 WHERE output_id=?",
+                    (output_id,),
+                )
+
+        def owner_evidence_for(output_id: str) -> tuple[int | None, bool, int]:
+            row = connection.execute(
+                "SELECT owner_id, owner_conflict, authority_rank FROM owner_evidence WHERE output_id=?",
+                (output_id,),
+            ).fetchone()
+            if row is None:
+                return None, False, 99
+            return _positive_int_or_none(row[0]), bool(row[1]), int(row[2])
+
+        def canonical_output_owner(output_id: str) -> tuple[int | None, int, bool]:
+            cached = connection.execute(
+                "SELECT owner_id, authority_rank, owner_conflict FROM resolved_authority WHERE output_id=?",
+                (output_id,),
+            ).fetchone()
+            if cached is not None:
+                return _positive_int_or_none(cached[0]), int(cached[1]), bool(cached[2])
+
+            output_getter = getattr(repository, "get_output_on", None)
+            output = (
+                output_getter(owner_connection, output_id)
+                if callable(output_getter)
+                else repository.get_output(output_id)
+            )
+            owner_id = _history_output_veyra_user_id(output.metadata) if output else None
+            authority_rank = 0
+            owner_conflict = False
+            if owner_id is None:
+                history_getter = getattr(media_store, "get_history_record_on", None)
+                history_record = (
+                    history_getter(owner_connection, output_id, include_missing=True)
+                    if callable(history_getter)
+                    else media_store.get_history_record(output_id, include_missing=True)
+                )
+                owner_id = (
+                    _positive_int_or_none(history_record.get("veyra_user_id"))
+                    if history_record
+                    else None
+                )
+                owner_conflict = bool(
+                    history_record and history_record.get("_veyra_owner_conflict")
+                )
+                authority_rank = 1
+            connection.execute(
+                "INSERT INTO resolved_authority(output_id, owner_id, owner_conflict, authority_rank) "
+                "VALUES(?, ?, ?, ?)",
+                (output_id, owner_id, int(owner_conflict), authority_rank),
+            )
+            return owner_id, authority_rank, owner_conflict
+
         def stage_candidate(item: ImageHistoryItem, *, source_priority: int) -> None:
             """Resolve duplicate IDs and owner evidence before applying account visibility."""
-            owner_id = _history_item_veyra_user_id(item)
+            output_id = str(item.id)
+            canonical_owner_id, canonical_authority_rank, canonical_owner_conflict = canonical_output_owner(output_id)
+            if canonical_owner_conflict:
+                connection.execute(
+                    "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
+                )
+                connection.execute("DELETE FROM history_items WHERE output_id=?", (output_id,))
+                return
+            item_owner_id = _history_item_veyra_user_id(item)
+            evidence_rank = (
+                canonical_authority_rank
+                if canonical_owner_id is not None
+                else {0: 2, 1: 1, 2: 3}.get(source_priority, 3)
+            )
+            record_owner_evidence(
+                output_id,
+                canonical_owner_id if canonical_owner_id is not None else item_owner_id,
+                authority_rank=evidence_rank,
+            )
+            owner_id, owner_conflict, _owner_rank = owner_evidence_for(output_id)
+            if owner_id is not None and item_owner_id != owner_id:
+                item = item.model_copy(update={"veyra_user_id": owner_id})
+            owner_match = int(owner_id is not None and item_owner_id == owner_id)
             payload = item.model_dump_json()
             timestamp, job_id, output_id = _history_sort_key(item)
             existing = connection.execute(
-                "SELECT sequence, owner_id, owner_conflict, source_priority "
+                "SELECT sequence, owner_id, owner_conflict, source_priority, owner_match "
                 "FROM history_items WHERE output_id=?",
                 (item.id,),
             ).fetchone()
             if existing is None:
                 connection.execute(
-                    "INSERT INTO history_items(output_id, sort_timestamp, job_id, payload, owner_id, source_priority) "
-                    "VALUES(?, ?, ?, ?, ?, ?)",
-                    (output_id, timestamp, job_id, payload, owner_id, source_priority),
+                    "INSERT INTO history_items(output_id, sort_timestamp, job_id, payload, owner_id, owner_conflict, source_priority, owner_match) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                    (output_id, timestamp, job_id, payload, owner_id, int(owner_conflict), source_priority, owner_match),
+                )
+                return
+            if owner_conflict:
+                connection.execute(
+                    "UPDATE history_items SET owner_conflict=1 WHERE output_id=?", (item.id,)
                 )
                 return
             if existing[2]:
@@ -3167,21 +3352,29 @@ def _list_image_history_sync(
             existing_owner = _positive_int_or_none(existing[1])
             if existing_owner is not None and owner_id is not None and existing_owner != owner_id:
                 connection.execute(
+                    "UPDATE owner_evidence SET owner_conflict=1 WHERE output_id=?", (item.id,)
+                )
+                connection.execute(
                     "UPDATE history_items SET owner_conflict=1 WHERE output_id=?", (item.id,)
                 )
                 return
-            # Explicit ownership outranks ownerless projections regardless of
-            # iteration order. Within the same ownership class, keep the
-            # established source precedence (repository, history, generated).
+            # The authority rank selects the owner; source priority only picks
+            # which display projection to retain within that ownership class.
             replace = (existing_owner is None and owner_id is not None) or (
                 (existing_owner is None) == (owner_id is None)
-                and source_priority < int(existing[3])
+                and (
+                    source_priority < int(existing[3])
+                    or (
+                        source_priority == int(existing[3])
+                        and owner_match > int(existing[4])
+                    )
+                )
             )
             if replace:
                 connection.execute(
-                    "UPDATE history_items SET owner_id=?, source_priority=?, payload=?, "
-                    "sort_timestamp=?, job_id=? WHERE output_id=?",
-                    (owner_id, source_priority, payload, timestamp, job_id, item.id),
+                    "UPDATE history_items SET owner_id=?, owner_conflict=0, source_priority=?, payload=?, "
+                    "sort_timestamp=?, job_id=?, owner_match=? WHERE output_id=?",
+                    (owner_id, source_priority, payload, timestamp, job_id, owner_match, item.id),
                 )
 
         try:
@@ -3199,6 +3392,11 @@ def _list_image_history_sync(
                     )
                     continue
                 for output in job.outputs:
+                    record_owner_evidence(
+                        output.id,
+                        _history_output_veyra_user_id(output.metadata),
+                        authority_rank=2,
+                    )
                     if output.format not in {"png", "jpeg", "webp"}:
                         continue
                     stage_candidate(
@@ -3249,6 +3447,11 @@ def _list_image_history_sync(
                         "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
                     )
                     continue
+                record_owner_evidence(
+                    output_id,
+                    _positive_int_or_none(record.get("veyra_user_id")),
+                    authority_rank=1,
+                )
                 if has_blocked_id(output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
                     continue
                 source_path = media_store.output_path(
@@ -3283,17 +3486,28 @@ def _list_image_history_sync(
                     break
                 for sequence, output_id, owner_conflict, payload in candidates:
                     last_sequence = sequence
-                    if owner_conflict or has_blocked_id(output_id):
+                    evidence_owner_id, evidence_conflict, _evidence_rank = owner_evidence_for(output_id)
+                    if owner_conflict or evidence_conflict or has_blocked_id(output_id):
                         connection.execute("DELETE FROM history_items WHERE sequence=?", (sequence,))
                         continue
-                    item = visible_history_item(ImageHistoryItem.model_validate_json(payload))
+                    item = ImageHistoryItem.model_validate_json(payload)
+                    item_owner_id = _history_item_veyra_user_id(item)
+                    if evidence_owner_id is not None and item_owner_id != evidence_owner_id:
+                        item = item.model_copy(update={"veyra_user_id": evidence_owner_id})
+                    item = visible_history_item(item)
                     if item is None:
                         connection.execute("DELETE FROM history_items WHERE sequence=?", (sequence,))
                         continue
                     timestamp, job_id, _ = _history_sort_key(item)
                     connection.execute(
-                        "UPDATE history_items SET sort_timestamp=?, job_id=?, payload=? WHERE sequence=?",
-                        (timestamp, job_id, item.model_dump_json(), sequence),
+                        "UPDATE history_items SET sort_timestamp=?, job_id=?, payload=?, owner_id=? WHERE sequence=?",
+                        (
+                            timestamp,
+                            job_id,
+                            item.model_dump_json(),
+                            _history_item_veyra_user_id(item),
+                            sequence,
+                        ),
                     )
 
             total = int(connection.execute("SELECT COUNT(*) FROM history_items").fetchone()[0])
@@ -3304,6 +3518,7 @@ def _list_image_history_sync(
             page = [ImageHistoryItem.model_validate_json(row[0]) for row in rows]
         finally:
             connection.close()
+            owner_connection.close()
 
     if page:
         favorite_ids = list_favorite_ids(

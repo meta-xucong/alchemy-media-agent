@@ -27,6 +27,15 @@ def test_v1_favorites_reader_buffer_stays_bounded_for_many_small_items():
     assert maximum_buffer < 80_000
 
 
+def test_v1_favorites_reader_waits_for_number_token_split_at_chunk_boundary():
+    token = "12345678901234567890"
+    number_start = 64 * 1024 - 4
+    payload = "[" + (" " * (number_start - 1)) + token + ",0]"
+    reader = _StreamingJSONReader(io.StringIO(payload))
+
+    assert list(reader.array_items()) == [int(token), 0]
+
+
 def test_v1_favorites_migrate_streaming_and_query_only_requested_ids(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     legacy = tmp_path / "favorites" / "image_favorites.json"

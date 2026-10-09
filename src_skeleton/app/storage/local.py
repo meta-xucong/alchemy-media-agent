@@ -193,6 +193,55 @@ class LocalMediaStore:
         finally:
             connection.close()
 
+    def get_history_record(self, output_id: str, *, include_missing: bool = False) -> dict[str, Any] | None:
+        """Read one indexed history manifest without applying the page window."""
+        self._ensure_history_index()
+        connection = connect(self.root / "repository.sqlite3")
+        try:
+            return self.get_history_record_on(
+                connection,
+                output_id,
+                include_missing=include_missing,
+            )
+        finally:
+            connection.close()
+
+    def get_history_record_on(
+        self,
+        connection: sqlite3.Connection,
+        output_id: str,
+        *,
+        include_missing: bool = False,
+    ) -> dict[str, Any] | None:
+        """Read one indexed history manifest using a caller-owned connection."""
+        row = connection.execute(
+            "SELECT records.payload, evidence.owner_id, evidence.owner_conflict "
+            "FROM v1_history_records AS records "
+            "LEFT JOIN v1_history_owner_evidence AS evidence USING(output_id) "
+            "WHERE records.output_id=?",
+            (str(output_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        record = json.loads(row[0])
+        if bool(row[2]):
+            record["_veyra_owner_conflict"] = True
+        elif row[1] is not None:
+            record["veyra_user_id"] = int(row[1])
+        output_format = record.get("format") or "png"
+        path = self.output_path(
+            job_id=record.get("job_id", ""),
+            output_id=str(output_id),
+            output_format=output_format,
+        )
+        if not include_missing and not path.exists():
+            return None
+        record["source"] = "manifest"
+        record["thumbnail_url"] = self.thumbnail_url(str(output_id))
+        record["preview_url"] = self.preview_url(str(output_id))
+        record["url"] = f"/v1/outputs/{output_id}/download"
+        return record
+
     def list_history_records(self, *, limit: int = 50, session_id: str | None = None) -> list[dict[str, Any]]:
         return list(self.iter_history_records(limit=limit, session_id=session_id))
 
@@ -243,33 +292,36 @@ class LocalMediaStore:
         return [item[2] for item in sorted(records, key=lambda item: item[:2], reverse=True)]
 
     def delete_output_file(self, *, output_id: str, job_id: str | None = None, output_format: str | None = None) -> bool:
-        target: Path | None = None
-        if job_id and output_format:
-            candidate = self.output_path(job_id=job_id, output_id=output_id, output_format=output_format)
-            if candidate.exists():
-                target = candidate
-        if target is None:
-            found = self.find_output_file(output_id)
-            if found:
-                target = found[0]
-        if target is None:
-            return False
-
+        deleted_any = False
         generated_root = self.generated_root.resolve()
-        resolved = target.resolve()
-        if generated_root not in resolved.parents:
-            return False
 
-        target.unlink(missing_ok=True)
+        def delete_candidate(target: Path) -> None:
+            nonlocal deleted_any
+            if not target.exists():
+                return
+            resolved = target.resolve()
+            if generated_root not in resolved.parents:
+                return
+            target.unlink(missing_ok=True)
+            deleted_any = True
+
+        if job_id and output_format:
+            delete_candidate(self.output_path(job_id=job_id, output_id=output_id, output_format=output_format))
+        if self.generated_root.exists():
+            for job_directory in self.generated_root.iterdir():
+                if not job_directory.is_dir():
+                    continue
+                for path in job_directory.iterdir():
+                    if path.stem == output_id and _format_from_suffix(path.suffix) in {"png", "jpeg", "webp"}:
+                        delete_candidate(path)
+                try:
+                    if job_directory.parent == self.generated_root and not any(job_directory.iterdir()):
+                        job_directory.rmdir()
+                except OSError:
+                    pass
         self.delete_thumbnail(output_id)
         self.delete_preview(output_id)
-        parent = target.parent
-        try:
-            if parent != generated_root and parent.parent == generated_root and not any(parent.iterdir()):
-                parent.rmdir()
-        except OSError:
-            pass
-        return True
+        return deleted_any
 
     def delete_thumbnail(self, output_id: str) -> bool:
         thumbnail_path = self.thumbnail_path(output_id)
@@ -323,10 +375,15 @@ class LocalMediaStore:
         connection = connect(self.root / "repository.sqlite3")
         try:
             with connection:
-                connection.execute("DELETE FROM v1_history_records WHERE output_id=?", (output_id,))
+                deleted_rows = connection.execute(
+                    "DELETE FROM v1_history_records WHERE output_id=?", (output_id,)
+                ).rowcount
+                connection.execute(
+                    "DELETE FROM v1_history_owner_evidence WHERE output_id=?", (output_id,)
+                )
         finally:
             connection.close()
-        return removed
+        return max(removed, int(deleted_rows or 0))
 
     def _ensure_history_index(self) -> None:
         connection = connect(self.root / "repository.sqlite3")
@@ -346,14 +403,25 @@ class LocalMediaStore:
                 "ON v1_history_records(session_id, created_epoch DESC, sequence ASC)"
             )
             connection.execute(
+                """CREATE TABLE IF NOT EXISTS v1_history_owner_evidence (
+                    output_id TEXT PRIMARY KEY,
+                    owner_id INTEGER NOT NULL,
+                    owner_conflict INTEGER NOT NULL DEFAULT 0
+                )"""
+            )
+            connection.execute(
                 """CREATE TABLE IF NOT EXISTS v1_history_state (
                     state_key TEXT PRIMARY KEY,
                     state_value TEXT NOT NULL
                 )"""
             )
-            if connection.execute(
+            history_imported = connection.execute(
                 "SELECT 1 FROM v1_history_state WHERE state_key='jsonl_imported'"
-            ).fetchone():
+            ).fetchone() is not None
+            owner_evidence_backfilled = connection.execute(
+                "SELECT 1 FROM v1_history_state WHERE state_key='owner_evidence_backfilled'"
+            ).fetchone() is not None
+            if history_imported and owner_evidence_backfilled:
                 return
             with connection:
                 if self.history_file.exists():
@@ -365,18 +433,47 @@ class LocalMediaStore:
                                 record = json.loads(line)
                             except json.JSONDecodeError:
                                 continue
-                            self._upsert_history_index(connection, record)
+                            if history_imported:
+                                self._upsert_history_owner_evidence(connection, record)
+                            else:
+                                self._upsert_history_index(connection, record)
                 connection.execute(
                     "INSERT OR REPLACE INTO v1_history_state(state_key, state_value) VALUES('jsonl_imported', '1')"
                 )
+                connection.execute(
+                    "INSERT OR REPLACE INTO v1_history_state(state_key, state_value) "
+                    "VALUES('owner_evidence_backfilled', '1')"
+                )
         finally:
             connection.close()
+
+    @staticmethod
+    def _upsert_history_owner_evidence(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+        output_id = str(record.get("id") or "").strip()
+        owner_id = _history_owner_id(record)
+        if not output_id or owner_id is None:
+            return
+        existing = connection.execute(
+            "SELECT owner_id, owner_conflict FROM v1_history_owner_evidence WHERE output_id=?",
+            (output_id,),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                "INSERT INTO v1_history_owner_evidence(output_id, owner_id) VALUES(?, ?)",
+                (output_id, owner_id),
+            )
+        elif int(existing[0]) != owner_id and not existing[1]:
+            connection.execute(
+                "UPDATE v1_history_owner_evidence SET owner_conflict=1 WHERE output_id=?",
+                (output_id,),
+            )
 
     @staticmethod
     def _upsert_history_index(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
         output_id = str(record.get("id") or "").strip()
         if not output_id:
             return
+        LocalMediaStore._upsert_history_owner_evidence(connection, record)
         source_timestamp = _record_timestamp(record)
         created_epoch = source_timestamp
         # The previous in-memory dedupe chose the later source record by the
