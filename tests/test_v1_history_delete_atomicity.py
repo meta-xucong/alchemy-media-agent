@@ -181,6 +181,8 @@ def test_v1_delete_mid_cleanup_failure_keeps_owner_anchor_for_retry(tmp_path, mo
     assert not output_path.exists()
     assert media_store.list_history_records(limit=10) == []
     assert main._v1_output_owner_id(output_id) == 41
+    assert repository.get_output_delete_claim(output_id)["owner_id"] == 41
+    assert repository.get_output_delete_claim(output_id)["attempt_id"] is None
     stored_job = repository.get_job("job_delete_atomicity")
     assert "veyra_user_id" not in stored_job.outputs[0].metadata
     assert "veyra_user_id" not in repository.get_job(duplicate_job_id).outputs[0].metadata
@@ -206,6 +208,7 @@ def test_v1_delete_mid_cleanup_failure_keeps_owner_anchor_for_retry(tmp_path, mo
     assert repository.get_job(duplicate_job_id).outputs == []
     assert list_favorite_ids(veyra_user_id=41, output_ids=[output_id]) == set()
     assert media_store.list_history_records(limit=10) == []
+    assert repository.get_output_delete_claim(output_id) is None
     events = repository.list_events("session_delete_atomicity")
     # The canonical row is ownerless and no Job copy explicitly identifies the
     # private owner, so deletion succeeds without publishing the ID to an
@@ -262,6 +265,174 @@ def test_v1_history_only_delete_can_retry_after_file_is_gone(tmp_path, monkeypat
     assert result["removed_history_records"] == 1
     assert list(media_store.iter_history_records(limit=10, include_missing=True)) == []
     assert list_favorite_ids(veyra_user_id=41, output_ids=[output_id]) == set()
+
+
+def test_v1_delete_claim_prevents_job_reassociation_during_file_cleanup(tmp_path, monkeypatch):
+    output_id, _output_path = _seed_output(tmp_path, monkeypatch, repository_owner=True)
+    token = _enable_user_auth(monkeypatch)
+    original_delete_file = media_store.delete_output_file
+    reassignment_attempted = False
+    association_during_reassignment = None
+
+    def attempt_reassignment_during_cleanup(**kwargs):
+        nonlocal reassignment_attempted, association_during_reassignment
+        deleted = original_delete_file(**kwargs)
+        if not reassignment_attempted:
+            reassignment_attempted = True
+            now = datetime.now(timezone.utc).isoformat()
+            rebound = GenerationOutput(
+                id=output_id,
+                job_id="job_delete_rebound_b",
+                url=f"/v1/outputs/{output_id}/download",
+                metadata={"veyra_user_id": 41},
+            )
+            repository.save_job(GenerationJob(
+                id="job_delete_rebound_b",
+                session_id="session_delete_rebound_b",
+                job_type="image",
+                status=JobStatus.ready,
+                trace_id="trace_delete_rebound_b",
+                created_at=now,
+                updated_at=now,
+                outputs=[rebound],
+            ))
+            current = repository.get_output(output_id)
+            association_during_reassignment = current.job_id if current else None
+        return deleted
+
+    monkeypatch.setattr(media_store, "delete_output_file", attempt_reassignment_during_cleanup)
+    result = asyncio.run(main.delete_image_history_item(output_id, _request(), f"Bearer {token}"))
+
+    assert result["ok"] is True
+    assert reassignment_attempted
+    assert association_during_reassignment == "job_delete_atomicity"
+    # The deletion claim wins over a save_job snapshot created during cleanup.
+    assert repository.get_job("job_delete_rebound_b").outputs == []
+    assert repository.get_output(output_id) is None
+    assert [event["event"] for event in repository.list_events("session_delete_atomicity")] == [
+        "generation.output.deleted"
+    ]
+    assert repository.list_events("session_delete_rebound_b") == []
+
+
+def test_v1_delete_rejects_reassociation_before_claim_without_cleanup(tmp_path, monkeypatch):
+    output_id, output_path = _seed_output(tmp_path, monkeypatch, repository_owner=True)
+    token = _enable_user_auth(monkeypatch)
+    original_begin_claim = repository.begin_output_delete_claim
+    reassigned = False
+
+    def reassign_before_claim(requested_output_id, **kwargs):
+        nonlocal reassigned
+        if not reassigned:
+            reassigned = True
+            now = datetime.now(timezone.utc).isoformat()
+            repository.save_job(GenerationJob(
+                id="job_delete_preclaim_b",
+                session_id="session_delete_preclaim_b",
+                job_type="image",
+                status=JobStatus.ready,
+                trace_id="trace_delete_preclaim_b",
+                created_at=now,
+                updated_at=now,
+                outputs=[GenerationOutput(
+                    id=output_id,
+                    job_id="job_delete_preclaim_b",
+                    url=f"/v1/outputs/{output_id}/download",
+                    metadata={"veyra_user_id": 41},
+                )],
+            ))
+        return original_begin_claim(requested_output_id, **kwargs)
+
+    monkeypatch.setattr(repository, "begin_output_delete_claim", reassign_before_claim)
+    with pytest.raises(HTTPException) as changed:
+        asyncio.run(main.delete_image_history_item(output_id, _request(), f"Bearer {token}"))
+
+    assert changed.value.status_code == 409
+    assert reassigned
+    assert repository.get_output(output_id).job_id == "job_delete_preclaim_b"
+    assert output_path.exists()
+    assert media_store.get_history_record(output_id, include_missing=True) is not None
+    assert repository.get_output_delete_claim(output_id) is None
+
+
+def test_v1_delete_claim_serializes_same_owner_attempts_and_allows_retry(tmp_path, monkeypatch):
+    output_id, _output_path = _seed_output(tmp_path, monkeypatch, repository_owner=True)
+    first = repository.begin_output_delete_claim(
+        output_id,
+        owner_id=41,
+        canonical_job_id="job_delete_atomicity",
+        event_job_id="job_delete_atomicity",
+    )
+
+    assert first is not None
+    assert first["attempt_id"]
+    assert repository.begin_output_delete_claim(
+        output_id,
+        owner_id=41,
+        canonical_job_id="job_delete_atomicity",
+        event_job_id="job_delete_atomicity",
+    ) is None
+
+    assert not repository.finish_output_delete_claim(
+        output_id,
+        owner_id=41,
+        attempt_id="different-attempt",
+    )
+    assert repository.release_output_delete_claim_attempt(
+        output_id,
+        owner_id=41,
+        attempt_id=first["attempt_id"],
+    )
+
+    retry = repository.begin_output_delete_claim(
+        output_id,
+        owner_id=41,
+        canonical_job_id="job_delete_atomicity",
+        event_job_id="job_delete_atomicity",
+    )
+    assert retry is not None
+    assert retry["attempt_id"] != first["attempt_id"]
+    assert repository.finish_output_delete_claim(
+        output_id,
+        owner_id=41,
+        attempt_id=retry["attempt_id"],
+    )
+    assert repository.get_output_delete_claim(output_id) is None
+
+
+def test_v1_delete_claim_lease_expiry_recovers_interrupted_process_attempt(tmp_path, monkeypatch):
+    output_id, _output_path = _seed_output(tmp_path, monkeypatch, repository_owner=True)
+    first = repository.begin_output_delete_claim(
+        output_id,
+        owner_id=41,
+        canonical_job_id="job_delete_atomicity",
+        event_job_id="job_delete_atomicity",
+    )
+    assert first is not None
+
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr("app.repositories.memory.time.time", lambda: clock[0])
+    # The first attempt was created using the real clock. Reset its lease to the
+    # controlled clock so expiry can be tested without waiting 15 minutes.
+    claim = repository.output_delete_claims[output_id]
+    claim["lease_expires_at"] = clock[0] + 900
+    repository.output_delete_claims[output_id] = claim
+
+    assert repository.begin_output_delete_claim(
+        output_id,
+        owner_id=41,
+        canonical_job_id="job_delete_atomicity",
+        event_job_id="job_delete_atomicity",
+    ) is None
+    clock[0] += 901
+    recovered = repository.begin_output_delete_claim(
+        output_id,
+        owner_id=41,
+        canonical_job_id="job_delete_atomicity",
+        event_job_id="job_delete_atomicity",
+    )
+    assert recovered is not None
+    assert recovered["attempt_id"] != first["attempt_id"]
 
 
 def test_v1_delete_cleans_legacy_duplicate_job_and_file(tmp_path, monkeypatch):

@@ -283,23 +283,37 @@ def test_v2_creative_run_allows_template_without_prompt() -> None:
     assert response.json()["run_id"].startswith("run_")
 
 
-def test_provider_sync_publishes_seed_cases() -> None:
+def test_provider_sync_publishes_seed_cases(monkeypatch) -> None:
     client = fresh_client()
-    providers = client.get("/api/v2/resource-providers").json()["providers"]
-    assert providers[0]["provider_id"] == "github_evolinkai_gpt_image_cases"
+    original_remote_sync = settings.enable_remote_github_sync
+    object.__setattr__(settings, "enable_remote_github_sync", True)
+    try:
+        import app.services.resource_sync as resource_sync_service
 
-    response = client.post("/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync")
-    assert response.status_code == 202
-    sync = response.json()
-    assert sync["status"] == "completed"
-    assert sync["stats"]["cases_published"] >= 6
-    assert sync["stats"]["case_index_path"].endswith("case_index.json")
+        def unexpected_remote_fetch():
+            raise AssertionError("seed mode must not access remote GitHub sync")
 
-    lookup = client.get(
-        f"/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync-runs/{sync['sync_run_id']}"
-    )
-    assert lookup.status_code == 200
-    assert lookup.json()["sync_run_id"] == sync["sync_run_id"]
+        monkeypatch.setattr(resource_sync_service, "fetch_evolinkai_github_cases", unexpected_remote_fetch)
+        providers = client.get("/api/v2/resource-providers").json()["providers"]
+        assert providers[0]["provider_id"] == "github_evolinkai_gpt_image_cases"
+
+        response = client.post(
+            "/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync",
+            params={"mode": "seed"},
+        )
+        assert response.status_code == 202
+        sync = response.json()
+        assert sync["status"] == "completed"
+        assert sync["stats"]["cases_published"] >= 6
+        assert sync["stats"]["case_index_path"].endswith("case_index.json")
+
+        lookup = client.get(
+            f"/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync-runs/{sync['sync_run_id']}"
+        )
+        assert lookup.status_code == 200
+        assert lookup.json()["sync_run_id"] == sync["sync_run_id"]
+    finally:
+        object.__setattr__(settings, "enable_remote_github_sync", original_remote_sync)
 
 
 def test_case_search_and_template_detail() -> None:

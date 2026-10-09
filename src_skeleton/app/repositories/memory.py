@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import secrets
+import time
 from pathlib import Path
 from typing import Any, Iterator
 from datetime import datetime, timezone
@@ -12,6 +14,8 @@ from app.schemas import Asset, GenerationJob, GenerationOutput, JobStatus, Provi
 class MemoryRepository:
     """Compatibility-named V1 repository backed by SQLite, not process memory."""
 
+    OUTPUT_DELETE_ATTEMPT_LEASE_SECONDS = 900
+
     def __init__(self, database_path: Path | None = None) -> None:
         self._database_path_override = Path(database_path) if database_path else None
         jobs = self._record_map("jobs", GenerationJob, self._job_index)
@@ -20,6 +24,11 @@ class MemoryRepository:
         self.jobs = jobs
         self.outputs = self._record_map("outputs", GenerationOutput)
         self.idempotency_index = self._record_map("idempotency", str)
+        self.output_delete_claims = SQLiteJsonMap(
+            lambda: self.database_path,
+            "output_delete_claims",
+            validator=json.loads,
+        )
 
     @property
     def database_path(self) -> Path:
@@ -53,8 +62,34 @@ class MemoryRepository:
         }
 
     def save_session(self, session: Session) -> Session:
-        self.sessions[session.id] = session
-        return session
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing_json = self.sessions.get_record_json_on(connection, session.id)
+            if existing_json is not None:
+                existing = Session.model_validate_json(existing_json)
+                old_owner_id = self._positive_owner_id(existing.veyra_user_id)
+                new_owner_id = self._positive_owner_id(session.veyra_user_id)
+                if old_owner_id is not None and new_owner_id is None:
+                    session = session.model_copy(update={"veyra_user_id": old_owner_id})
+                elif old_owner_id != new_owner_id:
+                    raise ValueError("A session owner cannot be reassigned or inferred after creation.")
+            self.sessions.put_on(connection, session.id, session)
+            connection.commit()
+            return session
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _positive_owner_id(value: Any) -> int | None:
+        try:
+            owner_id = int(value or 0)
+        except (TypeError, ValueError):
+            return None
+        return owner_id if owner_id > 0 else None
 
     def get_session(self, session_id: str) -> Session | None:
         return self.sessions.get(session_id)
@@ -85,6 +120,10 @@ class MemoryRepository:
                 connection.execute("BEGIN IMMEDIATE")
                 canonical_outputs: list[GenerationOutput] = []
                 for output in job.outputs:
+                    if self.output_delete_claims.get_record_json_on(connection, output.id) is not None:
+                        # Deletion owns this ID until all filesystem/history work
+                        # finishes. Never let a stale provider snapshot rebind it.
+                        continue
                     existing_json = self.outputs.get_record_json_on(connection, output.id)
                     if existing_json is not None:
                         existing = GenerationOutput.model_validate_json(existing_json)
@@ -109,6 +148,174 @@ class MemoryRepository:
         finally:
             connection.close()
         return canonical_job
+
+    def begin_output_delete_claim(
+        self,
+        output_id: str,
+        *,
+        owner_id: int | None,
+        canonical_job_id: str | None,
+        event_job_id: str | None,
+    ) -> dict[str, Any] | None:
+        """Fence output identity/ownership across non-transactional cleanup steps."""
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = time.time()
+            attempt_id = secrets.token_urlsafe(18)
+            existing_json = self.output_delete_claims.get_record_json_on(connection, output_id)
+            if existing_json is not None:
+                claim = json.loads(existing_json)
+                if self._positive_owner_id(claim.get("owner_id")) != self._positive_owner_id(owner_id):
+                    connection.rollback()
+                    return None
+                try:
+                    lease_expires_at = float(claim.get("lease_expires_at") or 0)
+                except (TypeError, ValueError):
+                    lease_expires_at = 0
+                if claim.get("attempt_id") and lease_expires_at > now:
+                    connection.rollback()
+                    return None
+                claim["attempt_id"] = attempt_id
+                claim["lease_expires_at"] = now + self.OUTPUT_DELETE_ATTEMPT_LEASE_SECONDS
+                self.output_delete_claims.put_on(connection, output_id, claim)
+                connection.commit()
+                return claim
+
+            output = self.get_output_on(connection, output_id)
+            current_job_id = output.job_id if output else None
+            if current_job_id != canonical_job_id:
+                connection.rollback()
+                return None
+
+            canonical_owner_id = self._output_owner_id(output) if output else None
+            resolved_owner_id = canonical_owner_id
+            owner_conflict = False
+            if canonical_owner_id is None:
+                table_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='v1_history_owner_evidence'"
+                ).fetchone()
+                history_evidence = (
+                    connection.execute(
+                        "SELECT owner_id, owner_conflict FROM v1_history_owner_evidence WHERE output_id=?",
+                        (output_id,),
+                    ).fetchone()
+                    if table_exists
+                    else None
+                )
+                if history_evidence is not None:
+                    owner_conflict = bool(history_evidence[1])
+                    resolved_owner_id = self._positive_owner_id(history_evidence[0])
+                if resolved_owner_id is None and not owner_conflict:
+                    job_rows = connection.execute(
+                        "SELECT payload FROM v1_records WHERE namespace='jobs'"
+                    ).fetchall()
+                    observed_owners: set[int] = set()
+                    for row in job_rows:
+                        job = GenerationJob.model_validate_json(row[0])
+                        for nested in job.outputs:
+                            if nested.id == output_id:
+                                nested_owner_id = self._output_owner_id(nested)
+                                if nested_owner_id is not None:
+                                    observed_owners.add(nested_owner_id)
+                    if len(observed_owners) > 1:
+                        owner_conflict = True
+                    elif observed_owners:
+                        resolved_owner_id = next(iter(observed_owners))
+
+            if owner_conflict or resolved_owner_id != self._positive_owner_id(owner_id):
+                connection.rollback()
+                return None
+            if event_job_id and self._validated_output_event_session_on(
+                connection,
+                event_job_id,
+                output_id,
+                self._positive_owner_id(owner_id),
+            ) is None:
+                event_job_id = None
+
+            claim = {
+                "output_id": output_id,
+                "owner_id": self._positive_owner_id(owner_id),
+                "canonical_job_id": current_job_id,
+                "event_job_id": event_job_id,
+                "attempt_id": attempt_id,
+                "lease_expires_at": now + self.OUTPUT_DELETE_ATTEMPT_LEASE_SECONDS,
+            }
+            self.output_delete_claims.put_on(connection, output_id, claim)
+            connection.commit()
+            return claim
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def get_output_delete_claim(self, output_id: str) -> dict[str, Any] | None:
+        return self.output_delete_claims.get(output_id)
+
+    def release_output_delete_claim_attempt(
+        self,
+        output_id: str,
+        *,
+        owner_id: int | None,
+        attempt_id: str,
+    ) -> bool:
+        """Release an interrupted attempt while retaining its authorization anchor."""
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            claim_json = self.output_delete_claims.get_record_json_on(connection, output_id)
+            if claim_json is None:
+                connection.commit()
+                return False
+            claim = json.loads(claim_json)
+            if (
+                self._positive_owner_id(claim.get("owner_id")) != self._positive_owner_id(owner_id)
+                or claim.get("attempt_id") != attempt_id
+            ):
+                connection.rollback()
+                return False
+            claim["attempt_id"] = None
+            claim["lease_expires_at"] = 0
+            self.output_delete_claims.put_on(connection, output_id, claim)
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def finish_output_delete_claim(
+        self,
+        output_id: str,
+        *,
+        owner_id: int | None,
+        attempt_id: str,
+    ) -> bool:
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            claim_json = self.output_delete_claims.get_record_json_on(connection, output_id)
+            if claim_json is None:
+                connection.commit()
+                return False
+            claim = json.loads(claim_json)
+            if (
+                self._positive_owner_id(claim.get("owner_id")) != self._positive_owner_id(owner_id)
+                or claim.get("attempt_id") != attempt_id
+            ):
+                connection.rollback()
+                return False
+            removed = self.output_delete_claims.delete_on(connection, output_id)
+            connection.commit()
+            return bool(removed)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def get_job(self, job_id: str) -> GenerationJob | None:
         return self.jobs.get(job_id)
@@ -187,11 +394,22 @@ class MemoryRepository:
         *,
         event_job_id: str | None = None,
         event_owner_id: int | None = None,
+        attempt_id: str,
     ) -> GenerationOutput | None:
         """Remove a canonical or legacy Job output and append any event atomically."""
         connection = connect(self.database_path)
         try:
             connection.execute("BEGIN IMMEDIATE")
+            claim_json = self.output_delete_claims.get_record_json_on(connection, output_id)
+            if claim_json is None:
+                raise RuntimeError("Output deletion requires an active ownership claim.")
+            claim = json.loads(claim_json)
+            claimed_owner_id = self._positive_owner_id(claim.get("owner_id"))
+            if self._positive_owner_id(event_owner_id) != claimed_owner_id:
+                raise RuntimeError("Output deletion owner does not match its active claim.")
+            if claim.get("attempt_id") != attempt_id or float(claim.get("lease_expires_at") or 0) <= time.time():
+                raise RuntimeError("Output deletion attempt is no longer active.")
+            event_job_id = str(claim.get("event_job_id") or "").strip() or None
             output_json = self.outputs.get_record_json_on(connection, output_id)
             if output_json is None:
                 event_session_id = None
@@ -219,6 +437,8 @@ class MemoryRepository:
                 connection.commit()
                 return legacy_output
             output = GenerationOutput.model_validate_json(output_json)
+            if output.job_id != claim.get("canonical_job_id"):
+                raise RuntimeError("Canonical output association changed during deletion.")
             job_json = self.jobs.get_record_json_on(connection, output.job_id)
             self.outputs.delete_on(connection, output_id)
             session_id = None
@@ -414,8 +634,8 @@ class MemoryRepository:
         try:
             with connection:
                 connection.execute(
-                    "DELETE FROM v1_records WHERE namespace IN (?, ?, ?, ?, ?)",
-                    ("sessions", "assets", "jobs", "outputs", "idempotency"),
+                    "DELETE FROM v1_records WHERE namespace IN (?, ?, ?, ?, ?, ?)",
+                    ("sessions", "assets", "jobs", "outputs", "idempotency", "output_delete_claims"),
                 )
                 connection.execute("DELETE FROM v1_events")
         finally:

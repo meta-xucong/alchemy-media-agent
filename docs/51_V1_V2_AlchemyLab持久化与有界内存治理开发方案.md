@@ -460,3 +460,19 @@ Source Fidelity A2 对 `f63f08e…` 指出，第 428 行附近历史章节仍写
 唯一现行规则：规范 output 为私有时，规范关联 Job 必须包含该 output 的副本，且同 Job 内同 ID 的所有副本都必须显式携带与规范 owner 完全相同的 owner；ownerless、缺失或冲突均抑制事件，不转投重复 Job。删除和权威清理仍完成，事件只用于辅助刷新。规范 ownerless 的私有 legacy 记录，只能向事务内验证为显式匹配 owner 的 Job session 发事件；无法证明目的地时抑制事件。本节优先于第 428 行附近及更早的同主题历史描述。
 
 该候选现已获得同指纹双审：独立 Audit A2 PASS，Source Fidelity A2 PASS，均绑定 `f63f08e3932c574acde5e77a7225e8b04487a80d351224d302e3b3559c1336ac`（39 个变更/新增 Python 文件）。Audit A2 独立复核上述 ownerless 事件边界、跨 session 历史归属、删除失败后的 owner 锚点与重试、SQLite 事务和目录竞态；审计环境缺 pytest，未独立执行测试。主控本机验证为 V1 history/delete/favorites/migration/SQLite/SSE/Lab + session-owner API 42 passed，另 V1 history API 14 passed、V2 favorites/migration/retention/SQLite 14 passed，分组有重叠；compileall、`git diff --check` 通过。路由溯源标记 `ROUTE_UNVERIFIED`。该双审只放行更新 Draft PR #28，不代表完整 V1/V2/Lab 生产验收，不授权合并或部署；此前宽范围 V2 provider-seed-sync 用例的一项失败信号仍未解释，生产旧数据迁移、浏览器、真实 Provider 和 VPS 资源验收也未完成。
+
+#### b8bd6b6 增量审计后的收尾模型（2026-10-10）
+
+总目标仍是 V1/V2/Alchemy Lab 的持久化与有界留存优化。当前阶段只关闭 b8bd6b6 审计提出的删除关联竞态、V1 session 事件/写入归属、V2 seed-sync 测试环境确定性；不合并、不部署、不调用真实 Provider、不操作生产数据。基线为 PR #28 分支 `codex/durable-bounded-retention` 的 `b8bd6b6ffed0de01b54d7b9970713fecc16c7e7d`；唯一 main checkout 与 `origin/main=3915b24d0cdab6cc626ad5a7d07c0839e5239064` 保持分离。既有未跟踪 `custom_media_agent_2_0/uv.lock` 和 `src_skeleton/custom_media_agent.egg-info/` 属于基线，不得纳入提交或清理。
+
+纠正模型：
+
+1. 删除授权、规范 output 当前关联、删除事件目标必须来自同一持久化删除 claim。claim 在任何图片/收藏/历史副作用前，以 `BEGIN IMMEDIATE` 原子校验当前规范 owner 与调用方已授权 owner，并固定当前 Job 关联；之后 `save_job` 对被 claim 的 output ID 不得重绑或重新写入。claim 同时含单次清理 attempt token 与 15 分钟 lease：同一 owner 的并发删除不能复用正在运行的 attempt；可捕获失败会释放 attempt 但保留授权锚点，便于同 owner 重试；进程崩溃遗留的 attempt 在 lease 到期后可恢复。全部清理成功后释放 claim。最终事务只允许使用 claim 中绑定的关联，不能回退到事务外旧 `event_job_id`。owner/规范关联在 claim 建立前已变化时拒绝本次旧授权请求，要求重新读取/授权。该 claim 是跨 SQLite/JSONL/文件副作用的短期并发栅栏，不把事务跨越到文件 I/O。
+2. Session 是独立的隐私边界，不由图片 ownerless/public 兼容规则推导。新增 session 由服务端写入不可由请求体指定的 `veyra_user_id`；auth 开启时，普通用户只可读写明确属于本人的 session，管理员只获得读取全局 session/SSE 的权限，跨 owner 写入仍拒绝。ownerless 旧 session 没有足够证据证明完整事件流归属，普通用户按 not-found 拒绝；既有 ownerless 图片仍按原 history API 的 public 兼容规则工作。关闭 auth 的本地模式保持原行为。消息和直接 image-job 两个带 session_id 的写入口必须在副作用前应用同一 session 守卫。
+3. V2 `test_provider_sync_publishes_seed_cases` 明确请求 `mode=seed`，由测试固定该用例目的，不依赖 `enable_remote_github_sync` 环境开关；不更改运行时 provider 同步策略。
+
+边界与验收：只允许修改 V1 `Session` schema/service/repository/session 路由、V1 删除 claim 和对应定向测试、V2 该 seed-sync 测试、本文及 `PROGRESS.md`。每个新增缺陷先在基线行为上以隔离数据复现，再实现最小修正。覆盖 Job A→B 重绑发生在删除 claim 前/后的行为、同 owner 并发删除只能有一个活动 attempt、可捕获失败释放 attempt 且同 owner 可重试、进程中断后 lease 到期可恢复、删除中 SQLite busy 后原 owner 重试及其他 owner 拒绝、私有/公有/ownerless session 的 owner/admin/auth-off 读写、session owner 保存不可清除/改绑、未授权请求零事件/零 Job 副作用，以及开启 remote GitHub sync 时 seed 测试仍不访问远端。实现后须执行 V1 删除/history/session 定向组与 V2 seed-sync/相关持久化组、变更文件编译和 diff 检查；冻结精确代码指纹后取得独立 Audit A2 与 Source Fidelity A2 同指纹 PASS，再更新 Draft PR #28。完整 V1 smoke、浏览器、生产旧数据迁移、VPS RSS/CPU/P95 仍是独立后续阶段。
+
+风险分类：D1，legacy session 能否按图片 owner 继承事件权限存在隐私语义歧义；独立 Think 已裁定不能继承，应对 auth-enabled 普通用户 fail-closed。I2，删除横跨 SQLite、JSONL、图片和收藏副作用，需要明确 claim/重试不变量。A2，涉及跨账号隐私、持久化及公开路由。路由溯源为 `ROUTE_UNVERIFIED`；Hook 状态为 `HOOK_UNVERIFIED`，均不作为代码正确性收据。
+
+实施状态：本轮本机 V1 定向组 55 passed、V2 定向组 13 passed、V1 history API 选择 4 passed；Python compileall 与 diff 检查通过。新增“同 owner 并发删除 attempt 序列化”回归在改动前失败、改动后通过。当前 42 个 Python 源码/测试文件相对 `origin/main` 的候选 fingerprint 为 `589385966facdf2682670b7dd20ec9ccde6ed61753982eb15503fbbb747506cc`，计算格式见 `PROGRESS.md`；此提交仍需独立 Audit A2 和 Source Fidelity A2 同树复核。未完成双审前不更新 PR；双审只允许更新 Draft PR，不授权合并或 VPS 部署。旧 session 的生产归属迁移、浏览器、真实 Provider、生产数据和 VPS 资源验收均未执行。

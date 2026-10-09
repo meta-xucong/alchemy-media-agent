@@ -2503,6 +2503,29 @@ def _require_veyra_user_if_enabled(request: Request, authorization: str = "") ->
     return _veyra_user_id_from_request(request, authorization)
 
 
+async def _require_v1_session_access(
+    request: Request,
+    session_id: str,
+    authorization: str = "",
+    *,
+    write: bool = False,
+) -> int | None:
+    """Enforce session ownership independently from image-history visibility."""
+    if not settings.veyra_auth_enabled:
+        return None
+    context = await _veyra_history_context(request, authorization)
+    session = repository.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail={"error_code": "session_not_found", "message": "Session not found."})
+    session_owner_id = _positive_int_or_none(getattr(session, "veyra_user_id", None))
+    user_id = _positive_int_or_none(context.get("user_id"))
+    if context.get("is_admin") and not write:
+        return user_id
+    if session_owner_id is not None and session_owner_id == user_id:
+        return user_id
+    raise HTTPException(status_code=404, detail={"error_code": "session_not_found", "message": "Session not found."})
+
+
 async def _veyra_history_context(request: Request, authorization: str = "") -> dict:
     if not settings.veyra_auth_enabled:
         return {"authenticated": False, "user_id": None, "is_admin": False}
@@ -2731,7 +2754,12 @@ def _v1_output_owner_state(output_id: str) -> tuple[int | None, bool]:
     # and prevents history age/page limits from affecting authorization.
     if len(owners) > 1:
         return None, True
-    return (next(iter(owners)) if owners else None), False
+    if owners:
+        return next(iter(owners)), False
+    delete_claim = repository.get_output_delete_claim(output_id)
+    if delete_claim is not None:
+        return _positive_int_or_none(delete_claim.get("owner_id")), False
+    return None, False
 
 
 def _v1_output_owner_id(output_id: str) -> int | None:
@@ -2763,6 +2791,7 @@ def _is_lab_output_id(output_id: str) -> bool:
 
 def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = None) -> dict[str, object]:
     """Perform one retryable history-output cleanup under a single admitted worker slot."""
+    had_claim = repository.get_output_delete_claim(output_id) is not None
     output = repository.get_output(output_id)
     output_owner_id = _history_output_veyra_user_id(output.metadata) if output else None
     history_record = (
@@ -2804,63 +2833,106 @@ def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = N
             if output is not None
             else str(history_record.get("job_id") or "").strip() if history_record else None
         )
-    thumbnail_existed = media_store.thumbnail_path(output_id).exists()
-    preview_existed = media_store.preview_path(output_id).exists()
-    deleted_file = media_store.delete_output_file(
-        output_id=output_id,
-        job_id=output.job_id if output else None,
-        output_format=output.format if output else None,
+    claim = repository.begin_output_delete_claim(
+        output_id,
+        owner_id=owner_id,
+        canonical_job_id=output.job_id if output else None,
+        event_job_id=legacy_event_job_id,
     )
-    deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
-    deleted_preview = media_store.delete_preview(output_id) or preview_existed
-
-    # Keep the repository output (or, for legacy-only records, the history
-    # record) as an authorization anchor until all preceding idempotent cleanup
-    # has succeeded. A failed call can then be retried by the same owner.
-    removed_favorites = delete_favorite(output_id)
-    if output_owner_id is not None or not history_owner_authority:
-        # Either the normalized output is the highest explicit owner anchor, or
-        # the Job copies are the only explicit owner source. In both cases the
-        # repository/Job evidence stays in place while lower-priority (or
-        # ownerless) history cleanup may fail.
-        removed_records = media_store.delete_history_record(output_id)
-        removed_output = repository.delete_output_with_event(
-            output_id,
-            event_job_id=legacy_event_job_id,
-            event_owner_id=owner_id,
-        )
-    else:
-        # An explicit history owner or same-tier conflict is the strongest
-        # remaining authority. Remove repository/Job copies first so this
-        # evidence remains available if either cleanup step fails.
-        removed_output = repository.delete_output_with_event(
-            output_id,
-            event_job_id=legacy_event_job_id,
-            event_owner_id=owner_id,
-        )
-        removed_records = media_store.delete_history_record(output_id)
-    if (
-        not output
-        and not deleted_file
-        and not deleted_thumbnail
-        and not deleted_preview
-        and removed_records == 0
-        and not removed_output
-    ):
+    if claim is None:
         raise HTTPException(
-            status_code=404,
-            detail={"code": "output_not_found", "message": "Output not found."},
+            status_code=409,
+            detail={
+                "error_code": "output_delete_state_changed",
+                "message": "Output ownership or association changed. Reload the history item and retry.",
+            },
         )
-    return {
-        "ok": True,
-        "output_id": output_id,
-        "deleted_file": deleted_file,
-        "deleted_thumbnail": deleted_thumbnail,
-        "deleted_preview": deleted_preview,
-        "removed_history_records": removed_records,
-        "removed_favorites": removed_favorites,
-        "removed_repository_output": bool(removed_output),
-    }
+    legacy_event_job_id = str(claim.get("event_job_id") or "").strip() or None
+    attempt_id = str(claim.get("attempt_id") or "")
+    try:
+        thumbnail_existed = media_store.thumbnail_path(output_id).exists()
+        preview_existed = media_store.preview_path(output_id).exists()
+        deleted_file = media_store.delete_output_file(
+            output_id=output_id,
+            job_id=output.job_id if output else None,
+            output_format=output.format if output else None,
+        )
+        deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
+        deleted_preview = media_store.delete_preview(output_id) or preview_existed
+
+        # Keep the repository output (or, for legacy-only records, the history
+        # record) as an authorization anchor until all preceding idempotent cleanup
+        # has succeeded. A failed call can then be retried by the same owner.
+        removed_favorites = delete_favorite(output_id)
+        if output_owner_id is not None or not history_owner_authority:
+            # Either the normalized output is the highest explicit owner anchor, or
+            # the Job copies are the only explicit owner source. In both cases the
+            # repository/Job evidence stays in place while lower-priority (or
+            # ownerless) history cleanup may fail.
+            removed_records = media_store.delete_history_record(output_id)
+            removed_output = repository.delete_output_with_event(
+                output_id,
+                event_job_id=legacy_event_job_id,
+                event_owner_id=owner_id,
+                attempt_id=attempt_id,
+            )
+        else:
+            # An explicit history owner or same-tier conflict is the strongest
+            # remaining authority. Remove repository/Job copies first so this
+            # evidence remains available if either cleanup step fails.
+            removed_output = repository.delete_output_with_event(
+                output_id,
+                event_job_id=legacy_event_job_id,
+                event_owner_id=owner_id,
+                attempt_id=attempt_id,
+            )
+            removed_records = media_store.delete_history_record(output_id)
+        if (
+            not output
+            and not deleted_file
+            and not deleted_thumbnail
+            and not deleted_preview
+            and removed_records == 0
+            and not removed_output
+            and not had_claim
+        ):
+            repository.finish_output_delete_claim(
+                output_id,
+                owner_id=owner_id,
+                attempt_id=attempt_id,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "output_not_found", "message": "Output not found."},
+            )
+        if not repository.finish_output_delete_claim(
+            output_id,
+            owner_id=owner_id,
+            attempt_id=attempt_id,
+        ):
+            raise RuntimeError("Output deletion claim changed before cleanup completed.")
+        return {
+            "ok": True,
+            "output_id": output_id,
+            "deleted_file": deleted_file,
+            "deleted_thumbnail": deleted_thumbnail,
+            "deleted_preview": deleted_preview,
+            "removed_history_records": removed_records,
+            "removed_favorites": removed_favorites,
+            "removed_repository_output": bool(removed_output),
+        }
+    except Exception:
+        try:
+            repository.release_output_delete_claim_attempt(
+                output_id,
+                owner_id=owner_id,
+                attempt_id=attempt_id,
+            )
+        except Exception:
+            # The durable owner anchor remains; lease expiry permits recovery if
+            # SQLite is unavailable during this best-effort attempt release.
+            pass
+        raise
 
 
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
@@ -3091,19 +3163,20 @@ def _v3_visual_asset_owner_scope(user_id: int | None) -> str:
 
 @app.post("/v1/sessions")
 def create_session_endpoint(body: CreateSessionRequest, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
-    return create_session(body)
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    return create_session(body, veyra_user_id=user_id)
 
 
 @app.post("/v1/sessions/{session_id}/messages")
 async def send_message(session_id: str, body: MessageRequest, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
-    return await handle_message(session_id, body)
+    user_id = await _require_v1_session_access(request, session_id, authorization, write=True)
+    _require_job_assets_visible(request, body.asset_ids, None, authorization)
+    return await handle_message(session_id, body, veyra_user_id=user_id)
 
 
 @app.get("/v1/sessions/{session_id}/events")
-def stream_session_events(session_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+async def stream_session_events(session_id: str, request: Request, authorization: str = Header(default="")):
+    await _require_v1_session_access(request, session_id, authorization)
     return StreamingResponse(format_sse_events(session_id), media_type="text/event-stream")
 
 
@@ -3193,6 +3266,7 @@ async def create_image_job_endpoint(
     authorization: str = Header(default=""),
 ):
     user_id = _veyra_user_id_from_request(request, authorization)
+    await _require_v1_session_access(request, body.session_id, authorization, write=True)
     _require_job_assets_visible(request, body.asset_ids, body.asset_intents, authorization)
     prepared = await submit_image_job(
         session_id=body.session_id,
