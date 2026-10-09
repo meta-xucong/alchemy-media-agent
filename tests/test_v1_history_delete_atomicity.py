@@ -506,6 +506,21 @@ def test_v1_ownerless_delete_claim_streams_job_owner_evidence(tmp_path, monkeypa
             metadata={"veyra_user_id": 77},
         )],
     )
+    repository.jobs["job_ownerless_stream_late_conflict"] = GenerationJob(
+        id="job_ownerless_stream_late_conflict",
+        session_id="session_ownerless_stream_late_conflict",
+        job_type="image",
+        status=JobStatus.ready,
+        trace_id="trace_ownerless_stream_late_conflict",
+        created_at=now,
+        updated_at=now,
+        outputs=[GenerationOutput(
+            id=output_id,
+            job_id="job_ownerless_stream_late_conflict",
+            url=f"/v1/outputs/{output_id}/download",
+            metadata={"veyra_user_id": 88},
+        )],
+    )
 
     scan = {"fetchall": 0, "fetchone": 0}
     real_connect = memory_repository_module.connect
@@ -554,7 +569,7 @@ def test_v1_ownerless_delete_claim_streams_job_owner_evidence(tmp_path, monkeypa
 
     assert claim is None
     assert scan["fetchall"] == 0
-    assert scan["fetchone"] == 3
+    assert scan["fetchone"] == 4
     assert repository.get_output_delete_claim(output_id) is None
 
 

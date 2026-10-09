@@ -207,7 +207,7 @@ class MemoryRepository:
                     owner_conflict = bool(history_evidence[1])
                     resolved_owner_id = self._positive_owner_id(history_evidence[0])
                 if resolved_owner_id is None and not owner_conflict:
-                    observed_owners: set[int] = set()
+                    observed_owner_id = None
                     job_cursor = connection.execute(
                         "SELECT payload FROM v1_records WHERE namespace='jobs'"
                     )
@@ -218,13 +218,14 @@ class MemoryRepository:
                                 if nested.id == output_id:
                                     nested_owner_id = self._output_owner_id(nested)
                                     if nested_owner_id is not None:
-                                        observed_owners.add(nested_owner_id)
+                                        if observed_owner_id is None:
+                                            observed_owner_id = nested_owner_id
+                                        elif observed_owner_id != nested_owner_id:
+                                            owner_conflict = True
                     finally:
                         job_cursor.close()
-                    if len(observed_owners) > 1:
-                        owner_conflict = True
-                    elif observed_owners:
-                        resolved_owner_id = next(iter(observed_owners))
+                    if observed_owner_id is not None:
+                        resolved_owner_id = observed_owner_id
 
             if owner_conflict or resolved_owner_id != self._positive_owner_id(owner_id):
                 connection.rollback()
