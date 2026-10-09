@@ -285,6 +285,31 @@ def test_doubao_adapter_blocks_next_http_request_after_takeover(tmp_path: Path, 
     assert transport.sent[0].url.path.endswith("/images/generations")
 
 
+def test_doubao_redirect_hop_is_blocked_after_claim_takeover(tmp_path: Path, monkeypatch) -> None:
+    claim = _configure_claim(tmp_path, monkeypatch)
+    _doubao_settings(monkeypatch)
+
+    def redirect_then_takeover(request: httpx.Request, index: int) -> httpx.Response:
+        assert index == 1
+        _supersede(claim)
+        return httpx.Response(
+            302,
+            headers={"Location": "https://doubao.invalid/v1/images/generations-redirected"},
+            request=request,
+        )
+
+    transport = _FakeTransport(redirect_then_takeover)
+    _install_transport(monkeypatch, transport)
+    provider = doubao_module.V2DoubaoImageProvider()
+
+    with task_queue.claimed_task(claim):
+        with pytest.raises(task_queue.StaleTaskClaim):
+            asyncio.run(provider.generate(_request()))
+
+    assert len(transport.sent) == 1
+    assert transport.sent[0].url.path.endswith("/images/generations")
+
+
 def test_doubao_output_url_download_is_claim_fenced(tmp_path: Path, monkeypatch) -> None:
     claim = _configure_claim(tmp_path, monkeypatch)
     _doubao_settings(monkeypatch)

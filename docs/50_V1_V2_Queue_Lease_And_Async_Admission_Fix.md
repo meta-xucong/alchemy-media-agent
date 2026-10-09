@@ -140,7 +140,7 @@ Rollback is code-only. Do not clear queue rows, checkpoint JSON, result JSON, hi
 
 #### Test and production acceptance boundary
 
-The new regressions use temporary SQLite files and fake HTTPX transports with the real OpenAI SDK and actual OpenAI, Doubao, and Gemini adapters. They cover malformed JSON and parseable invalid manifests, raw checkpoint and error preservation, direct capacity admission after quarantine, following-task progress, valid final-attempt checkpoint recovery, OpenAI multi-image sends, claim loss during generation-lock and limiter waits and explicit retry backoff, Doubao multi-image sends, Gemini candidate fallback, and claim loss before output-URL download. V1 cancellation used temporary lease state and fake work. No paid provider, live data, or secret was used.
+The new regressions use temporary SQLite files and fake HTTPX transports with the real OpenAI SDK and actual OpenAI, Doubao, and Gemini adapters. They cover malformed JSON and parseable invalid manifests, raw checkpoint and error preservation, direct capacity admission after quarantine, following-task progress, valid final-attempt checkpoint recovery, OpenAI multi-image sends, claim loss during generation-lock and limiter waits and explicit retry backoff, Doubao multi-image sends, Gemini candidate fallback, and claim loss before output-URL download. A later redirect-hop regression is recorded below. V1 cancellation used temporary lease state and fake work. No paid provider, live data, or secret was used.
 
 In the Windows executor, pytest's normal `0o700` fixture directories are inaccessible to the sandbox. Follow-up runs use a test-only Python bootstrap that changes only `os.mkdir(..., mode=0o700)` to mode `0o777` for pytest's temporary directories, plus a unique `--basetemp` inside the worktree. It does not modify test assertions or application/provider behavior. Any non-passing concurrent SQLite migration test is reported separately and rerun in isolation; this follow-up does not change migration code.
 
@@ -165,3 +165,14 @@ The initial PR #27 reproduction scripts used only temporary SQLite records and f
 | V1 and Lab capacity regressions | `D:\AI\Alchemy Media Agent System\.codex-work\pr26-queue-async-fencing`; `tests/test_resource_capacity_guards.py` | 30 passed, 5 dependency/framework deprecation warnings. This includes pre-start repeated cancellation, post-start cancellation, normal completion, and runner exception; each path releases one transferred Lab lease. |
 
 One earlier combined V2 run had a single `database is locked` in the parallel legacy-schema initialization test. That test passed in isolation and again in the complete 56-test follow-up run; no schema migration code was changed in response to that non-reproducible occurrence. The earlier PR #27 baseline evidence in the main verification table was not rerun wholesale: V1 API smoke (85), the full V2 API suite (176), and other unchanged scenarios remain prior-commit evidence. Only the files and API cases affected by this follow-up were rerun. No VPS, 2-core/2-GiB performance, deployment, merge, paid provider, secret, or live data was exercised.
+
+### PR #27 post-audit redirect-hop follow-up
+
+The independent review found no blocker and noted one low-priority coverage gap: claim takeover between an HTTP redirect response and its next request. The added regression uses the actual Doubao adapter and a fake HTTPX transport. The first fake request returns a redirect after taking over the SQLite claim; the per-request claim hook rejects the redirect hop, and the transport records exactly one request. No external network or provider is contacted.
+
+| Command scope | Result |
+|---|---|
+| `tests/test_resource_capacity_guards.py tests/test_task_claim_fencing.py tests/test_async_capacity_database.py tests/test_v2_provider_claim_fencing.py tests/test_v2_provider_rate_limit.py tests/test_production_provider_defaults.py -k "not legacy_queue_schema_migration_is_serialized_across_initializers" -p no:cacheprovider` | 64 passed, 1 deselected. |
+| `tests/test_task_claim_fencing.py::test_legacy_queue_schema_migration_is_serialized_across_initializers -p no:cacheprovider` | 1 passed in isolation. |
+
+These runs used the same test-only pytest temporary-directory bootstrap described above, with unique `--basetemp` directories. The isolated migration result is separate from the combined set because that two-thread test has previously shown an intermittent SQLite lock under parallel collection. No migration code changed. The offline result does not establish VPS capacity, multiprocess/provider behavior, or production readiness.
