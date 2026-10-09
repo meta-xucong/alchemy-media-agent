@@ -484,3 +484,12 @@ Source Fidelity A2 对 `f63f08e…` 指出，第 428 行附近历史章节仍写
 后续 A2 在该候选发现 revise 可借 ownerless legacy-public 输出跨 session 创建 Job/event。修正后的候选已将 history revision source lookup 改为只读；路由先检查输出可见性，再对同一已解析 source session 执行 `write=True`，提交复用该 source，授权后才持久化从 history 恢复的 source Job 与 revision。新回归覆盖 foreign/admin 零副作用、owner 正常提交、本地 auth-off 兼容；基线失败、新版通过。修正候选定向结果：V1 59 passed，V2 seed-sync 1 passed、相关 favorites/migration/retention/SQLite 14 passed，revision API + workflow 14 passed；compileall 与 diff check 通过。43 个 Python 文件 fingerprint 为 `8b69489da229f97bf458b4998ea03b314a2584a50991619929e870b91697c1`。该版本须先提交并由新一轮同提交 Audit A2 与 Source Fidelity A2 复审，未通过前不得更新 PR、合并或部署。
 
 审计收据：提交 `941a3f53e1ebeee83e36efda6c14d8874adc8b76` 上，独立 Audit A2 = PASS，Source Fidelity A2 = PASS；两者独立复算的 43-file Python fingerprint 均为 `8b69489da229f97bf458b4998ea03b314a2584a50991619929e870b91697c1`。两份收据均覆盖本轮 session/revision 权限修复；Source Fidelity A2 另确认删除 claim、SSE、Job 读取、V2 seed-sync 与文档契约映射一致。其他历史修复仍以各自冻结版本的审计收据为准。`ROUTE_UNVERIFIED`：未验证实际 Codex 路由或已部署运行时。仅允许更新 Draft PR；合并、部署、真实 Provider、生产旧数据对账和 VPS 资源验收不在本轮通过范围内。
+
+#### 60467bd2 增量审计后的收尾模型（2026-10-10）
+
+阶段目标：修复跨 session 幂等重放泄露和 ownerless 删除 claim 的全量 Job 缓冲。PR #28 仍为 Draft，不合并、不部署；生产旧数据迁移与 VPS 验收继续保持独立。
+
+1. Image Job 幂等重放必须由已经通过 session 写授权的请求上下文约束。服务层查重使用 `session_id` 和路由传入的可信 owner，不得把全局 `idempotency_index` 命中当作访问授权。历史普通键只允许在真实 Job 的 session 与 owner 均匹配时重放；旧全局索引指向其他 session 时忽略它，不要求迁移旧 Job。成功、asset-error、prompt-rejected、provider-failed 等所有可持久化分支都写入同一有效幂等键，并在重放前做作用域查找。相同用户/同 session 重试复用；同用户不同 session 与跨用户同键均创建各自任务，不互相返回 Job/Prompt/Output。保留已有自动 key 算法语义，不泄露旧全局索引数据。
+2. 删除 claim 的 ownerless fallback 仍须检查全部 Job 副本以发现 owner 冲突，但在既有 `BEGIN IMMEDIATE` 事务中按游标逐条解码，不 `fetchall()` 保留全部 payload。完整扫描语义与 owner 冲突判定保持不变；复杂度仍为 O(N)，这里只约束同时驻留的记录数和写锁期间临时内存。
+
+本阶段允许改动边界：V1 image-job API/service 的 idempotency 查重、repository 与 SQLite JSON map 的作用域查询、删除 claim 的 Job 副本扫描，以及对应 V1 测试、本文和 `PROGRESS.md`。回归须覆盖 API 级 A/B 跨用户同键、A 同 session 重放、A 不同 session 同键、已有旧全局键只在原 session 可重放、显式失败/拒绝 Job 键稳定重放；删除 claim 测试通过 SQL cursor spy 证明 job payload 查询逐行读取、不调用 `fetchall()`，并保留多 Job owner 冲突拦截。实现后跑 V1 idempotency/session/delete 定向组、此前 V1/V2 核心定向组、compileall、diff check；精确冻结后重新取得 Audit A2 与 Source Fidelity A2 PASS，才可更新 Draft PR。历史 ownerless session 对账、旧全局索引的非路由兼容调用、真实模型、VPS RSS/CPU/P95 均不得被本阶段通过所覆盖。
