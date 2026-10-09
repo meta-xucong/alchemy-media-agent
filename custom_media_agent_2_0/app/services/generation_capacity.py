@@ -242,7 +242,7 @@ def _reserve(
                 """
                 SELECT 1 FROM v2_tasks AS task
                 WHERE task.status = 'running' AND task.locked_at IS NOT NULL
-                  AND task.locked_at >= ? AND task.attempts < task.max_attempts
+                  AND task.locked_at >= ?
                   AND NOT EXISTS (
                       SELECT 1 FROM resource_leases AS lease
                       WHERE lease.namespace = ? AND lease.owner_task_id = task.task_id

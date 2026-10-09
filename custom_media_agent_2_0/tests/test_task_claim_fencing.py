@@ -1172,6 +1172,98 @@ def test_worker_slot_ownership_allows_spare_direct_slot_but_waits_for_unleased_c
             pass
 
 
+def test_fresh_final_attempt_claim_blocks_direct_until_worker_acquires_lease(tmp_path: Path, monkeypatch) -> None:
+    from app.services import generation_capacity as capacity_module
+
+    _configure_queue(tmp_path, monkeypatch, timeout=5.0, slots=1)
+    monkeypatch.setattr(task_queue, "settings", replace(task_queue.settings, task_queue_max_attempts=1))
+    task_id = _enqueue("run_final_attempt_priority")
+    claim = task_queue.claim_next_task("worker-final-attempt")
+    assert claim is not None
+    assert claim.task_id == task_id
+    assert claim.attempts == claim.max_attempts == 1
+
+    worker_at_reservation = threading.Event()
+    allow_worker_reservation = threading.Event()
+    worker_acquired = threading.Event()
+    worker_errors: list[BaseException] = []
+    original_reserve = capacity_module._reserve
+
+    def held_worker_reserve(*args, **kwargs):
+        request_kind = args[4] if len(args) > 4 else kwargs.get("request_kind")
+        if request_kind == "worker" and kwargs.get("task_id") == claim.task_id:
+            worker_at_reservation.set()
+            if not allow_worker_reservation.wait(3):
+                raise TimeoutError("worker reservation barrier was not released")
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(capacity_module, "_reserve", held_worker_reserve)
+
+    def run_worker() -> None:
+        try:
+            with task_queue.generation_capacity(request_kind="worker", claim=claim):
+                worker_acquired.set()
+        except BaseException as exc:
+            worker_errors.append(exc)
+
+    worker = threading.Thread(target=run_worker)
+    worker.start()
+    try:
+        assert worker_at_reservation.wait(2)
+        with pytest.raises(task_queue.GenerationCapacityExceeded):
+            with task_queue.generation_capacity(request_kind="direct"):
+                pass
+    finally:
+        allow_worker_reservation.set()
+        worker.join(5)
+
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert worker_acquired.is_set()
+
+
+def test_exhausted_stale_claim_terminalization_preserves_existing_lease_spare_slot(tmp_path: Path, monkeypatch) -> None:
+    database_path = _configure_queue(tmp_path, monkeypatch, timeout=0.01, slots=2)
+    monkeypatch.setattr(task_queue, "settings", replace(task_queue.settings, task_queue_max_attempts=1))
+    _enqueue("run_active_lease_spare_slot")
+    active_claim = task_queue.claim_next_task("worker-holding-lease")
+    assert active_claim is not None
+
+    with task_queue.generation_capacity(request_kind="worker", claim=active_claim):
+        _enqueue("run_exhausted_stale_spare_slot")
+        stale_exhausted_claim = task_queue.claim_next_task("worker-exhausted-stale")
+        assert stale_exhausted_claim is not None
+        assert stale_exhausted_claim.attempts == stale_exhausted_claim.max_attempts == 1
+        _make_stale(stale_exhausted_claim)
+
+        with task_queue.generation_capacity(request_kind="direct"):
+            with task_queue._connect() as connection:
+                terminal = connection.execute(
+                    "SELECT status, locked_by, locked_at FROM v2_tasks WHERE task_id = ?",
+                    (stale_exhausted_claim.task_id,),
+                ).fetchone()
+                leases = connection.execute(
+                    "SELECT slot, owner_task_id, owner_claim_token FROM resource_leases WHERE namespace = 'generation'"
+                ).fetchall()
+            assert terminal is not None
+            assert terminal["status"] == "failed"
+            assert terminal["locked_by"] is None and terminal["locked_at"] is None
+            assert len(leases) == 2
+            assert any(
+                row["owner_task_id"] == active_claim.task_id
+                and row["owner_claim_token"] == active_claim.claim_token
+                for row in leases
+            )
+
+        with task_queue._connect() as connection:
+            remaining = connection.execute(
+                "SELECT owner_task_id, owner_claim_token FROM resource_leases WHERE namespace = 'generation'"
+            ).fetchall()
+        assert len(remaining) == 1
+        assert remaining[0]["owner_task_id"] == active_claim.task_id
+        assert remaining[0]["owner_claim_token"] == active_claim.claim_token
+
+
 def test_stale_recoverable_running_task_does_not_block_direct_admission_forever(tmp_path: Path, monkeypatch) -> None:
     _configure_queue(tmp_path, monkeypatch, timeout=2.0)
     _enqueue("run_stale_recoverable")

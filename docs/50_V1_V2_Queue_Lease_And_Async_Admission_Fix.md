@@ -208,3 +208,31 @@ The V1 delta was revalidated with temporary job/repository state, a temporary SQ
 | `tests/test_resource_capacity_guards.py -p no:cacheprovider` | 37 passed, 5 framework/dependency deprecation warnings; this focused file reran the V1/Lab capacity regressions with the updated middleware and idempotency behavior. |
 
 This follow-up does not rerun V2/provider cases, the complete V1 suite, VPS deployment topology, 2-core/2-GiB capacity, or remote provider cancellation. The prior V2 evidence remains scoped to its recorded commit; no V2 change is included in this follow-up. The correction is not a production readiness or memory-performance sign-off.
+
+### PR #27 V2 admission-priority and WAL initialization follow-up (2026-10-09)
+
+The total objective remains bounded resource use across V1, V2, and Alchemy Lab. This phase closes two V2 queue-admission/database-lock defects only; it does not expand the V3 plan or claim VPS/performance acceptance.
+
+#### Confirmed source risks and correction
+
+- **Final-attempt claim priority:** `generation_capacity._reserve` already terminalizes expired exhausted claims within its reservation transaction before checking direct admission. The unleased-fresh-claim priority predicate then excluded rows where `attempts == max_attempts`, creating a gap after the worker claimed its last attempt but before its worker lease was acquired. A direct request could consume that slot during the gap. The predicate now counts every recent `running` claim without a matching live worker lease, independent of attempt count. Expired exhausted claims are terminalized first and do not block admission. A valid existing worker lease is still counted as active work, and a direct request can use a genuinely spare slot. This changes no endpoint or queue schema.
+- **WAL switch on every queue connection:** `task_queue._connect` previously ran `PRAGMA journal_mode=WAL` on each connection. Independent API/worker processes opening a new database concurrently could race while switching modes and receive `database is locked`; a reader holding a rollback-mode transaction also made an ordinary queue connection fail. The V2 capacity connector opens the same file and uses bounded SQLite write transactions, but does not set `journal_mode`; it can still contend with a WAL switch. Queue connections now set only the configured `busy_timeout`. Queue initialization reads the persisted mode and performs the WAL switch only when needed, before `BEGIN IMMEDIATE` and outside any transaction. Busy/locked responses use the existing `task_queue_busy_timeout_seconds` budget with bounded short retries, then surface as `QueueStorageBusy`. The async initializer runs SQLite work through the existing thread offload, so lock waiting does not block the event loop. The public enqueue error remains the existing retryable `503 local_database_busy` response with `Retry-After: 5`.
+
+The pre-fix independent-process reproduction started five separate Python processes behind a shared start barrier. For new databases, 30 initialization calls produced 2 `database is locked` failures at the per-connection WAL pragma. A queue connection made while a read transaction was held also failed at that pragma. The final-attempt direct-admission interleaving reproduced direct capacity acquisition before the worker lease. These results establish code-level race conditions; they are not evidence that a production incident occurred.
+
+#### Compatibility, configuration, migration, and rollback
+
+There is no new setting, public field, response schema, or database column. The WAL lock budget reuses the configured `task_queue_busy_timeout_seconds`, and successful initialization preserves the existing WAL-backed persistent queue. A new or legacy database still receives the same schema migration under the existing `BEGIN IMMEDIATE` serialization. Standalone workers and API processes can initialize the same file; the shared SQLite database remains the cross-process authority. An in-process semaphore is not used as a global capacity guarantee.
+
+Rollback is code-only. Do not delete queued or terminal tasks, leases, run history, idempotency evidence, or success checkpoints. WAL is a persistent SQLite mode and remains safe for the code version that preceded this change; rollback does not require reverting journal mode or rewriting database contents. A failed bounded initialization returns the existing retryable busy condition; callers may retry after `Retry-After` rather than receiving an unbounded wait.
+
+#### Focused verification and remaining acceptance
+
+The regression set uses temporary SQLite databases and local fake/no providers. It includes deterministic worker-claim/direct-admission interleaving at `attempts == max_attempts`, stale exhausted claim terminalization, spare direct admission alongside a valid worker lease, bounded WAL lock timeout with an event-loop responsiveness assertion, queue connection under a held rollback-mode reader, and repeated initialization from five independent processes across two rounds for both new databases and legacy schema upgrades. The stress test also opens the shared database through the separate `generation_capacity` connector and verifies that the persisted mode is WAL. It records retry-loop and failure counts rather than relying on a serial-only schema test.
+
+| Command scope | Result |
+|---|---|
+| `tests/test_resource_capacity_guards.py tests/test_task_claim_fencing.py tests/test_async_capacity_database.py -p no:cacheprovider -q` | 56 passed. |
+| The two independent-process stress cases plus bounded-timeout and connection-under-reader cases, with `-s -q` | 4 passed. New database: 30 initialization calls, 2 bounded WAL retry loops, 0 failures. Legacy upgrade: 30 calls, 0 retry loops, 0 failures. |
+
+The attempted 2-core/2-GiB VPS acceptance, process-crash/restart behavior on VPS, sustained throughput/memory measurement, real provider generation, merge, and deployment remain unrun. Passing offline regressions do not establish those properties or production readiness.

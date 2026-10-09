@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -67,9 +68,10 @@ class QueuedTask:
 _CURRENT_CLAIM: ContextVar[QueuedTask | None] = ContextVar("v2_current_task_claim", default=None)
 
 
-def initialize_task_queue() -> None:
+def initialize_task_queue() -> int:
     settings.task_queue_db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
+        wal_retry_loops = _ensure_wal_mode(conn)
         # API and standalone workers may initialize the same database at once.
         # Serialize schema inspection and ALTERs so both cannot add one column.
         conn.execute("BEGIN IMMEDIATE")
@@ -107,6 +109,7 @@ def initialize_task_queue() -> None:
             "CREATE INDEX IF NOT EXISTS idx_v2_tasks_status_not_before_created ON v2_tasks(status, not_before, created_at)"
         )
         conn.commit()
+    return wal_retry_loops
 
 
 async def initialize_task_queue_async() -> None:
@@ -770,9 +773,63 @@ def _connect() -> sqlite3.Connection:
     timeout = max(0.1, min(30.0, float(settings.task_queue_busy_timeout_seconds)))
     conn = sqlite3.connect(Path(settings.task_queue_db_path), timeout=timeout, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
     return conn
+
+
+def _ensure_wal_mode(conn: sqlite3.Connection) -> int:
+    """Switch a newly created or legacy queue database to WAL once, before transactions."""
+
+    if conn.in_transaction:
+        raise RuntimeError("V2 queue journal mode must be configured outside a transaction.")
+
+    timeout = max(0.1, min(30.0, float(settings.task_queue_busy_timeout_seconds)))
+    deadline = time.monotonic() + timeout
+    retry_loops = 0
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise QueueStorageBusy(
+                f"V2 queue database is busy; WAL setup timed out after {timeout:.2f}s "
+                f"(retry_loops={retry_loops})."
+            )
+
+        conn.execute(f"PRAGMA busy_timeout={max(1, int(remaining * 1000))}")
+        try:
+            mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            if mode == "wal":
+                break
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            conn.execute(f"PRAGMA busy_timeout={max(1, int(remaining * 1000))}")
+            mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+            if mode == "wal":
+                break
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if "locked" not in message and "busy" not in message:
+                raise
+            if time.monotonic() >= deadline:
+                retry_loops += 1
+                raise QueueStorageBusy(
+                    f"V2 queue database is busy; WAL setup timed out after {timeout:.2f}s "
+                    f"(retry_loops={retry_loops})."
+                ) from exc
+
+        retry_loops += 1
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise QueueStorageBusy(
+                f"V2 queue database is busy; WAL setup timed out after {timeout:.2f}s "
+                f"(retry_loops={retry_loops})."
+            )
+        time.sleep(min(0.025, remaining))
+
+    conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
+    return retry_loops
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:

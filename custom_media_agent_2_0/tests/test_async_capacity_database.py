@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sqlite3
+import subprocess
+import sys
+import textwrap
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,6 +24,7 @@ from app.services.generation_capacity import (
     GenerationCapacityStorageBusy,
     run_with_generation_capacity,
 )
+from app.services.task_queue import QueueStorageBusy
 
 
 def _configure_queue(tmp_path: Path, monkeypatch) -> Path:
@@ -31,6 +38,216 @@ def _hold_write_lock(database_path: Path):
     connection = sqlite3.connect(database_path, timeout=5, isolation_level=None, check_same_thread=False)
     connection.execute("BEGIN IMMEDIATE")
     return connection
+
+
+@pytest.mark.parametrize("legacy_schema", [False, True], ids=["new-database", "legacy-upgrade"])
+def test_v2_queue_initialization_repeats_across_independent_processes(
+    tmp_path: Path, legacy_schema: bool
+) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    child_code = textwrap.dedent(
+        """
+        import json, sys, time
+        from dataclasses import replace
+        from pathlib import Path
+        sys.dont_write_bytecode = True
+        from app.config import settings
+        from app.services import generation_capacity, task_queue
+        database_path, ready_path, start_path = map(Path, sys.argv[1:4])
+        task_queue.settings = replace(settings, task_queue_db_path=database_path, task_queue_busy_timeout_seconds=1.0)
+        ready_path.write_text("ready", encoding="utf-8")
+        deadline = time.monotonic() + 20
+        while not start_path.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("process start barrier timed out")
+            time.sleep(0.002)
+        retry_loops = 0
+        for _ in range(3):
+            retry_loops += int(task_queue.initialize_task_queue() or 0)
+            with generation_capacity._database(database_path) as connection:
+                mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+                if mode != "wal":
+                    raise AssertionError(f"capacity connection observed journal_mode={mode}")
+        print(json.dumps({"retry_loops": retry_loops}), flush=True)
+        """
+    )
+
+    worker_count = 5
+    rounds = 2
+    failures: list[str] = []
+    retry_loops = 0
+    initialization_calls = 0
+
+    for round_index in range(rounds):
+        database_path = tmp_path / f"queue-{int(legacy_schema)}-{round_index}.sqlite3"
+        if legacy_schema:
+            with sqlite3.connect(database_path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE v2_tasks (
+                        task_id TEXT PRIMARY KEY, kind TEXT NOT NULL, run_id TEXT NOT NULL,
+                        status TEXT NOT NULL, payload_json TEXT NOT NULL, queued_run_json TEXT NOT NULL,
+                        result_json TEXT, error_json TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+                        max_attempts INTEGER NOT NULL DEFAULT 3, locked_by TEXT, locked_at TEXT,
+                        not_before TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+
+        gate = tmp_path / f"start-{int(legacy_schema)}-{round_index}.flag"
+        ready_paths = [
+            tmp_path / f"ready-{int(legacy_schema)}-{round_index}-{worker}.flag"
+            for worker in range(worker_count)
+        ]
+        environment = os.environ.copy()
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-B", "-c", child_code, str(database_path), str(ready), str(gate)],
+                cwd=project_root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for ready in ready_paths
+        ]
+        try:
+            ready_deadline = time.monotonic() + 20
+            while not all(path.exists() for path in ready_paths) and time.monotonic() < ready_deadline:
+                if any(process.poll() is not None for process in processes):
+                    break
+                time.sleep(0.01)
+            if not all(path.exists() for path in ready_paths):
+                missing = [path.name for path in ready_paths if not path.exists()]
+                statuses = [process.poll() for process in processes]
+                raise AssertionError(
+                    f"independent queue initializers did not reach the shared start barrier; "
+                    f"missing={missing}, exit_statuses={statuses}"
+                )
+            gate.write_text("go", encoding="utf-8")
+            for process in processes:
+                try:
+                    stdout, stderr = process.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    stdout, stderr = process.communicate(timeout=5)
+                initialization_calls += 3
+                if process.returncode != 0:
+                    failures.append(f"exit={process.returncode}; stdout={stdout!r}; stderr={stderr!r}")
+                    continue
+                try:
+                    retry_loops += int(json.loads(stdout.strip().splitlines()[-1])["retry_loops"])
+                except (IndexError, KeyError, ValueError, json.JSONDecodeError) as exc:
+                    failures.append(f"invalid child output: {stdout!r}; error={exc!r}")
+        finally:
+            gate.write_text("go", encoding="utf-8")
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+
+        with sqlite3.connect(database_path) as connection:
+            mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(v2_tasks)")}
+        assert mode == "wal"
+        assert {"claim_token", "claim_generation", "success_checkpoint_json"} <= columns
+
+    print(
+        f"queue_init_stress legacy={legacy_schema} rounds={rounds} processes_per_round={worker_count} "
+        f"initialize_calls={initialization_calls} wal_retry_loops={retry_loops} failures={len(failures)}",
+        flush=True,
+    )
+    assert failures == []
+    assert initialization_calls == rounds * worker_count * 3
+
+
+def test_v2_wal_setup_is_bounded_off_loop_and_retries_after_lock_timeout(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "wal-setup-timeout.sqlite3"
+    monkeypatch.setattr(
+        task_queue,
+        "settings",
+        replace(settings, task_queue_db_path=database_path, task_queue_busy_timeout_seconds=0.2),
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("CREATE TABLE legacy_probe (id INTEGER PRIMARY KEY)")
+        assert str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "delete"
+
+    reader = sqlite3.connect(database_path, timeout=1, isolation_level=None, check_same_thread=False)
+    reader.execute("BEGIN")
+    reader.execute("SELECT * FROM legacy_probe").fetchall()
+    wal_setup_started = threading.Event()
+    wal_setup_started_at: list[float] = []
+    original_ensure_wal_mode = task_queue._ensure_wal_mode
+
+    def observed_wal_setup(connection: sqlite3.Connection) -> int:
+        wal_setup_started_at.append(time.monotonic())
+        wal_setup_started.set()
+        return original_ensure_wal_mode(connection)
+
+    monkeypatch.setattr(task_queue, "_ensure_wal_mode", observed_wal_setup)
+
+    async def exercise() -> None:
+        start = time.monotonic()
+        ticks: list[float] = []
+        stop_ticker = asyncio.Event()
+
+        async def ticker() -> None:
+            while not stop_ticker.is_set():
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.01)
+
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        initializing = asyncio.create_task(task_queue.initialize_task_queue_async())
+        try:
+            assert await asyncio.to_thread(wal_setup_started.wait, 2)
+            with pytest.raises(QueueStorageBusy) as busy:
+                await asyncio.wait_for(initializing, timeout=1)
+            finished = time.monotonic()
+        finally:
+            stop_ticker.set()
+            await ticker_task
+        assert "busy" in str(busy.value).lower()
+        elapsed = finished - start
+        assert 0.1 <= elapsed < 0.8
+        setup_started = wal_setup_started_at[0]
+        ticks_during_lock_wait = [tick for tick in ticks if setup_started <= tick <= finished]
+        assert len(ticks_during_lock_wait) >= 5
+        assert ticks_during_lock_wait[-1] >= setup_started + 0.05
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reader.rollback()
+        reader.close()
+
+    asyncio.run(task_queue.initialize_task_queue_async())
+    with task_queue._connect() as connection:
+        assert str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(v2_tasks)")}
+    assert "claim_token" in columns
+
+
+def test_v2_queue_connection_does_not_switch_journal_mode_under_reader_lock(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "queue-connect-reader.sqlite3"
+    monkeypatch.setattr(
+        task_queue,
+        "settings",
+        replace(settings, task_queue_db_path=database_path, task_queue_busy_timeout_seconds=0.1),
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+    reader = sqlite3.connect(database_path, timeout=1, isolation_level=None, check_same_thread=False)
+    reader.execute("BEGIN")
+    reader.execute("SELECT * FROM probe").fetchall()
+    try:
+        with task_queue._connect() as connection:
+            mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        assert mode == "delete"
+    finally:
+        reader.rollback()
+        reader.close()
 
 
 def test_v2_async_admission_keeps_loop_responsive_during_sqlite_write_lock(tmp_path: Path, monkeypatch) -> None:
