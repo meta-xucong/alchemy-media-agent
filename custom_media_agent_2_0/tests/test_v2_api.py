@@ -288,7 +288,7 @@ def test_provider_sync_publishes_seed_cases() -> None:
     providers = client.get("/api/v2/resource-providers").json()["providers"]
     assert providers[0]["provider_id"] == "github_evolinkai_gpt_image_cases"
 
-    response = client.post("/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync")
+    response = client.post("/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync", params={"mode": "seed"})
     assert response.status_code == 202
     sync = response.json()
     assert sync["status"] == "completed"
@@ -3530,6 +3530,7 @@ def test_creative_run_async_entry_is_pollable() -> None:
     assert run["run_id"] == queued["run_id"]
     assert run["status"] == "completed"
     assert run["prompt_plan"]
+    assert len(run["generation_jobs"]) == 1
     assert run["generation_jobs"][0]["outputs"]
 
     completed_status = client.get("/api/v2/task-queue/status").json()
@@ -3651,7 +3652,7 @@ def test_creative_run_async_preflights_user_balance_before_runtime(monkeypatch) 
     assert queue_status["counts"].get("queued", 0) == 0
 
 
-def test_task_worker_startup_releases_own_running_locks() -> None:
+def test_task_release_requires_the_current_worker_claim() -> None:
     client = fresh_client()
     response = client.post(
         "/api/v2/creative/runs/async",
@@ -3666,11 +3667,21 @@ def test_task_worker_startup_releases_own_running_locks() -> None:
     assert claimed is not None
     assert claimed.run_id == queued["run_id"]
 
-    assert task_queue_service.release_worker_running_tasks("other-worker") == 0
+    foreign_claim = task_queue_service.QueuedTask(
+        task_id=claimed.task_id,
+        kind=claimed.kind,
+        run_id=claimed.run_id,
+        payload=claimed.payload,
+        attempts=claimed.attempts,
+        max_attempts=claimed.max_attempts,
+        worker_id="other-worker",
+        claim_token=claimed.claim_token,
+    )
+    assert task_queue_service.release_task(foreign_claim) is False
     queue_status = client.get("/api/v2/task-queue/status").json()
     assert queue_status["counts"]["running"] == 1
 
-    assert task_queue_service.release_worker_running_tasks("v2-worker-1") == 1
+    assert task_queue_service.release_task(claimed) is True
     queue_status = client.get("/api/v2/task-queue/status").json()
     assert queue_status["counts"]["queued"] == 1
     assert queue_status["counts"].get("running", 0) == 0
@@ -3678,6 +3689,7 @@ def test_task_worker_startup_releases_own_running_locks() -> None:
     reclaimed = task_queue_service.claim_next_task("v2-worker-1")
     assert reclaimed is not None
     assert reclaimed.run_id == queued["run_id"]
+    assert reclaimed.claim_token != claimed.claim_token
 
 
 def test_openai_image_operation_has_outer_timeout(monkeypatch) -> None:

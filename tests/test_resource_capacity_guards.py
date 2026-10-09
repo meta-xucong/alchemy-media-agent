@@ -10,12 +10,15 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
 from app.services import generation_capacity as capacity_module
 from app.services.generation_capacity import run_with_generation_capacity
 from app.services import history_scan_capacity as history_scan_module
+from app.main import app as v1_app
+import app.main as main_module
 from app.main import _read_limited_request_body, _require_output_visible, delete_image_history_item, favorite_image_history_item
 from app.config import settings
 import app.services.alchemy_lab as alchemy_lab
@@ -226,6 +229,7 @@ def test_v1_cancellation_keeps_slot_until_provider_thread_finishes(tmp_path: Pat
         assert await asyncio.to_thread(started.wait, 5)
         task.cancel()
         await asyncio.sleep(0.05)
+        task.cancel()
         with pytest.raises(GenerationCapacityExceeded):
             with generation_capacity(tmp_path, lease_ttl_seconds=1):
                 pass
@@ -236,6 +240,357 @@ def test_v1_cancellation_keeps_slot_until_provider_thread_finishes(tmp_path: Pat
             pass
 
     asyncio.run(exercise())
+
+
+def test_v1_async_admission_keeps_loop_responsive_during_sqlite_write_lock(tmp_path: Path, monkeypatch) -> None:
+    with generation_capacity(tmp_path):
+        pass
+    database_path = tmp_path / ".v1-resource-admission.sqlite3"
+    lock_connection = sqlite3.connect(database_path, timeout=5, isolation_level=None, check_same_thread=False)
+    lock_connection.execute("BEGIN IMMEDIATE")
+    reserve_started = threading.Event()
+    original_reserve = capacity_module._reserve
+
+    def observed_reserve(*args, **kwargs):
+        reserve_started.set()
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(capacity_module, "_reserve", observed_reserve)
+    calls = 0
+
+    async def provider() -> str:
+        nonlocal calls
+        calls += 1
+        return "fake-complete"
+
+    async def exercise() -> None:
+        admission = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(reserve_started.wait, 2)
+        loop_ticked = asyncio.Event()
+        asyncio.get_running_loop().call_soon(loop_ticked.set)
+        await asyncio.wait_for(loop_ticked.wait(), timeout=1)
+        lock_connection.rollback()
+        assert await admission == "fake-complete"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        lock_connection.close()
+    assert calls == 1
+
+
+def test_v1_cancellation_during_acquire_releases_late_lease(tmp_path: Path, monkeypatch) -> None:
+    acquire_started = threading.Event()
+    continue_acquire = threading.Event()
+    original_reserve = capacity_module._reserve
+
+    def held_reserve(*args, **kwargs):
+        acquire_started.set()
+        assert continue_acquire.wait(3)
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(capacity_module, "_reserve", held_reserve)
+    provider_calls = 0
+
+    async def provider() -> str:
+        nonlocal provider_calls
+        provider_calls += 1
+        return "unexpected"
+
+    async def exercise() -> None:
+        task = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(acquire_started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        continue_acquire.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert provider_calls == 0
+    with capacity_module._database(tmp_path / ".v1-resource-admission.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM resource_leases").fetchone()[0] == 0
+
+
+def test_v1_cancellation_during_cleanup_waits_for_release(tmp_path: Path, monkeypatch) -> None:
+    cleanup_started = threading.Event()
+    continue_cleanup = threading.Event()
+    original_release = capacity_module.GenerationLease._release_sync
+    provider_calls = 0
+
+    def held_release(lease):
+        cleanup_started.set()
+        assert continue_cleanup.wait(3)
+        return original_release(lease)
+
+    monkeypatch.setattr(capacity_module.GenerationLease, "_release_sync", held_release)
+
+    async def provider() -> str:
+        nonlocal provider_calls
+        provider_calls += 1
+        return "created-once"
+
+    async def exercise() -> None:
+        task = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(cleanup_started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        continue_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert provider_calls == 1
+    with capacity_module._database(tmp_path / ".v1-resource-admission.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM resource_leases").fetchone()[0] == 0
+
+
+def test_v1_successful_provider_is_not_retried_when_lease_cleanup_fails(tmp_path: Path, monkeypatch) -> None:
+    provider_calls = 0
+
+    def failed_cleanup(_lease):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(capacity_module.GenerationLease, "_release_sync", failed_cleanup)
+
+    async def provider() -> str:
+        nonlocal provider_calls
+        provider_calls += 1
+        return "created-once"
+
+    result = asyncio.run(run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10))
+    assert result == "created-once"
+    assert provider_calls == 1
+
+
+def test_v1_cleanup_waits_for_bounded_database_permit_without_blocking_loop(tmp_path: Path, monkeypatch) -> None:
+    class Gate:
+        def __init__(self):
+            self.semaphore = threading.BoundedSemaphore(1)
+            self.blocked = False
+            self.waiting = threading.Event()
+
+        def acquire(self, blocking=False):
+            if self.blocked:
+                self.waiting.set()
+                return False
+            return self.semaphore.acquire(blocking=blocking)
+
+        def release(self):
+            self.semaphore.release()
+
+    gate = Gate()
+    monkeypatch.setattr(capacity_module, "_ASYNC_DB_SLOTS", gate)
+
+    async def provider() -> str:
+        gate.blocked = True
+        return "created-once"
+
+    async def exercise() -> str:
+        task = asyncio.create_task(
+            run_with_generation_capacity(provider, root=tmp_path, limit=1, lease_ttl_seconds=10)
+        )
+        assert await asyncio.to_thread(gate.waiting.wait, 2)
+        gate.blocked = False
+        return await task
+
+    assert asyncio.run(exercise()) == "created-once"
+
+
+def test_v1_async_sqlite_offload_is_bounded_and_permit_survives_cancellation(monkeypatch) -> None:
+    monkeypatch.setattr(capacity_module, "_ASYNC_DB_SLOTS", threading.BoundedSemaphore(1))
+    worker_started = threading.Event()
+    finish_worker = threading.Event()
+
+    def blocking_operation() -> str:
+        worker_started.set()
+        assert finish_worker.wait(3)
+        return "done"
+
+    async def exercise() -> None:
+        first = asyncio.create_task(capacity_module.run_sqlite_async(blocking_operation))
+        assert await asyncio.to_thread(worker_started.wait, 2)
+        with pytest.raises(capacity_module.GenerationCapacityStorageBusy):
+            await capacity_module.run_sqlite_async(lambda: "should-not-run")
+        first.cancel()
+        await asyncio.sleep(0)
+        with pytest.raises(capacity_module.GenerationCapacityStorageBusy):
+            await capacity_module.run_sqlite_async(lambda: "permit-was-released-too-early")
+        finish_worker.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert await capacity_module.run_sqlite_async(lambda: "available") == "available"
+
+    asyncio.run(exercise())
+
+
+def test_v1_session_image_capacity_is_retryable_and_does_not_block_chat_or_video(tmp_path: Path, monkeypatch) -> None:
+    repository.reset()
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    monkeypatch.setattr(image_service.settings, "llm_prompt_planning_enabled", False)
+    provider_calls = 0
+
+    async def unexpected_provider_call(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("capacity rejection must happen before provider execution")
+
+    monkeypatch.setattr(image_service, "_run_image_request", unexpected_provider_call)
+    client = TestClient(v1_app, raise_server_exceptions=False)
+    created = client.post("/v1/sessions", json={"project_id": "resource-guard", "title": "Capacity"})
+    assert created.status_code == 200
+    session_id = created.json()["id"]
+    before_jobs = repository.list_jobs(job_type="image", session_id=session_id)
+
+    with generation_capacity(tmp_path, limit=1):
+        image = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"target": "image", "text": "Make a simple image", "preferences": {"count": 1}},
+        )
+        assert image.status_code == 429
+        assert image.headers["retry-after"] == "5"
+        assert image.json()["detail"]["code"] == "generation_capacity"
+        assert image.json()["detail"]["retryable"] is True
+        assert repository.list_jobs(job_type="image", session_id=session_id) == before_jobs
+        assert provider_calls == 0
+
+        chat = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"target": "auto", "text": "Hello", "preferences": {}},
+        )
+        video = client.post(
+            f"/v1/sessions/{session_id}/messages",
+            json={"target": "video", "text": "Create a video", "preferences": {}},
+        )
+        assert chat.status_code == 200 and chat.json()["job_ids"] == []
+        assert video.status_code == 200 and video.json()["job_ids"] == []
+        assert provider_calls == 0
+
+    slots = threading.BoundedSemaphore(1)
+    assert slots.acquire(blocking=False)
+    monkeypatch.setattr(capacity_module, "_ASYNC_DB_SLOTS", slots)
+    busy = client.post(
+        f"/v1/sessions/{session_id}/messages",
+        json={"target": "image", "text": "Make a simple image", "preferences": {"count": 1}},
+    )
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert busy.json()["detail"]["code"] == "local_database_busy"
+    assert busy.json()["detail"]["retryable"] is True
+    assert repository.list_jobs(job_type="image", session_id=session_id) == before_jobs
+    assert provider_calls == 0
+    slots.release()
+
+    repository.reset()
+
+
+def test_v1_image_job_replays_bypass_full_capacity_but_new_payloads_do_not(tmp_path: Path, monkeypatch) -> None:
+    repository.reset()
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    runtime_settings = settings.model_copy(
+        update={"max_concurrent_image_generations": 1, "llm_prompt_planning_enabled": False}
+    )
+    monkeypatch.setattr(main_module, "settings", runtime_settings)
+    monkeypatch.setattr(image_service, "settings", runtime_settings)
+    provider_calls = 0
+
+    async def unexpected_provider_call(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("idempotent replay must not start provider work")
+
+    monkeypatch.setattr(image_service, "_run_image_request", unexpected_provider_call)
+    client = TestClient(v1_app, raise_server_exceptions=False)
+
+    active = asyncio.run(
+        image_service.submit_image_job(
+            session_id="session_idempotent_replay",
+            prompt="An offline fake image",
+            idempotency_key="active-replay-key",
+        )
+    )
+    implicit = asyncio.run(
+        image_service.submit_image_job(
+            session_id="session_implicit_replay",
+            prompt="An offline implicit-key image",
+        )
+    )
+    capacity_retry = asyncio.run(
+        image_service.submit_image_job(
+            session_id="session_capacity_retry_http",
+            prompt="A retryable capacity failure",
+            idempotency_key="capacity-retry-http-key",
+        )
+    )
+    assert active.job.status == JobStatus.generating
+    assert implicit.job.idempotency_key
+    capacity_retry.job.status = JobStatus.failed
+    capacity_retry.job.error = ProviderError(
+        code="generation_capacity",
+        message="Image generation is busy. Please retry shortly.",
+        retryable=True,
+        detail={"retry_after_seconds": 5},
+    )
+    repository.save_job(capacity_retry.job)
+
+    active_payload = {
+        "session_id": active.job.session_id,
+        "prompt": "An offline fake image",
+        "idempotency_key": "active-replay-key",
+    }
+    implicit_payload = {
+        "session_id": implicit.job.session_id,
+        "prompt": "An offline implicit-key image",
+    }
+    with generation_capacity(tmp_path, limit=1):
+        active_replay = client.post("/v1/image/jobs", json=active_payload)
+        assert active_replay.status_code == 200
+        assert active_replay.json()["id"] == active.job.id
+        assert active_replay.json()["status"] == "generating"
+
+        implicit_replay = client.post("/v1/image/jobs", json=implicit_payload)
+        assert implicit_replay.status_code == 200
+        assert implicit_replay.json()["id"] == implicit.job.id
+
+        active.job.status = JobStatus.ready
+        repository.save_job(active.job)
+        terminal_replay = client.post("/v1/image/jobs", json=active_payload)
+        assert terminal_replay.status_code == 200
+        assert terminal_replay.json()["id"] == active.job.id
+        assert terminal_replay.json()["status"] == "ready"
+
+        changed_payload = {**active_payload, "prompt": "A different payload under the same key"}
+        collision = client.post("/v1/image/jobs", json=changed_payload)
+        assert collision.status_code == 200
+        assert collision.json()["id"] == active.job.id
+
+        retry_payload = {
+            "session_id": capacity_retry.job.session_id,
+            "prompt": "A retryable capacity failure",
+            "idempotency_key": "capacity-retry-http-key",
+        }
+        retry_replay = client.post("/v1/image/jobs", json=retry_payload)
+        assert retry_replay.status_code == 429
+        assert retry_replay.json()["detail"]["retryable"] is True
+        assert repository.get_job(capacity_retry.job.id).status == JobStatus.failed
+
+        new_request = client.post(
+            "/v1/image/jobs",
+            json={"session_id": "session_new_request", "prompt": "A genuinely new image", "idempotency_key": "new-key"},
+        )
+        assert new_request.status_code == 429
+        assert new_request.headers["retry-after"] == "5"
+        assert new_request.json()["detail"]["retryable"] is True
+    assert provider_calls == 0
+    repository.reset()
 
 
 def test_v1_provider_timeout_does_not_prove_remote_work_stopped(tmp_path: Path) -> None:
@@ -282,6 +637,408 @@ def _request_with_body(body: bytes, *, content_length: str | None = None) -> Req
     return Request(scope, receive)
 
 
+def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: Path, monkeypatch) -> None:
+    lease_ttl_seconds = 0.6
+    monkeypatch.setattr(main_module.media_store, "root", tmp_path)
+    monkeypatch.setattr(image_service.media_store, "root", tmp_path)
+    monkeypatch.setattr(image_service.settings, "llm_prompt_planning_enabled", False)
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        settings.model_copy(
+            update={
+                "veyra_auth_enabled": False,
+                "max_concurrent_image_generations": 1,
+                "generation_capacity_lease_ttl_seconds": lease_ttl_seconds,
+            }
+        ),
+    )
+    runner_started = asyncio.Event()
+    finish_provider = threading.Event()
+    timeline: list[str] = []
+
+    idempotency_key = f"prestart-cancel-{time.time_ns()}"
+    session_id = f"session-{idempotency_key}"
+
+    async def fake_run_submitted_image_job(job_id, *_args, **_kwargs):
+        async def fake_provider_operation():
+            def blocking_fake_provider() -> None:
+                timeline.append("runner-started")
+                runner_started.set()
+                if not finish_provider.wait(10):
+                    raise TimeoutError("offline fake provider was not released")
+                job = repository.get_job(job_id)
+                assert job is not None
+                job.status = JobStatus.ready
+                repository.save_job(job)
+
+            await asyncio.to_thread(blocking_fake_provider)
+
+        await capacity_module.run_with_existing_generation_capacity(fake_provider_operation)
+
+    monkeypatch.setattr(main_module, "run_submitted_image_job", fake_run_submitted_image_job)
+
+    database_path = tmp_path / ".v1-resource-admission.sqlite3"
+
+    def read_lease_row():
+        with sqlite3.connect(database_path) as connection:
+            return connection.execute(
+                "SELECT namespace, slot, owner_token, lease_until, heartbeat_at FROM resource_leases"
+            ).fetchone()
+
+    def delete_test_lease_rows():
+        if not database_path.exists():
+            return
+        with sqlite3.connect(database_path) as connection:
+            connection.execute("DELETE FROM resource_leases WHERE namespace = 'generation'")
+
+    async def exercise() -> None:
+        body_send_entered = asyncio.Event()
+        allow_body_send_to_return = asyncio.Event()
+        body_send_cancelled = asyncio.Event()
+
+        class ControlledResponseSend:
+            def __init__(self, app, *, entered, allow_to_return, cancelled):
+                self.app = app
+                self.entered = entered
+                self.allow_to_return = allow_to_return
+                self.cancelled = cancelled
+
+            async def __call__(self, scope, receive, send):
+                async def controlled_send(message):
+                    if message["type"] == "http.response.body" and not message.get("more_body", False):
+                        timeline.append("final-body-send-entered")
+                        self.entered.set()
+                        try:
+                            await self.allow_to_return.wait()
+                        except asyncio.CancelledError:
+                            self.cancelled.set()
+                            raise
+                        timeline.append("final-body-send-returned")
+                    await send(message)
+
+                await self.app(scope, receive, controlled_send)
+
+        from starlette.middleware import Middleware
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        # Keep the production API-access BaseHTTPMiddleware in the stack and
+        # insert this send barrier inside it, before Starlette runs response
+        # background tasks. An outer ASGI send barrier is too late here because
+        # the existing BaseHTTPMiddleware can emit the body before the socket send.
+        original_user_middleware = v1_app.user_middleware
+        assert any(middleware.cls is BaseHTTPMiddleware for middleware in original_user_middleware)
+        monkeypatch.setattr(
+            v1_app,
+            "user_middleware",
+            [
+                *original_user_middleware,
+                Middleware(
+                    ControlledResponseSend,
+                    entered=body_send_entered,
+                    allow_to_return=allow_body_send_to_return,
+                    cancelled=body_send_cancelled,
+                ),
+            ],
+        )
+        monkeypatch.setattr(v1_app, "middleware_stack", None)
+
+        async def send(_message):
+            return None
+
+        def request_body() -> bytes:
+            return (
+                f'{{"session_id":"{session_id}",'
+                '"prompt":"offline prestart cancellation",'
+                f'"idempotency_key":"{idempotency_key}"}}'
+            ).encode("utf-8")
+
+        def new_request():
+            messages = [{"type": "http.request", "body": request_body(), "more_body": False}]
+
+            async def receive():
+                if messages:
+                    return messages.pop(0)
+                await asyncio.Event().wait()
+
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 123),
+                "root_path": "",
+                "path": "/v1/image/jobs",
+                "raw_path": b"/v1/image/jobs",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "state": {},
+            }
+            return scope, receive
+
+        scope, receive = new_request()
+        request_task = asyncio.create_task(v1_app(scope, receive, send))
+        try:
+            await asyncio.wait_for(body_send_entered.wait(), timeout=3)
+            assert not runner_started.is_set(), timeline
+
+            first_row = read_lease_row()
+            assert first_row is not None
+            assert first_row[0:2] == ("generation", 0)
+            first_deadline, first_heartbeat = first_row[3:5]
+            assert first_deadline > time.time()
+
+            heartbeat_deadline = time.monotonic() + 2
+            latest_row = first_row
+            while latest_row[4] <= first_heartbeat and time.monotonic() < heartbeat_deadline:
+                await asyncio.sleep(0.025)
+                latest_row = read_lease_row()
+                assert latest_row is not None
+            assert latest_row[4] > first_heartbeat
+            assert latest_row[3] > first_deadline
+            assert not runner_started.is_set()
+
+            request_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request_task
+
+            assert body_send_cancelled.is_set()
+            assert not runner_started.is_set()
+            cancelled_job = repository.get_job_by_idempotency_key(idempotency_key)
+            assert cancelled_job is not None
+            assert cancelled_job.status == JobStatus.failed
+            assert cancelled_job.error is not None
+            assert cancelled_job.error.code == "request_cancelled_before_start"
+            assert cancelled_job.error.retryable is True
+            cancelled_context = scope["state"][main_module._V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY]
+            assert await cancelled_context["lease"].release_async() is True
+            assert read_lease_row() is None
+            try:
+                new_lease = await capacity_module.acquire_generation_capacity_async(
+                    tmp_path,
+                    limit=1,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                )
+            except GenerationCapacityExceeded as exc:
+                raise AssertionError(
+                    f"pre-start request cancellation left its SQLite lease active: {read_lease_row()!r}"
+                ) from exc
+            try:
+                row = read_lease_row()
+                assert row is not None
+                assert row[2] == new_lease.token
+            finally:
+                await new_lease.release_async()
+
+            # A retry with the same key reuses and resets the original job.
+            allow_body_send_to_return.set()
+            retry_scope, retry_receive = new_request()
+            retry_task = asyncio.create_task(v1_app(retry_scope, retry_receive, send))
+            try:
+                await asyncio.wait_for(runner_started.wait(), timeout=3)
+                retry_context = retry_scope["state"][main_module._V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY]
+                assert retry_context["runner_started"] is True
+                assert repository.get_job_by_idempotency_key(idempotency_key).id == cancelled_job.id
+
+                with sqlite3.connect(database_path) as connection:
+                    active_row = connection.execute(
+                        "SELECT owner_token FROM resource_leases WHERE namespace = 'generation'"
+                    ).fetchone()
+                assert active_row is not None
+                with pytest.raises(GenerationCapacityExceeded):
+                    await capacity_module.acquire_generation_capacity_async(
+                        tmp_path,
+                        limit=1,
+                        lease_ttl_seconds=lease_ttl_seconds,
+                    )
+
+                retry_task.cancel()
+                await asyncio.sleep(0.05)
+                assert not retry_task.done(), "ASGI cancellation released capacity while fake provider work was running"
+                assert read_lease_row() is not None
+                finish_provider.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await retry_task
+                completed_job = repository.get_job_by_idempotency_key(idempotency_key)
+                assert completed_job is not None
+                assert completed_job.id == cancelled_job.id
+                assert completed_job.status == JobStatus.ready
+                assert read_lease_row() is None
+                assert await retry_context["lease"].release_async() is True
+                assert read_lease_row() is None
+            finally:
+                finish_provider.set()
+                if not retry_task.done():
+                    retry_task.cancel()
+                await asyncio.gather(retry_task, return_exceptions=True)
+        finally:
+            finish_provider.set()
+            allow_body_send_to_return.set()
+            if not request_task.done():
+                request_task.cancel()
+            await asyncio.gather(request_task, return_exceptions=True)
+            delete_test_lease_rows()
+            await asyncio.sleep(max(0.05, lease_ttl_seconds / 3) + 0.05)
+            job = repository.get_job_by_idempotency_key(idempotency_key)
+            if job:
+                repository.idempotency_index.pop(idempotency_key, None)
+                repository.jobs.pop(job.id, None)
+                repository.events_by_session.pop(session_id, None)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("route", ["create", "revise"])
+@pytest.mark.parametrize("mode", ["normal", "send_failure", "after_start_cancel"])
+def test_v1_create_and_revise_lease_ownership_matrix(route: str, mode: str, monkeypatch) -> None:
+    from fastapi import BackgroundTasks
+    from app.schemas import CreateImageJobRequest, GenerationJob, ReviseImageRequest
+    from app.services.image_service import PreparedImageJob
+
+    idempotency_key = f"lease-matrix-{route}-{mode}-{time.time_ns()}"
+    job = GenerationJob(
+        id=f"job-{idempotency_key}",
+        session_id=f"session-{idempotency_key}",
+        job_type="image",
+        status=JobStatus.generating,
+        idempotency_key=idempotency_key,
+        trace_id=f"trace-{idempotency_key}",
+        created_at="2026-10-09T00:00:00Z",
+        updated_at="2026-10-09T00:00:00Z",
+    )
+    repository.save_job(job)
+
+    class CountingLease:
+        def __init__(self) -> None:
+            self.release_calls = 0
+            self.released = False
+
+        async def release_async(self) -> bool:
+            self.release_calls += 1
+            self.released = True
+            return True
+
+    lease = CountingLease()
+    runner_started = asyncio.Event()
+    finish_runner = asyncio.Event()
+
+    async def acquire_lease():
+        return lease
+
+    async def fake_submit(*_args, **_kwargs):
+        return PreparedImageJob(job=job, request=object())
+
+    async def fake_run_submitted_image_job(*_args, **_kwargs):
+        async def operation():
+            runner_started.set()
+            if mode == "after_start_cancel":
+                await finish_runner.wait()
+
+        await capacity_module.run_with_existing_generation_capacity(operation)
+
+    monkeypatch.setattr(main_module, "settings", settings.model_copy(update={"veyra_auth_enabled": False}))
+    monkeypatch.setattr(main_module, "_acquire_v1_request_capacity", acquire_lease)
+    monkeypatch.setattr(main_module, "_require_job_assets_visible", lambda *_args, **_kwargs: None)
+
+    async def allow_output(*_args, **_kwargs):
+        return {"authenticated": False, "user_id": None, "owner_id": None}
+
+    monkeypatch.setattr(main_module, "_require_output_visible", allow_output)
+    monkeypatch.setattr(main_module, "find_existing_image_job_for_request", lambda **_kwargs: None)
+    monkeypatch.setattr(main_module, "submit_image_job", fake_submit)
+    monkeypatch.setattr(main_module, "submit_revise_image_job", fake_submit)
+    monkeypatch.setattr(main_module, "run_submitted_image_job", fake_run_submitted_image_job)
+
+    async def exercise() -> None:
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        request = Request({"type": "http", "method": "POST", "path": "/test", "headers": [], "state": {}}, receive)
+        background_tasks = BackgroundTasks()
+        if route == "create":
+            await main_module.create_image_job_endpoint(
+                CreateImageJobRequest(session_id=job.session_id, prompt="offline prompt", idempotency_key=idempotency_key),
+                request,
+                background_tasks,
+            )
+        else:
+            await main_module.revise_image_job_endpoint(
+                job.id,
+                ReviseImageRequest(output_id="offline-output", feedback="offline revision"),
+                request,
+                background_tasks,
+            )
+
+        context = request.scope["state"][main_module._V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY]
+        assert context["job_id"] == job.id
+        assert context["runner_started"] is False
+        assert len(background_tasks.tasks) == 1
+
+        if mode == "send_failure":
+            async def response_app(_scope, _receive, send):
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"response"})
+
+            async def failing_send(message):
+                if message["type"] == "http.response.body":
+                    raise OSError("simulated response send failure")
+
+            middleware = main_module._V1RequestCapacityLeaseCleanupMiddleware(response_app)
+            with pytest.raises(OSError, match="simulated response send failure"):
+                await middleware(request.scope, receive, failing_send)
+            assert job.status == JobStatus.failed
+            assert job.error is not None
+            assert job.error.code == "request_cancelled_before_start"
+            assert job.error.retryable is True
+            assert lease.released is True
+            assert lease.release_calls == 1
+            with pytest.raises(OSError, match="simulated response send failure"):
+                await middleware(request.scope, receive, failing_send)
+            assert lease.release_calls == 2
+            assert job.error.code == "request_cancelled_before_start"
+            return
+
+        if mode == "normal":
+            await background_tasks()
+            assert runner_started.is_set()
+            assert context["runner_started"] is True
+            assert lease.released is True
+            assert lease.release_calls == 1
+            return
+
+        runner_task = asyncio.create_task(background_tasks())
+        try:
+            await asyncio.wait_for(runner_started.wait(), timeout=2)
+            assert context["runner_started"] is True
+            assert lease.released is False
+            runner_task.cancel()
+            await asyncio.sleep(0.02)
+            assert not runner_task.done(), "cancellation released the lease before the active runner ended"
+            assert lease.released is False
+            finish_runner.set()
+            with pytest.raises(asyncio.CancelledError):
+                await runner_task
+            assert lease.released is True
+            assert lease.release_calls == 1
+        finally:
+            finish_runner.set()
+            if not runner_task.done():
+                runner_task.cancel()
+            await asyncio.gather(runner_task, return_exceptions=True)
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        repository.idempotency_index.pop(idempotency_key, None)
+        repository.jobs.pop(job.id, None)
+        repository.events_by_session.pop(job.session_id, None)
+
+
 def test_v1_limited_body_rejects_oversized_declared_length_before_read() -> None:
     request = _request_with_body(b"ignored", content_length="9")
     with pytest.raises(HTTPException) as error:
@@ -312,15 +1069,219 @@ def test_lab_limits_active_sessions_and_releases_slot_on_completion(tmp_path: Pa
     monkeypatch.setattr(alchemy_lab, "_run_exploration_session_guarded", hold_session)
 
     async def exercise() -> None:
-        alchemy_lab._schedule_exploration_session("lab_active_1")
+        await alchemy_lab._schedule_exploration_session("lab_active_1")
         await asyncio.sleep(0)
         with pytest.raises(GenerationCapacityExceeded):
-            alchemy_lab._schedule_exploration_session("lab_active_2")
+            await alchemy_lab._schedule_exploration_session("lab_active_2")
         active = list(alchemy_lab._background_tasks)
         release.set()
         await asyncio.gather(*active)
         with generation_capacity(tmp_path, limit=1, namespace="lab-session"):
             pass
+
+    asyncio.run(exercise())
+
+
+def test_lab_prestart_cancellation_releases_lease_once(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(alchemy_lab.media_store, "root", tmp_path)
+    runner_started = asyncio.Event()
+
+    class CountingLease:
+        def __init__(self) -> None:
+            self.release_calls = 0
+
+        async def release_async(self) -> bool:
+            self.release_calls += 1
+            return True
+
+    async def hold_runner(*_args, **_kwargs):
+        runner_started.set()
+
+    monkeypatch.setattr(alchemy_lab, "_run_exploration_session_guarded", hold_runner)
+    lease = CountingLease()
+
+    async def exercise() -> None:
+        preexisting = set(alchemy_lab._background_tasks)
+        await alchemy_lab._schedule_exploration_session("lab_prestart_cancel", lease=lease)
+        runner = next(task for task in alchemy_lab._background_tasks if task not in preexisting)
+        runner.cancel()
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+        for _ in range(8):
+            cleanup_tasks = [task for task in alchemy_lab._background_tasks if task not in preexisting and task is not runner]
+            if cleanup_tasks:
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+            if lease.release_calls:
+                break
+            await asyncio.sleep(0)
+        assert not runner_started.is_set()
+        assert lease.release_calls == 1
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("exit_kind", ["normal", "error", "cancel_after_start"])
+def test_lab_started_session_releases_transferred_lease_once(tmp_path: Path, monkeypatch, exit_kind: str) -> None:
+    monkeypatch.setattr(alchemy_lab.media_store, "root", tmp_path)
+    runner_started = asyncio.Event()
+
+    class CountingLease:
+        def __init__(self) -> None:
+            self.release_calls = 0
+
+        async def release_async(self) -> bool:
+            self.release_calls += 1
+            return True
+
+    async def runner(*_args, **_kwargs):
+        runner_started.set()
+        if exit_kind == "error":
+            raise RuntimeError("offline runner failure")
+        if exit_kind == "cancel_after_start":
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(alchemy_lab, "_run_exploration_session_guarded", runner)
+    lease = CountingLease()
+
+    async def exercise() -> None:
+        preexisting = set(alchemy_lab._background_tasks)
+        await alchemy_lab._schedule_exploration_session(f"lab_started_{exit_kind}", lease=lease)
+        session_task = next(task for task in alchemy_lab._background_tasks if task not in preexisting)
+        if exit_kind == "error":
+            with pytest.raises(RuntimeError, match="offline runner failure"):
+                await session_task
+        elif exit_kind == "cancel_after_start":
+            await asyncio.wait_for(runner_started.wait(), timeout=1)
+            session_task.cancel()
+            session_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await session_task
+        else:
+            await session_task
+        assert runner_started.is_set()
+        assert lease.release_calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_lab_capacity_is_acquired_before_intent_planning_and_released_on_error(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(alchemy_lab.media_store, "root", tmp_path)
+    preflight_started = threading.Event()
+    continue_preflight = threading.Event()
+    prepare_calls = 0
+    fail_prepare = False
+
+    async def prepare(_request, *, veyra_user_id=None):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        if prepare_calls == 1:
+            preflight_started.set()
+            assert await asyncio.to_thread(continue_preflight.wait, 3)
+        if fail_prepare:
+            raise RuntimeError("offline planner failure")
+        return SimpleNamespace(id=f"lab_preflight_{prepare_calls}", request=_request)
+
+    async def run_inline(session_id, *, veyra_user_id=None):
+        return SimpleNamespace(id=session_id)
+
+    monkeypatch.setattr(alchemy_lab, "prepare_exploration_session", prepare)
+    monkeypatch.setattr(alchemy_lab, "_should_run_inline", lambda _request: True)
+    monkeypatch.setattr(alchemy_lab, "run_exploration_session", run_inline)
+    request = alchemy_lab.ExplorationRequest(idea="offline Lab capacity test", target_count=1)
+
+    async def exercise() -> None:
+        first = asyncio.create_task(alchemy_lab.create_exploration_session(request))
+        assert await asyncio.to_thread(preflight_started.wait, 2)
+        with pytest.raises(alchemy_lab.LabSessionCapacityExceeded):
+            await alchemy_lab.create_exploration_session(request)
+        assert prepare_calls == 1
+        continue_preflight.set()
+        assert (await first).id == "lab_preflight_1"
+
+        nonlocal fail_prepare
+        fail_prepare = True
+        with pytest.raises(RuntimeError, match="offline planner failure"):
+            await alchemy_lab.create_exploration_session(request)
+        with generation_capacity(tmp_path, limit=1, namespace="lab-session"):
+            pass
+
+    asyncio.run(exercise())
+
+
+def test_lab_rejects_oversized_style_selection_before_capacity_admission(monkeypatch) -> None:
+    request = alchemy_lab.ExplorationRequest(
+        idea="offline Lab validation test",
+        selected_style_ids=[f"style_{index}" for index in range(alchemy_lab.MAX_SELECTED_STYLES + 1)],
+    )
+
+    async def unexpected_capacity_acquisition(*_args, **_kwargs):
+        raise AssertionError("invalid request must be rejected before acquiring capacity")
+
+    monkeypatch.setattr(alchemy_lab, "acquire_generation_capacity_async", unexpected_capacity_acquisition)
+
+    with pytest.raises(ValueError, match="Choose no more than"):
+        asyncio.run(alchemy_lab.create_exploration_session(request))
+
+
+def test_lab_rejects_unknown_explicit_style_before_capacity_admission(monkeypatch) -> None:
+    request = alchemy_lab.ExplorationRequest(
+        idea="offline Lab validation test",
+        style_id="unknown-style-id",
+    )
+
+    async def unexpected_capacity_acquisition(*_args, **_kwargs):
+        raise AssertionError("invalid request must be rejected before acquiring capacity")
+
+    monkeypatch.setattr(alchemy_lab, "acquire_generation_capacity_async", unexpected_capacity_acquisition)
+
+    with pytest.raises(ValueError, match="Unknown style preset"):
+        asyncio.run(alchemy_lab.create_exploration_session(request))
+
+
+def test_lab_history_route_offloads_and_rejects_when_scan_capacity_is_full(monkeypatch) -> None:
+    from app.main import list_alchemy_lab_history
+    from starlette.requests import Request
+
+    monkeypatch.setattr(history_scan_module, "_slots", threading.BoundedSemaphore(1))
+    started = threading.Event()
+    finish = threading.Event()
+    observed: list[tuple[int | None, bool, int]] = []
+
+    def slow_history(*, limit, include_mock, veyra_user_id, is_admin):
+        observed.append((veyra_user_id, is_admin, threading.get_ident()))
+        started.set()
+        assert finish.wait(5)
+        return {"items": [], "total": limit}
+
+    async def history_context(_request, _authorization):
+        return {"user_id": 23, "is_admin": False}
+
+    monkeypatch.setattr(main_module, "list_lab_history", slow_history)
+    monkeypatch.setattr(main_module, "_veyra_history_context", history_context)
+    request = Request({"type": "http", "method": "GET", "path": "/api/lab/history", "headers": []})
+
+    async def exercise() -> None:
+        event_loop_thread = threading.get_ident()
+        first = asyncio.create_task(
+            list_alchemy_lab_history(request, limit=80, include_mock=True, authorization="test")
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        loop_ticked = asyncio.Event()
+        asyncio.get_running_loop().call_soon(loop_ticked.set)
+        await asyncio.wait_for(loop_ticked.wait(), timeout=1)
+        with pytest.raises(HTTPException) as full:
+            await list_alchemy_lab_history(request, limit=80, include_mock=True, authorization="test")
+        assert full.value.status_code == 429
+        assert full.value.detail["retryable"] is True
+        finish.set()
+        response = await first
+        assert response == {"items": [], "total": 80}
+        assert len(observed) == 1
+        assert observed[0][:2] == (23, False)
+        assert observed[0][2] != event_loop_thread
 
     asyncio.run(exercise())
 

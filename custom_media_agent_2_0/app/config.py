@@ -92,8 +92,10 @@ class Settings:
     task_queue_inline_worker_enabled: bool = True
     task_queue_poll_interval_seconds: float = 1.0
     task_queue_claim_timeout_seconds: float = 900.0
+    task_queue_busy_timeout_seconds: float = 5.0
     task_queue_max_attempts: int = 3
     task_queue_max_pending: int = 100
+    resource_db_async_workers: int = 4
     history_scan_max_concurrent: int = 2
     max_concurrent_image_generations: int = 1
     generation_capacity_lease_ttl_seconds: float = 960.0
@@ -252,8 +254,10 @@ def load_settings() -> Settings:
         in {"1", "true", "yes", "on"},
         task_queue_poll_interval_seconds=float(os.getenv("V2_TASK_QUEUE_POLL_INTERVAL_SECONDS", "1.0")),
         task_queue_claim_timeout_seconds=float(os.getenv("V2_TASK_QUEUE_CLAIM_TIMEOUT_SECONDS", "900")),
+        task_queue_busy_timeout_seconds=max(0.1, min(30.0, float(os.getenv("V2_TASK_QUEUE_SQLITE_BUSY_TIMEOUT_SECONDS", "5")))),
         task_queue_max_attempts=max(1, int(os.getenv("V2_TASK_QUEUE_MAX_ATTEMPTS", "3"))),
         task_queue_max_pending=max(1, int(os.getenv("V2_TASK_QUEUE_MAX_PENDING", "100"))),
+        resource_db_async_workers=max(1, min(16, int(os.getenv("RESOURCE_DB_ASYNC_WORKERS", "4")))),
         history_scan_max_concurrent=max(1, min(16, int(os.getenv("V2_HISTORY_SCAN_MAX_CONCURRENT", "2")))),
         max_concurrent_image_generations=max(1, min(32, int(os.getenv("V2_MAX_CONCURRENT_IMAGE_GENERATIONS", "1")))),
         generation_capacity_lease_ttl_seconds=max(

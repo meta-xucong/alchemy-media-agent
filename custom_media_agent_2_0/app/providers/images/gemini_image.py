@@ -10,6 +10,7 @@ from urllib.parse import quote
 import httpx
 
 from app.config import settings
+from app.providers.images.claim_fenced_http import claim_fenced_async_client
 from app.providers.images.base import (
     V2ImageProviderCapabilities,
     V2ImageProviderNotConfiguredError,
@@ -91,7 +92,7 @@ class V2GeminiImageProvider:
         timeout = httpx.Timeout(settings.gemini_image_timeout_seconds, connect=30.0)
         attempts: list[dict[str, Any]] = []
         data: dict[str, Any] | None = None
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with claim_fenced_async_client(timeout=timeout, follow_redirects=True) as client:
             response: httpx.Response | None = None
             for url, model in _generate_content_candidates():
                 try:

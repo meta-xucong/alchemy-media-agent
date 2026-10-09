@@ -74,6 +74,7 @@ from app.services.asset_service import complete_asset_upload, create_asset_mask,
 from app.services.alchemy_lab import (
     LAB_PROJECT_ID,
     LabSessionCapacityExceeded,
+    LabSessionStorageBusy,
     ExplorationRequest,
     FavoriteSelection,
     comparison_board,
@@ -98,8 +99,18 @@ from app.services.alchemy_lab_uploads_models import CreateLabUploadRequest, LabA
 from app.services.events import format_sse_events
 from app.services.access_bridge import build_access_headers
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
-from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
-from app.services.generation_capacity import GenerationCapacityExceeded, generation_capacity
+from app.services.image_service import (
+    find_existing_image_job_for_request,
+    mark_image_job_retryable_before_start,
+    run_submitted_image_job,
+    submit_image_job,
+    submit_revise_image_job,
+)
+from app.services.generation_capacity import (
+    GenerationCapacityExceeded,
+    GenerationCapacityStorageBusy,
+    acquire_generation_capacity_async,
+)
 from app.services.history_scan_capacity import run_history_scan
 from app.services.media_acceleration import signed_output_url as signed_v1_output_url
 from app.services.retention_settings import get_retention_settings, save_retention_settings
@@ -122,6 +133,40 @@ from app.runtime_paths import (
 )
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
+
+
+_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY = "_v1_request_capacity_lease"
+
+
+class _V1RequestCapacityLeaseCleanupMiddleware:
+    """Reconcile a submitted V1 job if ASGI delivery ends before its runner starts."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await self.app(scope, receive, send)
+        except BaseException:
+            context = scope.get("state", {}).get(_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY)
+            if context is not None and not context["runner_started"]:
+                job_id = context["job_id"]
+                if job_id:
+                    try:
+                        mark_image_job_retryable_before_start(job_id)
+                    except Exception:
+                        logger.exception("Could not mark V1 image job retryable after pre-start request failure")
+                try:
+                    await context["lease"].release_async()
+                except Exception:
+                    logger.exception("Could not release V1 generation lease after pre-start request failure")
+            raise
+
+
+# The access middleware is installed below and wraps this ASGI cleanup guard.
+# Keep the guard inside it so cancellation during response transmission can
+# still release a lease whose Starlette background task has not started.
+app.add_middleware(_V1RequestCapacityLeaseCleanupMiddleware)
 logger = logging.getLogger(__name__)
 
 
@@ -2289,7 +2334,13 @@ async def list_alchemy_lab_history(
 ):
     context = await _veyra_history_context(request, authorization)
     limit = min(limit, 200)
-    return list_lab_history(limit=limit, include_mock=include_mock, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
+    return await run_history_scan(
+        list_lab_history,
+        limit=limit,
+        include_mock=include_mock,
+        veyra_user_id=context.get("user_id"),
+        is_admin=context.get("is_admin", False),
+    )
 
 
 @app.post("/api/lab/uploads")
@@ -2365,6 +2416,12 @@ async def create_rare_style_explorer_session(
             status_code=429,
             headers={"Retry-After": "5"},
             detail={"code": "lab_capacity", "message": str(exc), "retryable": True, "retry_after_seconds": 5},
+        ) from exc
+    except LabSessionStorageBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            detail={"code": "local_database_busy", "message": str(exc), "retryable": True, "retry_after_seconds": 5},
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "invalid_exploration_request", "message": str(exc)}) from exc
@@ -2902,7 +2959,12 @@ def create_session_endpoint(body: CreateSessionRequest, request: Request, author
 @app.post("/v1/sessions/{session_id}/messages")
 async def send_message(session_id: str, body: MessageRequest, request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
-    return await handle_message(session_id, body)
+    try:
+        return await handle_message(session_id, body)
+    except GenerationCapacityExceeded as exc:
+        raise _v1_generation_capacity_http_error() from exc
+    except GenerationCapacityStorageBusy as exc:
+        raise _v1_local_database_busy_http_error() from exc
 
 
 @app.get("/v1/sessions/{session_id}/events")
@@ -3031,7 +3093,28 @@ async def create_image_job_endpoint(
 ):
     user_id = _veyra_user_id_from_request(request, authorization)
     _require_job_assets_visible(request, body.asset_ids, body.asset_intents, authorization)
-    lease = _acquire_v1_request_capacity()
+    existing = find_existing_image_job_for_request(
+        session_id=body.session_id,
+        prompt=body.prompt,
+        asset_mode=body.asset_mode,
+        asset_ids=body.asset_ids,
+        asset_intents=body.asset_intents,
+        count=body.count,
+        size=body.size,
+        quality=body.quality,
+        output_format=body.output_format,
+        background=body.background,
+        moderation=body.moderation,
+        output_compression=body.output_compression,
+        work_intensity=body.work_intensity,
+        provider_preference=body.provider_preference,
+        idempotency_key=body.idempotency_key,
+        veyra_user_id=user_id,
+    )
+    if existing:
+        return existing
+    lease = await _acquire_v1_request_capacity()
+    capacity_context = _track_v1_request_capacity_lease(request, lease)
     transferred = False
     try:
         prepared = await submit_image_job(
@@ -3053,32 +3136,77 @@ async def create_image_job_endpoint(
             veyra_user_id=user_id,
         )
         if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
-            background_tasks.add_task(_run_submitted_image_job_with_lease, lease, prepared.job.id, prepared.request, edit=prepared.edit)
+            capacity_context["job_id"] = prepared.job.id
+            background_tasks.add_task(
+                _run_submitted_image_job_with_lease,
+                lease,
+                prepared.job.id,
+                prepared.request,
+                request_context=capacity_context,
+                edit=prepared.edit,
+            )
             transferred = True
         return prepared.job
     finally:
         if not transferred:
-            lease.__exit__(None, None, None)
+            await lease.release_async()
 
 
-def _acquire_v1_request_capacity():
-    lease = generation_capacity(
-        media_store.root,
-        limit=settings.max_concurrent_image_generations,
-        lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
-    )
+async def _acquire_v1_request_capacity():
     try:
-        lease.__enter__()
+        return await acquire_generation_capacity_async(
+            media_store.root,
+            limit=settings.max_concurrent_image_generations,
+            lease_ttl_seconds=settings.generation_capacity_lease_ttl_seconds,
+        )
     except GenerationCapacityExceeded as exc:
-        raise HTTPException(
-            status_code=429,
-            headers={"Retry-After": "5"},
-            detail={"code": "generation_capacity", "message": "Image generation is busy. Please retry shortly.", "retryable": True, "retry_after_seconds": 5},
-        ) from exc
-    return lease
+        raise _v1_generation_capacity_http_error() from exc
+    except GenerationCapacityStorageBusy as exc:
+        raise _v1_local_database_busy_http_error() from exc
 
 
-async def _run_submitted_image_job_with_lease(lease, job_id, image_request, *, edit: bool = False):
+def _track_v1_request_capacity_lease(request: Request, lease) -> dict[str, object]:
+    context: dict[str, object] = {"lease": lease, "job_id": None, "runner_started": False}
+    request.scope.setdefault("state", {})[_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY] = context
+    return context
+
+
+def _v1_generation_capacity_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": "5"},
+        detail={
+            "code": "generation_capacity",
+            "message": "Image generation is busy. Please retry shortly.",
+            "retryable": True,
+            "retry_after_seconds": 5,
+        },
+    )
+
+
+def _v1_local_database_busy_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        headers={"Retry-After": "5"},
+        detail={
+            "code": "local_database_busy",
+            "message": "Local image work storage is busy. Please retry shortly.",
+            "retryable": True,
+            "retry_after_seconds": 5,
+        },
+    )
+
+
+async def _run_submitted_image_job_with_lease(
+    lease,
+    job_id,
+    image_request,
+    *,
+    request_context: dict[str, object] | None = None,
+    edit: bool = False,
+):
+    if request_context is not None:
+        request_context["runner_started"] = True
     try:
         return await run_submitted_image_job(
             job_id,
@@ -3087,7 +3215,7 @@ async def _run_submitted_image_job_with_lease(lease, job_id, image_request, *, e
             capacity_already_acquired=True,
         )
     finally:
-        lease.__exit__(None, None, None)
+        await lease.release_async()
 
 
 def _list_image_history_sync(
@@ -3268,19 +3396,28 @@ async def revise_image_job_endpoint(
     authorization: str = Header(default=""),
 ):
     await _require_output_visible(request, body.output_id, authorization, allow_legacy_public=True)
-    lease = _acquire_v1_request_capacity()
+    lease = await _acquire_v1_request_capacity()
+    capacity_context = _track_v1_request_capacity_lease(request, lease)
     transferred = False
     try:
         prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
         if not prepared:
             raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
         if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
-            background_tasks.add_task(_run_submitted_image_job_with_lease, lease, prepared.job.id, prepared.request, edit=prepared.edit)
+            capacity_context["job_id"] = prepared.job.id
+            background_tasks.add_task(
+                _run_submitted_image_job_with_lease,
+                lease,
+                prepared.job.id,
+                prepared.request,
+                request_context=capacity_context,
+                edit=prepared.edit,
+            )
             transferred = True
         return prepared.job
     finally:
         if not transferred:
-            lease.__exit__(None, None, None)
+            await lease.release_async()
 
 
 @app.get("/v1/providers")
