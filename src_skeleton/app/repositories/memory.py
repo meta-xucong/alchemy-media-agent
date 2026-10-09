@@ -207,17 +207,20 @@ class MemoryRepository:
                     owner_conflict = bool(history_evidence[1])
                     resolved_owner_id = self._positive_owner_id(history_evidence[0])
                 if resolved_owner_id is None and not owner_conflict:
-                    job_rows = connection.execute(
-                        "SELECT payload FROM v1_records WHERE namespace='jobs'"
-                    ).fetchall()
                     observed_owners: set[int] = set()
-                    for row in job_rows:
-                        job = GenerationJob.model_validate_json(row[0])
-                        for nested in job.outputs:
-                            if nested.id == output_id:
-                                nested_owner_id = self._output_owner_id(nested)
-                                if nested_owner_id is not None:
-                                    observed_owners.add(nested_owner_id)
+                    job_cursor = connection.execute(
+                        "SELECT payload FROM v1_records WHERE namespace='jobs'"
+                    )
+                    try:
+                        while row := job_cursor.fetchone():
+                            job = GenerationJob.model_validate_json(row[0])
+                            for nested in job.outputs:
+                                if nested.id == output_id:
+                                    nested_owner_id = self._output_owner_id(nested)
+                                    if nested_owner_id is not None:
+                                        observed_owners.add(nested_owner_id)
+                    finally:
+                        job_cursor.close()
                     if len(observed_owners) > 1:
                         owner_conflict = True
                     elif observed_owners:
@@ -332,9 +335,27 @@ class MemoryRepository:
     def iter_jobs(self, *, job_type: str | None = None, session_id: str | None = None) -> Iterator[GenerationJob]:
         yield from self.jobs.iter_jobs(job_type=job_type, session_id=session_id)
 
-    def get_job_by_idempotency_key(self, idempotency_key: str | None) -> GenerationJob | None:
+    def get_job_by_idempotency_key(
+        self,
+        idempotency_key: str | None,
+        *,
+        session_id: str | None = None,
+        owner_id: int | None = None,
+    ) -> GenerationJob | None:
         if not idempotency_key:
             return None
+        if session_id is not None:
+            # Do not trust the legacy global idempotency map for a scoped replay.
+            # Old plain keys remain compatible only when the persisted Job's
+            # session and that session's immutable owner match this request.
+            job = self.jobs.get_job_by_idempotency_key(idempotency_key, session_id=session_id)
+            if job is None or job.session_id != session_id:
+                return None
+            if owner_id is not None:
+                session = self.get_session(session_id)
+                if session is None or self._positive_owner_id(session.veyra_user_id) != self._positive_owner_id(owner_id):
+                    return None
+            return job
         job_id = self.idempotency_index.get(idempotency_key)
         return self.jobs.get(job_id) if job_id else self.jobs.get_job_by_idempotency_key(idempotency_key)
 

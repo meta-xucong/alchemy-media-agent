@@ -16,6 +16,7 @@ from starlette.requests import Request
 
 from app import main
 from app.repositories import repository
+from app.repositories import memory as memory_repository_module
 from app.repositories.sqlite_calls import SQLiteStorageBusy, sqlite_calls
 from app.schemas import GenerationJob, GenerationOutput, JobStatus, Session
 from app.services.favorites import list_favorite_ids, set_favorite
@@ -460,6 +461,100 @@ def test_v1_delete_claim_serializes_same_owner_attempts_and_allows_retry(tmp_pat
         owner_id=41,
         attempt_id=retry["attempt_id"],
     )
+    assert repository.get_output_delete_claim(output_id) is None
+
+
+def test_v1_ownerless_delete_claim_streams_job_owner_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    output_id = "out_ownerless_stream_probe"
+    target_job_id = "job_ownerless_stream_target"
+    now = datetime.now(timezone.utc).isoformat()
+    repository.outputs[output_id] = GenerationOutput(
+        id=output_id,
+        job_id=target_job_id,
+        url=f"/v1/outputs/{output_id}/download",
+        metadata={},
+    )
+    repository.jobs[target_job_id] = GenerationJob(
+        id=target_job_id,
+        session_id="session_ownerless_stream_target",
+        job_type="image",
+        status=JobStatus.ready,
+        trace_id="trace_ownerless_stream_target",
+        created_at=now,
+        updated_at=now,
+        outputs=[GenerationOutput(
+            id=output_id,
+            job_id=target_job_id,
+            url=f"/v1/outputs/{output_id}/download",
+            metadata={"veyra_user_id": 41},
+        )],
+    )
+    repository.jobs["job_ownerless_stream_conflict"] = GenerationJob(
+        id="job_ownerless_stream_conflict",
+        session_id="session_ownerless_stream_conflict",
+        job_type="image",
+        status=JobStatus.ready,
+        trace_id="trace_ownerless_stream_conflict",
+        created_at=now,
+        updated_at=now,
+        outputs=[GenerationOutput(
+            id=output_id,
+            job_id="job_ownerless_stream_conflict",
+            url=f"/v1/outputs/{output_id}/download",
+            metadata={"veyra_user_id": 77},
+        )],
+    )
+
+    scan = {"fetchall": 0, "fetchone": 0}
+    real_connect = memory_repository_module.connect
+
+    class CursorSpy:
+        def __init__(self, cursor, *, track):
+            self._cursor = cursor
+            self._track = track
+
+        def fetchall(self):
+            if self._track:
+                scan["fetchall"] += 1
+            return self._cursor.fetchall()
+
+        def fetchone(self):
+            if self._track:
+                scan["fetchone"] += 1
+            return self._cursor.fetchone()
+
+        def __getattr__(self, name):
+            return getattr(self._cursor, name)
+
+    class ConnectionSpy:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, parameters=()):
+            cursor = self._connection.execute(sql, parameters)
+            track = "SELECT payload FROM v1_records WHERE namespace='jobs'" in sql
+            return CursorSpy(cursor, track=track)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    monkeypatch.setattr(
+        memory_repository_module,
+        "connect",
+        lambda database_path: ConnectionSpy(real_connect(database_path)),
+    )
+    claim = repository.begin_output_delete_claim(
+        output_id,
+        owner_id=41,
+        canonical_job_id=target_job_id,
+        event_job_id=None,
+    )
+
+    assert claim is None
+    assert scan["fetchall"] == 0
+    assert scan["fetchone"] == 3
     assert repository.get_output_delete_claim(output_id) is None
 
 

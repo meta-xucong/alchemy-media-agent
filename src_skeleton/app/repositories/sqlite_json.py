@@ -138,14 +138,21 @@ class SQLiteJsonMap(MutableMapping[str, T], Generic[T]):
         finally:
             connection.close()
 
-    def get_job_by_idempotency_key(self, key: str) -> T | None:
+    def get_job_by_idempotency_key(self, key: str, *, session_id: str | None = None) -> T | None:
         connection = self._connect()
         try:
-            row = connection.execute(
-                "SELECT payload FROM v1_records WHERE namespace=? AND idempotency_key=? "
-                "ORDER BY sort_at DESC LIMIT 1",
-                (self._namespace, key),
-            ).fetchone()
+            if session_id is None:
+                row = connection.execute(
+                    "SELECT payload FROM v1_records WHERE namespace=? AND idempotency_key=? "
+                    "ORDER BY sort_at DESC LIMIT 1",
+                    (self._namespace, key),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT payload FROM v1_records WHERE namespace=? AND idempotency_key=? AND session_id=? "
+                    "ORDER BY sort_at DESC LIMIT 1",
+                    (self._namespace, key, session_id),
+                ).fetchone()
         finally:
             connection.close()
         return self._validator(row["payload"]) if row else None
@@ -235,6 +242,10 @@ def connect(database_path: Path) -> sqlite3.Connection:
                     )
                     connection.execute(
                         "CREATE INDEX IF NOT EXISTS v1_records_idem_idx ON v1_records(namespace, idempotency_key)"
+                    )
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS v1_records_scoped_idem_idx "
+                        "ON v1_records(namespace, idempotency_key, session_id)"
                     )
                     connection.execute(
                         """CREATE TABLE IF NOT EXISTS v1_events (

@@ -148,6 +148,22 @@ async def submit_image_job(
             "variables": variables,
         }
     )
+    key = idempotency_key or _idempotency_key(
+        session_id,
+        prompt_plan.model_dump_json(),
+        asset_ids,
+        provider_preference,
+        work_intensity,
+        asset_mode,
+    )
+    existing = repository.get_job_by_idempotency_key(
+        key,
+        session_id=session_id,
+        owner_id=veyra_user_id,
+    )
+    if existing:
+        return PreparedImageJob(existing)
+
     trace_id = make_id("trace")
     created_at = now_iso()
     job = GenerationJob(
@@ -158,7 +174,7 @@ async def submit_image_job(
         asset_mode=asset_mode,
         asset_plan=advanced_asset_plan,
         prompt_plan=prompt_plan,
-        idempotency_key=idempotency_key,
+        idempotency_key=key,
         trace_id=trace_id,
         created_at=created_at,
         updated_at=created_at,
@@ -180,18 +196,6 @@ async def submit_image_job(
         job.updated_at = now_iso()
         return PreparedImageJob(repository.save_job(job))
 
-    key = idempotency_key or _idempotency_key(
-        session_id,
-        prompt_plan.model_dump_json(),
-        asset_ids,
-        provider_preference,
-        work_intensity,
-        asset_mode,
-    )
-    existing = repository.get_job_by_idempotency_key(key)
-    if existing:
-        return PreparedImageJob(existing)
-    job.idempotency_key = key
     job.status = JobStatus.generating
     job.provenance = {
         "asset_mode": asset_mode,
@@ -282,6 +286,14 @@ async def create_image_job(
         output_compression=output_compression,
         asset_ids=asset_ids,
     )
+    if idempotency_key:
+        existing = repository.get_job_by_idempotency_key(
+            idempotency_key,
+            session_id=session_id,
+            owner_id=veyra_user_id,
+        )
+        if existing:
+            return existing
     trace_id = make_id("trace")
     created_at = now_iso()
     job = GenerationJob(
@@ -298,6 +310,18 @@ async def create_image_job(
         updated_at=created_at,
     )
     if asset_error:
+        key = idempotency_key or _idempotency_key(
+            session_id,
+            prompt_plan.model_dump_json(),
+            asset_ids,
+            provider_preference,
+            work_intensity,
+            asset_mode,
+        )
+        existing = repository.get_job_by_idempotency_key(key, session_id=session_id, owner_id=veyra_user_id)
+        if existing:
+            return existing
+        job.idempotency_key = key
         job.status = JobStatus.failed
         job.error = ProviderError(
             code=asset_error.code,
@@ -309,6 +333,18 @@ async def create_image_job(
 
     safety_error = check_generation_prompt(prompt)
     if safety_error:
+        key = idempotency_key or _idempotency_key(
+            session_id,
+            prompt_plan.model_dump_json(),
+            asset_ids,
+            provider_preference,
+            work_intensity,
+            asset_mode,
+        )
+        existing = repository.get_job_by_idempotency_key(key, session_id=session_id, owner_id=veyra_user_id)
+        if existing:
+            return existing
+        job.idempotency_key = key
         job.status = JobStatus.rejected
         job.error = safety_error
         job.updated_at = now_iso()
@@ -350,7 +386,7 @@ async def create_image_job(
         work_intensity,
         asset_mode,
     )
-    existing = repository.get_job_by_idempotency_key(key)
+    existing = repository.get_job_by_idempotency_key(key, session_id=session_id, owner_id=veyra_user_id)
     if existing:
         return existing
     job.idempotency_key = key
