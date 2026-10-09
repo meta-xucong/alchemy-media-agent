@@ -3239,13 +3239,299 @@ def test_v1_history_duplicate_owner_cannot_fall_back_to_public_filesystem_record
         admin_token = _issue_test_veyra_session_token(99)
         other_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
         admin_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {admin_token}"})
+        other_download = client.get(
+            f"/v1/outputs/{output_id}/download",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
 
         assert other_history.status_code == 200
         assert output_id not in {item["id"] for item in other_history.json()["items"]}
+        assert other_download.status_code == 403
         assert admin_history.status_code == 200
         admin_item = next(item for item in admin_history.json()["items"] if item["id"] == output_id)
         assert admin_item["veyra_user_id"] == 41
         assert admin_item["job_id"] == source_job_id
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+@pytest.mark.parametrize("private_first", [True, False])
+def test_v1_history_repository_duplicate_owner_cannot_become_public(tmp_path, monkeypatch, private_first):
+    from datetime import datetime, timezone
+
+    from app.schemas import GenerationJob, GenerationOutput, JobStatus
+
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        role = "admin" if user_id == 99 else "user"
+        return type("Account", (), {"user_id": user_id, "role": role})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+    output_id = "out_duplicate_repository_owner"
+    now = datetime.now(timezone.utc).isoformat()
+
+    def job(job_id: str, owner_id: int | None) -> GenerationJob:
+        return GenerationJob(
+            id=job_id,
+            job_type="image",
+            status=JobStatus.ready,
+            trace_id=f"trace_{job_id}",
+            created_at=now,
+            updated_at=now,
+            outputs=[
+                GenerationOutput(
+                    id=output_id,
+                    job_id=job_id,
+                    url=f"/v1/outputs/{output_id}/download",
+                    metadata={"veyra_user_id": owner_id} if owner_id is not None else {},
+                )
+            ],
+        )
+
+    private_job = job("job_private_duplicate", 41)
+    public_job = job("job_ownerless_duplicate", None)
+    for item in ((private_job, public_job) if private_first else (public_job, private_job)):
+        repository.save_job(item)
+    with pytest.raises(ValueError, match="cannot be reassigned"):
+        repository.save_job(job("job_conflicting_duplicate", 77))
+    assert main_module._v1_output_owner_id(output_id) == 41
+
+    try:
+        client = TestClient(app)
+        other_token = _issue_test_veyra_session_token(77)
+        admin_token = _issue_test_veyra_session_token(99)
+        other_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        admin_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {admin_token}"})
+        other_download = client.get(
+            f"/v1/outputs/{output_id}/download",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+
+        assert other_history.status_code == 200
+        assert output_id not in {item["id"] for item in other_history.json()["items"]}
+        assert other_download.status_code == 403
+        assert admin_history.status_code == 200
+        admin_items = [item for item in admin_history.json()["items"] if item["id"] == output_id]
+        assert len(admin_items) == 1
+        assert admin_items[0]["veyra_user_id"] == 41
+        assert admin_items[0]["job_id"] == private_job.id
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_same_job_ownerless_update_keeps_private_owner_in_history_projection(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from app.schemas import GenerationJob, GenerationOutput, JobStatus
+
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        role = "admin" if user_id == 99 else "user"
+        return type("Account", (), {"user_id": user_id, "role": role})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+    output_id = "out_same_job_owner_update"
+    job_id = "job_same_job_owner_update"
+    now = datetime.now(timezone.utc).isoformat()
+    private_output = GenerationOutput(
+        id=output_id,
+        job_id=job_id,
+        url=f"/v1/outputs/{output_id}/download",
+        metadata={"veyra_user_id": 41},
+    )
+    private_job = GenerationJob(
+        id=job_id,
+        job_type="image",
+        status=JobStatus.ready,
+        trace_id="trace_same_job_owner_update",
+        created_at=now,
+        updated_at=now,
+        outputs=[private_output],
+    )
+    repository.save_job(private_job)
+
+    ownerless_update = private_job.model_copy(
+        update={
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "outputs": [private_output.model_copy(update={"metadata": {}})],
+        }
+    )
+    repository.save_job(ownerless_update)
+
+    # Both durable representations must retain the established owner because
+    # history projection reads outputs nested in the Job record.
+    assert repository.get_output(output_id).metadata["veyra_user_id"] == 41
+    assert repository.get_job(job_id).outputs[0].metadata["veyra_user_id"] == 41
+
+    try:
+        client = TestClient(app)
+        other_token = _issue_test_veyra_session_token(77)
+        owner_token = _issue_test_veyra_session_token(41)
+        admin_token = _issue_test_veyra_session_token(99)
+
+        other_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        owner_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {owner_token}"})
+        admin_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {admin_token}"})
+
+        assert other_history.status_code == 200
+        assert output_id not in {item["id"] for item in other_history.json()["items"]}
+        assert owner_history.status_code == 200
+        owner_items = [item for item in owner_history.json()["items"] if item["id"] == output_id]
+        assert len(owner_items) == 1
+        assert owner_items[0]["veyra_user_id"] == 41
+        assert admin_history.status_code == 200
+        admin_items = [item for item in admin_history.json()["items"] if item["id"] == output_id]
+        assert len(admin_items) == 1
+        assert admin_items[0]["veyra_user_id"] == 41
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
+def test_v1_concurrent_stale_ownerless_job_save_cannot_erase_private_owner(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from threading import Event, current_thread
+
+    from app.schemas import GenerationJob, GenerationOutput, JobStatus
+
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    output_id = "out_concurrent_stale_ownerless_save"
+    job_id = "job_concurrent_stale_ownerless_save"
+    now = datetime.now(timezone.utc).isoformat()
+
+    def job(owner_id: int | None) -> GenerationJob:
+        return GenerationJob(
+            id=job_id,
+            job_type="image",
+            status=JobStatus.ready,
+            trace_id="trace_concurrent_stale_ownerless_save",
+            created_at=now,
+            updated_at=now,
+            outputs=[
+                GenerationOutput(
+                    id=output_id,
+                    job_id=job_id,
+                    url=f"/v1/outputs/{output_id}/download",
+                    metadata={"veyra_user_id": owner_id} if owner_id is not None else {},
+                )
+            ],
+        )
+
+    repository.save_job(job(None))
+    original_get_record_json_on = repository.outputs.get_record_json_on
+    stale_owner_read = Event()
+    release_stale_writer = Event()
+    private_writer_started = Event()
+    private_writer_finished = Event()
+
+    def pause_stale_ownerless_read(connection, requested_output_id):
+        record = original_get_record_json_on(connection, requested_output_id)
+        if current_thread().name.endswith("_0") and not stale_owner_read.is_set():
+            stale_owner_read.set()
+            assert release_stale_writer.wait(timeout=5)
+        return record
+
+    monkeypatch.setattr(repository.outputs, "get_record_json_on", pause_stale_ownerless_read)
+
+    def save_private_owner():
+        private_writer_started.set()
+        try:
+            return repository.save_job(job(41))
+        finally:
+            private_writer_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="owner-race") as executor:
+        stale_future = executor.submit(repository.save_job, job(None))
+        assert stale_owner_read.wait(timeout=5)
+        private_future = executor.submit(save_private_owner)
+        assert private_writer_started.wait(timeout=5)
+
+        # The stale transaction holds the SQLite write reservation from before
+        # its owner read through commit, so the private writer cannot pass it.
+        assert not private_writer_finished.wait(timeout=0.1)
+        release_stale_writer.set()
+        stale_future.result(timeout=5)
+        private_future.result(timeout=5)
+
+    assert repository.get_output(output_id).metadata["veyra_user_id"] == 41
+    assert repository.get_job(job_id).outputs[0].metadata["veyra_user_id"] == 41
+
+
+def test_v1_history_conflicting_repository_owners_fail_closed(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from app.schemas import GenerationJob, GenerationOutput, JobStatus
+
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        role = "admin" if user_id == 99 else "user"
+        return type("Account", (), {"user_id": user_id, "role": role})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+    output_id = "out_conflicting_repository_owners"
+    now = datetime.now(timezone.utc).isoformat()
+
+    def job(job_id: str, owner_id: int) -> GenerationJob:
+        return GenerationJob(
+            id=job_id,
+            job_type="image",
+            status=JobStatus.ready,
+            trace_id=f"trace_{job_id}",
+            created_at=now,
+            updated_at=now,
+            outputs=[
+                GenerationOutput(
+                    id=output_id,
+                    job_id=job_id,
+                    url=f"/v1/outputs/{output_id}/download",
+                    metadata={"veyra_user_id": owner_id},
+                )
+            ],
+        )
+
+    first = job("job_conflicting_owner_41", 41)
+    conflicting_legacy_row = job("job_conflicting_owner_77", 77)
+    repository.save_job(first)
+    monkeypatch.setattr(repository, "iter_jobs", lambda **_kwargs: iter((first, conflicting_legacy_row)))
+
+    try:
+        client = TestClient(app)
+        for user_id in (41, 77, 99):
+            token = _issue_test_veyra_session_token(user_id)
+            response = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == 200
+            assert output_id not in {item["id"] for item in response.json()["items"]}
     finally:
         settings.veyra_auth_enabled = original_auth_enabled
         settings.veyra_internal_token = original_internal_token

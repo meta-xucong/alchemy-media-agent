@@ -467,8 +467,22 @@ async def _run_lab_sqlite_call(function, *args, **kwargs):
             await asyncio.sleep(0.01)
 
 
+async def _run_lab_checkpoint_call(function, *args, **kwargs):
+    """Keep an admitted runner's durable checkpoint alive through transient SQLite pressure."""
+    delay = 0.01
+    while True:
+        try:
+            return await sqlite_calls.run(function, *args, **kwargs)
+        except SQLiteStorageBusy:
+            # The runner already owns a bounded Lab session lease. Waiting here
+            # keeps its successful output snapshot and task ownership alive
+            # without putting another item in the SQLite executor queue.
+            await asyncio.sleep(delay)
+            delay = min(0.25, delay * 2)
+
+
 async def _save_runner_state(session: ExplorationSession) -> ExplorationSession:
-    return await _run_lab_sqlite_call(lab_store.save_runner_state, session)
+    return await _run_lab_checkpoint_call(lab_store.save_runner_state, session)
 
 
 FALLBACK_STYLE_PRESETS = [
@@ -1002,7 +1016,7 @@ async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: in
     try:
         await run_exploration_session(session_id, veyra_user_id=veyra_user_id)
     except Exception as exc:
-        session = await _run_lab_sqlite_call(lab_store.get, session_id)
+        session = await _run_lab_checkpoint_call(lab_store.get, session_id)
         if not session:
             return
         error = ExplorationError(

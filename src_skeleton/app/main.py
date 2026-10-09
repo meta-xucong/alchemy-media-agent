@@ -2725,13 +2725,42 @@ def _is_lab_output_id(output_id: str) -> bool:
     return False
 
 
-def _append_output_deleted_event(output) -> None:
-    job = repository.get_job(output.job_id)
-    repository.append_event(
-        job.session_id if job else None,
-        "generation.output.deleted",
-        {"output_id": output.id, "job_id": output.job_id},
+def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = None) -> dict[str, object]:
+    """Perform one retryable history-output cleanup under a single admitted worker slot."""
+    output = repository.get_output(output_id)
+    if output and owner_id is not None:
+        output = repository.preserve_output_owner(output_id, owner_id) or output
+    thumbnail_existed = media_store.thumbnail_path(output_id).exists()
+    preview_existed = media_store.preview_path(output_id).exists()
+    deleted_file = media_store.delete_output_file(
+        output_id=output_id,
+        job_id=output.job_id if output else None,
+        output_format=output.format if output else None,
     )
+    deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
+    deleted_preview = media_store.delete_preview(output_id) or preview_existed
+
+    # Keep the repository output (or, for legacy-only records, the history
+    # record) as an authorization anchor until all preceding idempotent cleanup
+    # has succeeded. A failed call can then be retried by the same owner.
+    removed_favorites = delete_favorite(output_id)
+    removed_records = media_store.delete_history_record(output_id)
+    removed_output = repository.delete_output_with_event(output_id) if output else None
+    if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "output_not_found", "message": "Output not found."},
+        )
+    return {
+        "ok": True,
+        "output_id": output_id,
+        "deleted_file": deleted_file,
+        "deleted_thumbnail": deleted_thumbnail,
+        "deleted_preview": deleted_preview,
+        "removed_history_records": removed_records,
+        "removed_favorites": removed_favorites,
+        "removed_repository_output": bool(removed_output),
+    }
 
 
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
@@ -3091,32 +3120,69 @@ def _list_image_history_sync(
             """
             CREATE TABLE history_items (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                output_id TEXT NOT NULL,
+                output_id TEXT NOT NULL UNIQUE,
                 sort_timestamp REAL NOT NULL,
                 job_id TEXT NOT NULL,
-                payload TEXT NOT NULL
+                payload TEXT NOT NULL,
+                owner_id INTEGER,
+                owner_conflict INTEGER NOT NULL DEFAULT 0,
+                source_priority INTEGER NOT NULL
             );
             CREATE INDEX history_page_order_idx
                 ON history_items(sort_timestamp DESC, job_id DESC, output_id DESC, sequence ASC);
-            CREATE TABLE seen_output_ids (output_id TEXT PRIMARY KEY);
             CREATE TABLE blocked_output_ids (output_id TEXT PRIMARY KEY);
             """
         )
 
-        def stage_item(item: ImageHistoryItem) -> None:
+        def visible_history_item(item: ImageHistoryItem) -> ImageHistoryItem | None:
             item = _with_veyra_history_access(item, veyra_context)
             if not _history_visible_to_veyra(item, veyra_context):
-                return
-            timestamp, job_id, output_id = _history_sort_key(item)
-            connection.execute(
-                "INSERT INTO history_items(output_id, sort_timestamp, job_id, payload) VALUES(?, ?, ?, ?)",
-                (output_id, timestamp, job_id, item.model_dump_json()),
-            )
+                return None
+            return item
 
-        def has_id(table: str, output_id: str) -> bool:
+        def has_blocked_id(output_id: str) -> bool:
             return connection.execute(
-                f"SELECT 1 FROM {table} WHERE output_id=?", (output_id,)
+                "SELECT 1 FROM blocked_output_ids WHERE output_id=?", (output_id,)
             ).fetchone() is not None
+
+        def stage_candidate(item: ImageHistoryItem, *, source_priority: int) -> None:
+            """Resolve duplicate IDs and owner evidence before applying account visibility."""
+            owner_id = _history_item_veyra_user_id(item)
+            payload = item.model_dump_json()
+            timestamp, job_id, output_id = _history_sort_key(item)
+            existing = connection.execute(
+                "SELECT sequence, owner_id, owner_conflict, source_priority "
+                "FROM history_items WHERE output_id=?",
+                (item.id,),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO history_items(output_id, sort_timestamp, job_id, payload, owner_id, source_priority) "
+                    "VALUES(?, ?, ?, ?, ?, ?)",
+                    (output_id, timestamp, job_id, payload, owner_id, source_priority),
+                )
+                return
+            if existing[2]:
+                return
+            existing_owner = _positive_int_or_none(existing[1])
+            if existing_owner is not None and owner_id is not None and existing_owner != owner_id:
+                connection.execute(
+                    "UPDATE history_items SET owner_conflict=1 WHERE output_id=?", (item.id,)
+                )
+                return
+            # Explicit ownership outranks ownerless projections regardless of
+            # iteration order. Within the same ownership class, keep the
+            # established source precedence (repository, history, generated).
+            replace = (existing_owner is None and owner_id is not None) or (
+                (existing_owner is None) == (owner_id is None)
+                and source_priority < int(existing[3])
+            )
+            if replace:
+                connection.execute(
+                    "UPDATE history_items SET owner_id=?, source_priority=?, payload=?, "
+                    "sort_timestamp=?, job_id=? WHERE output_id=?",
+                    (owner_id, source_priority, payload, timestamp, job_id, item.id),
+                )
 
         try:
             job_iterator = getattr(repository, "iter_jobs", None)
@@ -3135,10 +3201,7 @@ def _list_image_history_sync(
                 for output in job.outputs:
                     if output.format not in {"png", "jpeg", "webp"}:
                         continue
-                    connection.execute(
-                        "INSERT OR IGNORE INTO seen_output_ids(output_id) VALUES(?)", (output.id,)
-                    )
-                    stage_item(
+                    stage_candidate(
                         ImageHistoryItem(
                             id=output.id,
                             job_id=job.id,
@@ -3173,7 +3236,8 @@ def _list_image_history_sync(
                             created_at=job.created_at,
                             updated_at=job.updated_at,
                             source="repository",
-                        )
+                        ),
+                        source_priority=0,
                     )
 
             for record in media_store.iter_history_records(
@@ -3185,9 +3249,8 @@ def _list_image_history_sync(
                         "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
                     )
                     continue
-                if has_id("seen_output_ids", output_id) or has_id("blocked_output_ids", output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
+                if has_blocked_id(output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
                     continue
-                connection.execute("INSERT INTO seen_output_ids(output_id) VALUES(?)", (output_id,))
                 source_path = media_store.output_path(
                     job_id=str(record.get("job_id") or ""),
                     output_id=output_id,
@@ -3195,7 +3258,7 @@ def _list_image_history_sync(
                 )
                 if not source_path.is_file():
                     continue
-                stage_item(ImageHistoryItem(**{**record, "favorite": False}))
+                stage_candidate(ImageHistoryItem(**{**record, "favorite": False}), source_priority=1)
 
             if not session_id:
                 for record in media_store.list_generated_output_records(limit=10000):
@@ -3205,10 +3268,33 @@ def _list_image_history_sync(
                             "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
                         )
                         continue
-                    if has_id("seen_output_ids", output_id) or has_id("blocked_output_ids", output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
+                    if has_blocked_id(output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
                         continue
-                    connection.execute("INSERT INTO seen_output_ids(output_id) VALUES(?)", (output_id,))
-                    stage_item(ImageHistoryItem(**{**record, "favorite": False}))
+                    stage_candidate(ImageHistoryItem(**{**record, "favorite": False}), source_priority=2)
+
+            last_sequence = 0
+            while True:
+                candidates = connection.execute(
+                    "SELECT sequence, output_id, owner_conflict, payload FROM history_items "
+                    "WHERE sequence>? ORDER BY sequence ASC LIMIT 128",
+                    (last_sequence,),
+                ).fetchall()
+                if not candidates:
+                    break
+                for sequence, output_id, owner_conflict, payload in candidates:
+                    last_sequence = sequence
+                    if owner_conflict or has_blocked_id(output_id):
+                        connection.execute("DELETE FROM history_items WHERE sequence=?", (sequence,))
+                        continue
+                    item = visible_history_item(ImageHistoryItem.model_validate_json(payload))
+                    if item is None:
+                        connection.execute("DELETE FROM history_items WHERE sequence=?", (sequence,))
+                        continue
+                    timestamp, job_id, _ = _history_sort_key(item)
+                    connection.execute(
+                        "UPDATE history_items SET sort_timestamp=?, job_id=?, payload=? WHERE sequence=?",
+                        (timestamp, job_id, item.model_dump_json(), sequence),
+                    )
 
             total = int(connection.execute("SELECT COUNT(*) FROM history_items").fetchone()[0])
             rows = connection.execute(
@@ -3257,33 +3343,9 @@ def list_v1_veyra_usage(request: Request, limit: int = Query(default=50, ge=1, l
 
 @app.delete("/v1/image/history/{output_id}")
 async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
-    await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
-    output = await _run_sqlite_api_call(repository.delete_output, output_id)
-    thumbnail_existed = media_store.thumbnail_path(output_id).exists()
-    preview_existed = media_store.preview_path(output_id).exists()
-    deleted_file = media_store.delete_output_file(
-        output_id=output_id,
-        job_id=output.job_id if output else None,
-        output_format=output.format if output else None,
-    )
-    deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
-    deleted_preview = media_store.delete_preview(output_id) or preview_existed
-    removed_records = await _run_sqlite_api_call(media_store.delete_history_record, output_id)
-    removed_favorites = await _run_sqlite_api_call(delete_favorite, output_id)
-    if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
-        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
-    if output:
-        await _run_sqlite_api_call(_append_output_deleted_event, output)
-    return {
-        "ok": True,
-        "output_id": output_id,
-        "deleted_file": deleted_file,
-        "deleted_thumbnail": deleted_thumbnail,
-        "deleted_preview": deleted_preview,
-        "removed_history_records": removed_records,
-        "removed_favorites": removed_favorites,
-        "removed_repository_output": bool(output),
-    }
+    visibility = await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
+    owner_id = _positive_int_or_none(visibility.get("owner_id")) if isinstance(visibility, dict) else None
+    return await _run_sqlite_api_call(_delete_v1_history_output_bundle, output_id, owner_id=owner_id)
 
 
 @app.put("/v1/image/history/{output_id}/favorite")

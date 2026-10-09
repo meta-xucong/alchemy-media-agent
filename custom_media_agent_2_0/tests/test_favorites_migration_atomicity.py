@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 import threading
@@ -7,6 +8,27 @@ import threading
 import pytest
 
 from app.services import favorites
+
+
+def test_v2_favorites_reader_buffer_stays_bounded_for_many_small_items():
+    items = [{"output_id": f"out_{index:05d}", "note": "x" * 120} for index in range(3000)]
+    payload = "[" + ",".join(json.dumps(item, separators=(",", ":")) for item in items) + "]"
+    reader = favorites._StreamingJSONReader(io.StringIO(payload))
+    maximum_buffer = 0
+    original_fill = reader._fill
+
+    def measured_fill():
+        nonlocal maximum_buffer
+        result = original_fill()
+        maximum_buffer = max(maximum_buffer, len(reader.buffer))
+        return result
+
+    reader._fill = measured_fill
+    reader_items = list(reader.array_items())
+
+    assert len(payload) > 400_000
+    assert len(reader_items) == len(items)
+    assert maximum_buffer < 80_000
 
 
 def test_v2_truncated_favorites_import_can_be_repaired_and_retried(tmp_path, monkeypatch):

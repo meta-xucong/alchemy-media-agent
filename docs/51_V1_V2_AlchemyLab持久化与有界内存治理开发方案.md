@@ -183,7 +183,7 @@ A2 对上一冻结版实际取消 SQLite worker 的请求任务后发现：await
 
 #### 权威与最小修复
 
-每个 V1/V2 API 进程的最多两个 SQLite 工作名额，权威依据是同步函数对应的底层 concurrent future 是否完成，而不是请求协程是否完成。对取消，客户端可立即停止等待；已提交函数不强杀、不重复提交，原名额必须保持占用到该 future 真正结束。固定两线程 executor 与最多两个已准入 futures 一起限制物理并发及排队；第三个超限请求仍按既有约定返回 503/`Retry-After: 1`。提交失败或 future 在运行前被取消时也必须释放名额；SQLite busy 映射保持不变。
+每个 V1/V2 API 进程的最多两个 SQLite 工作名额，权威依据是同步函数对应的底层 concurrent future 是否完成，而不是请求协程是否完成。对取消，客户端可立即停止等待；已提交函数不强杀、不重复提交，原名额必须保持占用到该 future 真正结束。固定两线程 executor 与最多两个已准入 futures 一起限制物理并发及排队；第三个超限请求仍按既有约定返回 503/`Retry-After: 1`。请求 waiter 使用 `asyncio.shield`，不会取消尚未执行的 concurrent future；提交失败或 executor 明确取消已从物理队列移除的 future 时释放名额；SQLite busy 映射保持不变。
 
 #### 回归要求
 
@@ -206,7 +206,7 @@ SQLite 线程池容量绑定底层 `concurrent.futures.Future` 的完成回调�
 
 #### 当前实现进展
 
-V1/V2 SQLite 调用现使用固定两线程的 `BoundedSQLiteCalls`；容量基于 `threading.BoundedSemaphore`，由底层 concurrent Future 完成回调释放，取消等待任务不会提前归还名额。V1/Lab 共用 V1 执行器，V2 使用独立执行器。Lab runner 的会话准入上限为 2，先准入再进行 session 规划/持久化；完整 session 只在提示词和 variants 构造完成后写入一次，超限映射到现有 503 响应。Lab 重启恢复现可重建全终态 mixed/all-failed session 的聚合状态而不伪报中断。
+V1/V2 SQLite 调用现使用固定两线程的 `BoundedSQLiteCalls`；容量基于 `threading.BoundedSemaphore`，由底层 concurrent Future 完成回调释放；请求取消只取消 waiter，不会取消仍排在 executor 队列中的 Future。V1/Lab 共用 V1 执行器，V2 使用独立执行器。Lab runner 的会话准入上限为 2，先准入再进行 session 规划/持久化；完整 session 只在提示词和 variants 构造完成后写入一次，超限映射到现有 503 响应。Lab 重启恢复现可重建全终态 mixed/all-failed session 的聚合状态而不伪报中断。
 
 另补 Lab create awaiter 取消边界：创建阶段由拥有准入租约的内部任务完成，并由外层 `asyncio.shield` 防止客户端取消提前中止 owner。若请求取消，内部任务仍被跟踪；session 保存成功后仍须 handoff 到唯一 runner，runner 结束后释放准入。创建准备失败则 owner 自行释放。此路径不因取消而自动重复 Provider。
 
@@ -270,3 +270,43 @@ V1/V2 生成及 creative-run 路径跨越 Provider 前后的任务建立、幂�
 - 本节后冻结所有 `.py` 源码和测试文件，生成新 fingerprint，并重新运行独立 Source Fidelity A1 与 A2。旧指纹审计收据一律不适用。只有两项新审计均 PASS 才更新现有 Draft PR #28；仍不合并、不部署。
 - 本节最终代码/测试冻结指纹：`d6d8f3de469e4c01dc2ed3c3b994d849d45c5fd25ce05f0e9dd159513c974fa0`，覆盖 26 个改动或新增的 Python 文件。计算规则沿用本文冻结映射：按相对路径排序，对每个路径串接 UTF-8 路径、NUL、该文件小写 SHA-256 十六进制、NUL，再对总字节计算 SHA-256；文档与 `PROGRESS.md` 不参与。任何 `.py` 改动都会使此指纹失效。此最终指纹包括 Lab runner 恰好一次的回归断言；V1/V2 upload content 残余已列入本节上文。
 - 最终独立审计回执：Source Fidelity A1 与独立 A2 均对上述指纹 PASS。A1 核对文档范围及源码/测试证据；A2 复核 Lab 取消 handoff、唯一 runner、SSE 固定快照、V1/V2 上传残余及其他相关持久化路径。审计者的 Python 环境未安装 pytest；本机验证单独记录为 V1/Lab/SSE/SQLite 容量 30 passed、五项公开 API 回归 5 passed、V2 组合套件 183 passed，Lab/SSE 两项最终断言回归亦通过。完整 V1 `test_api_smoke.py` 未运行通过。未调用 Provider、未访问生产数据、未部署或执行 VPS RSS/性能验收。现有 Draft PR #28 可更新，但不得据此合并或部署。
+
+### 增量审计收尾（2026-10-09）
+
+#### 审计基线与修正模型
+
+针对 Draft PR #28 的 `58333063b5b7521518c95de834d70e861a584339` 增量审计，复现了三项遗漏：V1/V2 收藏解析器在每条 JSON 值后无条件读入 64 KiB，导致输入缓冲逐步接近整份文件；Lab 已持有成功输出的 runner 在 SQLite worker 饱和超过一秒时放弃成功状态写入，随后恢复读取也可能受同一容量拒绝；V1 历史删除分步申请 SQLite 名额，前面已删输出与图片后，后续步骤可能返回 503，破坏重试授权依据。
+
+保留的权威仍是现有文件和 SQLite 记录，不新增缓存或状态框架。解析器仅在当前 token 不完整、确需更多字节时压缩已消费内容并补读。Lab 已准入 runner 对临时 worker 容量满或数据库 busy 使用 capped exponential backoff 重试关键状态读取/提交，等待期间持有现有 session/task 所有权；源码调用路径不因这类忙锁重试重新进入 Provider 调用，但本轮测试只是检查点辅助层模拟，并非端到端 Provider 执行证明。其他 Lab 操作仍沿用原有有限等待策略。V1 删除在身份校验后只申请一次 SQLite worker 名额，名额内完成幂等文件、收藏及历史清理；若已验证 owner 只存在于历史投影，则先将该 owner 补到仍保留的 repository output，避免历史投影删除后丢失同 owner 重试资格。最后由一个 SQLite 事务删除 output/job 引用并写删除事件；仅当 Job 关联 session 时才产生事件。这样容量拒绝发生在任何清理副作用之前，中途失败可由同一 owner 重试。
+
+#### 新增回归及局部验证
+
+- V1/V2 收藏 reader 各以 3,000 条小记录（约 468 KiB）逐项解析，并记录 `_fill()` 后的最大缓冲；上限低于 80 KiB，证明不会把整个文件累积在解析器内存中。两项在修改前均因原断言/缓冲增长失败，修复后通过。
+- Lab 检查点辅助层回归用真实共享 SQLite executor 的两个阻塞 worker 持续超过原一秒期限，再提交预先构造的成功 Job/output 快照。它验证 checkpoint task 保持等待、容量释放后快照保存成功；测试没有运行 `run_exploration_session` 或 Provider，也不作为 Provider 调用次数的端到端证据。源码调用路径显示 busy 重试 helper 不调用 Provider。
+- V1 删除路由回归覆盖 bundle 名额在副作用前被拒绝；还覆盖 owner 只存在于 history 投影时，history 已删除而最后 output/job/event 事务遇 busy，repository output 仍保留并接收此前已验证的 owner；随后在启用 Veyra 鉴权的条件下，非 owner 重试被拒、同 owner 重试成功。同时断言关联 Job/session 的删除事件只写一次。初始增量审计中的分步删除失败已在基线上复现；新增的 history-only owner 组合由 A1 指出后加入回归并在修复后通过。
+- 当前局部验证：V1 持久化/历史/收藏/SQLite 容量/删除回归 19 passed；公开 API owner/删除回归 3 passed；Lab 恢复/缓存/快照 11 passed；V2 收藏迁移/留存 4 passed。上述测试组有交集，不相加为一个总数。变更 Python 文件 `compileall` 与 `git diff --check` 通过；有既存 FastAPI/Starlette lifespan 弃用告警。
+- 此局部验证不是完整 V1/V2 套件、不是浏览器验证，也不证明生产数据、RSS 或 VPS 容量。没有调用 Provider、读取/改动线上数据或部署 VPS。
+- 该三项增量修复仍须基于精确最终源码/测试指纹取得新的 Source Fidelity A1 与独立 A2；此前针对 `d6d8…`、`0def…` 的审计收据均不能套用于当前树。仅当两项新审计均 PASS，才可更新 Draft PR #28；仍不合并或部署。
+- 上述 `720a2de…` 候选收到 A1 隐私阻断：同一 Job 以 ownerless 输出再次保存时，唯一 output 表保留了原 owner，但 Job 内嵌输出仍可能被保存为 ownerless，历史接口直接从 Job 投影 owner。现已改为先规范化 Job 的全部 outputs，再在同一事务保存规范 Job 与 output 行；新增同一 Job owner 41→ownerless 重存后，owner 41 与管理员各见一条私有项目、用户 77 看不到的真实 API 回归。
+- 此修正后的当前候选 Python 源码/测试指纹为 `754f1b10222c2c3e0161d699005b91ac31728cd0ae387f7059bc5e97f3a51fba`，覆盖相对 `origin/main` 的 39 个变更或新增 Python 文件。算法为按 UTF-8 相对路径字节序排序，每项拼接路径、NUL、文件原始字节 SHA-256 的小写十六进制、NUL，再对总字节计算 SHA-256；本文件和 `PROGRESS.md` 不参与。任何 `.py` 编辑都会使指纹失效。
+- 当前追加验证：same-Job ownerless 重存及相邻 owner 冲突 API 回归 4 passed；V1 删除/收藏/SQLite 容量与迁移组 11 passed；Lab 恢复/缓存/快照组 11 passed。定向组有交集，不相加为整仓通过。针对当前 `754f1b…` 的新 A1/A2 仍待完成；此前所有指纹收据均不适用。只有双审对同一指纹 PASS 才可更新 Draft PR #28；不合并、不部署。
+- 针对 `754f1b…` 的 A2 又复现同一 Job owner 保护中的并发 TOCTOU：两个 `save_job` 事务都在首次写入前读取 owner，旧 ownerless 快照可先读取旧值，待私有 owner 写入提交后再覆盖 owner。现已在 `save_job` 读取与规范化前显式执行 `BEGIN IMMEDIATE`，将 owner 读取、规范 Job/output 写入与幂等索引写入串行化；新增确定性双线程屏障回归，验证旧快照持有写锁时私有更新不能越过，最终两份记录均保留 owner 41。
+- 该并发修正后的当前候选 Python 指纹为 `0e0325479954b7c30eea5c81c5856da82fa2af5b86b67db569a15a974cd4a37f`，39 个变更/新增 Python 路径，算法与上条相同。最终局部验证：V1 删除/收藏/SQLite 容量/收藏迁移组 11 passed；V1 历史 owner API 6 passed；Lab 恢复/缓存/快照 11 passed；V2 收藏迁移/留存/SQLite 容量 7 passed。并发 ownerless 旧快照回归另连续运行 5 次，均通过。分组有交集；未运行完整 V1 smoke、浏览器、真实 Provider、生产数据或 VPS。compileall 与 `git diff --check` 通过。此前针对 `754f1b…` 的 A1/A2 均已被本修正作废；必须针对 `0e0325…` 重新取得 A1/A2 双 PASS，之后才可更新 Draft PR #28；不合并、不部署。
+
+#### 历史审计记录：第二轮复审发现与收尾修正（后续被本节顶部的 754f/0e0325 候选记录更新）
+
+对 `c1740a…` 的 A2 复审另外发现两个相邻边界。第一，同一 output ID 可出现在多个历史来源或 Job 输出中；若 ownerless 副本在私有副本后被单独投影，列表可能按旧版公共记录规则对其他账号可见，repository 的唯一 output 记录也可能被 ownerless 写入覆盖。现在请求临时 SQLite 表先按 output ID 合并候选，再按 owner 过滤：有效 owner 优先于 ownerless；两个不同的显式 owner 冲突时，该 ID 在本次历史投影中 fail closed。`MemoryRepository.save_job` 保留已确认 owner 的唯一 output 映射，并拒绝把该 ID 改派给另一个显式 owner。回归覆盖两种写入顺序、直接下载拒绝非 owner、owner 冲突投影拒绝，以及管理员看到唯一的规范记录。
+
+第二，V1/V2 `BoundedSQLiteCalls` 的 Future 如果在 worker 取队列前被 asyncio waiter 取消，ThreadPoolExecutor 的 work item 仍留在内部队列，但 Future 会立即标记完成并触发 capacity callback。两处现在都通过 `asyncio.shield` 将 waiter 取消与底层 Future 解耦；名额保留至实际工作完成。使用可控延迟 executor 连续尝试 1,000 次超额提交，取消后实体等待队列仍保持两个，队列完成后容量恢复。该保护仅改变 awaiter 对已准入操作的取消传播，不放大 executor worker 数。
+
+本轮最终局部验证：V1 持久化/历史/收藏/SQLite 容量/删除 20 passed；V1 历史权限与重复 owner API 回归 5 passed；Lab 恢复/缓存/快照 11 passed；V2 收藏迁移/留存/SQLite 取消容量 7 passed。组间结果不相加为完整仓库套件。FastAPI/Starlette 生命周期弃用告警仍存在。未运行完整 V1 API smoke、浏览器、真实 Provider 或 VPS 性能/RSS 验收。
+
+当时针对 `c1740a…` 的 A1 PASS 与 A2 FAIL 均已过期；`720a2de…` 的审计状态也由后续顶部记录更新。以上仅保留历史审计经过，不代表当前审计状态。旧进程易失数据导出/对账及 VPS 运行验收仍是后续独立条件。
+
+#### 当前审计收据与 PR 放行
+
+- 最终审查代码/测试指纹：`0e0325479954b7c30eea5c81c5856da82fa2af5b86b67db569a15a974cd4a37f`，39 个 Python 源码/测试路径；HEAD `58333063b5b7521518c95de834d70e861a584339`，目标分支 `codex/durable-bounded-retention`，审查基线 `origin/main=3915b24d0cdab6cc626ad5a7d07c0839e5239064`。
+- Source Fidelity A1：PASS，独立复算指纹；确认同 Job ownerless 顺序及并发重存保护、所有者投影/解析、删除及 SQLite cancellation 测试与文档范围一致。
+- 独立 A2：PASS，独立复算相同指纹；检查 `BEGIN IMMEDIATE` owner 串行化及相邻权限、收藏、Lab checkpoint、V1 删除、V1/V2 SQLite cancellation 路径，并以临时 SQLite 双线程复现确认最终两份记录 owner 均为 41。审计环境没有 pytest，A2 未执行测试套件；本机测试证据见上文。
+- 本机局部测试：V1 删除/收藏/SQLite 容量/迁移 11 passed；V1 历史 owner API 6 passed；Lab 恢复/缓存/快照 11 passed；V2 收藏迁移/留存/SQLite 容量 7 passed；并发 stale-owner 回归连续 5 次通过。各组存在重叠，不相加为全仓套件。完整 V1 smoke、浏览器、Provider、生产数据、VPS/RSS 与性能未验证。
+- 双审仅放行更新 Draft PR #28，不放行合并、部署或数据切换。旧进程易失数据导出/对账、完整 V1 smoke/浏览器覆盖和 VPS 迁移与运行验收仍是独立上线门槛。

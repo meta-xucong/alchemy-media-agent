@@ -119,7 +119,6 @@ class _StreamingJSONReader:
                     raise ValueError("Legacy V2 favorites file ended before its JSON value was complete.") from None
             else:
                 self.position = end
-                self._fill()
                 return value
 
     def array_items(self):

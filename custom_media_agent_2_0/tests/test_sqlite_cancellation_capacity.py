@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future
 import sqlite3
 import threading
 
 from fastapi import HTTPException
 
 from app.main import _run_sqlite_api_call
+from app.repositories.sqlite_calls import BoundedSQLiteCalls, SQLiteStorageBusy
+
+
+class _DeferredExecutor:
+    def __init__(self):
+        self.pending = []
+
+    def submit(self, function):
+        future = Future()
+        self.pending.append((future, function))
+        return future
+
+    def run_next(self):
+        future, function = self.pending.pop(0)
+        if future.set_running_or_notify_cancel():
+            try:
+                future.set_result(function())
+            except BaseException as exc:
+                future.set_exception(exc)
 
 
 def test_v2_cancelled_awaiters_keep_capacity_until_sqlite_workers_finish():
@@ -66,6 +86,40 @@ def test_v2_cancelled_awaiters_keep_capacity_until_sqlite_workers_finish():
     assert result == "available"
     assert maximum_active == 2
     assert active == 0
+
+
+def test_v2_cancelled_queued_awaiters_do_not_grow_physical_executor_queue():
+    calls = BoundedSQLiteCalls(capacity=2)
+    executor = _DeferredExecutor()
+    calls._executor = executor
+
+    async def exercise():
+        queued = [asyncio.create_task(calls.run(lambda: "done")) for _ in range(2)]
+        await asyncio.sleep(0)
+        assert len(executor.pending) == 2
+        for task in queued:
+            task.cancel()
+        await asyncio.gather(*queued, return_exceptions=True)
+
+        rejected = 0
+        for _ in range(1000):
+            try:
+                await calls.run(lambda: "must-not-submit")
+            except SQLiteStorageBusy:
+                rejected += 1
+        assert rejected == 1000
+        assert len(executor.pending) == 2
+        assert all(not future.cancelled() for future, _ in executor.pending)
+
+        executor.run_next()
+        executor.run_next()
+        replacement = asyncio.create_task(calls.run(lambda: "available"))
+        await asyncio.sleep(0)
+        assert len(executor.pending) == 1
+        executor.run_next()
+        return await replacement
+
+    assert asyncio.run(exercise()) == "available"
 
 
 def test_v2_sqlite_busy_error_releases_executor_capacity():

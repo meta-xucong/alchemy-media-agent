@@ -63,6 +63,14 @@ class MemoryRepository:
         self.assets[asset.id] = asset
         return asset
 
+    @staticmethod
+    def _output_owner_id(output: GenerationOutput) -> int | None:
+        try:
+            owner_id = int((output.metadata or {}).get("veyra_user_id") or 0)
+        except (TypeError, ValueError):
+            return None
+        return owner_id if owner_id > 0 else None
+
     def get_asset(self, asset_id: str) -> Any | None:
         return self.assets.get(asset_id)
 
@@ -70,14 +78,37 @@ class MemoryRepository:
         connection = connect(self.database_path)
         try:
             with connection:
-                self.jobs.put_on(connection, job.id, job)
+                # Serialize owner lookup and canonicalization with every writer.
+                # A deferred transaction would allow a stale ownerless snapshot
+                # to read first, then overwrite a private owner committed by a
+                # concurrent save before this transaction's first write.
+                connection.execute("BEGIN IMMEDIATE")
+                canonical_outputs: list[GenerationOutput] = []
                 for output in job.outputs:
+                    existing_json = self.outputs.get_record_json_on(connection, output.id)
+                    if existing_json is not None:
+                        existing = GenerationOutput.model_validate_json(existing_json)
+                        existing_owner = self._output_owner_id(existing)
+                        incoming_owner = self._output_owner_id(output)
+                        if existing_owner is not None and incoming_owner is not None and existing_owner != incoming_owner:
+                            raise ValueError("An output ID cannot be reassigned to a different account.")
+                        if existing_owner is not None and incoming_owner is None:
+                            metadata = dict(output.metadata or {})
+                            metadata["veyra_user_id"] = existing_owner
+                            output = output.model_copy(update={"metadata": metadata})
+                    canonical_outputs.append(output)
                     self.outputs.put_on(connection, output.id, output)
+                # Keep the Job projection consistent with the canonical output
+                # records. History listing reads nested Job.outputs, so only
+                # normalizing the outputs table would leave an ownerless copy
+                # that could be projected as public after a same-Job update.
+                canonical_job = job.model_copy(update={"outputs": canonical_outputs})
+                self.jobs.put_on(connection, canonical_job.id, canonical_job)
                 if job.idempotency_key:
-                    self.idempotency_index.put_on(connection, job.idempotency_key, job.id)
+                    self.idempotency_index.put_on(connection, job.idempotency_key, canonical_job.id)
         finally:
             connection.close()
-        return job
+        return canonical_job
 
     def get_job(self, job_id: str) -> GenerationJob | None:
         return self.jobs.get(job_id)
@@ -112,6 +143,78 @@ class MemoryRepository:
                 job = GenerationJob.model_validate_json(job_json)
                 job.outputs = [item for item in job.outputs if item.id != output_id]
                 self.jobs.put_on(connection, job.id, job)
+            connection.commit()
+            return output
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def delete_output_with_event(self, output_id: str) -> GenerationOutput | None:
+        """Remove an output and append its deletion event in the same transaction."""
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            output_json = self.outputs.get_record_json_on(connection, output_id)
+            if output_json is None:
+                connection.commit()
+                return None
+            output = GenerationOutput.model_validate_json(output_json)
+            job_json = self.jobs.get_record_json_on(connection, output.job_id)
+            self.outputs.delete_on(connection, output_id)
+            session_id = None
+            if job_json:
+                job = GenerationJob.model_validate_json(job_json)
+                job.outputs = [item for item in job.outputs if item.id != output_id]
+                self.jobs.put_on(connection, job.id, job)
+                session_id = job.session_id
+            if session_id:
+                connection.execute(
+                    "INSERT INTO v1_events(session_id, event_type, payload) VALUES(?, ?, ?)",
+                    (
+                        session_id,
+                        "generation.output.deleted",
+                        json.dumps(
+                            {"output_id": output.id, "job_id": output.job_id},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                )
+            connection.commit()
+            return output
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def preserve_output_owner(self, output_id: str, owner_id: int | None) -> GenerationOutput | None:
+        """Persist a verified history owner on an output before its history anchor is removed."""
+        try:
+            verified_owner_id = int(owner_id or 0)
+        except (TypeError, ValueError):
+            return None
+        if verified_owner_id <= 0:
+            return None
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            output_json = self.outputs.get_record_json_on(connection, output_id)
+            if output_json is None:
+                connection.commit()
+                return None
+            output = GenerationOutput.model_validate_json(output_json)
+            metadata = dict(output.metadata or {})
+            try:
+                current_owner_id = int(metadata.get("veyra_user_id") or 0)
+            except (TypeError, ValueError):
+                current_owner_id = 0
+            if current_owner_id <= 0:
+                metadata["veyra_user_id"] = verified_owner_id
+                output.metadata = metadata
+                self.outputs.put_on(connection, output_id, output)
             connection.commit()
             return output
         except Exception:

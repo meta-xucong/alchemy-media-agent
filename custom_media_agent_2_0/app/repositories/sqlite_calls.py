@@ -31,7 +31,11 @@ class BoundedSQLiteCalls:
             raise
         future.add_done_callback(lambda _future: self._capacity.release())
         try:
-            return await asyncio.wrap_future(future)
+            # Keep queued executor work accounted for if its asyncio waiter is
+            # cancelled. Cancelling the concurrent Future marks it done before
+            # its physical queue item is dequeued, which would release capacity
+            # too early and permit the queue to grow without bound.
+            return await asyncio.shield(asyncio.wrap_future(future))
         except sqlite3.OperationalError as exc:
             if "locked" in str(exc).lower() or "busy" in str(exc).lower():
                 raise SQLiteStorageBusy("SQLite database is busy; retry shortly.") from exc
