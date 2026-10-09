@@ -370,9 +370,11 @@ async def create_image_job(
 
 
 async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> GenerationJob | None:
-    source_job, source_output = _revision_source(job_id, request.output_id)
+    source_job, source_output = resolve_revision_source(job_id, request.output_id)
     if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
         return None
+
+    _persist_restored_revision_source(source_job)
 
     patch = build_revision_patch(output_id=request.output_id, feedback=request.feedback, preserve=request.preserve)
     prompt_plan = apply_patch_to_plan(source_job.prompt_plan, patch)
@@ -403,10 +405,18 @@ async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_us
     return await _run_image_request(revision, image_request, edit=True)
 
 
-async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> PreparedImageJob | None:
-    source_job, source_output = _revision_source(job_id, request.output_id)
+async def submit_revise_image_job(
+    job_id: str,
+    request: ReviseImageRequest,
+    *,
+    veyra_user_id: int | None = None,
+    resolved_source: tuple[GenerationJob | None, GenerationOutput | None] | None = None,
+) -> PreparedImageJob | None:
+    source_job, source_output = resolved_source or resolve_revision_source(job_id, request.output_id)
     if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
         return None
+
+    _persist_restored_revision_source(source_job)
 
     patch = build_revision_patch(output_id=request.output_id, feedback=request.feedback, preserve=request.preserve)
     prompt_plan = apply_patch_to_plan(source_job.prompt_plan, patch)
@@ -439,12 +449,17 @@ async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, v
     return PreparedImageJob(saved, image_request, edit=True)
 
 
-def _revision_source(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
+def resolve_revision_source(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
     source_job = repository.get_job(job_id)
     source_output = repository.get_output(output_id)
     if source_job and source_output:
         return source_job, source_output
     return _restore_revision_source_from_history(job_id, output_id)
+
+
+def _persist_restored_revision_source(source_job: GenerationJob) -> None:
+    if (source_job.raw_response_summary or {}).get("restored_from_history") is True:
+        repository.save_job(source_job)
 
 
 def _restore_revision_source_from_history(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
@@ -501,7 +516,6 @@ def _restore_revision_source_from_history(job_id: str, output_id: str) -> tuple[
         },
     )
     source_job.outputs = [source_output]
-    repository.save_job(source_job)
     return source_job, source_output
 
 

@@ -101,7 +101,12 @@ from app.services.alchemy_lab_uploads_models import CreateLabUploadRequest, LabA
 from app.services.events import format_sse_events
 from app.services.access_bridge import build_access_headers
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
-from app.services.image_service import run_submitted_image_job, submit_image_job, submit_revise_image_job
+from app.services.image_service import (
+    resolve_revision_source,
+    run_submitted_image_job,
+    submit_image_job,
+    submit_revise_image_job,
+)
 from app.services.media_acceleration import signed_output_url as signed_v1_output_url
 from app.services.retention_settings import get_retention_settings, save_retention_settings
 from app.services.session_service import create_session, handle_message
@@ -3738,7 +3743,16 @@ async def revise_image_job_endpoint(
     authorization: str = Header(default=""),
 ):
     await _require_output_visible(request, body.output_id, authorization, allow_legacy_public=True)
-    prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
+    source_job, source_output = resolve_revision_source(job_id, body.output_id)
+    if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
+    await _require_v1_session_access(request, source_job.session_id, authorization, write=True)
+    prepared = await submit_revise_image_job(
+        job_id,
+        body,
+        veyra_user_id=_veyra_user_id_from_request(request, authorization),
+        resolved_source=(source_job, source_output),
+    )
     if not prepared:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
     if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:

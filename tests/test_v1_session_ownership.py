@@ -168,6 +168,84 @@ def test_v1_image_job_read_obeys_associated_session_owner(tmp_path, monkeypatch)
     assert local_response.status_code == 200
 
 
+def test_v1_revise_requires_write_access_to_private_source_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    _enable_auth(monkeypatch)
+    session_id = "session_private_revise_source"
+    job_id = "job_private_revise_source"
+    output_id = "output_legacy_public_revise_source"
+    now = "2026-10-10T00:00:00Z"
+    repository.save_session(Session(
+        id=session_id,
+        project_id="project_private_revise_source",
+        created_at=now,
+        veyra_user_id=41,
+    ))
+    output_path = media_store.output_path(job_id=job_id, output_id=output_id, output_format="png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"not-decoded-by-revision-source")
+    media_store.save_history_record({
+        "id": output_id,
+        "job_id": job_id,
+        "session_id": session_id,
+        "url": f"/v1/outputs/{output_id}/download",
+        "format": "png",
+        "prompt": "source prompt",
+        "provider": "mock_image",
+        "model": "mock-image-v1",
+        "created_at": now,
+        "updated_at": now,
+    })
+    runner_calls = []
+
+    async def skip_provider_run(job_id, request, *, edit=False):
+        runner_calls.append(job_id)
+
+    monkeypatch.setattr(main, "run_submitted_image_job", skip_provider_run)
+    client = TestClient(main.app)
+    foreign_headers = {"Authorization": f"Bearer {_token(77)}"}
+    owner_headers = {"Authorization": f"Bearer {_token(41)}"}
+    admin_headers = {"Authorization": f"Bearer {_token(99)}"}
+
+    denied = client.post(
+        f"/v1/image/jobs/{job_id}/revise",
+        json={"output_id": output_id, "feedback": "revise privately"},
+        headers=foreign_headers,
+    )
+    assert denied.status_code == 404
+    assert repository.list_jobs() == []
+    assert repository.list_events(session_id) == []
+    assert runner_calls == []
+
+    admin_denied = client.post(
+        f"/v1/image/jobs/{job_id}/revise",
+        json={"output_id": output_id, "feedback": "admin cannot write"},
+        headers=admin_headers,
+    )
+    assert admin_denied.status_code == 404
+    assert repository.list_jobs() == []
+    assert repository.list_events(session_id) == []
+
+    allowed = client.post(
+        f"/v1/image/jobs/{job_id}/revise",
+        json={"output_id": output_id, "feedback": "revise owned source", "provider_preference": "mock_image"},
+        headers=owner_headers,
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["session_id"] == session_id
+    assert {job.id for job in repository.list_jobs()} == {job_id, allowed.json()["id"]}
+    assert repository.list_events(session_id)
+    assert runner_calls == [allowed.json()["id"]]
+
+    monkeypatch.setattr(main.settings, "veyra_auth_enabled", False)
+    local_response = client.post(
+        f"/v1/image/jobs/{job_id}/revise",
+        json={"output_id": output_id, "feedback": "local compatibility", "provider_preference": "mock_image"},
+    )
+    assert local_response.status_code == 200
+
+
 def test_v1_legacy_ownerless_session_is_admin_read_only_and_auth_off_stays_compatible(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     repository.reset()
