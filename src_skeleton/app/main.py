@@ -101,6 +101,7 @@ from app.services.access_bridge import build_access_headers
 from app.services.favorites import delete_favorite, list_favorite_ids, set_favorite
 from app.services.image_service import (
     find_existing_image_job_for_request,
+    mark_image_job_retryable_before_start,
     run_submitted_image_job,
     submit_image_job,
     submit_revise_image_job,
@@ -138,7 +139,7 @@ _V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY = "_v1_request_capacity_lease"
 
 
 class _V1RequestCapacityLeaseCleanupMiddleware:
-    """Release a transferred V1 lease if ASGI response delivery is cancelled."""
+    """Reconcile a submitted V1 job if ASGI delivery ends before its runner starts."""
 
     def __init__(self, app):
         self.app = app
@@ -147,9 +148,18 @@ class _V1RequestCapacityLeaseCleanupMiddleware:
         try:
             await self.app(scope, receive, send)
         except BaseException:
-            lease = scope.get("state", {}).get(_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY)
-            if lease is not None:
-                await lease.release_async()
+            context = scope.get("state", {}).get(_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY)
+            if context is not None and not context["runner_started"]:
+                job_id = context["job_id"]
+                if job_id:
+                    try:
+                        mark_image_job_retryable_before_start(job_id)
+                    except Exception:
+                        logger.exception("Could not mark V1 image job retryable after pre-start request failure")
+                try:
+                    await context["lease"].release_async()
+                except Exception:
+                    logger.exception("Could not release V1 generation lease after pre-start request failure")
             raise
 
 
@@ -3104,7 +3114,7 @@ async def create_image_job_endpoint(
     if existing:
         return existing
     lease = await _acquire_v1_request_capacity()
-    _track_v1_request_capacity_lease(request, lease)
+    capacity_context = _track_v1_request_capacity_lease(request, lease)
     transferred = False
     try:
         prepared = await submit_image_job(
@@ -3126,7 +3136,15 @@ async def create_image_job_endpoint(
             veyra_user_id=user_id,
         )
         if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
-            background_tasks.add_task(_run_submitted_image_job_with_lease, lease, prepared.job.id, prepared.request, edit=prepared.edit)
+            capacity_context["job_id"] = prepared.job.id
+            background_tasks.add_task(
+                _run_submitted_image_job_with_lease,
+                lease,
+                prepared.job.id,
+                prepared.request,
+                request_context=capacity_context,
+                edit=prepared.edit,
+            )
             transferred = True
         return prepared.job
     finally:
@@ -3147,8 +3165,10 @@ async def _acquire_v1_request_capacity():
         raise _v1_local_database_busy_http_error() from exc
 
 
-def _track_v1_request_capacity_lease(request: Request, lease) -> None:
-    request.scope.setdefault("state", {})[_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY] = lease
+def _track_v1_request_capacity_lease(request: Request, lease) -> dict[str, object]:
+    context: dict[str, object] = {"lease": lease, "job_id": None, "runner_started": False}
+    request.scope.setdefault("state", {})[_V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY] = context
+    return context
 
 
 def _v1_generation_capacity_http_error() -> HTTPException:
@@ -3177,7 +3197,16 @@ def _v1_local_database_busy_http_error() -> HTTPException:
     )
 
 
-async def _run_submitted_image_job_with_lease(lease, job_id, image_request, *, edit: bool = False):
+async def _run_submitted_image_job_with_lease(
+    lease,
+    job_id,
+    image_request,
+    *,
+    request_context: dict[str, object] | None = None,
+    edit: bool = False,
+):
+    if request_context is not None:
+        request_context["runner_started"] = True
     try:
         return await run_submitted_image_job(
             job_id,
@@ -3368,14 +3397,22 @@ async def revise_image_job_endpoint(
 ):
     await _require_output_visible(request, body.output_id, authorization, allow_legacy_public=True)
     lease = await _acquire_v1_request_capacity()
-    _track_v1_request_capacity_lease(request, lease)
+    capacity_context = _track_v1_request_capacity_lease(request, lease)
     transferred = False
     try:
         prepared = await submit_revise_image_job(job_id, body, veyra_user_id=_veyra_user_id_from_request(request, authorization))
         if not prepared:
             raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
         if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
-            background_tasks.add_task(_run_submitted_image_job_with_lease, lease, prepared.job.id, prepared.request, edit=prepared.edit)
+            capacity_context["job_id"] = prepared.job.id
+            background_tasks.add_task(
+                _run_submitted_image_job_with_lease,
+                lease,
+                prepared.job.id,
+                prepared.request,
+                request_context=capacity_context,
+                edit=prepared.edit,
+            )
             transferred = True
         return prepared.job
     finally:

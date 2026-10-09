@@ -638,11 +638,10 @@ def _request_with_body(body: bytes, *, content_length: str | None = None) -> Req
 
 
 def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: Path, monkeypatch) -> None:
-    from app.schemas import GenerationJob, JobStatus
-    from app.services.image_service import PreparedImageJob
-
     lease_ttl_seconds = 0.6
     monkeypatch.setattr(main_module.media_store, "root", tmp_path)
+    monkeypatch.setattr(image_service.media_store, "root", tmp_path)
+    monkeypatch.setattr(image_service.settings, "llm_prompt_planning_enabled", False)
     monkeypatch.setattr(
         main_module,
         "settings",
@@ -654,30 +653,30 @@ def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: P
             }
         ),
     )
-    monkeypatch.setattr(main_module, "find_existing_image_job_for_request", lambda **_kwargs: None)
-
     runner_started = asyncio.Event()
+    finish_provider = threading.Event()
     timeline: list[str] = []
 
-    async def fake_run_submitted_image_job(*_args, **_kwargs):
-        timeline.append("runner-started")
-        runner_started.set()
+    idempotency_key = f"prestart-cancel-{time.time_ns()}"
+    session_id = f"session-{idempotency_key}"
 
-    job = GenerationJob(
-        id="job_prestart_cancel",
-        session_id="session_prestart_cancel",
-        job_type="image",
-        status=JobStatus.generating,
-        trace_id="trace_prestart_cancel",
-        created_at="2026-10-09T00:00:00Z",
-        updated_at="2026-10-09T00:00:00Z",
-    )
+    async def fake_run_submitted_image_job(job_id, *_args, **_kwargs):
+        async def fake_provider_operation():
+            def blocking_fake_provider() -> None:
+                timeline.append("runner-started")
+                runner_started.set()
+                if not finish_provider.wait(10):
+                    raise TimeoutError("offline fake provider was not released")
+                job = repository.get_job(job_id)
+                assert job is not None
+                job.status = JobStatus.ready
+                repository.save_job(job)
 
-    async def fake_submit_image_job(**_kwargs):
-        return PreparedImageJob(job=job, request=object())
+            await asyncio.to_thread(blocking_fake_provider)
+
+        await capacity_module.run_with_existing_generation_capacity(fake_provider_operation)
 
     monkeypatch.setattr(main_module, "run_submitted_image_job", fake_run_submitted_image_job)
-    monkeypatch.setattr(main_module, "submit_image_job", fake_submit_image_job)
 
     database_path = tmp_path / ".v1-resource-admission.sqlite3"
 
@@ -694,13 +693,6 @@ def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: P
             connection.execute("DELETE FROM resource_leases WHERE namespace = 'generation'")
 
     async def exercise() -> None:
-        request_messages = [
-            {
-                "type": "http.request",
-                "body": b'{"session_id":"session_prestart_cancel","prompt":"offline prestart cancellation"}',
-                "more_body": False,
-            }
-        ]
         body_send_entered = asyncio.Event()
         allow_body_send_to_return = asyncio.Event()
         body_send_cancelled = asyncio.Event()
@@ -751,32 +743,45 @@ def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: P
         )
         monkeypatch.setattr(v1_app, "middleware_stack", None)
 
-        async def receive():
-            if request_messages:
-                return request_messages.pop(0)
-            await asyncio.Event().wait()
-
         async def send(_message):
             return None
 
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0", "spec_version": "2.3"},
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "server": ("testserver", 80),
-            "client": ("testclient", 123),
-            "root_path": "",
-            "path": "/v1/image/jobs",
-            "raw_path": b"/v1/image/jobs",
-            "query_string": b"",
-            "headers": [
-                (b"host", b"testserver"),
-                (b"content-type", b"application/json"),
-            ],
-            "state": {},
-        }
+        def request_body() -> bytes:
+            return (
+                f'{{"session_id":"{session_id}",'
+                '"prompt":"offline prestart cancellation",'
+                f'"idempotency_key":"{idempotency_key}"}}'
+            ).encode("utf-8")
+
+        def new_request():
+            messages = [{"type": "http.request", "body": request_body(), "more_body": False}]
+
+            async def receive():
+                if messages:
+                    return messages.pop(0)
+                await asyncio.Event().wait()
+
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 123),
+                "root_path": "",
+                "path": "/v1/image/jobs",
+                "raw_path": b"/v1/image/jobs",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "state": {},
+            }
+            return scope, receive
+
+        scope, receive = new_request()
         request_task = asyncio.create_task(v1_app(scope, receive, send))
         try:
             await asyncio.wait_for(body_send_entered.wait(), timeout=3)
@@ -804,6 +809,15 @@ def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: P
 
             assert body_send_cancelled.is_set()
             assert not runner_started.is_set()
+            cancelled_job = repository.get_job_by_idempotency_key(idempotency_key)
+            assert cancelled_job is not None
+            assert cancelled_job.status == JobStatus.failed
+            assert cancelled_job.error is not None
+            assert cancelled_job.error.code == "request_cancelled_before_start"
+            assert cancelled_job.error.retryable is True
+            cancelled_context = scope["state"][main_module._V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY]
+            assert await cancelled_context["lease"].release_async() is True
+            assert read_lease_row() is None
             try:
                 new_lease = await capacity_module.acquire_generation_capacity_async(
                     tmp_path,
@@ -820,15 +834,209 @@ def test_v1_asgi_cancel_before_background_runner_releases_real_lease(tmp_path: P
                 assert row[2] == new_lease.token
             finally:
                 await new_lease.release_async()
+
+            # A retry with the same key reuses and resets the original job.
+            allow_body_send_to_return.set()
+            retry_scope, retry_receive = new_request()
+            retry_task = asyncio.create_task(v1_app(retry_scope, retry_receive, send))
+            try:
+                await asyncio.wait_for(runner_started.wait(), timeout=3)
+                retry_context = retry_scope["state"][main_module._V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY]
+                assert retry_context["runner_started"] is True
+                assert repository.get_job_by_idempotency_key(idempotency_key).id == cancelled_job.id
+
+                with sqlite3.connect(database_path) as connection:
+                    active_row = connection.execute(
+                        "SELECT owner_token FROM resource_leases WHERE namespace = 'generation'"
+                    ).fetchone()
+                assert active_row is not None
+                with pytest.raises(GenerationCapacityExceeded):
+                    await capacity_module.acquire_generation_capacity_async(
+                        tmp_path,
+                        limit=1,
+                        lease_ttl_seconds=lease_ttl_seconds,
+                    )
+
+                retry_task.cancel()
+                await asyncio.sleep(0.05)
+                assert not retry_task.done(), "ASGI cancellation released capacity while fake provider work was running"
+                assert read_lease_row() is not None
+                finish_provider.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await retry_task
+                completed_job = repository.get_job_by_idempotency_key(idempotency_key)
+                assert completed_job is not None
+                assert completed_job.id == cancelled_job.id
+                assert completed_job.status == JobStatus.ready
+                assert read_lease_row() is None
+                assert await retry_context["lease"].release_async() is True
+                assert read_lease_row() is None
+            finally:
+                finish_provider.set()
+                if not retry_task.done():
+                    retry_task.cancel()
+                await asyncio.gather(retry_task, return_exceptions=True)
         finally:
+            finish_provider.set()
             allow_body_send_to_return.set()
             if not request_task.done():
                 request_task.cancel()
             await asyncio.gather(request_task, return_exceptions=True)
             delete_test_lease_rows()
             await asyncio.sleep(max(0.05, lease_ttl_seconds / 3) + 0.05)
+            job = repository.get_job_by_idempotency_key(idempotency_key)
+            if job:
+                repository.idempotency_index.pop(idempotency_key, None)
+                repository.jobs.pop(job.id, None)
+                repository.events_by_session.pop(session_id, None)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("route", ["create", "revise"])
+@pytest.mark.parametrize("mode", ["normal", "send_failure", "after_start_cancel"])
+def test_v1_create_and_revise_lease_ownership_matrix(route: str, mode: str, monkeypatch) -> None:
+    from fastapi import BackgroundTasks
+    from app.schemas import CreateImageJobRequest, GenerationJob, ReviseImageRequest
+    from app.services.image_service import PreparedImageJob
+
+    idempotency_key = f"lease-matrix-{route}-{mode}-{time.time_ns()}"
+    job = GenerationJob(
+        id=f"job-{idempotency_key}",
+        session_id=f"session-{idempotency_key}",
+        job_type="image",
+        status=JobStatus.generating,
+        idempotency_key=idempotency_key,
+        trace_id=f"trace-{idempotency_key}",
+        created_at="2026-10-09T00:00:00Z",
+        updated_at="2026-10-09T00:00:00Z",
+    )
+    repository.save_job(job)
+
+    class CountingLease:
+        def __init__(self) -> None:
+            self.release_calls = 0
+            self.released = False
+
+        async def release_async(self) -> bool:
+            self.release_calls += 1
+            self.released = True
+            return True
+
+    lease = CountingLease()
+    runner_started = asyncio.Event()
+    finish_runner = asyncio.Event()
+
+    async def acquire_lease():
+        return lease
+
+    async def fake_submit(*_args, **_kwargs):
+        return PreparedImageJob(job=job, request=object())
+
+    async def fake_run_submitted_image_job(*_args, **_kwargs):
+        async def operation():
+            runner_started.set()
+            if mode == "after_start_cancel":
+                await finish_runner.wait()
+
+        await capacity_module.run_with_existing_generation_capacity(operation)
+
+    monkeypatch.setattr(main_module, "settings", settings.model_copy(update={"veyra_auth_enabled": False}))
+    monkeypatch.setattr(main_module, "_acquire_v1_request_capacity", acquire_lease)
+    monkeypatch.setattr(main_module, "_require_job_assets_visible", lambda *_args, **_kwargs: None)
+
+    async def allow_output(*_args, **_kwargs):
+        return {"authenticated": False, "user_id": None, "owner_id": None}
+
+    monkeypatch.setattr(main_module, "_require_output_visible", allow_output)
+    monkeypatch.setattr(main_module, "find_existing_image_job_for_request", lambda **_kwargs: None)
+    monkeypatch.setattr(main_module, "submit_image_job", fake_submit)
+    monkeypatch.setattr(main_module, "submit_revise_image_job", fake_submit)
+    monkeypatch.setattr(main_module, "run_submitted_image_job", fake_run_submitted_image_job)
+
+    async def exercise() -> None:
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        request = Request({"type": "http", "method": "POST", "path": "/test", "headers": [], "state": {}}, receive)
+        background_tasks = BackgroundTasks()
+        if route == "create":
+            await main_module.create_image_job_endpoint(
+                CreateImageJobRequest(session_id=job.session_id, prompt="offline prompt", idempotency_key=idempotency_key),
+                request,
+                background_tasks,
+            )
+        else:
+            await main_module.revise_image_job_endpoint(
+                job.id,
+                ReviseImageRequest(output_id="offline-output", feedback="offline revision"),
+                request,
+                background_tasks,
+            )
+
+        context = request.scope["state"][main_module._V1_REQUEST_CAPACITY_LEASE_SCOPE_KEY]
+        assert context["job_id"] == job.id
+        assert context["runner_started"] is False
+        assert len(background_tasks.tasks) == 1
+
+        if mode == "send_failure":
+            async def response_app(_scope, _receive, send):
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"response"})
+
+            async def failing_send(message):
+                if message["type"] == "http.response.body":
+                    raise OSError("simulated response send failure")
+
+            middleware = main_module._V1RequestCapacityLeaseCleanupMiddleware(response_app)
+            with pytest.raises(OSError, match="simulated response send failure"):
+                await middleware(request.scope, receive, failing_send)
+            assert job.status == JobStatus.failed
+            assert job.error is not None
+            assert job.error.code == "request_cancelled_before_start"
+            assert job.error.retryable is True
+            assert lease.released is True
+            assert lease.release_calls == 1
+            with pytest.raises(OSError, match="simulated response send failure"):
+                await middleware(request.scope, receive, failing_send)
+            assert lease.release_calls == 2
+            assert job.error.code == "request_cancelled_before_start"
+            return
+
+        if mode == "normal":
+            await background_tasks()
+            assert runner_started.is_set()
+            assert context["runner_started"] is True
+            assert lease.released is True
+            assert lease.release_calls == 1
+            return
+
+        runner_task = asyncio.create_task(background_tasks())
+        try:
+            await asyncio.wait_for(runner_started.wait(), timeout=2)
+            assert context["runner_started"] is True
+            assert lease.released is False
+            runner_task.cancel()
+            await asyncio.sleep(0.02)
+            assert not runner_task.done(), "cancellation released the lease before the active runner ended"
+            assert lease.released is False
+            finish_runner.set()
+            with pytest.raises(asyncio.CancelledError):
+                await runner_task
+            assert lease.released is True
+            assert lease.release_calls == 1
+        finally:
+            finish_runner.set()
+            if not runner_task.done():
+                runner_task.cancel()
+            await asyncio.gather(runner_task, return_exceptions=True)
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        repository.idempotency_index.pop(idempotency_key, None)
+        repository.jobs.pop(job.id, None)
+        repository.events_by_session.pop(job.session_id, None)
 
 
 def test_v1_limited_body_rejects_oversized_declared_length_before_read() -> None:

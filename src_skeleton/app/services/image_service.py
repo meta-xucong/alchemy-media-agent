@@ -71,6 +71,27 @@ TERMINAL_IMAGE_STATUSES = {
     JobStatus.canceled,
 }
 
+RETRYABLE_IMAGE_SUBMISSION_ERROR_CODES = frozenset(
+    {"generation_capacity", "request_cancelled_before_start"}
+)
+
+
+def mark_image_job_retryable_before_start(job_id: str) -> GenerationJob | None:
+    job = repository.get_job(job_id)
+    if not job or job.status not in {JobStatus.created, JobStatus.generating}:
+        return job
+    job.status = JobStatus.failed
+    job.error = ProviderError(
+        code="request_cancelled_before_start",
+        message="The request ended before image generation started. Retry the same request.",
+        retryable=True,
+        detail={"stage": "background_runner_start"},
+    )
+    job.updated_at = now_iso()
+    saved = repository.save_job(job)
+    _emit_image_events(saved)
+    return saved
+
 
 def find_existing_image_job_for_request(
     *,
@@ -169,7 +190,11 @@ def find_existing_image_job_for_request(
     existing = repository.get_job_by_idempotency_key(key)
     if not existing:
         return None
-    if existing.error and existing.error.code == "generation_capacity" and existing.error.retryable:
+    if (
+        existing.error
+        and existing.error.code in RETRYABLE_IMAGE_SUBMISSION_ERROR_CODES
+        and existing.error.retryable
+    ):
         request_fingerprint = _image_request_fingerprint(
             session_id=session_id,
             prompt=prompt,
@@ -348,7 +373,11 @@ async def submit_image_job(
     )
     existing = repository.get_job_by_idempotency_key(key)
     if existing:
-        if existing.error and existing.error.code == "generation_capacity" and existing.error.retryable:
+        if (
+            existing.error
+            and existing.error.code in RETRYABLE_IMAGE_SUBMISSION_ERROR_CODES
+            and existing.error.retryable
+        ):
             if existing.raw_response_summary.get("idempotency_request_fingerprint") != request_fingerprint:
                 return PreparedImageJob(existing)
             existing.status = JobStatus.generating
