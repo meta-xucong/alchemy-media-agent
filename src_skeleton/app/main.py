@@ -9,7 +9,9 @@ import httpx
 import json
 import logging
 import os
+import sqlite3
 import sys
+import tempfile
 import time
 from html import escape
 from pathlib import Path
@@ -3018,81 +3020,144 @@ async def list_image_history(
 ):
     veyra_context = await _veyra_history_context(request, authorization)
     limit = min(limit, 200)
-    favorite_ids = list_favorite_ids(
-        veyra_user_id=_positive_int_or_none(veyra_context.get("user_id")),
-        include_legacy_public=True,
-    )
-    items: list[ImageHistoryItem] = []
-    known_output_ids: set[str] = set()
-    blocked_output_ids: set[str] = set()
-    for job in repository.list_jobs(job_type="image", session_id=session_id):
-        if _is_non_v1_history_job(job):
-            blocked_output_ids.update(output.id for output in job.outputs)
-            continue
-        for output in job.outputs:
-            if output.format not in {"png", "jpeg", "webp"}:
-                continue
-            known_output_ids.add(output.id)
-            items.append(
-                ImageHistoryItem(
-                    id=output.id,
-                    job_id=job.id,
-                    session_id=job.session_id,
-                    url=output.url,
-                    thumbnail_url=media_store.thumbnail_url(output.id),
-                    preview_url=media_store.preview_url(output.id),
-                    format=output.format,
-                    width=output.width,
-                    height=output.height,
-                    provider=job.provider,
-                    model=job.model,
-                    requested_provider=_job_requested_provider(job),
-                    requested_model=_job_requested_model(job),
-                    provider_fallback=job.raw_response_summary.get("image_provider_fallback") if job.raw_response_summary else None,
-                    asset_mode=job.asset_mode,
-                    asset_intents=_job_asset_intents(job),
-                    asset_plan=job.asset_plan,
-                    asset_vision_profiles=_job_asset_vision_profiles(job),
-                    provider_input_plan=_job_provider_input_plan(job),
-                    visual_review=output.visual_review.model_dump() if output.visual_review else None,
-                    prompt_plan=job.prompt_plan.variables.get("advanced_prompt_plan") if job.prompt_plan and job.prompt_plan.variables else None,
-                    original_prompt=job.provenance.get("original_prompt") if job.provenance else None,
-                    final_prompt=_job_prompt(job),
-                    work_intensity=_job_work_intensity(job),
-                    work_intensity_label=_job_work_intensity_label(job),
-                    prompt=_job_prompt(job),
-                    size=job.prompt_plan.size if job.prompt_plan else None,
-                    version_parent_id=output.version_parent_id,
-                    veyra_user_id=_history_output_veyra_user_id(output.metadata),
-                    favorite=output.id in favorite_ids,
-                    created_at=job.created_at,
-                    updated_at=job.updated_at,
-                    source="repository",
-                )
+    # Keep the request scratch DB beside durable media data. The platform's
+    # default temp directory may be a memory-backed filesystem on Linux.
+    media_store.root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="v1-image-history-", dir=media_store.root) as scratch:
+        connection = sqlite3.connect(Path(scratch) / "page.sqlite3")
+        connection.execute("PRAGMA journal_mode=OFF")
+        connection.execute("PRAGMA synchronous=OFF")
+        connection.executescript(
+            """
+            CREATE TABLE history_items (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                output_id TEXT NOT NULL,
+                sort_timestamp REAL NOT NULL,
+                job_id TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX history_page_order_idx
+                ON history_items(sort_timestamp DESC, job_id DESC, output_id DESC, sequence ASC);
+            CREATE TABLE seen_output_ids (output_id TEXT PRIMARY KEY);
+            CREATE TABLE blocked_output_ids (output_id TEXT PRIMARY KEY);
+            """
+        )
+
+        def stage_item(item: ImageHistoryItem) -> None:
+            item = _with_veyra_history_access(item, veyra_context)
+            if not _history_visible_to_veyra(item, veyra_context):
+                return
+            timestamp, job_id, output_id = _history_sort_key(item)
+            connection.execute(
+                "INSERT INTO history_items(output_id, sort_timestamp, job_id, payload) VALUES(?, ?, ?, ?)",
+                (output_id, timestamp, job_id, item.model_dump_json()),
             )
 
-    for record in media_store.list_history_records(limit=10000, session_id=session_id):
-        if _is_non_v1_history_record(record):
-            blocked_output_ids.add(record["id"])
-            continue
-        if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
-            continue
-        known_output_ids.add(record["id"])
-        items.append(ImageHistoryItem(**{**record, "favorite": record["id"] in favorite_ids}))
+        def has_id(table: str, output_id: str) -> bool:
+            return connection.execute(
+                f"SELECT 1 FROM {table} WHERE output_id=?", (output_id,)
+            ).fetchone() is not None
 
-    if not session_id:
-        for record in media_store.list_generated_output_records(limit=10000):
-            if _is_non_v1_history_record(record):
-                blocked_output_ids.add(record["id"])
-                continue
-            if record["id"] in known_output_ids or record["id"] in blocked_output_ids or record["format"] not in {"png", "jpeg", "webp"}:
-                continue
-            known_output_ids.add(record["id"])
-            items.append(ImageHistoryItem(**{**record, "favorite": record["id"] in favorite_ids}))
+        try:
+            job_iterator = getattr(repository, "iter_jobs", None)
+            jobs = (
+                job_iterator(job_type="image", session_id=session_id)
+                if callable(job_iterator)
+                else iter(repository.list_jobs(job_type="image", session_id=session_id))
+            )
+            for job in jobs:
+                if _is_non_v1_history_job(job):
+                    connection.executemany(
+                        "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)",
+                        ((output.id,) for output in job.outputs),
+                    )
+                    continue
+                for output in job.outputs:
+                    if output.format not in {"png", "jpeg", "webp"}:
+                        continue
+                    connection.execute(
+                        "INSERT OR IGNORE INTO seen_output_ids(output_id) VALUES(?)", (output.id,)
+                    )
+                    stage_item(
+                        ImageHistoryItem(
+                            id=output.id,
+                            job_id=job.id,
+                            session_id=job.session_id,
+                            url=output.url,
+                            thumbnail_url=media_store.thumbnail_url(output.id),
+                            preview_url=media_store.preview_url(output.id),
+                            format=output.format,
+                            width=output.width,
+                            height=output.height,
+                            provider=job.provider,
+                            model=job.model,
+                            requested_provider=_job_requested_provider(job),
+                            requested_model=_job_requested_model(job),
+                            provider_fallback=job.raw_response_summary.get("image_provider_fallback") if job.raw_response_summary else None,
+                            asset_mode=job.asset_mode,
+                            asset_intents=_job_asset_intents(job),
+                            asset_plan=job.asset_plan,
+                            asset_vision_profiles=_job_asset_vision_profiles(job),
+                            provider_input_plan=_job_provider_input_plan(job),
+                            visual_review=output.visual_review.model_dump() if output.visual_review else None,
+                            prompt_plan=job.prompt_plan.variables.get("advanced_prompt_plan") if job.prompt_plan and job.prompt_plan.variables else None,
+                            original_prompt=job.provenance.get("original_prompt") if job.provenance else None,
+                            final_prompt=_job_prompt(job),
+                            work_intensity=_job_work_intensity(job),
+                            work_intensity_label=_job_work_intensity_label(job),
+                            prompt=_job_prompt(job),
+                            size=job.prompt_plan.size if job.prompt_plan else None,
+                            version_parent_id=output.version_parent_id,
+                            veyra_user_id=_history_output_veyra_user_id(output.metadata),
+                            favorite=False,
+                            created_at=job.created_at,
+                            updated_at=job.updated_at,
+                            source="repository",
+                        )
+                    )
 
-    items = [_with_veyra_history_access(item, veyra_context) for item in items if _history_visible_to_veyra(item, veyra_context)]
-    items.sort(key=_history_sort_key, reverse=True)
-    return ImageHistoryResponse(items=items[offset : offset + limit], total=len(items))
+            for record in media_store.iter_history_records(limit=10000, session_id=session_id):
+                output_id = str(record.get("id") or "")
+                if _is_non_v1_history_record(record):
+                    connection.execute(
+                        "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
+                    )
+                    continue
+                if has_id("seen_output_ids", output_id) or has_id("blocked_output_ids", output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
+                    continue
+                connection.execute("INSERT INTO seen_output_ids(output_id) VALUES(?)", (output_id,))
+                stage_item(ImageHistoryItem(**{**record, "favorite": False}))
+
+            if not session_id:
+                for record in media_store.list_generated_output_records(limit=10000):
+                    output_id = str(record.get("id") or "")
+                    if _is_non_v1_history_record(record):
+                        connection.execute(
+                            "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
+                        )
+                        continue
+                    if has_id("seen_output_ids", output_id) or has_id("blocked_output_ids", output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
+                        continue
+                    connection.execute("INSERT INTO seen_output_ids(output_id) VALUES(?)", (output_id,))
+                    stage_item(ImageHistoryItem(**{**record, "favorite": False}))
+
+            total = int(connection.execute("SELECT COUNT(*) FROM history_items").fetchone()[0])
+            rows = connection.execute(
+                "SELECT payload FROM history_items ORDER BY sort_timestamp DESC, job_id DESC, output_id DESC, sequence ASC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+            page = [ImageHistoryItem.model_validate_json(row[0]) for row in rows]
+        finally:
+            connection.close()
+
+    if page:
+        favorite_ids = list_favorite_ids(
+            veyra_user_id=_positive_int_or_none(veyra_context.get("user_id")),
+            include_legacy_public=True,
+            output_ids=(item.id for item in page),
+        )
+        page = [item.model_copy(update={"favorite": item.id in favorite_ids}) for item in page]
+    return ImageHistoryResponse(items=page, total=total)
 
 
 @app.get("/v1/veyra/usage")

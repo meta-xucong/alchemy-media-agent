@@ -3026,6 +3026,11 @@ def test_v1_image_history_supports_offset_pagination(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     repository.reset()
     client = TestClient(app)
+    monkeypatch.setattr(
+        repository,
+        "list_jobs",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("history route must stream jobs")),
+    )
     records = [
         ("out_page_1", "job_page_1", "2026-04-04T09:00:00+00:00"),
         ("out_page_2", "job_page_2", "2026-04-03T09:00:00+00:00"),
@@ -3052,6 +3057,14 @@ def test_v1_image_history_supports_offset_pagination(tmp_path, monkeypatch):
             }
         )
 
+    favorite_lookups: list[set[str]] = []
+
+    def page_scoped_favorites(*, veyra_user_id=None, include_legacy_public=True, output_ids=None):
+        favorite_lookups.append(set(output_ids or []))
+        return {"out_page_1"}
+
+    monkeypatch.setattr(main_module, "list_favorite_ids", page_scoped_favorites)
+
     first_page = client.get("/v1/image/history?session_id=ses_history_page&limit=2&offset=0")
     second_page = client.get("/v1/image/history?session_id=ses_history_page&limit=2&offset=2")
     empty_page = client.get("/v1/image/history?session_id=ses_history_page&limit=2&offset=99")
@@ -3063,6 +3076,9 @@ def test_v1_image_history_supports_offset_pagination(tmp_path, monkeypatch):
     assert second_page.json()["total"] == 4
     assert [item["id"] for item in first_page.json()["items"]] == ["out_page_1", "out_page_2"]
     assert [item["id"] for item in second_page.json()["items"]] == ["out_page_3", "out_page_4"]
+    assert [item["favorite"] for item in first_page.json()["items"]] == [True, False]
+    assert [item["favorite"] for item in second_page.json()["items"]] == [False, False]
+    assert favorite_lookups == [{"out_page_1", "out_page_2"}, {"out_page_3", "out_page_4"}]
     assert empty_page.json()["items"] == []
 
 

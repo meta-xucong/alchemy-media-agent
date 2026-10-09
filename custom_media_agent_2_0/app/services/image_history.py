@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import threading
+import tempfile
+from collections import OrderedDict
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -11,16 +16,21 @@ from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageO
 from app.services.favorites import delete_favorite, list_favorite_ids
 from app.services.output_storage import delete_output_storage
 
+_HISTORY_DATABASES: OrderedDict[str, None] = OrderedDict()
+_HISTORY_SCHEMA_LOCK = threading.Lock()
+_HISTORY_DATABASES_MAX = 8
+
 
 def persist_image_job_history(job: ImageJob) -> None:
     if not settings.persist_image_history:
         return
     if not job.outputs:
         return
+    _ensure_history_index()
     settings.image_history_path.parent.mkdir(parents=True, exist_ok=True)
-    with settings.image_history_path.open("a", encoding="utf-8") as handle:
-        for output in job.outputs:
-            item = ImageHistoryItem(
+    items: list[ImageHistoryItem] = []
+    items = [
+        ImageHistoryItem(
                 output_id=output.output_id,
                 job_id=job.job_id,
                 run_id=job.run_id,
@@ -38,8 +48,20 @@ def persist_image_job_history(job: ImageJob) -> None:
                 created_at=output.created_at,
                 updated_at=job.updated_at,
             )
-            handle.write(item.model_dump_json())
-            handle.write("\n")
+        for output in job.outputs
+    ]
+    if items:
+        connection = _history_connect()
+        try:
+            with connection:
+                for item in items:
+                    _upsert_history_item(connection, item)
+        finally:
+            connection.close()
+        with settings.image_history_path.open("a", encoding="utf-8") as handle:
+            for item in items:
+                handle.write(item.model_dump_json())
+                handle.write("\n")
 
 
 def list_image_history(
@@ -50,83 +72,98 @@ def list_image_history(
     include_legacy_public: bool = True,
     include_all: bool = False,
 ) -> ImageHistoryResponse:
-    if not settings.image_history_path.exists():
-        return ImageHistoryResponse(items=[], total=0)
-    favorite_ids = list_favorite_ids(
-        veyra_user_id=veyra_user_id,
-        include_legacy_public=include_legacy_public,
-        include_all=include_all,
-    )
-    records_by_output: dict[str, ImageHistoryItem] = {}
-    for line in settings.image_history_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = ImageHistoryItem.model_validate(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not include_all and veyra_user_id is not None:
-            owner_id = _veyra_user_id(item.metadata)
-            if owner_id != veyra_user_id and not (include_legacy_public and owner_id is None):
-                continue
-        elif not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
-            continue
-        item = _with_veyra_history_access(
-            _normalize_thumbnail_url(item),
-            veyra_user_id=veyra_user_id,
-            include_all=include_all,
-        )
-        item = item.model_copy(update={"favorite": item.output_id in favorite_ids})
-        existing = records_by_output.get(item.output_id)
-        if existing is None or _timestamp(item.updated_at) >= _timestamp(existing.updated_at):
-            records_by_output[item.output_id] = item
-    items = sorted(records_by_output.values(), key=lambda item: (_timestamp(item.created_at), item.job_id), reverse=True)
+    _ensure_history_index()
     safe_offset = max(0, offset)
-    return ImageHistoryResponse(items=items[safe_offset : safe_offset + limit], total=len(items))
+    if not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
+        return ImageHistoryResponse(items=[], total=0)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if not include_all and veyra_user_id is not None:
+        if include_legacy_public:
+            clauses.append("(owner_id=? OR owner_id IS NULL)")
+            params.append(veyra_user_id)
+        else:
+            clauses.append("owner_id=?")
+            params.append(veyra_user_id)
+    where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
+    connection = _history_connect()
+    try:
+        total = int(connection.execute("SELECT COUNT(*) FROM v2_image_history" + where_sql, params).fetchone()[0])
+        rows = list(connection.execute(
+            "SELECT payload FROM v2_image_history" + where_sql +
+            " ORDER BY created_epoch DESC, job_id DESC LIMIT ? OFFSET ?",
+            [*params, max(0, int(limit)), safe_offset],
+        ))
+        history_items = [ImageHistoryItem.model_validate_json(row[0]) for row in rows]
+        favorite_ids = list_favorite_ids(
+            veyra_user_id=veyra_user_id,
+            include_legacy_public=include_legacy_public,
+            include_all=include_all,
+            output_ids=[item.output_id for item in history_items],
+        )
+        items = []
+        for item in history_items:
+            item = _with_veyra_history_access(
+                _normalize_thumbnail_url(item),
+                veyra_user_id=veyra_user_id,
+                include_all=include_all,
+            )
+            items.append(item.model_copy(update={"favorite": item.output_id in favorite_ids}))
+        return ImageHistoryResponse(items=items, total=total)
+    finally:
+        connection.close()
 
 
 def get_image_history_item(output_id: str) -> ImageHistoryItem | None:
-    if not settings.image_history_path.exists():
-        return None
-    newest: ImageHistoryItem | None = None
-    for line in settings.image_history_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = ImageHistoryItem.model_validate(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if item.output_id != output_id:
-            continue
-        if newest is None or _timestamp(item.updated_at) >= _timestamp(newest.updated_at):
-            newest = item
-    return newest
+    _ensure_history_index()
+    connection = _history_connect()
+    try:
+        row = connection.execute(
+            "SELECT payload FROM v2_image_history WHERE output_id=?", (output_id,)
+        ).fetchone()
+        return ImageHistoryItem.model_validate_json(row[0]) if row else None
+    finally:
+        connection.close()
 
 
 def delete_image_history_item(output_id: str) -> dict[str, Any]:
+    _ensure_history_index()
     removed_records = 0
     newest_removed: ImageHistoryItem | None = None
-    kept_lines: list[str] = []
     if settings.image_history_path.exists():
-        for line in settings.image_history_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                item = ImageHistoryItem.model_validate(json.loads(line))
-            except (json.JSONDecodeError, ValueError):
-                kept_lines.append(line)
-                continue
-            if item.output_id != output_id:
-                kept_lines.append(line)
-                continue
-            removed_records += 1
-            if newest_removed is None or _timestamp(item.updated_at) >= _timestamp(newest_removed.updated_at):
-                newest_removed = item
+        path = settings.image_history_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", dir=path.parent, delete=False) as handle:
+            temp_path = Path(handle.name)
+            with path.open("r", encoding="utf-8") as source:
+                for line in source:
+                    try:
+                        item = ImageHistoryItem.model_validate_json(line)
+                    except (json.JSONDecodeError, ValueError):
+                        handle.write(line)
+                        continue
+                    if item.output_id != output_id:
+                        handle.write(line if line.endswith("\n") else line + "\n")
+                        continue
+                    removed_records += 1
+                    if newest_removed is None or _timestamp(item.updated_at) >= _timestamp(newest_removed.updated_at):
+                        newest_removed = item
         if removed_records:
-            settings.image_history_path.write_text(
-                ("\n".join(kept_lines) + "\n") if kept_lines else "",
-                encoding="utf-8",
-            )
+            temp_path.replace(path)
+        else:
+            temp_path.unlink(missing_ok=True)
+
+    connection = _history_connect()
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT payload FROM v2_image_history WHERE output_id=?", (output_id,)
+            ).fetchone()
+            if row and newest_removed is None:
+                newest_removed = ImageHistoryItem.model_validate_json(row[0])
+            connection.execute("DELETE FROM v2_image_history WHERE output_id=?", (output_id,))
+    finally:
+        connection.close()
 
     output = repository.delete_output(output_id)
     metadata = dict(newest_removed.metadata if newest_removed else output.metadata if output else {})
@@ -150,6 +187,92 @@ def delete_image_history_item(output_id: str) -> dict[str, Any]:
         "removed_repository_output": removed_output,
         **storage_result,
     }
+
+
+def _history_connect() -> sqlite3.Connection:
+    db_path = settings.image_history_path.with_name("image_history_index.sqlite3")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path, timeout=3.0)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=3000")
+    key = str(db_path.resolve())
+    if key not in _HISTORY_DATABASES:
+        with _HISTORY_SCHEMA_LOCK:
+            if key not in _HISTORY_DATABASES:
+                try:
+                    connection.execute("PRAGMA journal_mode=WAL")
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS v2_image_history (
+                            output_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, owner_id INTEGER,
+                            created_epoch REAL NOT NULL, updated_epoch REAL NOT NULL, payload TEXT NOT NULL
+                        )"""
+                    )
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS v2_image_history_page_idx "
+                        "ON v2_image_history(owner_id, created_epoch DESC, job_id DESC)"
+                    )
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS v2_image_history_migration (
+                            migration_key TEXT PRIMARY KEY, completed_at TEXT NOT NULL
+                        )"""
+                    )
+                    _HISTORY_DATABASES[key] = None
+                    _HISTORY_DATABASES.move_to_end(key)
+                    while len(_HISTORY_DATABASES) > _HISTORY_DATABASES_MAX:
+                        _HISTORY_DATABASES.popitem(last=False)
+                except Exception:
+                    connection.close()
+                    raise
+    return connection
+
+
+def _upsert_history_item(connection: sqlite3.Connection, item: ImageHistoryItem) -> None:
+    created_epoch = _timestamp(item.created_at)
+    updated_epoch = _timestamp(item.updated_at)
+    connection.execute(
+        """INSERT INTO v2_image_history(output_id, job_id, owner_id, created_epoch, updated_epoch, payload)
+           VALUES(?, ?, ?, ?, ?, ?)
+           ON CONFLICT(output_id) DO UPDATE SET
+             job_id=excluded.job_id, owner_id=excluded.owner_id,
+             created_epoch=excluded.created_epoch, updated_epoch=excluded.updated_epoch,
+             payload=excluded.payload
+           WHERE excluded.updated_epoch >= v2_image_history.updated_epoch""",
+        (
+            item.output_id,
+            item.job_id,
+            _veyra_user_id(item.metadata),
+            created_epoch,
+            updated_epoch,
+            item.model_dump_json(),
+        ),
+    )
+
+
+def _ensure_history_index() -> None:
+    """Import legacy JSONL once, one validated record at a time, without retaining it."""
+    connection = _history_connect()
+    try:
+        if connection.execute(
+            "SELECT 1 FROM v2_image_history_migration WHERE migration_key='jsonl'"
+        ).fetchone():
+            return
+        with connection:
+            if settings.image_history_path.exists():
+                with settings.image_history_path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        if not line.strip():
+                            continue
+                        try:
+                            item = ImageHistoryItem.model_validate_json(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        _upsert_history_item(connection, item)
+            connection.execute(
+                "INSERT OR REPLACE INTO v2_image_history_migration(migration_key, completed_at) VALUES('jsonl', ?)",
+                (datetime.now().astimezone().isoformat(),),
+            )
+    finally:
+        connection.close()
 
 
 def _template_case_id(job: ImageJob) -> str | None:

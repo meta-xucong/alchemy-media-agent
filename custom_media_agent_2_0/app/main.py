@@ -854,6 +854,7 @@ async def history_reference_asset(
         veyra_user_id=context.get("user_id"),
         include_legacy_public=True,
         include_all=context.get("is_admin", False),
+        output_ids=[output_id],
     )
     if output_id not in favorite_ids:
         raise HTTPException(

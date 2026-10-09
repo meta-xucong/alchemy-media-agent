@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable
+from pathlib import Path
+from typing import Any, Iterable
 
+from app.config import settings
+from app.repositories.sqlite_json import SQLiteJsonMap, connect
 from app.schemas import (
     CreativeRun,
     FeedbackEvent,
@@ -21,19 +24,56 @@ def utc_now() -> datetime:
 
 
 class InMemoryV2Repository:
-    def __init__(self) -> None:
-        self.reset()
+    """Compatibility-named V2 repository backed by V2-owned durable SQLite."""
+
+    _namespaces = (
+        "providers", "sync_runs", "prompt_cases", "creative_runs", "image_jobs",
+        "outputs", "uploaded_assets", "feedback_events", "safety_decisions",
+    )
+
+    def __init__(self, database_path: Path | None = None) -> None:
+        self._database_path_override = Path(database_path) if database_path else None
+        self.providers = self._map("providers", ResourceProvider)
+        self.sync_runs = self._map("sync_runs", ProviderSyncRun)
+        self.prompt_cases = self._map("prompt_cases", PromptCase, self._case_index)
+        self.creative_runs = self._map("creative_runs", CreativeRun)
+        self.image_jobs = self._map("image_jobs", ImageJob)
+        self.outputs = self._map("outputs", ImageOutput)
+        self.uploaded_assets = self._map("uploaded_assets", UploadedAsset)
+        self.feedback_events = self._map("feedback_events", FeedbackEvent)
+        self.safety_decisions = self._map("safety_decisions", SafetyDecision)
+
+    @property
+    def database_path(self) -> Path:
+        return self._database_path_override or Path(settings.data_dir) / "repository.sqlite3"
+
+    def _map(self, namespace: str, model: Any, index_fields=None) -> SQLiteJsonMap:
+        return SQLiteJsonMap(
+            lambda: self.database_path,
+            namespace,
+            validator=model.model_validate_json,
+            index_fields=index_fields,
+        )
+
+    @staticmethod
+    def _case_index(case: PromptCase) -> dict[str, Any]:
+        return {
+            "provider_id": case.provider_id,
+            "active": int(case.is_active),
+            "quality": case.quality_score,
+            "index_version": case.index_version,
+        }
 
     def reset(self) -> None:
-        self.providers: dict[str, ResourceProvider] = {}
-        self.sync_runs: dict[str, ProviderSyncRun] = {}
-        self.prompt_cases: dict[str, PromptCase] = {}
-        self.creative_runs: dict[str, CreativeRun] = {}
-        self.image_jobs: dict[str, ImageJob] = {}
-        self.outputs: dict[str, ImageOutput] = {}
-        self.uploaded_assets: dict[str, UploadedAsset] = {}
-        self.feedback_events: dict[str, FeedbackEvent] = {}
-        self.safety_decisions: dict[str, SafetyDecision] = {}
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                connection.executemany(
+                    "DELETE FROM v2_records WHERE namespace=?",
+                    [(namespace,) for namespace in self._namespaces],
+                )
+        finally:
+            connection.close()
 
     def upsert_provider(self, provider: ResourceProvider) -> ResourceProvider:
         self.providers[provider.provider_id] = provider
@@ -53,32 +93,42 @@ class InMemoryV2Repository:
         return self.sync_runs.get(sync_run_id)
 
     def upsert_cases(self, cases: Iterable[PromptCase]) -> int:
+        connection = connect(self.database_path)
         count = 0
-        for case in cases:
-            self.prompt_cases[case.case_id] = case
-            count += 1
+        try:
+            with connection:
+                for case in cases:
+                    self.prompt_cases.put_on(connection, case.case_id, case)
+                    count += 1
+        finally:
+            connection.close()
         return count
 
     def replace_cases_for_provider(self, provider_id: str, cases: Iterable[PromptCase]) -> int:
-        self.prompt_cases = {
-            case_id: case
-            for case_id, case in self.prompt_cases.items()
-            if case.provider_id != provider_id
-        }
-        return self.upsert_cases(cases)
+        connection = connect(self.database_path)
+        count = 0
+        try:
+            with connection:
+                connection.execute(
+                    "DELETE FROM v2_records WHERE namespace='prompt_cases' AND provider_id=?",
+                    (provider_id,),
+                )
+                for case in cases:
+                    self.prompt_cases.put_on(connection, case.case_id, case)
+                    count += 1
+        finally:
+            connection.close()
+        return count
 
     def list_cases(self, active_only: bool = True) -> list[PromptCase]:
-        cases = list(self.prompt_cases.values())
-        if active_only:
-            cases = [case for case in cases if case.is_active]
-        return sorted(cases, key=lambda item: (-item.quality_score, item.case_id))
+        return self.prompt_cases.list_values(active_only=active_only)
 
     def get_case(self, case_id: str) -> PromptCase | None:
         return self.prompt_cases.get(case_id)
 
     def get_active_index_version(self) -> str | None:
-        versions = {case.index_version for case in self.prompt_cases.values() if case.is_active}
-        return sorted(versions)[-1] if versions else None
+        versions = self.prompt_cases.active_index_versions()
+        return versions[-1] if versions else None
 
     def save_safety_decision(self, decision: SafetyDecision) -> SafetyDecision:
         self.safety_decisions[decision.decision_id] = decision
@@ -92,9 +142,14 @@ class InMemoryV2Repository:
         return self.creative_runs.get(run_id)
 
     def save_image_job(self, job: ImageJob) -> ImageJob:
-        self.image_jobs[job.job_id] = job
-        for output in job.outputs:
-            self.outputs[output.output_id] = output
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                self.image_jobs.put_on(connection, job.job_id, job)
+                for output in job.outputs:
+                    self.outputs.put_on(connection, output.output_id, output)
+        finally:
+            connection.close()
         return job
 
     def get_image_job(self, job_id: str) -> ImageJob | None:
@@ -104,13 +159,23 @@ class InMemoryV2Repository:
         return self.outputs.get(output_id)
 
     def delete_output(self, output_id: str) -> ImageOutput | None:
-        output = self.outputs.pop(output_id, None)
-        if output:
-            job = self.image_jobs.get(output.job_id)
-            if job:
-                kept_outputs = [item for item in job.outputs if item.output_id != output_id]
-                self.image_jobs[job.job_id] = job.model_copy(update={"outputs": kept_outputs, "updated_at": utc_now()})
-        return output
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                output_payload = self.outputs.get_json_on(connection, output_id)
+                if output_payload is None:
+                    return None
+                output = ImageOutput.model_validate_json(output_payload)
+                job_payload = self.image_jobs.get_json_on(connection, output.job_id)
+                self.outputs.delete_on(connection, output_id)
+                if job_payload:
+                    job = ImageJob.model_validate_json(job_payload)
+                    updated = [item for item in job.outputs if item.output_id != output_id]
+                    job = job.model_copy(update={"outputs": updated, "updated_at": utc_now()})
+                    self.image_jobs.put_on(connection, job.job_id, job)
+                return output
+        finally:
+            connection.close()
 
     def save_uploaded_asset(self, asset: UploadedAsset) -> UploadedAsset:
         self.uploaded_assets[asset.asset_id] = asset
@@ -120,17 +185,27 @@ class InMemoryV2Repository:
         return self.uploaded_assets.get(asset_id)
 
     def save_feedback(self, event: FeedbackEvent) -> FeedbackEvent:
-        self.feedback_events[event.feedback_id] = event
-        if event.feedback_type == "selected" and event.output_id in self.outputs:
-            output = self.outputs[event.output_id]
-            self.outputs[event.output_id] = output.model_copy(update={"selected_by_user": True})
-            job = self.image_jobs.get(output.job_id)
-            if job:
-                updated_outputs = [
-                    self.outputs[item.output_id] if item.output_id == event.output_id else item
-                    for item in job.outputs
-                ]
-                self.image_jobs[job.job_id] = job.model_copy(update={"outputs": updated_outputs, "updated_at": utc_now()})
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                self.feedback_events.put_on(connection, event.feedback_id, event)
+                if event.feedback_type == "selected":
+                    output_payload = self.outputs.get_json_on(connection, event.output_id)
+                    if output_payload:
+                        output = ImageOutput.model_validate_json(output_payload)
+                        output = output.model_copy(update={"selected_by_user": True})
+                        self.outputs.put_on(connection, output.output_id, output)
+                        job_payload = self.image_jobs.get_json_on(connection, output.job_id)
+                        if job_payload:
+                            job = ImageJob.model_validate_json(job_payload)
+                            updated = [
+                                output if item.output_id == output.output_id else item
+                                for item in job.outputs
+                            ]
+                            job = job.model_copy(update={"outputs": updated, "updated_at": utc_now()})
+                            self.image_jobs.put_on(connection, job.job_id, job)
+        finally:
+            connection.close()
         return event
 
 

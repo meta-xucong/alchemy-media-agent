@@ -6,7 +6,6 @@ import os
 import random
 import re
 import time
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.repositories import repository
+from app.repositories.sqlite_json import SQLiteJsonMap
 from app.schemas import GenerationJob, JobStatus
 from app.services.alchemy_lab_quality import (
     QUALITY_ENHANCEMENT_OPTIONS,
@@ -295,9 +295,24 @@ class LabHistoryItem(BaseModel):
     source: str | None = None
 
 
-@dataclass
 class AlchemyLabStore:
-    sessions: dict[str, ExplorationSession]
+    def __init__(self, database_path: Path | None = None) -> None:
+        self._database_path_override = Path(database_path) if database_path else None
+        self.sessions = SQLiteJsonMap(
+            lambda: self.database_path,
+            "lab_sessions",
+            validator=ExplorationSession.model_validate_json,
+            index_fields=lambda session: {
+                "session_id": str(session.veyra_user_id) if session.veyra_user_id is not None else None,
+                "sort_at": session.updated_at,
+            },
+        )
+
+    @property
+    def database_path(self) -> Path:
+        if self._database_path_override is not None:
+            return self._database_path_override
+        return repository.database_path
 
     def save(self, session: ExplorationSession) -> ExplorationSession:
         self.sessions[session.id] = session
@@ -310,7 +325,7 @@ class AlchemyLabStore:
         self.sessions.clear()
 
 
-lab_store = AlchemyLabStore(sessions={})
+lab_store = AlchemyLabStore()
 _background_tasks: set[asyncio.Task] = set()
 
 

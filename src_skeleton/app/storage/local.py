@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import base64
+import heapq
 import json
 import re
+import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from app.config import settings
+from app.repositories.sqlite_json import connect
 
 
 class LocalMediaStore:
@@ -133,46 +137,68 @@ class LocalMediaStore:
         return self.generated_root / job_id / f"{output_id}.{ext}"
 
     def save_history_record(self, record: dict[str, Any]) -> None:
+        self._ensure_history_index()
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
+        connection = connect(self.root / "repository.sqlite3")
+        try:
+            with connection:
+                self._upsert_history_index(connection, record)
+        finally:
+            connection.close()
         with self.history_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
+    def iter_history_records(self, *, limit: int = 50, session_id: str | None = None) -> Iterator[dict[str, Any]]:
+        self._ensure_history_index()
+        safe_limit = max(0, int(limit))
+        if safe_limit == 0:
+            return
+        connection = connect(self.root / "repository.sqlite3")
+        yielded = 0
+        try:
+            if session_id:
+                cursor = connection.execute(
+                    "SELECT payload FROM v1_history_records WHERE session_id=? "
+                    "ORDER BY created_epoch DESC, sequence ASC",
+                    (session_id,),
+                )
+            else:
+                cursor = connection.execute(
+                    "SELECT payload FROM v1_history_records ORDER BY created_epoch DESC, sequence ASC"
+                )
+            for row in cursor:
+                record = json.loads(row[0])
+                output_id = record.get("id")
+                if not output_id:
+                    continue
+                output_format = record.get("format") or "png"
+                path = self.output_path(job_id=record.get("job_id", ""), output_id=output_id, output_format=output_format)
+                if not path.exists():
+                    continue
+                record["source"] = "manifest"
+                record["thumbnail_url"] = self.thumbnail_url(output_id)
+                record["preview_url"] = self.preview_url(output_id)
+                record["url"] = f"/v1/outputs/{output_id}/download"
+                yield record
+                yielded += 1
+                if yielded >= safe_limit:
+                    break
+        finally:
+            connection.close()
+
     def list_history_records(self, *, limit: int = 50, session_id: str | None = None) -> list[dict[str, Any]]:
-        if not self.history_file.exists():
-            return []
-        records_by_output: dict[str, dict[str, Any]] = {}
-        for line in self.history_file.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            output_id = record.get("id")
-            if not output_id:
-                continue
-            if session_id and record.get("session_id") != session_id:
-                continue
-            output_format = record.get("format") or "png"
-            path = self.output_path(job_id=record.get("job_id", ""), output_id=output_id, output_format=output_format)
-            if not path.exists():
-                continue
-            record["source"] = "manifest"
-            record["thumbnail_url"] = self.thumbnail_url(output_id)
-            record["preview_url"] = self.preview_url(output_id)
-            record["url"] = f"/v1/outputs/{output_id}/download"
-            existing = records_by_output.get(output_id)
-            if existing is None or _record_timestamp(record) >= _record_timestamp(existing):
-                records_by_output[output_id] = record
-        records = sorted(records_by_output.values(), key=_record_timestamp, reverse=True)
-        return records[:limit]
+        return list(self.iter_history_records(limit=limit, session_id=session_id))
 
     def list_generated_output_records(self, *, limit: int = 50) -> list[dict[str, Any]]:
         outputs_root = self.generated_root
         if not outputs_root.exists():
             return []
-        records: list[dict[str, Any]] = []
+        safe_limit = max(0, int(limit))
+        if safe_limit == 0:
+            return []
+        records: list[tuple[float, int, dict[str, Any]]] = []
+        sequence = 0
         for path in outputs_root.glob("job_*/*"):
             if not path.is_file() or path.name.startswith("."):
                 continue
@@ -187,8 +213,7 @@ class LocalMediaStore:
                 updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
             except OSError:
                 continue
-            records.append(
-                {
+            record = {
                     "id": output_id,
                     "job_id": job_id,
                     "url": f"/v1/outputs/{output_id}/download",
@@ -203,9 +228,13 @@ class LocalMediaStore:
                     "updated_at": updated_at,
                     "source": "filesystem",
                 }
-            )
-        records.sort(key=_record_timestamp, reverse=True)
-        return records[:limit]
+            item = (_record_timestamp(record), -sequence, record)
+            sequence += 1
+            if len(records) < safe_limit:
+                heapq.heappush(records, item)
+            elif item[:2] > records[0][:2]:
+                heapq.heapreplace(records, item)
+        return [item[2] for item in sorted(records, key=lambda item: item[:2], reverse=True)]
 
     def delete_output_file(self, *, output_id: str, job_id: str | None = None, output_format: str | None = None) -> bool:
         target: Path | None = None
@@ -263,25 +292,105 @@ class LocalMediaStore:
         return True
 
     def delete_history_record(self, output_id: str) -> int:
-        if not self.history_file.exists():
-            return 0
-        kept_lines: list[str] = []
+        self._ensure_history_index()
         removed = 0
-        for line in self.history_file.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                kept_lines.append(line)
-                continue
-            if record.get("id") == output_id:
-                removed += 1
-                continue
-            kept_lines.append(line)
-        if removed:
-            self.history_file.write_text(("\n".join(kept_lines) + "\n") if kept_lines else "", encoding="utf-8")
+        if self.history_file.exists():
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", newline="", dir=self.history_file.parent, delete=False
+            ) as target:
+                temporary = Path(target.name)
+                with self.history_file.open("r", encoding="utf-8") as source:
+                    for line in source:
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            target.write(line)
+                            continue
+                        if record.get("id") == output_id:
+                            removed += 1
+                            continue
+                        target.write(line if line.endswith("\n") else line + "\n")
+            if removed:
+                temporary.replace(self.history_file)
+            else:
+                temporary.unlink(missing_ok=True)
+        connection = connect(self.root / "repository.sqlite3")
+        try:
+            with connection:
+                connection.execute("DELETE FROM v1_history_records WHERE output_id=?", (output_id,))
+        finally:
+            connection.close()
         return removed
+
+    def _ensure_history_index(self) -> None:
+        connection = connect(self.root / "repository.sqlite3")
+        try:
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS v1_history_records (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    output_id TEXT NOT NULL UNIQUE,
+                    session_id TEXT,
+                    created_epoch REAL NOT NULL,
+                    updated_epoch REAL NOT NULL,
+                    payload TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS v1_history_page_idx "
+                "ON v1_history_records(session_id, created_epoch DESC, sequence ASC)"
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS v1_history_state (
+                    state_key TEXT PRIMARY KEY,
+                    state_value TEXT NOT NULL
+                )"""
+            )
+            if connection.execute(
+                "SELECT 1 FROM v1_history_state WHERE state_key='jsonl_imported'"
+            ).fetchone():
+                return
+            with connection:
+                if self.history_file.exists():
+                    with self.history_file.open("r", encoding="utf-8") as source:
+                        for line in source:
+                            if not line.strip():
+                                continue
+                            try:
+                                record = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            self._upsert_history_index(connection, record)
+                connection.execute(
+                    "INSERT OR REPLACE INTO v1_history_state(state_key, state_value) VALUES('jsonl_imported', '1')"
+                )
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _upsert_history_index(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+        output_id = str(record.get("id") or "").strip()
+        if not output_id:
+            return
+        source_timestamp = _record_timestamp(record)
+        created_epoch = source_timestamp
+        # The previous in-memory dedupe chose the later source record by the
+        # same created_at-or-updated_at timestamp used for display ordering.
+        updated_epoch = source_timestamp
+        connection.execute(
+            """INSERT INTO v1_history_records(output_id, session_id, created_epoch, updated_epoch, payload)
+               VALUES(?, ?, ?, ?, ?)
+               ON CONFLICT(output_id) DO UPDATE SET
+                 session_id=excluded.session_id, created_epoch=excluded.created_epoch,
+                 updated_epoch=excluded.updated_epoch, payload=excluded.payload
+               WHERE excluded.updated_epoch >= v1_history_records.updated_epoch""",
+            (
+                output_id,
+                str(record.get("session_id") or "") or None,
+                created_epoch,
+                updated_epoch,
+                json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            ),
+        )
 
     def find_output_file(self, output_id: str) -> tuple[Path, str, str] | None:
         outputs_root = self.generated_root

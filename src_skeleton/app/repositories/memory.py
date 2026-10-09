@@ -1,19 +1,55 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+import json
+from pathlib import Path
+from typing import Any, Iterator
 
-from app.schemas import GenerationJob, GenerationOutput, Session
+from app.repositories.sqlite_json import SQLiteJsonMap, connect
+from app.schemas import Asset, GenerationJob, GenerationOutput, Session
 
 
-@dataclass
 class MemoryRepository:
-    sessions: dict[str, Session] = field(default_factory=dict)
-    assets: dict[str, Any] = field(default_factory=dict)
-    jobs: dict[str, GenerationJob] = field(default_factory=dict)
-    outputs: dict[str, GenerationOutput] = field(default_factory=dict)
-    idempotency_index: dict[str, str] = field(default_factory=dict)
-    events_by_session: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    """Compatibility-named V1 repository backed by SQLite, not process memory."""
+
+    def __init__(self, database_path: Path | None = None) -> None:
+        self._database_path_override = Path(database_path) if database_path else None
+        jobs = self._record_map("jobs", GenerationJob, self._job_index)
+        self.sessions = self._record_map("sessions", Session)
+        self.assets = self._record_map("assets", Asset)
+        self.jobs = jobs
+        self.outputs = self._record_map("outputs", GenerationOutput)
+        self.idempotency_index = self._record_map("idempotency", str)
+
+    @property
+    def database_path(self) -> Path:
+        if self._database_path_override is not None:
+            return self._database_path_override
+        # Import lazily to avoid a repository -> storage -> application import cycle.
+        from app.storage import media_store
+
+        return Path(media_store.root) / "repository.sqlite3"
+
+    def _record_map(self, namespace: str, model: Any, index_fields=None) -> SQLiteJsonMap:
+        def validate(payload: str):
+            if model is str:
+                return json.loads(payload)
+            return model.model_validate_json(payload)
+
+        return SQLiteJsonMap(
+            lambda: self.database_path,
+            namespace,
+            validator=validate,
+            index_fields=index_fields,
+        )
+
+    @staticmethod
+    def _job_index(job: GenerationJob) -> dict[str, str | None]:
+        return {
+            "session_id": job.session_id,
+            "job_type": job.job_type,
+            "sort_at": job.updated_at or job.created_at,
+            "idempotency_key": job.idempotency_key,
+        }
 
     def save_session(self, session: Session) -> Session:
         self.sessions[session.id] = session
@@ -30,57 +66,94 @@ class MemoryRepository:
         return self.assets.get(asset_id)
 
     def save_job(self, job: GenerationJob) -> GenerationJob:
-        self.jobs[job.id] = job
-        if job.idempotency_key:
-            self.idempotency_index[job.idempotency_key] = job.id
-        for output in job.outputs:
-            self.outputs[output.id] = output
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                self.jobs.put_on(connection, job.id, job)
+                for output in job.outputs:
+                    self.outputs.put_on(connection, output.id, output)
+                if job.idempotency_key:
+                    self.idempotency_index.put_on(connection, job.idempotency_key, job.id)
+        finally:
+            connection.close()
         return job
 
     def get_job(self, job_id: str) -> GenerationJob | None:
         return self.jobs.get(job_id)
 
     def list_jobs(self, *, job_type: str | None = None, session_id: str | None = None) -> list[GenerationJob]:
-        jobs = list(self.jobs.values())
-        if job_type:
-            jobs = [job for job in jobs if job.job_type == job_type]
-        if session_id:
-            jobs = [job for job in jobs if job.session_id == session_id]
-        return sorted(jobs, key=lambda job: job.updated_at or job.created_at, reverse=True)
+        return self.jobs.list_jobs(job_type=job_type, session_id=session_id)
+
+    def iter_jobs(self, *, job_type: str | None = None, session_id: str | None = None) -> Iterator[GenerationJob]:
+        yield from self.jobs.iter_jobs(job_type=job_type, session_id=session_id)
 
     def get_job_by_idempotency_key(self, idempotency_key: str | None) -> GenerationJob | None:
         if not idempotency_key:
             return None
         job_id = self.idempotency_index.get(idempotency_key)
-        return self.jobs.get(job_id) if job_id else None
+        return self.jobs.get(job_id) if job_id else self.jobs.get_job_by_idempotency_key(idempotency_key)
 
     def get_output(self, output_id: str) -> GenerationOutput | None:
         return self.outputs.get(output_id)
 
     def delete_output(self, output_id: str) -> GenerationOutput | None:
-        output = self.outputs.pop(output_id, None)
-        if not output:
-            return None
-        job = self.jobs.get(output.job_id)
-        if job:
-            job.outputs = [item for item in job.outputs if item.id != output_id]
-        return output
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                output_json = self.outputs.get_record_json_on(connection, output_id)
+                if output_json is None:
+                    return None
+                output = GenerationOutput.model_validate_json(output_json)
+                job_json = self.jobs.get_record_json_on(connection, output.job_id)
+                self.outputs.delete_on(connection, output_id)
+                if job_json:
+                    job = GenerationJob.model_validate_json(job_json)
+                    job.outputs = [item for item in job.outputs if item.id != output_id]
+                    self.jobs.put_on(connection, job.id, job)
+                return output
+        finally:
+            connection.close()
 
     def append_event(self, session_id: str | None, event_type: str, data: dict[str, Any]) -> None:
         if not session_id:
             return
-        self.events_by_session.setdefault(session_id, []).append({"event": event_type, "data": data})
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                connection.execute(
+                    "INSERT INTO v1_events(session_id, event_type, payload) VALUES(?, ?, ?)",
+                    (session_id, event_type, json.dumps(data, ensure_ascii=False, separators=(",", ":"))),
+                )
+        finally:
+            connection.close()
+
+    def iter_events(self, session_id: str):
+        connection = connect(self.database_path)
+        cursor = connection.execute(
+            "SELECT event_type, payload FROM v1_events WHERE session_id=? ORDER BY event_id",
+            (session_id,),
+        )
+        try:
+            while row := cursor.fetchone():
+                yield {"event": row["event_type"], "data": json.loads(row["payload"])}
+        finally:
+            cursor.close()
+            connection.close()
 
     def list_events(self, session_id: str) -> list[dict[str, Any]]:
-        return list(self.events_by_session.get(session_id, []))
+        return list(self.iter_events(session_id))
 
     def reset(self) -> None:
-        self.sessions.clear()
-        self.assets.clear()
-        self.jobs.clear()
-        self.outputs.clear()
-        self.idempotency_index.clear()
-        self.events_by_session.clear()
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                connection.execute(
+                    "DELETE FROM v1_records WHERE namespace IN (?, ?, ?, ?, ?)",
+                    ("sessions", "assets", "jobs", "outputs", "idempotency"),
+                )
+                connection.execute("DELETE FROM v1_events")
+        finally:
+            connection.close()
 
 
 repository = MemoryRepository()
