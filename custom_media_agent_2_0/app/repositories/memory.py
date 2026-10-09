@@ -161,19 +161,24 @@ class InMemoryV2Repository:
     def delete_output(self, output_id: str) -> ImageOutput | None:
         connection = connect(self.database_path)
         try:
-            with connection:
-                output_payload = self.outputs.get_json_on(connection, output_id)
-                if output_payload is None:
-                    return None
-                output = ImageOutput.model_validate_json(output_payload)
-                job_payload = self.image_jobs.get_json_on(connection, output.job_id)
-                self.outputs.delete_on(connection, output_id)
-                if job_payload:
-                    job = ImageJob.model_validate_json(job_payload)
-                    updated = [item for item in job.outputs if item.output_id != output_id]
-                    job = job.model_copy(update={"outputs": updated, "updated_at": utc_now()})
-                    self.image_jobs.put_on(connection, job.job_id, job)
-                return output
+            connection.execute("BEGIN IMMEDIATE")
+            output_payload = self.outputs.get_json_on(connection, output_id)
+            if output_payload is None:
+                connection.commit()
+                return None
+            output = ImageOutput.model_validate_json(output_payload)
+            job_payload = self.image_jobs.get_json_on(connection, output.job_id)
+            self.outputs.delete_on(connection, output_id)
+            if job_payload:
+                job = ImageJob.model_validate_json(job_payload)
+                updated = [item for item in job.outputs if item.output_id != output_id]
+                job = job.model_copy(update={"outputs": updated, "updated_at": utc_now()})
+                self.image_jobs.put_on(connection, job.job_id, job)
+            connection.commit()
+            return output
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 

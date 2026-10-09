@@ -3191,6 +3191,67 @@ def test_v1_account_history_filters_user_public_and_admin_records(tmp_path, monk
         settings.veyra_session_secret = original_session_secret
 
 
+def test_v1_history_duplicate_owner_cannot_fall_back_to_public_filesystem_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        role = "admin" if user_id == 99 else "user"
+        return type("Account", (), {"user_id": user_id, "role": role})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+    output_id = "out_duplicateprivate0001"
+    source_job_id = "job_originalprivate0001"
+    source_path = media_store.output_path(job_id=source_job_id, output_id=output_id, output_format="png")
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    media_store.save_history_record(
+        {
+            "id": output_id,
+            "job_id": source_job_id,
+            "format": "png",
+            "veyra_user_id": 41,
+            "prompt": "private source record",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    media_store.save_history_record(
+        {
+            "id": output_id,
+            "job_id": "job_missingduplicate0001",
+            "format": "png",
+            "prompt": "ownerless missing duplicate",
+            "created_at": "2026-02-01T00:00:00+00:00",
+            "updated_at": "2026-02-01T00:00:00+00:00",
+        }
+    )
+
+    try:
+        client = TestClient(app)
+        other_token = _issue_test_veyra_session_token(77)
+        admin_token = _issue_test_veyra_session_token(99)
+        other_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {other_token}"})
+        admin_history = client.get("/v1/image/history?limit=10", headers={"Authorization": f"Bearer {admin_token}"})
+
+        assert other_history.status_code == 200
+        assert output_id not in {item["id"] for item in other_history.json()["items"]}
+        assert admin_history.status_code == 200
+        admin_item = next(item for item in admin_history.json()["items"] if item["id"] == output_id)
+        assert admin_item["veyra_user_id"] == 41
+        assert admin_item["job_id"] == source_job_id
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
 def test_v1_media_acceleration_redirects_only_after_account_visibility(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     repository.reset()

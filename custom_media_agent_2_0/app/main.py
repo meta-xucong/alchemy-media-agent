@@ -90,6 +90,7 @@ from app.services.veyra_auth import (
 from app.services.veyra_usage import list_veyra_usage
 from app.services.visual_review_agent import get_visual_review_agent_status, refresh_visual_review_agent
 from app.repositories.memory import utc_now
+from app.repositories.sqlite_calls import SQLiteStorageBusy, sqlite_calls
 from app.providers.images import list_v2_image_provider_capabilities
 from app.services.output_storage import read_output_content
 from app.services.output_storage import resolve_output_file
@@ -99,6 +100,15 @@ logger = logging.getLogger(__name__)
 creative_manager = CreativeManagerRuntime()
 _TEMPLATE_RESPONSE_CACHE_MAX = 128
 _template_response_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+async def _run_sqlite_api_call(function, *args, **kwargs):
+    try:
+        return await sqlite_calls.run(function, *args, **kwargs)
+    except SQLiteStorageBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error_code": "storage_busy", "message": "Storage is busy; retry the request."},
+            headers={"Retry-After": "1"},
+        ) from exc
 
 
 @asynccontextmanager
@@ -256,9 +266,13 @@ async def veyra_history(
     authorization: str = Header(default=""),
 ):
     if not settings.veyra_auth_enabled:
-        return list_image_history(limit=limit, offset=offset, veyra_user_id=None, include_legacy_public=True, include_all=True)
+        return await _run_sqlite_api_call(
+            list_image_history, limit=limit, offset=offset,
+            veyra_user_id=None, include_legacy_public=True, include_all=True,
+        )
     context = await _veyra_request_context(request, authorization)
-    return list_image_history(
+    return await _run_sqlite_api_call(
+        list_image_history,
         limit=limit,
         offset=offset,
         veyra_user_id=context["user_id"],
@@ -469,9 +483,10 @@ def _v2_output_owner_id(output_id: str) -> int | None:
 
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
     if not settings.veyra_auth_enabled:
-        return {"user_id": None, "is_admin": False, "owner_id": _v2_output_owner_id(output_id)}
+        owner_id = await _run_sqlite_api_call(_v2_output_owner_id, output_id)
+        return {"user_id": None, "is_admin": False, "owner_id": owner_id}
     context = await _veyra_request_context(request, authorization)
-    owner_id = _v2_output_owner_id(output_id)
+    owner_id = await _run_sqlite_api_call(_v2_output_owner_id, output_id)
     if context["is_admin"] or owner_id == context["user_id"] or (allow_legacy_public and owner_id is None):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
@@ -788,9 +803,10 @@ async def image_history(
     authorization: str = Header(default=""),
 ):
     if not settings.veyra_auth_enabled:
-        return list_image_history(limit=limit, offset=offset)
+        return await _run_sqlite_api_call(list_image_history, limit=limit, offset=offset)
     context = await _veyra_request_context(request, authorization)
-    return list_image_history(
+    return await _run_sqlite_api_call(
+        list_image_history,
         limit=limit,
         offset=offset,
         veyra_user_id=context["user_id"],
@@ -802,7 +818,7 @@ async def image_history(
 @app.get("/api/v2/image/history/{output_id}/thumbnail")
 async def image_history_thumbnail(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    thumbnail = read_history_thumbnail(output_id)
+    thumbnail = await _run_sqlite_api_call(read_history_thumbnail, output_id)
     if not thumbnail:
         raise HTTPException(status_code=404, detail={"error_code": "history_thumbnail_not_found", "message": "History thumbnail not found."})
     content, media_type = thumbnail
@@ -812,7 +828,7 @@ async def image_history_thumbnail(output_id: str, request: Request, authorizatio
 @app.get("/api/v2/image/history/{output_id}/preview")
 async def image_history_preview(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    preview = read_history_preview(output_id)
+    preview = await _run_sqlite_api_call(read_history_preview, output_id)
     if not preview:
         raise HTTPException(status_code=404, detail={"error_code": "history_preview_not_found", "message": "History preview not found."})
     content, media_type = preview
@@ -822,7 +838,7 @@ async def image_history_preview(output_id: str, request: Request, authorization:
 @app.delete("/api/v2/image/history/{output_id}")
 async def delete_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
-    result = delete_image_history_item(output_id)
+    result = await _run_sqlite_api_call(delete_image_history_item, output_id)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,
@@ -834,12 +850,14 @@ async def delete_history_item(output_id: str, request: Request, authorization: s
 @app.put("/api/v2/image/history/{output_id}/favorite")
 async def favorite_history_item(output_id: str, body: FavoriteImageRequest, request: Request, authorization: str = Header(default="")):
     context = await _require_output_visible(request, output_id, authorization)
-    if not repository.get_output(output_id):
+    if not await _run_sqlite_api_call(repository.get_output, output_id):
         from app.services.image_history import get_image_history_item
 
-        if not get_image_history_item(output_id):
+        if not await _run_sqlite_api_call(get_image_history_item, output_id):
             raise HTTPException(status_code=404, detail={"error_code": "history_output_not_found", "message": "V2 history output not found."})
-    return set_favorite(output_id, body.favorite, veyra_user_id=context.get("user_id"))
+    return await _run_sqlite_api_call(
+        set_favorite, output_id, body.favorite, veyra_user_id=context.get("user_id")
+    )
 
 
 @app.post("/api/v2/image/history/{output_id}/reference-asset")
@@ -850,7 +868,8 @@ async def history_reference_asset(
     authorization: str = Header(default=""),
 ):
     context = await _require_output_visible(request, output_id, authorization)
-    favorite_ids = list_favorite_ids(
+    favorite_ids = await _run_sqlite_api_call(
+        list_favorite_ids,
         veyra_user_id=context.get("user_id"),
         include_legacy_public=True,
         include_all=context.get("is_admin", False),
@@ -861,7 +880,8 @@ async def history_reference_asset(
             status_code=400,
             detail={"error_code": "history_output_not_favorite", "message": "Please star this V2 history output before using it as a continuation reference."},
         )
-    asset = create_reference_asset_from_history_output(
+    asset = await _run_sqlite_api_call(
+        create_reference_asset_from_history_output,
         output_id,
         body,
         veyra_user_id=context.get("user_id"),
@@ -883,14 +903,15 @@ def get_image_job(job_id: str, request: Request, authorization: str = Header(def
 @app.get("/api/v2/outputs/{output_id}/download")
 async def output_download(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    output_file = resolve_output_file(output_id)
+    output_file = await _run_sqlite_api_call(resolve_output_file, output_id)
     if output_file:
         path, media_type = output_file
         accelerated_url = await signed_v2_output_url(output_id=output_id, source_path=path)
         if accelerated_url:
             return RedirectResponse(accelerated_url, status_code=302, headers={"Cache-Control": "private, no-store"})
-        return Response(content=path.read_bytes(), media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
-    output = read_output_content(output_id)
+        content = await _run_sqlite_api_call(path.read_bytes)
+        return Response(content=content, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+    output = await _run_sqlite_api_call(read_output_content, output_id)
     if not output:
         raise HTTPException(status_code=404, detail={"error_code": "output_not_found", "message": "V2 output file not found."})
     content, media_type = output
@@ -900,7 +921,7 @@ async def output_download(output_id: str, request: Request, authorization: str =
 @app.post("/api/v2/outputs/{output_id}/feedback", status_code=201, response_model=FeedbackEvent)
 async def output_feedback(output_id: str, body: CreateFeedbackRequest, request: Request, authorization: str = Header(default="")) -> FeedbackEvent:
     await _require_output_visible(request, output_id, authorization)
-    if not repository.get_output(output_id):
+    if not await _run_sqlite_api_call(repository.get_output, output_id):
         raise HTTPException(status_code=404, detail={"error_code": "output_not_found", "message": "Output not found."})
     event = FeedbackEvent(
         feedback_id=new_id("feedback"),
@@ -909,14 +930,14 @@ async def output_feedback(output_id: str, body: CreateFeedbackRequest, request: 
         payload=body.payload,
         created_at=utc_now(),
     )
-    return repository.save_feedback(event)
+    return await _run_sqlite_api_call(repository.save_feedback, event)
 
 
 @app.post("/api/v2/outputs/{output_id}/revisions", status_code=202)
 async def output_revision(output_id: str, body: CreateRevisionRunRequest, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
     try:
-        request = build_revision_request(output_id, body)
+        request = await _run_sqlite_api_call(build_revision_request, output_id, body)
     except RevisionSourceError as exc:
         code = str(exc)
         raise HTTPException(
@@ -930,7 +951,7 @@ async def output_revision(output_id: str, body: CreateRevisionRunRequest, reques
 async def output_revision_async(output_id: str, body: CreateRevisionRunRequest, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
     try:
-        request = build_revision_request(output_id, body)
+        request = await _run_sqlite_api_call(build_revision_request, output_id, body)
     except RevisionSourceError as exc:
         code = str(exc)
         raise HTTPException(

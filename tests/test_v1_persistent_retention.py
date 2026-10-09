@@ -2,6 +2,7 @@ from app.repositories.memory import MemoryRepository
 from app.services.alchemy_lab import AlchemyLabStore, ExplorationRequest, ExplorationSession
 from app.schemas import GenerationJob, GenerationOutput, Session
 import gc
+import threading
 import weakref
 
 
@@ -70,6 +71,72 @@ def test_v1_output_delete_updates_durable_job_projection(tmp_path):
     assert repo.get_output(output.id) is None
     assert repo.get_job(job.id).outputs == []
     assert MemoryRepository(database_path=repo.database_path).get_job(job.id).outputs == []
+
+
+def test_concurrent_v1_output_deletes_do_not_restore_each_others_reference(tmp_path):
+    db_path = tmp_path / "v1.sqlite3"
+    first = MemoryRepository(database_path=db_path)
+    outputs = [
+        GenerationOutput(id="out_delete_a", job_id="job_delete_race", url="/a"),
+        GenerationOutput(id="out_delete_b", job_id="job_delete_race", url="/b"),
+    ]
+    first.save_job(GenerationJob(
+        id="job_delete_race",
+        job_type="image",
+        status="ready",
+        trace_id="trace",
+        created_at="2026-10-09T00:00:00Z",
+        updated_at="2026-10-09T00:00:00Z",
+        outputs=outputs,
+    ))
+    repositories = [MemoryRepository(database_path=db_path) for _ in outputs]
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def delete(repo, output_id):
+        try:
+            barrier.wait(timeout=2)
+            repo.delete_output(output_id)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=delete, args=(repo, output.id)) for repo, output in zip(repositories, outputs)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+        assert not thread.is_alive()
+
+    assert errors == []
+    restored = MemoryRepository(database_path=db_path).get_job("job_delete_race")
+    assert restored.outputs == []
+
+
+def test_restart_recovery_marks_active_v1_jobs_failed_once_without_touching_terminal_jobs(tmp_path):
+    repo = MemoryRepository(database_path=tmp_path / "v1.sqlite3")
+    def job(job_id, status):
+        return GenerationJob(
+            id=job_id,
+            job_type="image",
+            status=status,
+            trace_id="trace",
+            created_at="2026-10-09T00:00:00Z",
+            updated_at="2026-10-09T00:00:00Z",
+        )
+
+    repo.save_job(job("job_active_a", "generating"))
+    repo.save_job(job("job_active_b", "queued"))
+    repo.save_job(job("job_complete", "ready"))
+
+    assert repo.recover_interrupted_jobs(batch_size=1) == 2
+    assert repo.recover_interrupted_jobs(batch_size=1) == 0
+    for job_id in ("job_active_a", "job_active_b"):
+        restored = repo.get_job(job_id)
+        assert restored.status == "failed"
+        assert restored.error.code == "worker_interrupted"
+        assert restored.error.retryable is False
+        assert restored.error.detail["automatic_provider_replay"] is False
+    assert repo.get_job("job_complete").status == "ready"
 
 
 def test_v1_reset_clears_repository_rows_without_removing_media_files(tmp_path):

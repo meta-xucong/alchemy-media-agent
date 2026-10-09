@@ -93,6 +93,7 @@ V1/V2 必须保持存储隔离；V2 不能导入 V1 repository。每个数据库
 | Baseline source path @ 3915b24 | Target path | Mapping | 保持的源行为/边界 |
 |---|---|---|---|
 | `src_skeleton/app/repositories/memory.py` | 同路径 | THIN_ADAPTER | repository 方法与返回模型保持兼容；仅将 RAM 权威改为 SQLite，原 job/output/idempotency 语义及删除联动保持 |
+| `src_skeleton/app/repositories/sqlite_json.py` | 同路径 | AUTHORIZED_NEW | 本方案授权的 V1/Lab SQLite adapter；数据持久化与事务失败语义，不改公开模型 |
 | `src_skeleton/app/services/events.py` | 同路径 | THIN_ADAPTER | SSE 事件内容和先后顺序一致；改为游标迭代 |
 | `src_skeleton/app/storage/local.py` | 同路径 | THIN_ADAPTER | 文件字节、历史字段、排序/过滤和删除语义保持；JSONL 导入逐行，SQLite 索引分页 |
 | `src_skeleton/app/services/favorites.py` | 同路径 | THIN_ADAPTER | owner/public 可见、收藏/取消收藏/删除行为保持；旧 JSON 流式一次导入并保留 |
@@ -100,6 +101,7 @@ V1/V2 必须保持存储隔离；V2 不能导入 V1 repository。每个数据库
 | `src_skeleton/app/services/alchemy_lab.py` | 同路径 | THIN_ADAPTER | Lab session API/model/state 原语义保持，session 不再依赖 RAM 生存 |
 | `src_skeleton/app/services/alchemy_lab_style_search.py` | 同路径 | AUTHORIZED_NEW | 本任务明确授权的派生搜索缓存限条数/估算字节；不改变持久数据和搜索结果 authority |
 | `custom_media_agent_2_0/app/repositories/memory.py` | 同路径 | THIN_ADAPTER | V2 repository 调用/模型、owner/filter、队列 authority 边界保持；V2 SQLite 独立于 V1 |
+| `custom_media_agent_2_0/app/repositories/sqlite_json.py` | 同路径 | AUTHORIZED_NEW | 本方案授权的 V2 独立 SQLite adapter；与 V1 文件和命名空间隔离 |
 | `custom_media_agent_2_0/app/services/image_history.py` | 同路径 | THIN_ADAPTER | JSONL 字段、owner、重复 ID 取舍、稳定排序、total/page/delete 行为保持；SQLite 索引按行导入 |
 | `custom_media_agent_2_0/app/services/favorites.py` | 同路径 | THIN_ADAPTER | 用户收藏隔离和当前行为保持；旧 JSON 流式导入并保留 |
 | `custom_media_agent_2_0/app/services/claude_orchestrator.py` | 同路径 | AUTHORIZED_NEW | 仅可重建 LLM 决策缓存被有界；不得缓存裁剪用户历史、改变持久输出 authority 或删除旧文件 |
@@ -119,3 +121,152 @@ V1/V2 必须保持存储隔离；V2 不能导入 V1 repository。每个数据库
 - 运行进程数据边界：当前 V1/Lab RAM-only 记录无完整导出入口。此代码变更不能复原已消失记录；VPS 切换必须先从旧进程做经过校验的只读导出，否则阻止切换并明确记录损失范围。
 - 验收方式：先写失败回归；完成三模块持久化和有界读取后冻结版本，分别运行 Source Fidelity A1 只读侧审与普通 A2 独立代码审计。审计 PASS 前不提交/推送或部署。
 - 当前阶段：实现与测试收尾；下一步冻结精确 diff，先做 Source Fidelity A1，再做普通 A2。未完成审计与历史接口峰值问题之前，不合并、不部署。
+
+## 审计后修订：跨调用一致性收尾
+
+### 观察到的不一致
+
+PR #28 的固定版本 `29148df9d7d2bbf70a5b4e411541d467e326a19f` 已通过原审计，但后续独立探针报告：历史重复记录可能把已知私有 owner 降级为无 owner；Lab runner 用旧 session 快照覆盖并发收藏；SQLite 同步锁等待阻塞异步事件循环；损坏收藏源仍可能写入迁移完成标记；SSE 跨 yield 保留 cursor/connection；测试先 reset 再切临时数据根；并发删除和重启中的生成状态仍需明确定义。
+
+### 权威规则
+
+1. SQLite 记录是 V1/V2/Lab 持久状态权威；任何并发更新都必须基于事务内最新行，不得用过期整对象快照覆盖其他字段。
+2. 对历史记录，显式 owner 是访问控制权威。文件存在性、恢复扫描和重复 ID 只能补充可用性，不能删除已知 owner 或将其变成公共记录。已知 owner 的重复记录应优先于 owner 缺失的恢复副本，再按现有可见性规则过滤。
+3. SQLite 忙锁是有限、可重试的存储错误；不能让同步等待阻塞事件循环，也不能无限等待或把失败报告为成功。同步数据库工作须在有界执行边界运行。
+4. 收藏迁移标记只在完整验证来源并成功提交导入的同一个数据库事务中写入；无效/截断输入必须回滚，修复文件后允许重试，并发首次迁移结果须唯一。
+5. SSE 不允许在响应迭代器跨 yield/线程复用 SQLite connection/cursor；以稳定事件游标分批读取，每批结束关闭连接，保持原事件顺序且不漏不重。
+6. 删除联动需在同一存储事务内读取权威 output/job 并更新引用；跨文件删除保持可重入，不得由竞争删除留下指向已删除图片的 Job 引用。
+7. 持久的 `queued/generating` 记录并不意味着后台工作可恢复。启动时必须把本进程无法续接的工作显式归为中断态；不得静默重放可能已到达 Provider 的请求，且幂等键不能永久卡在不可续接的旧状态。
+
+### 最小修复边界和验收顺序
+
+先为所有涉及全局 repository/SQLite 的测试安装临时数据根，再运行任何可能调用 `reset()` 的用例。其后先补跨账户历史重复 owner 回归，再按当前持久模型补 Lab 字段级更新、数据库有界线程/忙锁返回、严格迁移原子性、SSE 分页连接生命周期和并发删除/重启状态回归。每项先证明固定版本失败，再做局部实现；不新增缓存框架、通用状态机或超出本方案的公共 API。
+
+交付门槛：V1/V2/Lab 定向测试及相关原有回归通过；迁移失败可修复后重试；锁压力下 event loop 心跳持续；强制线程切换的 SSE 全量序号无遗漏；私有 owner 不能通过任何 fallback 出现在其他账户响应；收藏更新不能被 runner 回滚；启动后无永久 `generating` 幂等阻塞。随后对最终代码/测试指纹运行 Source Fidelity A1 和独立 A2。PR #26/#27 交叉集成、旧进程 RAM-only 数据导出与 VPS RSS/磁盘/延迟验收仍是单独的后续门槛，本修订不授权合并或部署。
+
+### 本轮最小实现与阶段验收记录
+
+- 历史索引在重复 ID 合并时保留已知 owner；历史 API 在检查图片文件前先记录来源 ID，缺失文件不能让已知私有记录从恢复路径降级为公共记录。
+- Lab 收藏使用事务内最新行作准；runner 保存状态时合并最新 favorites。V1/V2 非生成 API 的 SQLite 读写投影以及 Lab runner 的相关 SQLite 调用离开事件循环并有界执行；SQLite/执行容量忙映射成 `503` 与 `Retry-After: 1`。V1 `image_service` 和 V2 `generation` 中 Provider 前后的直接同步仓库调用不属于本轮已解决范围，按本文件末尾列出的残余处理。
+- 收藏导入完整解析外层 JSON 后才写迁移标记，导入数据与标记同事务提交；补充截断修复重试及并发首次导入回归。
+- SSE 历史事件先固定本次读取的最大事件 ID，再按 128 条游标批读取；每批在 yield 前关闭连接。
+- V1/V2 删除图片均在读取 output/job 前取得 `BEGIN IMMEDIATE`，同一 Job 的并发删除不会互相恢复旧引用。
+- V1 queued/generating 任务及 Lab queued/running session 在启动时分批标记为 `worker_interrupted`，不自动重放 Provider；部分完成 Lab 保留已成功结果及收藏。
+- V2 测试使用 autouse 临时 `data_dir` 隔离，避免 `repository.reset()` 接触工作区或用户数据库。
+- 当前定向证据：V1 持久化/历史/收藏/Lab/迁移/SSE/锁边界 20 项通过；V1 公开 API 关联用例 6 项通过；V2 持久化/历史/收藏/迁移/锁边界 9 项通过；V2 API 全套 173 项通过。V1 `test_api_smoke.py` 全文件长测曾手动中止，不能计作全套通过。编译、完整 diff 审查及独立 Source Fidelity A1 / A2 尚待完成。
+- 本记录仅表示代码阶段的测试进展。精确 diff 与测试树冻结后必须重新进行 Source Fidelity A1 和独立 A2；当前旧版审计收据不适用于本轮改动。审计通过后只更新 Draft PR #28；不合并、不部署。旧进程数据导出及 VPS 运行验收仍是独立门槛。
+
+### 审计追加修订：异步读取投影与终态分类
+
+独立 A2 针对上一个工作指纹发现：V1 全历史、Lab 历史和 V1/V2 图片详情仍有 async handler 直接执行 SQLite-backed 同步读取。之前仅包装了部分收藏/删除/所有者调用，不能覆盖完整路由工作量；SQLite 锁等待仍可能阻塞事件循环。另有 Lab session 已将全部 variant 保存为成功、但在最终 session 汇总持久化前退出时被错误分类为部分成功。
+
+保持的权威：SQLite 与已持久化图片继续是唯一来源，API 字段、owner/排序/分页和图片投影保持原实现。修正只把现有纯同步读取投影整体放入相同有界 off-loop 边界，禁止在投影里再嵌套调用有界 helper；DB 忙仍按既有可重试语义处理。Lab 启动恢复先检查 variant 结果：全部成功时补齐 `completed` 汇总且不增加中断错误；存在未完成工作才按已有规则标记中断，不重放 Provider。
+
+验收增加实际路由级持锁＋event-loop heartbeat 回归，覆盖 V1 history/Lab history/download 与 V2 thumbnail/preview/download；并覆盖 Lab 全部 variant 成功但 session 汇总仍 running 的重启边界。此修订使前述 fingerprint 失效；实现后重新跑测试并重新执行 Source Fidelity A1 与独立 A2。
+
+### 异步读取与 Lab 恢复修订实现记录
+
+- V1 `/v1/image/history` 保留同步历史投影实现，但公开 async 路由现在将整次投影交给有界 SQLite worker；`/api/lab/history` 同样把整个列表投影移出事件循环。
+- V1 下载、缩略图和预览路由在同一有界边界中解析 SQLite 输出记录；缩略图/预览的读取与派生生成也在 worker 中执行，未改变文件路径、媒体类型或响应头。
+- V2 历史缩略图、预览、下载（包含文件读取回退）和收藏参考图创建均交给现有有界 SQLite worker；权限检查仍先完成，owner 过滤与公开返回结构不变。
+- Lab 启动恢复若发现 session 仍是 queued/running，但所有非空 variants 均已成功，则只补齐 completed 汇总与进度，不附加 `worker_interrupted`；仍存在未完成 variant 时继续采用显式中断，不自动重放 Provider。空 variant 集合仍按中断处理。
+- 新增真实路由调用级锁冲突＋异步心跳测试。V1 覆盖完整历史、Lab 历史及输出下载/缩略图/预览；V2 覆盖缩略图/预览/下载和收藏转参考图；锁等待应返回 503、`Retry-After: 1`，心跳在等待期间持续运行。Lab 增加“所有变体已成功、聚合 session 状态仍 running”的恢复回归。
+- 本次阶段验证：V1 持久化/历史/Lab/迁移/SSE/锁边界加 10 个明确历史/owner/Lab API 回归共 26 项通过；V2 完整 API 及存储/迁移/路由锁边界共 181 项通过。前后测试有重叠，不相加为独立总数。`test_api_smoke.py` 全文件未通过执行；没有真实模型、VPS 或浏览器压力验证。
+- 对 22 个修改/新增 Python 源与测试文件计算的冻结指纹为 `7dfd67fcc27e1c5af2d21468e48d926e3364f42f5ad0d2d49d593d37beee068a`。确定算法为按路径排序后，对每个条目依次写入 UTF-8 相对路径、NUL、该文件 SHA-256 的 64 字符小写十六进制、NUL，再对串接字节计算 SHA-256；排除本开发方案与 `PROGRESS.md`。目标分支基线为 PR #28 提交 `29148df9d7d2bbf70a5b4e411541d467e326a19f`；当时抓取的 `origin/main` `3915b24d0cdab6cc626ad5a7d07c0839e5239064` 是该基线的祖先，不是其后继。target 为该基线加工作区变更。任何源/测试文件变化都会使此指纹失效。
+- 以上是实现阶段证据，不构成最终验收。旧 Source Fidelity A1/A2 回执均不适用于本指纹；下一步只读审计必须针对该精确指纹。审计通过前不提交/推送、不合并、不部署。
+
+### 取消后物理工作容量修订
+
+#### 观察到的不一致
+
+A2 对上一冻结版实际取消 SQLite worker 的请求任务后发现：awaiter 被取消并进入 `finally`，semaphore 名额立即归还，但 `run_in_threadpool` 内原生同步函数仍在工作线程里执行。循环重复取消即可继续提交工作，使物理活动线程超过声明的两路并发。先前的“运行中取消”测试没有把活动调用线程的生存期与 awaiter 分开测量。
+
+#### 权威与最小修复
+
+每个 V1/V2 API 进程的最多两个 SQLite 工作名额，权威依据是同步函数对应的底层 concurrent future 是否完成，而不是请求协程是否完成。对取消，客户端可立即停止等待；已提交函数不强杀、不重复提交，原名额必须保持占用到该 future 真正结束。固定两线程 executor 与最多两个已准入 futures 一起限制物理并发及排队；第三个超限请求仍按既有约定返回 503/`Retry-After: 1`。提交失败或 future 在运行前被取消时也必须释放名额；SQLite busy 映射保持不变。
+
+#### 回归要求
+
+V1、V2 各增加确定性线程测试：同时阻塞两个已准入操作，取消两个 awaiter，在底层函数仍未结束时再提交第三个操作；第三个必须收到 503，记录的物理活动数不得超过 2。释放阻塞后，两项原操作退出，名额恢复，后续正常操作可以成功。测试还须验证 worker 抛出 SQLite busy 时 awaiter 收到 503，且清理后容量恢复。此修订变更 API helper 及测试，因此任何先前冻结指纹与审计均失效；完成后必须重新运行定向测试并重新派发 A1/A2。
+
+### 取消容量、Lab 准入与恢复终态修订
+
+#### 纠正模型
+
+SQLite 线程池容量绑定底层 `concurrent.futures.Future` 的完成回调；API awaiter 取消不能归还尚在运行的工作名额。V1 与 V2 各自使用固定两线程执行器，且同一时刻最多准入两个 Future，不创建超限线程池队列。Lab 共享 V1 的 SQLite 执行边界；Lab 活跃会话先做非阻塞准入，最多两个，容量满时复用 `503 storage_busy` 与 `Retry-After: 1`，拒绝发生在规划、持久化和后台 task 创建之前。已准入会话仅在同步执行结束或 runner task 真正结束后释放相应容量。
+
+重启恢复只聚合持久化变体状态：非空 variants 全部终态时按成功/失败数量归为 completed、partial_success 或 failed，并保留已有错误；只有仍有 queued/running variant 时才补 `worker_interrupted`。零 variant queued/running session 继续按中断处理。恢复不调用 Provider。
+
+#### 回归要求
+
+- V1、V2 与 Lab 分别阻塞两个线程操作、取消等待协程并尝试第三项；第三项保持被拒绝，底层活动峰值不超过 2，解锁后容量恢复。
+- Lab 同时两会话准入后，第三个请求不得进入规划、持久化或后台执行；两个 runner 结束后可再次准入。
+- Lab 重启恢复覆盖全成功、全失败、成功+失败、存在非终态、零 variants；全部终态均不得添加 `worker_interrupted`，存在非终态才追加，且不得触发 Provider。
+- 启动恢复函数必须注册在 V1 FastAPI startup 列表并执行 V1 job 与 Lab session 恢复。
+
+#### 当前实现进展
+
+V1/V2 SQLite 调用现使用固定两线程的 `BoundedSQLiteCalls`；容量基于 `threading.BoundedSemaphore`，由底层 concurrent Future 完成回调释放，取消等待任务不会提前归还名额。V1/Lab 共用 V1 执行器，V2 使用独立执行器。Lab runner 的会话准入上限为 2，先准入再进行 session 规划/持久化；完整 session 只在提示词和 variants 构造完成后写入一次，超限映射到现有 503 响应。Lab 重启恢复现可重建全终态 mixed/all-failed session 的聚合状态而不伪报中断。
+
+另补 Lab create awaiter 取消边界：创建阶段由拥有准入租约的内部任务完成，并由外层 `asyncio.shield` 防止客户端取消提前中止 owner。若请求取消，内部任务仍被跟踪；session 保存成功后仍须 handoff 到唯一 runner，runner 结束后释放准入。创建准备失败则 owner 自行释放。此路径不因取消而自动重复 Provider。
+
+#### 本轮明确排除：异步生成服务的 SQLite 调用
+
+本 PR 的异步 SQLite 保证仅覆盖本次明确改造并由路由锁测试验证的 V1/V2 持久化投影、历史/收藏/delete API 及 Alchemy Lab session 生命周期，不应泛化为“所有非生成 API 已隔离”。以下调用仍可能在事件循环里同步等待 SQLite 锁；本轮不把它们表述为已解决，也不通过机械包装当前 fail-fast helper 来掩盖风险：
+
+- V1 `src_skeleton/app/services/image_service.py` 的 `submit_image_job`、`create_image_job`、`revise_image_job`、`submit_revise_image_job`、`run_submitted_image_job`、`_prepare_submitted_image_run`、`_run_image_request`，以及 `_revision_source`、`_emit_image_events`、`_persist_history_records`、`_discard_job_outputs` 等被这些异步流程调用的同步仓库操作。
+- V1 asset content 写入：`src_skeleton/app/main.py` 的异步 `PUT /v1/assets/{asset_id}/content` 路由同步调用 `src_skeleton/app/services/asset_service.py:store_asset_content` 或 `store_asset_content_bytes`；路径内同步读取/写入持久 asset 元数据并写内容文件。此端点未由本轮路由锁冲突测试覆盖。
+- V2 `custom_media_agent_2_0/app/services/generation.py` 的 `create_running_image_job`、`create_image_job` 及 `_save_job` 中的同步仓库操作。
+- V2 creative-run 路径：`custom_media_agent_2_0/app/agents/runtime.py` 的 `queue_run`、`complete_queued_run`、`_run_deterministic_manager`、`_save_run_stage` 对 creative-run 的同步读写；`custom_media_agent_2_0/app/services/safety.py:run_safety_check` 对安全决策的持久化；`custom_media_agent_2_0/app/main.py` 的 `/api/v2/creative/runs`、`/api/v2/creative/runs/async` 及异步 revision 路由中直接或间接调用上述方法的路径。
+- V2 upload content 写入：`custom_media_agent_2_0/app/main.py` 的异步 `PUT /api/v2/uploads/{asset_id}/content` 路由，在读取请求 body 后同步调用 `custom_media_agent_2_0/app/services/uploaded_assets.py:store_uploaded_asset_content` 或 `store_uploaded_asset_bytes`；这些方法继续同步读取/写入 SQLite uploaded-asset 元数据并写内容文件。数据库锁等待可能阻塞 API worker 的事件循环。此上传写路径没有由本轮锁冲突路由测试覆盖，故明确列为残余。
+
+V1/V2 生成及 creative-run 路径跨越 Provider 前后的任务建立、幂等检查和最终结果持久化。若 Provider 已成功或已扣费后，SQLite worker 容量满被 fail-fast 拒绝，图片结果可能无法持久化，并可能使客户端重试产生重复 Provider 费用。因此本轮不把这些生成写入直接改为可拒绝的 503。单独修复必须先设计 Provider 前的任务准入与终态提交保障，证明 Provider 后必需写入不会因容量拒绝而丢结果，也不得自动重放 Provider；Provider 网络调用及图像处理始终不得放进 SQLite executor。V1/V2 upload content 是另一类残余：当前异步路由同步完成文件写入和元数据读写，本轮未证明其文件/元数据原子性及安全重试语义，也未覆盖锁冲突，故明确记录为未解决项，而不机械套用现有 503 helper。
+
+这些残余可能在数据库锁竞争时阻塞同一 API worker 的事件循环，影响并发响应性；它们不推翻本 PR 对持久化权威和有界缓存的修改，但不能据本 PR 宣称图像生成、V2 creative-run 或 V1/V2 upload content 写入路径也具备完整的异步 SQLite 隔离。后续需用独立变更和 fake Provider/锁竞争回归处理，不调用真实 Provider 作为探索性调试。
+
+#### 本轮修订验证记录
+
+- V1 持久化/历史/Lab/SSE/SQLite 容量相关测试 28 项通过；另有 10 项针对历史排序、分页、owner 隔离和 Lab 历史的公开 API 回归通过。两组不代表完整 `test_api_smoke.py`，该文件全量本轮未完成。
+- V2 API、持久化、收藏导入和 SQLite 取消容量组合套件 183 项通过。
+- 修改/新增的 V1/V2 Python 源和测试文件 `compileall` 通过，`git diff --check` 通过。测试输出包含 FastAPI/Starlette 生命周期弃用告警。
+- 一次初始 V1 定向运行因新测试缺少 `sqlite3` 导入而失败；补上导入后，最终上述定向套件通过。另一次扩展到完整 V1 smoke 的组合运行被主动中止，不能计作通过或产品失败。
+- 没有调用真实 Provider、读取/修改线上数据、部署 VPS 或进行 RSS/性能验收。当前代码与测试树必须按 Progress 中记录的精确 fingerprint 完成新一轮 Source Fidelity A1 与 A2；审计通过只允许更新现有 Draft PR，不授权合并、数据迁移或部署。
+
+### 独立复审后的最后窄修订
+
+#### 修正模型
+
+上一次 A1/A2 均未放行，问题分属不同边界：A1 指出文档没有完整列出 V2 creative-run 的同步 SQLite 残余，且 SSE 测试未证明跨 128 条批次及开始迭代后的追加事件边界；A2 复现 Lab 创建调用在同步保存仍运行时被取消，可能先释放会话准入容量，而后台 SQLite 写入随后成功，留下 queued 但没有 runner 的会话。A2 后续复核还发现 V1 和 V2 异步 upload content 写入路径未列入残余范围，并建议对 Lab runner 单次 handoff 加明确断言。
+
+保留的权威是 SQLite 行及其 owner、状态和事件游标。此次修订还将 V1/V2 upload content 写入补入残余清单，并让取消回归明确断言 runner handoff 恰好发生一次。客户端取消不再等于撤销已经开始的 session 创建，也不复制 Provider 工作。
+
+#### Lab 取消交接规则
+
+`create_exploration_session` 先非阻塞取得会话容量，再通过受 `asyncio.shield` 保护的内部 task 执行准备、持久化和 runner handoff。调用方取消时，只取消其等待；owner task 保留 admission lease，并由 `_background_tasks` 持有至结束。若 queued session 已持久化，必须继续安排且只安排一个 runner；容量直到 runner 完成才归还。准备/持久化失败则由 owner task 归还容量。进程关闭或崩溃后，既有启动恢复将无法续接的 queued/running 状态标为中断，不重放 Provider。
+
+回归通过阻塞实际 SQLite-backed `save`、取消外层创建任务、再释放保存：取消后且 runner 活跃期间不能取得准入；已持久化 session 必须启动且只启动一个 runner；runner 结束后容量恢复。测试使用 fake runner，不调用 Provider。
+
+#### SSE 快照边界
+
+回归先建立 130 条事件，再启动 iterator 并读取第一项以固定最大 event ID；随后追加第 131 条事件。完整迭代必须准确得到原始 130 条，ID/顺序不变，且追加项不进入当前流。这覆盖 128 条分页边界和 snapshot isolation。实现仍按批读取、每批在 yield 前关闭 SQLite 连接。
+
+#### 明确的生成链路残余
+
+除了前文列出的 V1 `image_service` 与 V2 `generation` 外，V2 creative-run 也不属于本轮已解决的异步 SQLite 隔离范围：
+
+- `custom_media_agent_2_0/app/agents/runtime.py`：`queue_run`、`complete_queued_run`、`_run_deterministic_manager`、`_save_run_stage` 的 creative-run 同步仓库读写。
+- `custom_media_agent_2_0/app/services/safety.py`：`run_safety_check` 的安全决策持久化。
+- `custom_media_agent_2_0/app/main.py`：`/api/v2/creative/runs`、`/api/v2/creative/runs/async` 和异步 revision 路由直接或间接进入上述逻辑的调用路径。
+
+这些逻辑可能在 SQLite 锁等待时阻塞 API worker 的事件循环。它们横跨 Provider 前的任务建立、幂等判断与 Provider 后的必要结果提交，不能直接改用可拒绝的 fail-fast 写入，否则可能丢掉已付费结果或诱发重复请求。后续若治理，必须先设计 Provider 前 admission 和 Provider 后不可丢失的终态提交，并用 fake Provider/锁冲突回归验证；本轮不做 Provider 调用、重放或生成路由行为修改。
+
+#### 本轮验证与审计状态
+
+- V1/Lab/SSE/SQLite 容量相关焦点测试：30 passed；其中包含取消保存交接及 SSE 130 条固定快照。
+- 五项公开 API 回归（历史排序、分页、用户/管理员 owner 可见性、重复 owner 防降级、Lab 私有历史）：5 passed。
+- V2 API/持久化/迁移/容量组合套件：183 passed。
+- 变更 Python 文件 `compileall` 与 `git diff --check` 通过；FastAPI/Starlette 有弃用告警。完整 V1 `test_api_smoke.py` 未运行通过，不能视为全量通过。
+- 上述为本地隔离测试。未调用真实 Provider、未访问生产数据、未部署或采样 VPS RSS/延迟。
+- 本节后冻结所有 `.py` 源码和测试文件，生成新 fingerprint，并重新运行独立 Source Fidelity A1 与 A2。旧指纹审计收据一律不适用。只有两项新审计均 PASS 才更新现有 Draft PR #28；仍不合并、不部署。
+- 本节最终代码/测试冻结指纹：`d6d8f3de469e4c01dc2ed3c3b994d849d45c5fd25ce05f0e9dd159513c974fa0`，覆盖 26 个改动或新增的 Python 文件。计算规则沿用本文冻结映射：按相对路径排序，对每个路径串接 UTF-8 路径、NUL、该文件小写 SHA-256 十六进制、NUL，再对总字节计算 SHA-256；文档与 `PROGRESS.md` 不参与。任何 `.py` 改动都会使此指纹失效。此最终指纹包括 Lab runner 恰好一次的回归断言；V1/V2 upload content 残余已列入本节上文。
+- 最终独立审计回执：Source Fidelity A1 与独立 A2 均对上述指纹 PASS。A1 核对文档范围及源码/测试证据；A2 复核 Lab 取消 handoff、唯一 runner、SSE 固定快照、V1/V2 上传残余及其他相关持久化路径。审计者的 Python 环境未安装 pytest；本机验证单独记录为 V1/Lab/SSE/SQLite 容量 30 passed、五项公开 API 回归 5 passed、V2 组合套件 183 passed，Lab/SSE 两项最终断言回归亦通过。完整 V1 `test_api_smoke.py` 未运行通过。未调用 Provider、未访问生产数据、未部署或执行 VPS RSS/性能验收。现有 Draft PR #28 可更新，但不得据此合并或部署。

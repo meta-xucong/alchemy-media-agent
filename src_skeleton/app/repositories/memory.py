@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Iterator
+from datetime import datetime, timezone
 
 from app.repositories.sqlite_json import SQLiteJsonMap, connect
-from app.schemas import Asset, GenerationJob, GenerationOutput, Session
+from app.schemas import Asset, GenerationJob, GenerationOutput, JobStatus, ProviderError, Session
 
 
 class MemoryRepository:
@@ -99,20 +100,71 @@ class MemoryRepository:
     def delete_output(self, output_id: str) -> GenerationOutput | None:
         connection = connect(self.database_path)
         try:
-            with connection:
-                output_json = self.outputs.get_record_json_on(connection, output_id)
-                if output_json is None:
-                    return None
-                output = GenerationOutput.model_validate_json(output_json)
-                job_json = self.jobs.get_record_json_on(connection, output.job_id)
-                self.outputs.delete_on(connection, output_id)
-                if job_json:
-                    job = GenerationJob.model_validate_json(job_json)
-                    job.outputs = [item for item in job.outputs if item.id != output_id]
-                    self.jobs.put_on(connection, job.id, job)
-                return output
+            connection.execute("BEGIN IMMEDIATE")
+            output_json = self.outputs.get_record_json_on(connection, output_id)
+            if output_json is None:
+                connection.commit()
+                return None
+            output = GenerationOutput.model_validate_json(output_json)
+            job_json = self.jobs.get_record_json_on(connection, output.job_id)
+            self.outputs.delete_on(connection, output_id)
+            if job_json:
+                job = GenerationJob.model_validate_json(job_json)
+                job.outputs = [item for item in job.outputs if item.id != output_id]
+                self.jobs.put_on(connection, job.id, job)
+            connection.commit()
+            return output
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
+
+    def recover_interrupted_jobs(self, *, batch_size: int = 128) -> int:
+        active_statuses = (
+            JobStatus.created.value,
+            JobStatus.queued.value,
+            JobStatus.planning.value,
+            JobStatus.safety_check.value,
+            JobStatus.generating.value,
+            JobStatus.postprocessing.value,
+            JobStatus.evaluating.value,
+            JobStatus.processing.value,
+            JobStatus.submitted.value,
+        )
+        recovered = 0
+        while True:
+            connection = connect(self.database_path)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                placeholders = ",".join("?" for _ in active_statuses)
+                rows = connection.execute(
+                    "SELECT record_key, payload FROM v1_records "
+                    f"WHERE namespace='jobs' AND json_extract(payload, '$.status') IN ({placeholders}) "
+                    "ORDER BY rowid LIMIT ?",
+                    (*active_statuses, max(1, int(batch_size))),
+                ).fetchall()
+                if not rows:
+                    connection.commit()
+                    return recovered
+                for row in rows:
+                    job = GenerationJob.model_validate_json(row["payload"])
+                    job.status = JobStatus.failed
+                    job.error = ProviderError(
+                        code="worker_interrupted",
+                        message="The server restarted before this generation completed. It was not replayed automatically; submit a new request to retry.",
+                        retryable=False,
+                        detail={"recovery": "process_restart", "automatic_provider_replay": False},
+                    )
+                    job.updated_at = datetime.now(timezone.utc).isoformat()
+                    self.jobs.put_on(connection, job.id, job)
+                    recovered += 1
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
 
     def append_event(self, session_id: str | None, event_type: str, data: dict[str, Any]) -> None:
         if not session_id:
@@ -129,16 +181,37 @@ class MemoryRepository:
 
     def iter_events(self, session_id: str):
         connection = connect(self.database_path)
-        cursor = connection.execute(
-            "SELECT event_type, payload FROM v1_events WHERE session_id=? ORDER BY event_id",
-            (session_id,),
-        )
         try:
-            while row := cursor.fetchone():
-                yield {"event": row["event_type"], "data": json.loads(row["payload"])}
+            row = connection.execute(
+                "SELECT COALESCE(MAX(event_id), 0) FROM v1_events WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+            upper_event_id = int(row[0] or 0)
         finally:
-            cursor.close()
             connection.close()
+
+        last_event_id = 0
+        batch_size = 128
+        while last_event_id < upper_event_id:
+            connection = connect(self.database_path)
+            try:
+                rows = connection.execute(
+                    "SELECT event_id, event_type, payload FROM v1_events "
+                    "WHERE session_id=? AND event_id>? AND event_id<=? "
+                    "ORDER BY event_id LIMIT ?",
+                    (session_id, last_event_id, upper_event_id, batch_size),
+                ).fetchall()
+            finally:
+                connection.close()
+            if not rows:
+                return
+            events = [
+                (int(row["event_id"]), {"event": row["event_type"], "data": json.loads(row["payload"])})
+                for row in rows
+            ]
+            for event_id, event in events:
+                last_event_id = event_id
+                yield event
 
     def list_events(self, session_id: str) -> list[dict[str, Any]]:
         return list(self.iter_events(session_id))

@@ -54,6 +54,7 @@ from app.browse_reads import run_output_browse
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
 from app.repositories import repository
+from app.repositories.sqlite_calls import SQLiteStorageBusy, sqlite_calls
 from app.schemas import (
     AssetContentUploadRequest,
     AssetIntent,
@@ -74,6 +75,7 @@ from app.schemas import (
 from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content, store_asset_content_bytes
 from app.services.alchemy_lab import (
     LAB_PROJECT_ID,
+    lab_store,
     ExplorationRequest,
     FavoriteSelection,
     comparison_board,
@@ -121,6 +123,18 @@ from app.runtime_paths import (
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 logger = logging.getLogger(__name__)
+
+
+async def _run_sqlite_api_call(function, *args, **kwargs):
+    """Run one bounded SQLite operation away from the API event loop."""
+    try:
+        return await sqlite_calls.run(function, *args, **kwargs)
+    except SQLiteStorageBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "storage_busy", "message": "Storage is busy; retry shortly."},
+            headers={"Retry-After": "1"},
+        ) from exc
 
 
 def _positive_worker_count(name: str, *, default: int, maximum: int | None = None) -> int:
@@ -1441,6 +1455,22 @@ def _recover_v3_interrupted_background_generations() -> int:
 
 
 @app.on_event("startup")
+def _recover_interrupted_v1_and_lab_work_on_startup() -> None:
+    try:
+        jobs = repository.recover_interrupted_jobs()
+        lab_sessions = lab_store.recover_interrupted_sessions()
+    except Exception:
+        logger.exception("V1/Lab restart recovery failed before serving requests")
+        raise
+    if jobs or lab_sessions:
+        logger.warning(
+            "Closed interrupted V1 work: jobs=%s lab_sessions=%s; providers were not replayed.",
+            jobs,
+            lab_sessions,
+        )
+
+
+@app.on_event("startup")
 def _recover_v3_interrupted_background_generations_on_startup() -> None:
     _write_v3_local_runtime_descriptor()
     recovered_planning = _recover_v3_interrupted_project_planning_operations()
@@ -2287,7 +2317,13 @@ async def list_alchemy_lab_history(
 ):
     context = await _veyra_history_context(request, authorization)
     limit = min(limit, 200)
-    return list_lab_history(limit=limit, include_mock=include_mock, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
+    return await _run_sqlite_api_call(
+        list_lab_history,
+        limit=limit,
+        include_mock=include_mock,
+        veyra_user_id=context.get("user_id"),
+        is_admin=context.get("is_admin", False),
+    )
 
 
 @app.post("/api/lab/uploads")
@@ -2360,13 +2396,24 @@ async def create_rare_style_explorer_session(
         session = await create_exploration_session(body, veyra_user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "invalid_exploration_request", "message": str(exc)}) from exc
+    except SQLiteStorageBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "storage_busy", "message": "Storage is busy; retry shortly."},
+            headers={"Retry-After": "1"},
+        ) from exc
     return {"session": public_exploration_session(session), "board": comparison_board(session), "async": session.status not in {"completed", "partial_success", "failed"}}
 
 
 @app.get("/api/lab/rare-style-explorer/sessions/{session_id}")
 async def get_rare_style_explorer_session(session_id: str, request: Request, authorization: str = Header(default="")):
     context = await _veyra_history_context(request, authorization)
-    session = get_exploration_session(session_id, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
+    session = await _run_sqlite_api_call(
+        get_exploration_session,
+        session_id,
+        veyra_user_id=context.get("user_id"),
+        is_admin=context.get("is_admin", False),
+    )
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
     return {"session": public_exploration_session(session), "board": comparison_board(session)}
@@ -2380,7 +2427,13 @@ async def update_rare_style_explorer_favorites(
     authorization: str = Header(default=""),
 ):
     context = await _veyra_history_context(request, authorization)
-    session = update_favorites(session_id, body, veyra_user_id=context.get("user_id"), is_admin=context.get("is_admin", False))
+    session = await _run_sqlite_api_call(
+        update_favorites,
+        session_id,
+        body,
+        veyra_user_id=context.get("user_id"),
+        is_admin=context.get("is_admin", False),
+    )
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
     return {"session": public_exploration_session(session), "board": comparison_board(session)}
@@ -2672,11 +2725,21 @@ def _is_lab_output_id(output_id: str) -> bool:
     return False
 
 
+def _append_output_deleted_event(output) -> None:
+    job = repository.get_job(output.job_id)
+    repository.append_event(
+        job.session_id if job else None,
+        "generation.output.deleted",
+        {"output_id": output.id, "job_id": output.job_id},
+    )
+
+
 async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
     if not settings.veyra_auth_enabled:
-        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v1_output_owner_id(output_id)}
+        owner_id = await _run_sqlite_api_call(_v1_output_owner_id, output_id)
+        return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": owner_id}
     context = await _veyra_history_context(request, authorization)
-    owner_id = _v1_output_owner_id(output_id)
+    owner_id = await _run_sqlite_api_call(_v1_output_owner_id, output_id)
     if context.get("is_admin") or owner_id == context.get("user_id") or (allow_legacy_public and owner_id is None):
         return {**context, "owner_id": owner_id}
     raise HTTPException(status_code=403, detail={"error_code": "veyra_output_forbidden", "message": "Output is not visible to this account."})
@@ -3010,15 +3073,12 @@ async def create_image_job_endpoint(
     return prepared.job
 
 
-@app.get("/v1/image/history")
-async def list_image_history(
-    request: Request,
+def _list_image_history_sync(
+    veyra_context: dict,
     session_id: str | None = None,
-    limit: int = Query(default=50, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
-    authorization: str = Header(default=""),
-):
-    veyra_context = await _veyra_history_context(request, authorization)
+    limit: int = 50,
+    offset: int = 0,
+) -> ImageHistoryResponse:
     limit = min(limit, 200)
     # Keep the request scratch DB beside durable media data. The platform's
     # default temp directory may be a memory-backed filesystem on Linux.
@@ -3116,7 +3176,9 @@ async def list_image_history(
                         )
                     )
 
-            for record in media_store.iter_history_records(limit=10000, session_id=session_id):
+            for record in media_store.iter_history_records(
+                limit=10000, session_id=session_id, include_missing=True
+            ):
                 output_id = str(record.get("id") or "")
                 if _is_non_v1_history_record(record):
                     connection.execute(
@@ -3126,6 +3188,13 @@ async def list_image_history(
                 if has_id("seen_output_ids", output_id) or has_id("blocked_output_ids", output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
                     continue
                 connection.execute("INSERT INTO seen_output_ids(output_id) VALUES(?)", (output_id,))
+                source_path = media_store.output_path(
+                    job_id=str(record.get("job_id") or ""),
+                    output_id=output_id,
+                    output_format=str(record.get("format") or "png"),
+                )
+                if not source_path.is_file():
+                    continue
                 stage_item(ImageHistoryItem(**{**record, "favorite": False}))
 
             if not session_id:
@@ -3160,6 +3229,24 @@ async def list_image_history(
     return ImageHistoryResponse(items=page, total=total)
 
 
+@app.get("/v1/image/history")
+async def list_image_history(
+    request: Request,
+    session_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    authorization: str = Header(default=""),
+):
+    veyra_context = await _veyra_history_context(request, authorization)
+    return await _run_sqlite_api_call(
+        _list_image_history_sync,
+        veyra_context,
+        session_id,
+        min(limit, 200),
+        offset,
+    )
+
+
 @app.get("/v1/veyra/usage")
 def list_v1_veyra_usage(request: Request, limit: int = Query(default=50, ge=1, le=1000), authorization: str = Header(default="")):
     user_id = _veyra_user_id_from_request(request, authorization)
@@ -3171,7 +3258,7 @@ def list_v1_veyra_usage(request: Request, limit: int = Query(default=50, ge=1, l
 @app.delete("/v1/image/history/{output_id}")
 async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
-    output = repository.delete_output(output_id)
+    output = await _run_sqlite_api_call(repository.delete_output, output_id)
     thumbnail_existed = media_store.thumbnail_path(output_id).exists()
     preview_existed = media_store.preview_path(output_id).exists()
     deleted_file = media_store.delete_output_file(
@@ -3181,16 +3268,12 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
     )
     deleted_thumbnail = media_store.delete_thumbnail(output_id) or thumbnail_existed
     deleted_preview = media_store.delete_preview(output_id) or preview_existed
-    removed_records = media_store.delete_history_record(output_id)
-    removed_favorites = delete_favorite(output_id)
+    removed_records = await _run_sqlite_api_call(media_store.delete_history_record, output_id)
+    removed_favorites = await _run_sqlite_api_call(delete_favorite, output_id)
     if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     if output:
-        repository.append_event(
-            repository.get_job(output.job_id).session_id if repository.get_job(output.job_id) else None,
-            "generation.output.deleted",
-            {"output_id": output_id, "job_id": output.job_id},
-        )
+        await _run_sqlite_api_call(_append_output_deleted_event, output)
     return {
         "ok": True,
         "output_id": output_id,
@@ -3205,11 +3288,16 @@ async def delete_image_history_item(output_id: str, request: Request, authorizat
 
 @app.put("/v1/image/history/{output_id}/favorite")
 async def favorite_image_history_item(output_id: str, body: FavoriteImageRequest, request: Request, authorization: str = Header(default="")):
-    if not _v1_history_output_exists(output_id):
+    if not await _run_sqlite_api_call(_v1_history_output_exists, output_id):
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=True)
     context = await _veyra_history_context(request, authorization)
-    return set_favorite(output_id, body.favorite, veyra_user_id=_positive_int_or_none(context.get("user_id")))
+    return await _run_sqlite_api_call(
+        set_favorite,
+        output_id,
+        body.favorite,
+        veyra_user_id=_positive_int_or_none(context.get("user_id")),
+    )
 
 
 @app.get("/v1/image/jobs/{job_id}")
@@ -3303,7 +3391,7 @@ def update_provider_settings(body: RuntimeProviderSettingsRequest, request: Requ
 @app.get("/v1/outputs/{output_id}/download")
 async def download_output(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    path, _ = _resolve_output_file(output_id)
+    path, _ = await _run_sqlite_api_call(_resolve_output_file, output_id)
     accelerated_url = await signed_v1_output_url(output_id=output_id, source_path=path, storage_root=media_store.root)
     if accelerated_url:
         return RedirectResponse(accelerated_url, status_code=302, headers={"Cache-Control": "private, no-store"})
@@ -3313,8 +3401,7 @@ async def download_output(output_id: str, request: Request, authorization: str =
 @app.get("/v1/outputs/{output_id}/thumbnail")
 async def thumbnail_output(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    path, _ = _resolve_output_file(output_id)
-    thumbnail_path = media_store.ensure_thumbnail(output_id=output_id, source_path=path)
+    thumbnail_path = await _run_sqlite_api_call(_ensure_output_thumbnail, output_id)
     if thumbnail_path == media_store.thumbnail_path(output_id):
         return FileResponse(thumbnail_path, media_type="image/jpeg", headers=IMMUTABLE_IMAGE_HEADERS)
     return FileResponse(thumbnail_path, headers=IMMUTABLE_IMAGE_HEADERS)
@@ -3323,8 +3410,7 @@ async def thumbnail_output(output_id: str, request: Request, authorization: str 
 @app.get("/v1/outputs/{output_id}/preview")
 async def preview_output(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_output_visible(request, output_id, authorization)
-    path, _ = _resolve_output_file(output_id)
-    preview_path = media_store.ensure_preview(output_id=output_id, source_path=path)
+    preview_path = await _run_sqlite_api_call(_ensure_output_preview, output_id)
     if preview_path == media_store.preview_path(output_id):
         return FileResponse(preview_path, media_type="image/webp", headers=IMMUTABLE_IMAGE_HEADERS)
     return FileResponse(preview_path, headers=IMMUTABLE_IMAGE_HEADERS)
@@ -3346,6 +3432,16 @@ def _resolve_output_file(output_id: str) -> tuple[Path, str]:
         path, output_format, _ = fallback
         return path, output_format
     return path, output.format
+
+
+def _ensure_output_thumbnail(output_id: str) -> Path:
+    path, _ = _resolve_output_file(output_id)
+    return media_store.ensure_thumbnail(output_id=output_id, source_path=path)
+
+
+def _ensure_output_preview(output_id: str) -> Path:
+    path, _ = _resolve_output_file(output_id)
+    return media_store.ensure_preview(output_id=output_id, source_path=path)
 
 
 def _safe_public_share_url(request: Request, value: str | None, *, fallback: str) -> str:

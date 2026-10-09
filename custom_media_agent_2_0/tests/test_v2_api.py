@@ -42,10 +42,10 @@ from app.services.visual_signals import build_case_visual_signals
 
 def fresh_client() -> TestClient:
     test_dir = Path(tempfile.mkdtemp(prefix="alchemy_v2_test_"))
-    repository.reset()
     claude_orchestrator_service.reset_orchestrator_observability()
     object.__setattr__(settings, "data_dir", test_dir)
     object.__setattr__(settings, "storage_dir", test_dir / "storage")
+    repository.reset()
     object.__setattr__(settings, "default_agent_model", "gpt-4.1-mini")
     object.__setattr__(settings, "image_generation_provider", "mock_image")
     object.__setattr__(settings, "openai_api_key", "sk-test-openai")

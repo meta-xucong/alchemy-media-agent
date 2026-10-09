@@ -16,43 +16,110 @@ def favorites_path() -> Path:
     return media_store.root / "favorites" / "image_favorites.json"
 
 
-def _iter_items(handle):
-    decoder = JSONDecoder()
-    buffer = ""
-    marker = '"items"'
-    started = False
-    index = 0
-    while not started:
-        chunk = handle.read(64 * 1024)
+class _StreamingJSONReader:
+    def __init__(self, handle) -> None:
+        self.handle = handle
+        self.decoder = JSONDecoder()
+        self.buffer = ""
+        self.position = 0
+        self.eof = False
+
+    def _fill(self) -> bool:
+        if self.position:
+            self.buffer = self.buffer[self.position :]
+            self.position = 0
+        chunk = self.handle.read(64 * 1024)
         if not chunk:
+            self.eof = True
+            return False
+        self.buffer += chunk
+        return True
+
+    def peek(self) -> str | None:
+        while self.position >= len(self.buffer) and not self.eof:
+            self._fill()
+        return self.buffer[self.position] if self.position < len(self.buffer) else None
+
+    def consume(self, expected: str) -> None:
+        self.skip_whitespace()
+        if self.peek() != expected:
+            raise ValueError("Legacy V1 favorites file is not a complete JSON object.")
+        self.position += 1
+
+    def skip_whitespace(self) -> None:
+        while (char := self.peek()) is not None and char.isspace():
+            self.position += 1
+
+    def value(self):
+        self.skip_whitespace()
+        while True:
+            try:
+                value, end = self.decoder.raw_decode(self.buffer, self.position)
+            except json.JSONDecodeError:
+                if not self._fill():
+                    raise ValueError("Legacy V1 favorites file ended before its JSON value was complete.") from None
+            else:
+                self.position = end
+                self._fill()
+                return value
+
+    def array_items(self):
+        self.consume("[")
+        self.skip_whitespace()
+        if self.peek() == "]":
+            self.position += 1
             return
-        buffer += chunk
-        marker_index = buffer.find(marker)
-        if marker_index < 0:
-            buffer = buffer[-len(marker) :]
-            continue
-        array_index = buffer.find("[", marker_index + len(marker))
-        if array_index < 0:
-            continue
-        buffer = buffer[array_index + 1 :]
-        started = True
-    while True:
-        while index < len(buffer) and (buffer[index].isspace() or buffer[index] == ","):
-            index += 1
-        if index < len(buffer) and buffer[index] == "]":
-            return
-        try:
-            item, end = decoder.raw_decode(buffer, index)
-        except json.JSONDecodeError:
-            chunk = handle.read(64 * 1024)
-            if not chunk:
-                raise ValueError("Legacy V1 favorites file ended before its items array was complete.")
-            buffer = buffer[index:] + chunk
-            index = 0
-            continue
-        yield item
-        buffer = buffer[end:]
-        index = 0
+        while True:
+            yield self.value()
+            self.skip_whitespace()
+            separator = self.peek()
+            if separator == "]":
+                self.position += 1
+                return
+            if separator != ",":
+                raise ValueError("Legacy V1 favorites items array is malformed.")
+            self.position += 1
+            self.skip_whitespace()
+            if self.peek() == "]":
+                raise ValueError("Legacy V1 favorites items array has a trailing comma.")
+
+    def finish(self) -> None:
+        self.skip_whitespace()
+        if self.peek() is not None:
+            raise ValueError("Legacy V1 favorites file has trailing data after its JSON object.")
+
+
+def _iter_items(handle):
+    reader = _StreamingJSONReader(handle)
+    if reader.peek() == "\ufeff":
+        reader.position += 1
+    reader.consume("{")
+    found_items = False
+    reader.skip_whitespace()
+    if reader.peek() != "}":
+        while True:
+            key = reader.value()
+            if not isinstance(key, str):
+                raise ValueError("Legacy V1 favorites object contains a non-string key.")
+            reader.consume(":")
+            if key == "items":
+                if found_items:
+                    raise ValueError("Legacy V1 favorites object contains duplicate items fields.")
+                found_items = True
+                yield from reader.array_items()
+            else:
+                reader.value()
+            reader.skip_whitespace()
+            separator = reader.peek()
+            if separator == "}":
+                break
+            if separator != ",":
+                raise ValueError("Legacy V1 favorites object is malformed.")
+            reader.position += 1
+    reader.consume("}")
+    reader.finish()
+    if not found_items:
+        raise ValueError("Legacy V1 favorites object has no items array.")
 
 
 def _positive_int_or_none(value: Any) -> int | None:
@@ -81,12 +148,14 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
             state_key TEXT PRIMARY KEY, state_value TEXT NOT NULL
         )"""
     )
-    if connection.execute(
-        "SELECT 1 FROM v1_favorite_state WHERE state_key='legacy_imported'"
-    ).fetchone():
-        return
     path = favorites_path()
-    with connection:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if connection.execute(
+            "SELECT 1 FROM v1_favorite_state WHERE state_key='legacy_imported'"
+        ).fetchone():
+            connection.commit()
+            return
         if path.exists():
             with path.open("r", encoding="utf-8") as handle:
                 for item in _iter_items(handle):
@@ -108,6 +177,10 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
             "INSERT INTO v1_favorite_state(state_key, state_value) VALUES('legacy_imported', ?)",
             (datetime.now(timezone.utc).isoformat(),),
         )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def list_favorite_ids(

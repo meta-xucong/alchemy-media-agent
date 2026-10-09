@@ -28,9 +28,9 @@ def _database_path() -> Path:
 def _connect() -> sqlite3.Connection:
     path = _database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=3.0)
+    connection = sqlite3.connect(path, timeout=0.75)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout=3000")
+    connection.execute("PRAGMA busy_timeout=750")
     key = str(path.resolve())
     if key not in _INITIALIZED_PATHS:
         with _SCHEMA_LOCK:
@@ -75,53 +75,121 @@ def _owner_key(owner_id: int | None) -> str:
     return str(owner_id) if owner_id is not None else ""
 
 
-def _iter_json_array_items(handle, *, array_name: str = "items"):
-    decoder = JSONDecoder()
-    buffer = ""
-    marker = f'"{array_name}"'
-    array_started = False
-    index = 0
-    while not array_started:
-        chunk = handle.read(64 * 1024)
-        if not chunk:
-            return
-        buffer += chunk
-        marker_index = buffer.find(marker)
-        if marker_index < 0:
-            buffer = buffer[-len(marker) :]
-            continue
-        array_index = buffer.find("[", marker_index + len(marker))
-        if array_index < 0:
-            continue
-        buffer = buffer[array_index + 1 :]
-        array_started = True
+class _StreamingJSONReader:
+    def __init__(self, handle) -> None:
+        self.handle = handle
+        self.decoder = JSONDecoder()
+        self.buffer = ""
+        self.position = 0
+        self.eof = False
 
-    while True:
-        while index < len(buffer) and (buffer[index].isspace() or buffer[index] == ","):
-            index += 1
-        if index < len(buffer) and buffer[index] == "]":
+    def _fill(self) -> bool:
+        if self.position:
+            self.buffer = self.buffer[self.position :]
+            self.position = 0
+        chunk = self.handle.read(64 * 1024)
+        if not chunk:
+            self.eof = True
+            return False
+        self.buffer += chunk
+        return True
+
+    def peek(self) -> str | None:
+        while self.position >= len(self.buffer) and not self.eof:
+            self._fill()
+        return self.buffer[self.position] if self.position < len(self.buffer) else None
+
+    def consume(self, expected: str) -> None:
+        self.skip_whitespace()
+        if self.peek() != expected:
+            raise ValueError("Legacy V2 favorites file is not a complete JSON object.")
+        self.position += 1
+
+    def skip_whitespace(self) -> None:
+        while (char := self.peek()) is not None and char.isspace():
+            self.position += 1
+
+    def value(self):
+        self.skip_whitespace()
+        while True:
+            try:
+                value, end = self.decoder.raw_decode(self.buffer, self.position)
+            except json.JSONDecodeError:
+                if not self._fill():
+                    raise ValueError("Legacy V2 favorites file ended before its JSON value was complete.") from None
+            else:
+                self.position = end
+                self._fill()
+                return value
+
+    def array_items(self):
+        self.consume("[")
+        self.skip_whitespace()
+        if self.peek() == "]":
+            self.position += 1
             return
-        try:
-            item, end = decoder.raw_decode(buffer, index)
-        except json.JSONDecodeError:
-            chunk = handle.read(64 * 1024)
-            if not chunk:
-                raise ValueError("Legacy favorites JSON ended before the items array was complete.")
-            buffer = buffer[index:] + chunk
-            index = 0
-            continue
-        yield item
-        buffer = buffer[end:]
-        index = 0
+        while True:
+            yield self.value()
+            self.skip_whitespace()
+            separator = self.peek()
+            if separator == "]":
+                self.position += 1
+                return
+            if separator != ",":
+                raise ValueError("Legacy V2 favorites items array is malformed.")
+            self.position += 1
+            self.skip_whitespace()
+            if self.peek() == "]":
+                raise ValueError("Legacy V2 favorites items array has a trailing comma.")
+
+    def finish(self) -> None:
+        self.skip_whitespace()
+        if self.peek() is not None:
+            raise ValueError("Legacy V2 favorites file has trailing data after its JSON object.")
+
+
+def _iter_json_array_items(handle, *, array_name: str = "items"):
+    reader = _StreamingJSONReader(handle)
+    if reader.peek() == "\ufeff":
+        reader.position += 1
+    reader.consume("{")
+    found_array = False
+    reader.skip_whitespace()
+    if reader.peek() != "}":
+        while True:
+            key = reader.value()
+            if not isinstance(key, str):
+                raise ValueError("Legacy V2 favorites object contains a non-string key.")
+            reader.consume(":")
+            if key == array_name:
+                if found_array:
+                    raise ValueError("Legacy V2 favorites object contains duplicate items fields.")
+                found_array = True
+                yield from reader.array_items()
+            else:
+                reader.value()
+            reader.skip_whitespace()
+            separator = reader.peek()
+            if separator == "}":
+                break
+            if separator != ",":
+                raise ValueError("Legacy V2 favorites object is malformed.")
+            reader.position += 1
+    reader.consume("}")
+    reader.finish()
+    if not found_array:
+        raise ValueError("Legacy V2 favorites object has no items array.")
 
 
 def _ensure_imported(connection: sqlite3.Connection) -> None:
-    if connection.execute(
-        "SELECT 1 FROM favorite_migrations WHERE migration_key='legacy_json'"
-    ).fetchone():
-        return
     path = favorites_path()
-    with connection:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if connection.execute(
+            "SELECT 1 FROM favorite_migrations WHERE migration_key='legacy_json'"
+        ).fetchone():
+            connection.commit()
+            return
         if path.exists():
             with path.open("r", encoding="utf-8") as handle:
                 for item in _iter_json_array_items(handle):
@@ -143,6 +211,10 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
             "INSERT INTO favorite_migrations(migration_key, completed_at) VALUES('legacy_json', ?)",
             (datetime.now(timezone.utc).isoformat(),),
         )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def list_favorite_ids(

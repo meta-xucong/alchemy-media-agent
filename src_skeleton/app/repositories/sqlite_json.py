@@ -213,9 +213,9 @@ class SQLiteJsonMap(MutableMapping[str, T], Generic[T]):
 def connect(database_path: Path) -> sqlite3.Connection:
     path = Path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=3.0)
+    connection = sqlite3.connect(path, timeout=0.75)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout = 3000")
+    connection.execute("PRAGMA busy_timeout = 750")
     key = str(path.resolve())
     if key not in _INITIALIZED_DATABASES:
         with _SCHEMA_LOCK:

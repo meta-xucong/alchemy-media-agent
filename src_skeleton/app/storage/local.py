@@ -149,7 +149,13 @@ class LocalMediaStore:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
-    def iter_history_records(self, *, limit: int = 50, session_id: str | None = None) -> Iterator[dict[str, Any]]:
+    def iter_history_records(
+        self,
+        *,
+        limit: int = 50,
+        session_id: str | None = None,
+        include_missing: bool = False,
+    ) -> Iterator[dict[str, Any]]:
         self._ensure_history_index()
         safe_limit = max(0, int(limit))
         if safe_limit == 0:
@@ -174,7 +180,7 @@ class LocalMediaStore:
                     continue
                 output_format = record.get("format") or "png"
                 path = self.output_path(job_id=record.get("job_id", ""), output_id=output_id, output_format=output_format)
-                if not path.exists():
+                if not path.exists() and not include_missing:
                     continue
                 record["source"] = "manifest"
                 record["thumbnail_url"] = self.thumbnail_url(output_id)
@@ -376,13 +382,26 @@ class LocalMediaStore:
         # The previous in-memory dedupe chose the later source record by the
         # same created_at-or-updated_at timestamp used for display ordering.
         updated_epoch = source_timestamp
+        existing = connection.execute(
+            "SELECT payload FROM v1_history_records WHERE output_id=?", (output_id,)
+        ).fetchone()
+        incoming_owner = _history_owner_id(record)
+        if existing:
+            existing_record = json.loads(existing[0])
+            existing_owner = _history_owner_id(existing_record)
+            # A recovery/manifest duplicate with no owner cannot erase the
+            # explicit account attribution of a durable history record.
+            if existing_owner is not None and incoming_owner is None:
+                return
         connection.execute(
             """INSERT INTO v1_history_records(output_id, session_id, created_epoch, updated_epoch, payload)
                VALUES(?, ?, ?, ?, ?)
                ON CONFLICT(output_id) DO UPDATE SET
                  session_id=excluded.session_id, created_epoch=excluded.created_epoch,
                  updated_epoch=excluded.updated_epoch, payload=excluded.payload
-               WHERE excluded.updated_epoch >= v1_history_records.updated_epoch""",
+               WHERE excluded.updated_epoch >= v1_history_records.updated_epoch
+                  OR (json_extract(v1_history_records.payload, '$.veyra_user_id') IS NULL
+                      AND json_extract(excluded.payload, '$.veyra_user_id') IS NOT NULL)""",
             (
                 output_id,
                 str(record.get("session_id") or "") or None,
@@ -391,6 +410,7 @@ class LocalMediaStore:
                 json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
             ),
         )
+
 
     def find_output_file(self, output_id: str) -> tuple[Path, str, str] | None:
         outputs_root = self.generated_root
@@ -401,6 +421,14 @@ class LocalMediaStore:
             if output_format:
                 return path, output_format, path.parent.name
         return None
+
+
+def _history_owner_id(record: dict[str, Any]) -> int | None:
+    try:
+        owner_id = int(record.get("veyra_user_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return owner_id if owner_id > 0 else None
 
 
 def _format_from_suffix(suffix: str) -> str | None:
