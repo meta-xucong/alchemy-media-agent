@@ -17,7 +17,7 @@ from starlette.requests import Request
 from app import main
 from app.repositories import repository
 from app.repositories.sqlite_calls import SQLiteStorageBusy, sqlite_calls
-from app.schemas import GenerationJob, GenerationOutput, JobStatus
+from app.schemas import GenerationJob, GenerationOutput, JobStatus, Session
 from app.services.favorites import list_favorite_ids, set_favorite
 from app.storage import media_store
 
@@ -45,6 +45,12 @@ def _seed_output(tmp_path, monkeypatch, *, repository_owner: bool = True) -> tup
     output_id = "out_delete_atomicity"
     job_id = "job_delete_atomicity"
     now = datetime.now(timezone.utc).isoformat()
+    repository.save_session(Session(
+        id="session_delete_atomicity",
+        project_id="project_delete_atomicity",
+        created_at=now,
+        veyra_user_id=41 if repository_owner else None,
+    ))
     output = GenerationOutput(
         id=output_id,
         job_id=job_id,
@@ -315,6 +321,63 @@ def test_v1_delete_claim_prevents_job_reassociation_during_file_cleanup(tmp_path
     assert repository.list_events("session_delete_rebound_b") == []
 
 
+def test_v1_private_delete_suppresses_event_for_session_owned_by_another_user(tmp_path, monkeypatch):
+    output_id, _output_path = _seed_output(tmp_path, monkeypatch, repository_owner=True)
+    token = _enable_user_auth(monkeypatch)
+    foreign_session_id = "session_delete_foreign_owner"
+    now = datetime.now(timezone.utc).isoformat()
+    repository.save_session(Session(
+        id=foreign_session_id,
+        project_id="project_delete_foreign_owner",
+        created_at=now,
+        veyra_user_id=77,
+    ))
+    canonical_job = repository.get_job("job_delete_atomicity")
+    repository.save_job(canonical_job.model_copy(update={"session_id": foreign_session_id}))
+
+    result = asyncio.run(main.delete_image_history_item(output_id, _request(), f"Bearer {token}"))
+
+    assert result["ok"] is True
+    assert repository.get_output(output_id) is None
+    assert repository.list_events(foreign_session_id) == []
+
+
+def test_v1_delete_keeps_frozen_event_session_when_job_session_changes_mid_cleanup(tmp_path, monkeypatch):
+    output_id, _output_path = _seed_output(tmp_path, monkeypatch, repository_owner=True)
+    token = _enable_user_auth(monkeypatch)
+    original_session_id = "session_delete_atomicity"
+    rebound_session_id = "session_delete_rebound_same_owner"
+    now = datetime.now(timezone.utc).isoformat()
+    repository.save_session(Session(
+        id=rebound_session_id,
+        project_id="project_delete_rebound_same_owner",
+        created_at=now,
+        veyra_user_id=41,
+    ))
+    original_delete_file = media_store.delete_output_file
+    reassigned = False
+
+    def change_job_session_during_cleanup(**kwargs):
+        nonlocal reassigned
+        deleted = original_delete_file(**kwargs)
+        if not reassigned:
+            reassigned = True
+            current_job = repository.get_job("job_delete_atomicity")
+            repository.save_job(current_job.model_copy(update={"session_id": rebound_session_id}))
+        return deleted
+
+    monkeypatch.setattr(media_store, "delete_output_file", change_job_session_during_cleanup)
+    result = asyncio.run(main.delete_image_history_item(output_id, _request(), f"Bearer {token}"))
+
+    assert result["ok"] is True
+    assert reassigned
+    assert repository.get_job("job_delete_atomicity").session_id == rebound_session_id
+    assert [event["event"] for event in repository.list_events(original_session_id)] == [
+        "generation.output.deleted"
+    ]
+    assert repository.list_events(rebound_session_id) == []
+
+
 def test_v1_delete_rejects_reassociation_before_claim_without_cleanup(tmp_path, monkeypatch):
     output_id, output_path = _seed_output(tmp_path, monkeypatch, repository_owner=True)
     token = _enable_user_auth(monkeypatch)
@@ -575,6 +638,18 @@ def test_v1_history_owner_stays_authoritative_if_legacy_job_cleanup_fails(tmp_pa
         }
     )
     repository.jobs[matching_owner_job_id] = matching_owner_job
+    repository.save_session(Session(
+        id="session_history_owner_cleanup_authority",
+        project_id="project_history_owner_cleanup_authority",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        veyra_user_id=41,
+    ))
+    repository.save_session(Session(
+        id="session_history_owner_cleanup_stale_copy",
+        project_id="project_history_owner_cleanup_stale_copy",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        veyra_user_id=77,
+    ))
     output_path = media_store.output_path(job_id=job_id, output_id=output_id, output_format="png")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(b"private history-owned image")
@@ -658,6 +733,18 @@ def test_v1_canonical_ownerless_output_routes_delete_event_to_matching_owner_ses
         }
     )
     repository.jobs[matching_job_id] = matching_job
+    repository.save_session(Session(
+        id="session_canonical_ownerless_matching_owner",
+        project_id="project_canonical_ownerless_matching_owner",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        veyra_user_id=41,
+    ))
+    repository.save_session(Session(
+        id="session_canonical_ownerless_stale_copy",
+        project_id="project_canonical_ownerless_stale_copy",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        veyra_user_id=77,
+    ))
 
     result = asyncio.run(main.delete_image_history_item(output_id, _request(), f"Bearer {token}"))
 
@@ -845,6 +932,12 @@ def test_v1_job_only_owner_remains_retryable_when_ownerless_history_cleanup_hits
     # Preserve the pre-canonical legacy shape: owner exists only in Job.outputs,
     # while a separate ownerless manifest must not be mistaken for an owner anchor.
     repository.jobs[job_id] = job
+    repository.save_session(Session(
+        id="session_job_only_owner_busy_retry",
+        project_id="project_job_only_owner_busy_retry",
+        created_at=now,
+        veyra_user_id=41,
+    ))
     ownerless_duplicate_job = GenerationJob(
         id="job_job_only_ownerless_duplicate",
         session_id="session_job_only_ownerless_duplicate",

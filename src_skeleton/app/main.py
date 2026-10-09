@@ -3164,7 +3164,8 @@ def _v3_visual_asset_owner_scope(user_id: int | None) -> str:
 @app.post("/v1/sessions")
 def create_session_endpoint(body: CreateSessionRequest, request: Request, authorization: str = Header(default="")):
     user_id = _require_veyra_user_if_enabled(request, authorization)
-    return create_session(body, veyra_user_id=user_id)
+    session = create_session(body, veyra_user_id=user_id)
+    return session.model_dump(exclude={"veyra_user_id"})
 
 
 @app.post("/v1/sessions/{session_id}/messages")

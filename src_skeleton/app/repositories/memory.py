@@ -226,12 +226,17 @@ class MemoryRepository:
             if owner_conflict or resolved_owner_id != self._positive_owner_id(owner_id):
                 connection.rollback()
                 return None
-            if event_job_id and self._validated_output_event_session_on(
-                connection,
-                event_job_id,
-                output_id,
-                self._positive_owner_id(owner_id),
-            ) is None:
+            event_session_id = (
+                self._validated_output_event_session_on(
+                    connection,
+                    event_job_id,
+                    output_id,
+                    self._positive_owner_id(owner_id),
+                )
+                if event_job_id
+                else None
+            )
+            if event_session_id is None:
                 event_job_id = None
 
             claim = {
@@ -239,6 +244,7 @@ class MemoryRepository:
                 "owner_id": self._positive_owner_id(owner_id),
                 "canonical_job_id": current_job_id,
                 "event_job_id": event_job_id,
+                "event_session_id": event_session_id,
                 "attempt_id": attempt_id,
                 "lease_expires_at": now + self.OUTPUT_DELETE_ATTEMPT_LEASE_SECONDS,
             }
@@ -410,16 +416,9 @@ class MemoryRepository:
             if claim.get("attempt_id") != attempt_id or float(claim.get("lease_expires_at") or 0) <= time.time():
                 raise RuntimeError("Output deletion attempt is no longer active.")
             event_job_id = str(claim.get("event_job_id") or "").strip() or None
+            event_session_id = str(claim.get("event_session_id") or "").strip() or None
             output_json = self.outputs.get_record_json_on(connection, output_id)
             if output_json is None:
-                event_session_id = None
-                if event_job_id:
-                    event_session_id = self._validated_output_event_session_on(
-                        connection,
-                        event_job_id,
-                        output_id,
-                        event_owner_id,
-                    )
                 legacy_output = self._rewrite_output_copies_on(connection, output_id)
                 if legacy_output is not None and event_job_id and event_session_id:
                     connection.execute(
@@ -439,25 +438,8 @@ class MemoryRepository:
             output = GenerationOutput.model_validate_json(output_json)
             if output.job_id != claim.get("canonical_job_id"):
                 raise RuntimeError("Canonical output association changed during deletion.")
-            job_json = self.jobs.get_record_json_on(connection, output.job_id)
             self.outputs.delete_on(connection, output_id)
-            session_id = None
-            output_owner_id = self._output_owner_id(output)
-            if output_owner_id is not None and event_job_id == output.job_id and job_json:
-                job = GenerationJob.model_validate_json(job_json)
-                matching_outputs = [item for item in job.outputs if item.id == output_id]
-                if matching_outputs and all(
-                    self._output_owner_id(item) == output_owner_id
-                    for item in matching_outputs
-                ):
-                    session_id = job.session_id
-            elif event_job_id:
-                session_id = self._validated_output_event_session_on(
-                    connection,
-                    event_job_id,
-                    output_id,
-                    event_owner_id,
-                )
+            session_id = event_session_id
             self._rewrite_output_copies_on(connection, output_id)
             if session_id:
                 connection.execute(
@@ -495,6 +477,13 @@ class MemoryRepository:
         matching_outputs = [item for item in job.outputs if item.id == output_id]
         if not matching_outputs or any(self._output_owner_id(item) != owner_id for item in matching_outputs):
             return None
+        if owner_id is not None:
+            session_json = self.sessions.get_record_json_on(connection, job.session_id)
+            if session_json is None:
+                return None
+            session = Session.model_validate_json(session_json)
+            if self._positive_owner_id(session.veyra_user_id) != owner_id:
+                return None
         return job.session_id
 
     def preserve_output_owner(self, output_id: str, owner_id: int | None) -> GenerationOutput | None:

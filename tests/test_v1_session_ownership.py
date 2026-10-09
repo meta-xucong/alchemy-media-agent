@@ -54,7 +54,7 @@ def test_v1_session_owner_is_server_assigned_and_enforced_for_sse_and_writes(tmp
     )
     assert created.status_code == 200
     session_id = created.json()["id"]
-    assert created.json()["veyra_user_id"] == 41
+    assert "veyra_user_id" not in created.json()
     assert repository.get_session(session_id).veyra_user_id == 41
     repository.append_event(session_id, "private.test", {"value": "owner-only"})
 
