@@ -302,7 +302,12 @@ class LocalMediaStore:
             resolved = target.resolve()
             if generated_root not in resolved.parents:
                 return
-            target.unlink(missing_ok=True)
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                # Another cleanup may have removed it after the existence
+                # check. Treat that as an idempotent no-op.
+                return
             deleted_any = True
 
         if job_id and output_format:
@@ -314,11 +319,9 @@ class LocalMediaStore:
                 for path in job_directory.iterdir():
                     if path.stem == output_id and _format_from_suffix(path.suffix) in {"png", "jpeg", "webp"}:
                         delete_candidate(path)
-                try:
-                    if job_directory.parent == self.generated_root and not any(job_directory.iterdir()):
-                        job_directory.rmdir()
-                except OSError:
-                    pass
+                # Keep empty directories. Writers create them before opening
+                # the output file; removing a just-emptied directory here can
+                # race a different output's paused write in the same Job.
         self.delete_thumbnail(output_id)
         self.delete_preview(output_id)
         return deleted_any

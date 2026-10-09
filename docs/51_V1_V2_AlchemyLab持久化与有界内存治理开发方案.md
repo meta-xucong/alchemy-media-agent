@@ -402,3 +402,61 @@ Source Fidelity A2 对 `6d550e0…` 继续发现：删除 history 行和 owner e
 当前 Python 源码/测试指纹：`8590db1c057978f8b4698c189cb4b56d181c442dd76fb85c662721bd20e0b32f`，39 个相对 `origin/main` 的变更/新增 Python 文件，路径 UTF-8 排序，散列格式为“相对路径 + NUL + 每文件小写 SHA256(raw bytes) 十六进制 + NUL”；文档/PROGRESS 不计入指纹。双审仅放行更新 Draft PR #28，不授权合并或部署。
 
 最终只读审计收据：Source Fidelity A2 PASS 与独立 Audit A2 PASS，均复算同一 `8590db1c…` 指纹；未修改源码。A2 额外执行 V1 history/delete/favorites/migration/SQLite/Lab 33 passed、V1 owner/history API 14 passed、V2 favorites/migration/SQLite 14 passed；本机单独执行的相邻组为 41/14/8 passed，组间重叠，各自报告、不相加。A2 标记路由溯源 `ROUTE_UNVERIFIED`。双审允许更新 Draft PR #28；不构成完整 V1 smoke、浏览器、Provider、生产旧库迁移或 VPS RSS/CPU/P95 验收，也不授权合并/部署。
+
+#### 私有规范输出的删除事件目标再次收紧（2026-10-10）
+
+对前一候选 `0a9e14e…` 的独立 Audit A2 发现，规范 output 明确属于用户 41、关联 Job 副本 ownerless 时，仓库仍会把该 Job session 当作可投递删除事件的目标。即使另一个 session 有明确 owner=41 的重复 Job 副本，ownerless 关联 Job 也不能证明其 session 属于 41；session 事件读取端仅凭 session ID 取数，因此不得向该 session 发送私有 output/job ID。
+
+修正规则：私有规范 output 的事件只能投递到其规范关联 Job，且该 Job 内同 ID 的每个副本都必须显式 owner=规范 owner；缺少副本、ownerless 或 owner 不同均抑制事件，不转投重复 Job。输出删除和权威清理继续完成，事件仅用于辅助刷新，客户端可重新读取授权列表。公有 ownerless 与 history/Job-only 私有事件沿用已定义的显式授权证据规则。新增交错回归覆盖规范 owner=41、关联 Job ownerless、另一 session 存在 owner=41 重复副本；旧实现失败，新实现删除成功且两边都无事件。另验证明确匹配规范 owner 的关联 Job 仍收到事件。
+
+前一候选的 Audit A2 为 FAIL，Source Fidelity A2 PASS；两者均不适用于本修订。当前修订已完成局部定向回归，需重新冻结 Python 源码/测试指纹并取得同一指纹上的独立 Audit A2 与 Source Fidelity A2；未通过前不更新 Draft PR #28，不合并、不部署。宽范围 V2 provider-seed-sync 测试失败信号仍作为单独未解释限制记录。
+
+#### 删除事件 session 归属收敛（2026-10-09）
+
+对 `6dc1542c` 的三项删除/历史缺口完成修正后，独立 A2 又指出：迁移前数据可能把同一 output ID 复制到不同 session。删除旧 Job 副本时，不能把迭代遇到的第一份 Job 当作事件接收 session；否则 ownerless 或 stale-owner 副本所在 session 会收到私有 output/job ID。事件读取接口当前只校验登录态，不验证 session 归属，因此删除路径必须自己 fail-closed。
+
+最终规则：存在明确 owner 的规范 output 时，沿用规范 output 的 Job/session；否则，私有输出仅在找到明确 owner 与已授权 owner 相同的 Job 副本时向该 Job session 写事件。ownerless/stale/conflicting Job 不能单独证明私有事件的目标 session。对于无法证明目标 session 的迁移前私有记录，删除和持久清理仍正常完成，但不向任意 session 广播私有 ID；客户端应重新读取权威列表。Repository 在 SQLite 删除事务内再次校验目标 Job 确实含该 output ID 且副本 owner 匹配，再原子追加事件。删除权限锚点仍按规范 output、history owner/conflict、Job owner 的优先级留存；不再为了发事件或排序而把已授权 owner 复制到无关 ownerless Job/session。
+
+新增回归覆盖：history owner=41 指向 ownerless Job A，另有 stale owner=77 的 Job C 与显式 owner=41 的 Job B；canonical output 存在且 ownerless 时，事件仅进入 B 的 session，A/C 不收到；Job-only 旧记录同样优先通知显式 owner Job；无明确 owner session 的私有记录不发事件；规范 output/history/Job 部分清理失败仍可由原 owner 重试。原有跨 session 列表归属、SQLite busy 重试、无关/共享 Job 目录写入竞态回归继续通过。
+
+当前候选本机验证：V1 history/delete/favorites/migration/SQLite/SSE/Lab 及 session owner API 组 39 passed；V2 favorites/migration/retention/SQLite 组 15 passed；Python compileall、`git diff --check` 通过。分组不相加。6 个 FastAPI lifecycle 弃用警告仍在。宽泛 V2 provider-seed-sync 用例此前独立审计有 1 项未解释失败且本轮未覆盖；完整 V1 smoke、浏览器、Provider、旧生产库回填耗时及 VPS RSS/CPU/P95 仍未验证。
+
+本候选 Python 源码/测试指纹：`4b14a4c2de06ef3e4645ff39a0dde7de71207b3e5ee5d0c9bed3cc41a250b074`，39 个相对 `origin/main` 的变更/新增 Python 路径，按 UTF-8 相对路径排序并使用“路径 + NUL + 每文件小写 SHA256(raw bytes) 十六进制 + NUL”计算；文档和 `PROGRESS.md` 不在散列内。此前 `80ba9d…`、`5e4498…`、`99eb42…` 的 A2/Source Fidelity 收据均因后续事件路由修正失效。只有对此精确候选重新取得 Source Fidelity A2 与独立 Audit A2 双 PASS，才可更新 Draft PR #28；不授权合并或部署。
+
+#### 规范 owner 与 Job session 不一致时的事件保护（2026-10-09）
+
+后续 A2 发现，即使规范 output 明确属于 owner 41，它关联的 Job 副本仍可能是缺失或 stale owner=77。规范 output 继续作为删除授权权威，但不能单凭其 `job_id` 把删除事件投递到未经验证的 Job session。更新后的规则是：规范 output 有明确 owner 时，只有关联 Job 仍包含该 output，且副本 owner 缺失或与规范 owner 相同，才向规范 session 追加事件；若 Job 副本缺失或明确冲突，清理仍成功，但不向该 session 发事件。不会改投另一个重复 Job 的 session，因为那不是规范输出与当前事件的关联关系。
+
+规范 output ownerless 时，私有事件只在事务内验证到明确 matching-owner Job 后才发出；无法证明安全目的地时不发事件。Job-only / history-only 场景同样对目标 Job 输出身份和 owner 做事务内复核。该规则优先保护跨账号元数据隔离，可能让少数迁移前异常记录的客户端依赖下一次权威列表刷新。
+
+本修正新增回归：规范 output owner=41、规范 Job 输出副本 stale owner=77，同时存在另一 Job owner=41；由 41 删除时不向 stale session 或另一非规范 session发事件。规范 ownerless + history owner=41 + ownerless/stale/matching Job 三方重复场景仍只向显式 matching-owner Job session 通知。
+
+当前代码候选 fingerprint 为 `0a9e14e5351f7829952fd5e829a0bf3b8422e25f8cf9f4d4be5517ef47b34fad`（39 个相对 `origin/main` 的 Python 路径，计算方式同前；文档和 `PROGRESS.md` 排除）。旧 `4b14a4…` Source Fidelity/Audit 收据因本次补丁失效。V1 相关回归、V2 持久化回归及独立双审须针对新的同一指纹重新通过；仍不合并、不部署。
+
+#### Session 归属证据与删除锚点收尾（2026-10-09）
+
+对 `6dc1542c` 的增量审计确认了三个缺口。修正模型先统一权威规则：session 参数只决定哪些历史投影可出现在列表，不能限制 output ID 的 owner 证据范围；规范 outputs 行是最高优先级授权锚点，在整个删除成功前不得因清理顺序退位；文件系统清理只负责本次确实删除了目标文件的 Job 目录，不能顺便回收其他空目录。
+
+实现边界：历史列表扫描全部旧 Job 副本并累计其 owner 证据，但只为请求 session 暂存候选；不增加持久缓存。删除先解析当前 owner authority：明确 owner 的规范 output 高于明确 owner/conflict 的 history evidence，后者高于 Job 副本。每次清理都要保留当前唯一或最高等级的有效归属/冲突证据直到更低层记录清除；不能把 ownerless history 行误作 owner 锚点。图片删除不移除空 Job 目录：写入端会先建目录再写文件，存储层没有与删除共享的 Job 锁，即使目录刚因删除目标图片变空，也可能正被同一 Job 的另一张图使用。
+
+必须回归：跨 session 的 Job-only 同 ID 副本不得把 ownerless 投影作为公共历史返回；规范 owner 41 与 stale history owner 77 并存、history 清理遇 busy 后，41 可重试、77 仍拒绝；无规范 output、ownerless history manifest、owner 41 Job 副本并存且 history 清理遇 busy 时，Job owner 必须仍能重试；删除目标 A 不得删除无关的空 Job 目录，也不得删除共享目录中暂停写入 B 的目录，B 随后应能写入文件。新增探针须先在旧行为上失败，再验证一致性。V1/V2/Lab 其他持久化范围与 VPS 部署条件保持不变。
+
+独立 A2 又发现 ownerless history manifest 被错误当作删除重试锚点：当 Job 副本是唯一显式 owner、没有规范 output/history owner 时，先删除 Job 后遇到 history SQLite busy 会使原 owner 无法重试。故本轮原 `64b201da…` fingerprint 和双审收据失效。继续实现前的修正模型是按实际 authority 而不是记录存在性选择删除顺序：若规范 output 显式携带 owner，history 先删、规范 output/Job 后删；否则若 history 显式 owner 或同级冲突存在，Job 先删、history 最后删；否则 Job 副本是 owner authority 时，history（包括 ownerless manifest）先清理，Job 最后清理。每一步出错时，至少一个保有相同 resolved owner/conflict 的源仍在。
+
+最终本机定向验证：V1 persistence/history/favorites/migration/SQLite/SSE/delete/Lab 相关组 46 passed；V1 API history 24 passed；V2 favorites/migration/retention/SQLite 15 passed。组间有重叠，不相加。三个审计场景及同 Job 暂停写入竞态均在修复前失败、修复后通过；变更 Python `compileall` 与 `git diff --check` 通过。生命周期 deprecation warnings 保留记录。完整全量 smoke、浏览器、真实 Provider、生产数据、VPS/RSS/CPU/P95 不在本轮验证范围。
+
+当前冻结 Python 源码/测试 fingerprint：`64b201da6b9aee752b190dcdb5c72415161555e131a57f6d9deda351479cc934`，39 个相对 `origin/main` 的变更/新增 Python 文件；路径按 Python UTF-8 字符串顺序排序，哈希格式为相对路径 + NUL + 每文件小写 SHA256(raw bytes) 十六进制 + NUL。文档与 `PROGRESS.md` 不参与指纹。该树只有在新的独立 Source Fidelity A2 与 Audit A2 均对同一指纹复核通过后，才允许更新 Draft PR #28；不授权合并或部署。
+
+#### Job-only owner 重试锚点收尾（2026-10-09）
+
+此边界已补回归并修正：删除前读取精确的 history owner/conflict authority；只有规范 output 明确携带 owner 时才按规范 output 优先路径清理 history，否则显式 history owner/conflict 保留到 Job 清理后，ownerless/无 history 归属时先尝试 history 清理并保留 Job 副本。`delete_output_with_event` 在没有规范 output 行时仍返回事务中移除的旧 Job 输出副本，使已经清理 Job-only 结果的幂等重试返回成功，而不是在图片/manifest 已被前次尝试清理后误报 404。故障回归覆盖 owner 41 Job 副本 + ownerless history manifest + history SQLite busy：首次 503 时 Job owner 保留，owner 77 被拒绝，owner 41 重试成功。
+
+该修正后本机相关组：V1 persistence/history/favorites/migration/SQLite/SSE/delete/Lab 47 passed；V1 API history 24 passed；V2 favorites/migration/retention/SQLite 15 passed。组间重叠。上一独立 A2 曾在宽选集报告 V2 provider-seed 用例 1 项失败；定向 15 项持久化组未覆盖该功能，本机单测尝试超时并中断，因此它仍是未解释的宽套件信号，不能记作全绿。当前源码变化已使 `64b201da…` 双审收据失效，需要重新冻结并通过两路独立审计。完整 smoke、浏览器、真实 Provider、生产数据、VPS/RSS/CPU/P95 未验证。
+
+#### 私有规范输出事件规则勘误（2026-10-10）
+
+Source Fidelity A2 对 `f63f08e…` 指出，第 428 行附近历史章节仍写“副本 owner 缺失或与规范 owner 相同”即可向规范 Job session 投递删除事件。该句记录的是旧规则，现已被本文件后续章节“私有规范输出的删除事件目标再次收紧”取代，不再是当前实现或开发的依据。
+
+唯一现行规则：规范 output 为私有时，规范关联 Job 必须包含该 output 的副本，且同 Job 内同 ID 的所有副本都必须显式携带与规范 owner 完全相同的 owner；ownerless、缺失或冲突均抑制事件，不转投重复 Job。删除和权威清理仍完成，事件只用于辅助刷新。规范 ownerless 的私有 legacy 记录，只能向事务内验证为显式匹配 owner 的 Job session 发事件；无法证明目的地时抑制事件。本节优先于第 428 行附近及更早的同主题历史描述。
+
+该候选现已获得同指纹双审：独立 Audit A2 PASS，Source Fidelity A2 PASS，均绑定 `f63f08e3932c574acde5e77a7225e8b04487a80d351224d302e3b3559c1336ac`（39 个变更/新增 Python 文件）。Audit A2 独立复核上述 ownerless 事件边界、跨 session 历史归属、删除失败后的 owner 锚点与重试、SQLite 事务和目录竞态；审计环境缺 pytest，未独立执行测试。主控本机验证为 V1 history/delete/favorites/migration/SQLite/SSE/Lab + session-owner API 42 passed，另 V1 history API 14 passed、V2 favorites/migration/retention/SQLite 14 passed，分组有重叠；compileall、`git diff --check` 通过。路由溯源标记 `ROUTE_UNVERIFIED`。该双审只放行更新 Draft PR #28，不代表完整 V1/V2/Lab 生产验收，不授权合并或部署；此前宽范围 V2 provider-seed-sync 用例的一项失败信号仍未解释，生产旧数据迁移、浏览器、真实 Provider 和 VPS 资源验收也未完成。

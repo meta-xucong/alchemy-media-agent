@@ -3332,6 +3332,92 @@ def test_v1_missing_private_manifest_keeps_owner_on_filesystem_recovery(tmp_path
         settings.veyra_session_secret = original_session_secret
 
 
+def test_v1_session_history_uses_job_owner_evidence_from_other_sessions(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from app.schemas import GenerationJob, GenerationOutput, JobStatus
+
+    monkeypatch.setattr(media_store, "root", tmp_path)
+    repository.reset()
+    original_auth_enabled = settings.veyra_auth_enabled
+    original_internal_token = settings.veyra_internal_token
+    original_session_secret = settings.veyra_session_secret
+    settings.veyra_auth_enabled = True
+    settings.veyra_internal_token = "bridge-secret"
+    settings.veyra_session_secret = "session-secret"
+
+    async def fake_load_account(user_id: int):
+        return type("Account", (), {"user_id": user_id, "role": "user"})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
+    output_id = "out_legacy_cross_session_owner"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    ownerless_job = GenerationJob(
+        id="job_legacy_ownerless_session",
+        session_id="ses_legacy_ownerless",
+        job_type="image",
+        status="ready",
+        trace_id="trace_legacy_ownerless",
+        created_at=timestamp,
+        updated_at=timestamp,
+        outputs=[GenerationOutput(
+            id=output_id,
+            job_id="job_legacy_ownerless_session",
+            url=f"/v1/outputs/{output_id}/download",
+            format="png",
+            metadata={},
+        )],
+    )
+    private_job = GenerationJob(
+        id="job_legacy_private_session",
+        session_id="ses_legacy_private",
+        job_type="image",
+        status="ready",
+        trace_id="trace_legacy_private",
+        created_at=timestamp,
+        updated_at=timestamp,
+        outputs=[GenerationOutput(
+            id=output_id,
+            job_id="job_legacy_private_session",
+            url=f"/v1/outputs/{output_id}/download",
+            format="png",
+            metadata={"veyra_user_id": 41},
+        )],
+    )
+    # Legacy Job-only records are inserted directly to preserve the state before
+    # canonical output/history rows were introduced.
+    repository.jobs[ownerless_job.id] = ownerless_job
+    repository.jobs[private_job.id] = private_job
+
+    try:
+        client = TestClient(app)
+        other_token = _issue_test_veyra_session_token(77)
+        owner_token = _issue_test_veyra_session_token(41)
+        other_history = client.get(
+            "/v1/image/history?session_id=ses_legacy_ownerless&limit=10",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        owner_history = client.get(
+            "/v1/image/history?session_id=ses_legacy_ownerless&limit=10",
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        other_download = client.get(
+            f"/v1/outputs/{output_id}/download",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+
+        assert other_history.status_code == 200
+        assert output_id not in {item["id"] for item in other_history.json()["items"]}
+        assert owner_history.status_code == 200
+        owner_items = [item for item in owner_history.json()["items"] if item["id"] == output_id]
+        assert len(owner_items) == 1
+        assert owner_items[0]["veyra_user_id"] == 41
+        assert other_download.status_code == 403
+    finally:
+        settings.veyra_auth_enabled = original_auth_enabled
+        settings.veyra_internal_token = original_internal_token
+        settings.veyra_session_secret = original_session_secret
+
+
 def test_v1_old_history_owner_lookup_is_not_limited_to_recent_page_window(tmp_path, monkeypatch):
     from app.repositories.sqlite_json import connect
 

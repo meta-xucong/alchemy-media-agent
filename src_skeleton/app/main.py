@@ -2764,8 +2764,46 @@ def _is_lab_output_id(output_id: str) -> bool:
 def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = None) -> dict[str, object]:
     """Perform one retryable history-output cleanup under a single admitted worker slot."""
     output = repository.get_output(output_id)
-    if owner_id is not None:
-        output = repository.preserve_output_owner(output_id, owner_id) or output
+    output_owner_id = _history_output_veyra_user_id(output.metadata) if output else None
+    history_record = (
+        media_store.get_history_record(output_id, include_missing=True)
+        if output_owner_id is None
+        else None
+    )
+    history_owner_authority = bool(
+        history_record
+        and (
+            history_record.get("_veyra_owner_conflict")
+            or _positive_int_or_none(history_record.get("veyra_user_id")) is not None
+        )
+    )
+    legacy_event_job_id = None
+    if output is not None and output_owner_id is not None:
+        legacy_event_job_id = output.job_id
+    elif owner_id is not None:
+        # For private outputs, only a Job copy with an explicit matching owner
+        # can establish a safe event session. Do not infer session ownership
+        # from an ownerless duplicate or a history row's job_id alone.
+        job_iterator = getattr(repository, "iter_jobs", None)
+        jobs = (
+            job_iterator(job_type="image")
+            if callable(job_iterator)
+            else iter(repository.list_jobs(job_type="image"))
+        )
+        for job in jobs:
+            if any(
+                nested.id == output_id
+                and _history_output_veyra_user_id(nested.metadata) == owner_id
+                for nested in job.outputs
+            ) and legacy_event_job_id is None:
+                legacy_event_job_id = job.id
+    elif not history_owner_authority:
+        # Public/ownerless history may use its own session or the canonical Job.
+        legacy_event_job_id = (
+            output.job_id
+            if output is not None
+            else str(history_record.get("job_id") or "").strip() if history_record else None
+        )
     thumbnail_existed = media_store.thumbnail_path(output_id).exists()
     preview_existed = media_store.preview_path(output_id).exists()
     deleted_file = media_store.delete_output_file(
@@ -2780,12 +2818,35 @@ def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = N
     # record) as an authorization anchor until all preceding idempotent cleanup
     # has succeeded. A failed call can then be retried by the same owner.
     removed_favorites = delete_favorite(output_id)
-    removed_output = repository.delete_output_with_event(output_id)
-    # Repository/Job projections are removed while the durable history owner
-    # evidence still protects the ID. If the history delete then hits SQLITE_BUSY,
-    # the remaining history row remains sufficient for the original owner to retry.
-    removed_records = media_store.delete_history_record(output_id)
-    if not output and not deleted_file and not deleted_thumbnail and not deleted_preview and removed_records == 0:
+    if output_owner_id is not None or not history_owner_authority:
+        # Either the normalized output is the highest explicit owner anchor, or
+        # the Job copies are the only explicit owner source. In both cases the
+        # repository/Job evidence stays in place while lower-priority (or
+        # ownerless) history cleanup may fail.
+        removed_records = media_store.delete_history_record(output_id)
+        removed_output = repository.delete_output_with_event(
+            output_id,
+            event_job_id=legacy_event_job_id,
+            event_owner_id=owner_id,
+        )
+    else:
+        # An explicit history owner or same-tier conflict is the strongest
+        # remaining authority. Remove repository/Job copies first so this
+        # evidence remains available if either cleanup step fails.
+        removed_output = repository.delete_output_with_event(
+            output_id,
+            event_job_id=legacy_event_job_id,
+            event_owner_id=owner_id,
+        )
+        removed_records = media_store.delete_history_record(output_id)
+    if (
+        not output
+        and not deleted_file
+        and not deleted_thumbnail
+        and not deleted_preview
+        and removed_records == 0
+        and not removed_output
+    ):
         raise HTTPException(
             status_code=404,
             detail={"code": "output_not_found", "message": "Output not found."},
@@ -3379,10 +3440,15 @@ def _list_image_history_sync(
 
         try:
             job_iterator = getattr(repository, "iter_jobs", None)
+            # Session narrows which candidates can be displayed, but ownership
+            # evidence for a globally unique output ID must include legacy Job
+            # copies from every session. Otherwise an ownerless copy in the
+            # requested session could be exposed as public history while the
+            # private copy that establishes its owner sits in another session.
             jobs = (
-                job_iterator(job_type="image", session_id=session_id)
+                job_iterator(job_type="image")
                 if callable(job_iterator)
-                else iter(repository.list_jobs(job_type="image", session_id=session_id))
+                else iter(repository.list_jobs(job_type="image"))
             )
             for job in jobs:
                 if _is_non_v1_history_job(job):
@@ -3397,6 +3463,8 @@ def _list_image_history_sync(
                         _history_output_veyra_user_id(output.metadata),
                         authority_rank=2,
                     )
+                    if session_id and job.session_id != session_id:
+                        continue
                     if output.format not in {"png", "jpeg", "webp"}:
                         continue
                     stage_candidate(

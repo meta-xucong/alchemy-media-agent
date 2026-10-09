@@ -132,11 +132,20 @@ class MemoryRepository:
         payload = self.outputs.get_record_json_on(connection, output_id)
         return GenerationOutput.model_validate_json(payload) if payload is not None else None
 
-    def _rewrite_output_copies_on(self, connection, output_id: str, *, owner_id: int | None = None) -> None:
+    def _rewrite_output_copies_on(
+        self,
+        connection,
+        output_id: str,
+        *,
+        owner_id: int | None = None,
+    ) -> GenerationOutput | None:
         """Update or remove every legacy Job projection for one output ID."""
+        matching_output = None
         for job in self.jobs.iter_jobs():
             if not any(item.id == output_id for item in job.outputs):
                 continue
+            if matching_output is None:
+                matching_output = next(item for item in job.outputs if item.id == output_id)
             if owner_id is None:
                 outputs = [item for item in job.outputs if item.id != output_id]
             else:
@@ -150,6 +159,7 @@ class MemoryRepository:
                     outputs.append(item.model_copy(update={"metadata": metadata}))
             if outputs != job.outputs:
                 self.jobs.put_on(connection, job.id, job.model_copy(update={"outputs": outputs}))
+        return matching_output
 
     def delete_output(self, output_id: str) -> GenerationOutput | None:
         connection = connect(self.database_path)
@@ -171,23 +181,63 @@ class MemoryRepository:
         finally:
             connection.close()
 
-    def delete_output_with_event(self, output_id: str) -> GenerationOutput | None:
-        """Remove an output and append its deletion event in the same transaction."""
+    def delete_output_with_event(
+        self,
+        output_id: str,
+        *,
+        event_job_id: str | None = None,
+        event_owner_id: int | None = None,
+    ) -> GenerationOutput | None:
+        """Remove a canonical or legacy Job output and append any event atomically."""
         connection = connect(self.database_path)
         try:
             connection.execute("BEGIN IMMEDIATE")
             output_json = self.outputs.get_record_json_on(connection, output_id)
             if output_json is None:
-                self._rewrite_output_copies_on(connection, output_id)
+                event_session_id = None
+                if event_job_id:
+                    event_session_id = self._validated_output_event_session_on(
+                        connection,
+                        event_job_id,
+                        output_id,
+                        event_owner_id,
+                    )
+                legacy_output = self._rewrite_output_copies_on(connection, output_id)
+                if legacy_output is not None and event_job_id and event_session_id:
+                    connection.execute(
+                        "INSERT INTO v1_events(session_id, event_type, payload) VALUES(?, ?, ?)",
+                        (
+                            event_session_id,
+                            "generation.output.deleted",
+                            json.dumps(
+                                {"output_id": legacy_output.id, "job_id": event_job_id},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        ),
+                    )
                 connection.commit()
-                return None
+                return legacy_output
             output = GenerationOutput.model_validate_json(output_json)
             job_json = self.jobs.get_record_json_on(connection, output.job_id)
             self.outputs.delete_on(connection, output_id)
             session_id = None
-            if job_json:
+            output_owner_id = self._output_owner_id(output)
+            if output_owner_id is not None and event_job_id == output.job_id and job_json:
                 job = GenerationJob.model_validate_json(job_json)
-                session_id = job.session_id
+                matching_outputs = [item for item in job.outputs if item.id == output_id]
+                if matching_outputs and all(
+                    self._output_owner_id(item) == output_owner_id
+                    for item in matching_outputs
+                ):
+                    session_id = job.session_id
+            elif event_job_id:
+                session_id = self._validated_output_event_session_on(
+                    connection,
+                    event_job_id,
+                    output_id,
+                    event_owner_id,
+                )
             self._rewrite_output_copies_on(connection, output_id)
             if session_id:
                 connection.execute(
@@ -196,7 +246,7 @@ class MemoryRepository:
                         session_id,
                         "generation.output.deleted",
                         json.dumps(
-                            {"output_id": output.id, "job_id": output.job_id},
+                            {"output_id": output.id, "job_id": event_job_id or output.job_id},
                             ensure_ascii=False,
                             separators=(",", ":"),
                         ),
@@ -209,6 +259,23 @@ class MemoryRepository:
             raise
         finally:
             connection.close()
+
+    def _validated_output_event_session_on(
+        self,
+        connection,
+        job_id: str,
+        output_id: str,
+        owner_id: int | None,
+    ) -> str | None:
+        """Return a session only when its Job copy matches the chosen owner evidence."""
+        job_json = self.jobs.get_record_json_on(connection, job_id)
+        if not job_json:
+            return None
+        job = GenerationJob.model_validate_json(job_json)
+        matching_outputs = [item for item in job.outputs if item.id == output_id]
+        if not matching_outputs or any(self._output_owner_id(item) != owner_id for item in matching_outputs):
+            return None
+        return job.session_id
 
     def preserve_output_owner(self, output_id: str, owner_id: int | None) -> GenerationOutput | None:
         """Persist a verified history owner on an output before its history anchor is removed."""
