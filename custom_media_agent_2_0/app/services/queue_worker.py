@@ -34,6 +34,21 @@ def _worker_instance_id() -> str:
     return f"v2-inline-{uuid.uuid4().hex}"
 
 
+def _recover_success_checkpoint(claim: task_queue.QueuedTask) -> tuple[CreativeRun | None, bool]:
+    try:
+        return task_queue.get_success_checkpoint(claim), False
+    except task_queue.InvalidSuccessCheckpoint as exc:
+        if task_queue.terminalize_invalid_success_checkpoint(claim, exc):
+            logger.error(
+                "V2 task %s was quarantined because its success checkpoint failed integrity validation (%s)",
+                claim.task_id,
+                exc.cause_type,
+            )
+        else:
+            logger.info("V2 task %s checkpoint quarantine skipped because its claim was superseded", claim.task_id)
+        return None, True
+
+
 @dataclass
 class QueueWorker:
     runtime: CreativeManagerRuntime
@@ -80,7 +95,9 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
             if record.kind not in {"creative_run", "revision_run"}:
                 raise ValueError(f"Unsupported task kind: {record.kind}")
             request = CreateCreativeRunRequest.model_validate(record.payload)
-            run = task_queue.get_success_checkpoint(record)
+            run, invalid_checkpoint = _recover_success_checkpoint(record)
+            if invalid_checkpoint:
+                return True
             if run is not None:
                 run = task_queue.restore_success_checkpoint(run)
                 _complete_task_with_bounded_retry(record, run)
@@ -127,7 +144,9 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                             consume_attempt=False,
                         )
                     return True
-            checkpoint = task_queue.get_success_checkpoint(record)
+            checkpoint, invalid_checkpoint = _recover_success_checkpoint(record)
+            if invalid_checkpoint:
+                return True
             if checkpoint is not None:
                 run = task_queue.restore_success_checkpoint(checkpoint)
             if not task_queue.task_claim_is_current(record):

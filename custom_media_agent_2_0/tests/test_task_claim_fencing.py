@@ -788,8 +788,9 @@ def test_success_checkpoint_restores_all_completed_jobs_without_generation_or_re
             (task_queue._json_dumps(envelope), run_id),
         )
     with task_queue.claimed_task(claim):
-        with pytest.raises(ValueError, match="authoritative queued run snapshot"):
+        with pytest.raises(task_queue.InvalidSuccessCheckpoint) as corrupt_checkpoint:
             task_queue.get_success_checkpoint(claim)
+    assert corrupt_checkpoint.value.cause_type == "ValueError"
     fallback_snapshot = task_queue.get_run_snapshot(run_id)
     assert fallback_snapshot is not None and fallback_snapshot.status == "generating"
     assert [job.job_id for job in fallback_snapshot.generation_jobs] == [first_job.job_id, second_running.job_id]
@@ -822,6 +823,11 @@ def test_success_checkpoint_restores_all_completed_jobs_without_generation_or_re
     assert pending_recovery["result_json"] is None
     assert task_queue.get_run_snapshot(run_id).status == "completed"
 
+    with task_queue._connect() as connection:
+        connection.execute(
+            "UPDATE v2_tasks SET attempts = max_attempts WHERE task_id = ?",
+            (claim.task_id,),
+        )
     _make_stale(claim)
     repository.reset()  # Simulate process-local projection loss after a worker restart.
 
@@ -848,10 +854,12 @@ def test_success_checkpoint_restores_all_completed_jobs_without_generation_or_re
     assert task_queue.get_run_snapshot(run_id).status == "completed"
     with task_queue._connect() as connection:
         row = connection.execute(
-            "SELECT status, success_checkpoint_json, result_json FROM v2_tasks WHERE run_id = ?",
+            "SELECT status, attempts, max_attempts, success_checkpoint_json, result_json "
+            "FROM v2_tasks WHERE run_id = ?",
             (run_id,),
         ).fetchone()
     assert row["status"] == "completed"
+    assert row["attempts"] == row["max_attempts"]
     assert row["success_checkpoint_json"] is None
     assert row["result_json"]
 
@@ -1031,22 +1039,32 @@ def test_worker_bounded_finalization_retries_sqlite_busy(tmp_path: Path, monkeyp
     assert calls == 3
 
 
-def test_corrupt_success_checkpoint_never_fabricates_completion(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("checkpoint_kind", ["malformed_json", "invalid_manifest"])
+def test_corrupt_success_checkpoint_is_quarantined_without_blocking_following_work(
+    tmp_path: Path,
+    monkeypatch,
+    checkpoint_kind: str,
+) -> None:
     from app.repositories import repository
     from app.services import queue_worker
 
     _configure_queue(tmp_path, monkeypatch)
-    run_id = "run_checkpoint_corrupt"
+    run_id = f"run_checkpoint_corrupt_{checkpoint_kind}"
     _enqueue(run_id)
     claim = task_queue.claim_next_task("worker-checkpoint-corrupt-source")
     assert claim is not None
     with task_queue.claimed_task(claim):
         assert task_queue.get_success_checkpoint(claim) is None
     _make_stale(claim)
+    checkpoint_raw = (
+        "{corrupt-json"
+        if checkpoint_kind == "malformed_json"
+        else task_queue._json_dumps({"version": 2, "run": {}})
+    )
     with task_queue._connect() as connection:
         connection.execute(
             "UPDATE v2_tasks SET success_checkpoint_json = ? WHERE task_id = ?",
-            ("{corrupt-json", claim.task_id),
+            (checkpoint_raw, claim.task_id),
         )
 
     class Runtime:
@@ -1057,12 +1075,43 @@ def test_corrupt_success_checkpoint_never_fabricates_completion(tmp_path: Path, 
     assert repository.get_creative_run(run_id) is None
     with task_queue._connect() as connection:
         row = connection.execute(
-            "SELECT status, success_checkpoint_json, result_json FROM v2_tasks WHERE run_id = ?",
+            "SELECT status, attempts, success_checkpoint_json, result_json, error_json, locked_by, claim_token "
+            "FROM v2_tasks WHERE run_id = ?",
             (run_id,),
         ).fetchone()
-    assert row["status"] == "queued"
-    assert row["success_checkpoint_json"] == "{corrupt-json"
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1
+    assert row["success_checkpoint_json"] == checkpoint_raw
     assert row["result_json"] is None
+    assert row["locked_by"] is None
+    assert row["claim_token"] is None
+    error = task_queue._json_loads(row["error_json"])
+    assert error["code"] == "success_checkpoint_recovery_failed"
+    assert error["retryable"] is False
+
+    # A corrupt checkpoint is terminal evidence, so it cannot occupy direct
+    # generation admission or keep an older queue row ahead of later work.
+    with task_queue.generation_capacity(request_kind="direct"):
+        pass
+    following_run_id = f"{run_id}_following"
+    _enqueue(following_run_id)
+
+    async def no_preflight(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(queue_worker, "_preflight_veyra_balance", no_preflight)
+
+    class FollowingRuntime:
+        async def complete_queued_run(self, _request, next_run_id):
+            return _run(next_run_id)
+
+    assert queue_worker.process_next_task_once(FollowingRuntime(), "worker-following-task") is True
+    with task_queue._connect() as connection:
+        following = connection.execute(
+            "SELECT status FROM v2_tasks WHERE run_id = ?",
+            (following_run_id,),
+        ).fetchone()
+    assert following["status"] == "completed"
 
 
 def test_default_worker_instances_have_distinct_ids_and_claim_lock_errors_recover(tmp_path: Path, monkeypatch) -> None:

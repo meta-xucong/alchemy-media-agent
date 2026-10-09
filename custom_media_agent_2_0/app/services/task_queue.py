@@ -44,6 +44,14 @@ class StaleTaskClaim(RuntimeError):
     """Raised when a superseded worker tries to commit task-owned output."""
 
 
+class InvalidSuccessCheckpoint(RuntimeError):
+    """Raised when persisted success evidence cannot be safely recovered."""
+
+    def __init__(self, cause_type: str) -> None:
+        super().__init__("Persisted V2 success checkpoint failed integrity validation.")
+        self.cause_type = cause_type
+
+
 @dataclass(frozen=True)
 class QueuedTask:
     task_id: str
@@ -411,11 +419,43 @@ def get_success_checkpoint(claim: QueuedTask | None = None) -> CreativeRun | Non
     raw = row["success_checkpoint_json"]
     if not raw:
         return None
-    expected_snapshot = CreativeRun.model_validate(_json_loads(row["queued_run_json"]))
-    recovered = _decode_success_checkpoint(raw, expected_snapshot=expected_snapshot)
-    if recovered.run_id != active_claim.run_id:
-        raise ValueError("The V2 task success checkpoint does not belong to the claimed run.")
+    try:
+        expected_snapshot = CreativeRun.model_validate(_json_loads(row["queued_run_json"]))
+        recovered = _decode_success_checkpoint(raw, expected_snapshot=expected_snapshot)
+        if recovered.run_id != active_claim.run_id:
+            raise ValueError("The V2 task success checkpoint does not belong to the claimed run.")
+    except StaleTaskClaim:
+        raise
+    except Exception as exc:
+        raise InvalidSuccessCheckpoint(type(exc).__name__) from exc
     return recovered
+
+
+def terminalize_invalid_success_checkpoint(claim: QueuedTask, error: InvalidSuccessCheckpoint) -> bool:
+    """Quarantine corrupt success evidence without retrying or rewriting it."""
+
+    now = utc_now().isoformat()
+    error_json = _json_dumps(
+        {
+            "code": "success_checkpoint_recovery_failed",
+            "message": str(error),
+            "cause_type": error.cause_type,
+            "retryable": False,
+        }
+    )
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            UPDATE v2_tasks
+            SET status = 'failed', error_json = ?, locked_by = NULL, locked_at = NULL,
+                claim_token = NULL, not_before = NULL, updated_at = ?
+            WHERE task_id = ? AND status = 'running' AND locked_by = ? AND claim_token = ?
+            """,
+            (error_json, now, claim.task_id, claim.worker_id, claim.claim_token),
+        )
+        conn.commit()
+    return cursor.rowcount == 1
 
 
 def restore_success_checkpoint(run: CreativeRun) -> CreativeRun:
