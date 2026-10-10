@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.providers.images.claim_fenced_http import claim_fenced_async_client
 from app.providers.images.base import (
     V2ImageProviderCapabilities,
     V2ImageProviderNotConfiguredError,
@@ -90,7 +91,7 @@ class V2DoubaoImageProvider:
             "Content-Type": "application/json",
         }
         timeout = httpx.Timeout(settings.doubao_image_timeout_seconds, connect=30.0)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with claim_fenced_async_client(timeout=timeout, follow_redirects=True) as client:
             response = await client.post(_images_url(), headers=headers, json=payload)
         if response.status_code >= 400:
             raise V2ImageProviderRuntimeError(
@@ -132,7 +133,7 @@ class V2DoubaoImageProvider:
                 ("image", (path.name, stack.enter_context(path.open("rb")), _mime_for_path(path)))
                 for path in reference_paths
             ]
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            async with claim_fenced_async_client(timeout=timeout, follow_redirects=True) as client:
                 response = await client.post(_image_edits_url(), headers=headers, data=data, files=files)
         if response.status_code >= 400:
             raise V2ImageProviderRuntimeError(

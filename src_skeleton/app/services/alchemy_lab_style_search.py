@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections import OrderedDict
+from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass
+import itertools
+import sys
+import threading
 from typing import Any
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -15,11 +21,103 @@ MIN_STYLE_RELEVANCE_SCORE = 0.18
 MAX_LOCAL_CANDIDATES = 120
 MAX_QUERY_CHARS = 500
 
-_STYLE_BASE_TEXT_CACHE: dict[str, str] = {}
-_STYLE_SEARCH_TEXT_CACHE: dict[str, str] = {}
-_STYLE_TOKEN_COUNTER_CACHE: dict[str, Counter[str]] = {}
-_STYLE_TOKEN_SET_CACHE: dict[str, set[str]] = {}
-_STYLE_FEATURE_CACHE: dict[str, set[str]] = {}
+_STYLE_CACHE_MAX_ENTRIES = 256
+_STYLE_CACHE_MAX_BYTES = 1024 * 1024
+_STYLE_CACHE_MAX_ENTRY_BYTES = 64 * 1024
+_StyleCacheKey = TypeVar("_StyleCacheKey")
+_StyleCacheValue = TypeVar("_StyleCacheValue")
+
+
+def _estimate_cache_size(value: Any, ceiling: int) -> int:
+    size = 0
+    seen: set[int] = set()
+    stack: list[Iterator[Any]] = [iter((value,))]
+    while stack:
+        try:
+            item = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        item_id = id(item)
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        size += sys.getsizeof(item)
+        if size > ceiling:
+            return ceiling + 1
+        if isinstance(item, dict):
+            stack.append(iter(itertools.chain.from_iterable(item.items())))
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            stack.append(iter(item))
+        elif hasattr(item, "__dict__"):
+            stack.append(iter(vars(item).values()))
+    return size
+
+
+class _BoundedObjectCache(MutableMapping[_StyleCacheKey, _StyleCacheValue], Generic[_StyleCacheKey, _StyleCacheValue]):
+    def __init__(
+        self,
+        *,
+        max_entries: int = _STYLE_CACHE_MAX_ENTRIES,
+        max_bytes: int = _STYLE_CACHE_MAX_BYTES,
+        max_entry_bytes: int = _STYLE_CACHE_MAX_ENTRY_BYTES,
+    ) -> None:
+        self._values: OrderedDict[_StyleCacheKey, tuple[_StyleCacheValue, int]] = OrderedDict()
+        self.max_entries = max_entries
+        self.max_bytes = max_bytes
+        self.max_entry_bytes = max_entry_bytes
+        self.accounted_bytes = 0
+        self._lock = threading.RLock()
+
+    def __getitem__(self, key: _StyleCacheKey) -> _StyleCacheValue:
+        with self._lock:
+            value, size = self._values.pop(key)
+            self._values[key] = (value, size)
+            return value
+
+    def __setitem__(self, key: _StyleCacheKey, value: _StyleCacheValue) -> None:
+        with self._lock:
+            if key in self._values:
+                self.__delitem__(key)
+            size = _estimate_cache_size((key, value), self.max_entry_bytes)
+            if size > self.max_entry_bytes or self.max_entries <= 0 or self.max_bytes <= 0:
+                return
+            self._values[key] = (value, size)
+            self.accounted_bytes += size
+            while len(self._values) > self.max_entries or self.accounted_bytes > self.max_bytes:
+                _, (_, removed_size) = self._values.popitem(last=False)
+                self.accounted_bytes -= removed_size
+
+    def __delitem__(self, key: _StyleCacheKey) -> None:
+        with self._lock:
+            _, size = self._values.pop(key)
+            self.accounted_bytes -= size
+
+    def __iter__(self) -> Iterator[_StyleCacheKey]:
+        with self._lock:
+            return iter(tuple(self._values))
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._values)
+
+    def get(self, key: _StyleCacheKey, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def clear(self) -> None:
+        with self._lock:
+            self._values.clear()
+            self.accounted_bytes = 0
+
+
+_STYLE_BASE_TEXT_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_STYLE_SEARCH_TEXT_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_STYLE_TOKEN_COUNTER_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_STYLE_TOKEN_SET_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_STYLE_FEATURE_CACHE: _BoundedObjectCache = _BoundedObjectCache()
 
 GENERIC_QUERY_TOKENS = {
     "ad",

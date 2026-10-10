@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections import OrderedDict
+from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass
+import itertools
+import sys
+import threading
+from typing import Any, Generic, TypeVar
 
 from app.config import settings
 from app.repositories import repository
@@ -13,12 +19,103 @@ from app.services.visual_signals import build_case_visual_signals
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 MIN_FREE_TEXT_RELEVANCE_SCORE = 0.5
-_CASE_BASE_TEXT_CACHE: dict[tuple[str, str], str] = {}
-_CASE_FEATURE_CACHE: dict[tuple[str, str], set[str]] = {}
-_CASE_PROFILE_CACHE: dict[tuple[str, str, str, str | None], CaseProfile] = {}
-_CASE_SEARCH_TEXT_CACHE: dict[tuple[str, str, str, str | None], str] = {}
-_CASE_TOKEN_COUNTER_CACHE: dict[tuple[str, str, str, str | None], Counter[str]] = {}
-_CASE_TOKEN_SET_CACHE: dict[tuple[str, str, str, str | None], set[str]] = {}
+_CASE_CACHE_MAX_ENTRIES = 256
+_CASE_CACHE_MAX_BYTES = 2 * 1024 * 1024
+_CASE_CACHE_MAX_ENTRY_BYTES = 64 * 1024
+_CacheKey = TypeVar("_CacheKey")
+_CacheValue = TypeVar("_CacheValue")
+
+
+def _estimate_cache_size(value: Any, ceiling: int) -> int:
+    size = 0
+    seen: set[int] = set()
+    stack: list[Iterator[Any]] = [iter((value,))]
+    while stack:
+        try:
+            item = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        item_id = id(item)
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        size += sys.getsizeof(item)
+        if size > ceiling:
+            return ceiling + 1
+        if isinstance(item, dict):
+            stack.append(iter(itertools.chain.from_iterable(item.items())))
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            stack.append(iter(item))
+        elif hasattr(item, "__dict__"):
+            stack.append(iter(vars(item).values()))
+    return size
+
+
+class _BoundedObjectCache(MutableMapping[_CacheKey, _CacheValue], Generic[_CacheKey, _CacheValue]):
+    def __init__(
+        self,
+        *,
+        max_entries: int = _CASE_CACHE_MAX_ENTRIES,
+        max_bytes: int = _CASE_CACHE_MAX_BYTES,
+        max_entry_bytes: int = _CASE_CACHE_MAX_ENTRY_BYTES,
+    ) -> None:
+        self._values: OrderedDict[_CacheKey, tuple[_CacheValue, int]] = OrderedDict()
+        self.max_entries = max_entries
+        self.max_bytes = max_bytes
+        self.max_entry_bytes = max_entry_bytes
+        self.accounted_bytes = 0
+        self._lock = threading.RLock()
+
+    def __getitem__(self, key: _CacheKey) -> _CacheValue:
+        with self._lock:
+            value, size = self._values.pop(key)
+            self._values[key] = (value, size)
+            return value
+
+    def __setitem__(self, key: _CacheKey, value: _CacheValue) -> None:
+        with self._lock:
+            self.__delitem__(key) if key in self._values else None
+            size = _estimate_cache_size((key, value), self.max_entry_bytes)
+            if size > self.max_entry_bytes or self.max_entries <= 0 or self.max_bytes <= 0:
+                return
+            self._values[key] = (value, size)
+            self.accounted_bytes += size
+            while len(self._values) > self.max_entries or self.accounted_bytes > self.max_bytes:
+                _, (_, removed_size) = self._values.popitem(last=False)
+                self.accounted_bytes -= removed_size
+
+    def __delitem__(self, key: _CacheKey) -> None:
+        with self._lock:
+            _, size = self._values.pop(key)
+            self.accounted_bytes -= size
+
+    def __iter__(self) -> Iterator[_CacheKey]:
+        with self._lock:
+            return iter(tuple(self._values))
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._values)
+
+    def get(self, key: _CacheKey, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def clear(self) -> None:
+        with self._lock:
+            self._values.clear()
+            self.accounted_bytes = 0
+
+
+_CASE_BASE_TEXT_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_CASE_FEATURE_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_CASE_PROFILE_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_CASE_SEARCH_TEXT_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_CASE_TOKEN_COUNTER_CACHE: _BoundedObjectCache = _BoundedObjectCache()
+_CASE_TOKEN_SET_CACHE: _BoundedObjectCache = _BoundedObjectCache()
 CORE_SUBJECT_FEATURES = {
     "subject.perfume",
     "subject.skincare",

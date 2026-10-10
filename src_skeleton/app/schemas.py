@@ -370,6 +370,7 @@ class Session(BaseModel):
     title: str | None = None
     orchestration_mode: Literal["runtime_first", "claude_first"] = "runtime_first"
     created_at: str
+    veyra_user_id: int | None = None
 
 
 class MessageRequest(BaseModel):

@@ -19,6 +19,7 @@ from app.providers.images.base import (
     V2ImageProviderResult,
     V2ImageProviderRuntimeError,
 )
+from app.providers.images.claim_fenced_http import claim_fenced_async_client, raise_if_stale_task_claim
 from app.providers.images.response_payloads import outputs_from_image_response
 from app.services.reference_provider import materialize_openai_reference_request, provider_receipt_for_output
 from app.services.uploaded_assets import uploaded_asset_path
@@ -171,18 +172,22 @@ class V2OpenAIGPTImage2Provider:
         client_kwargs: dict[str, Any] = {"api_key": settings.openai_api_key}
         if settings.openai_base_url:
             client_kwargs["base_url"] = settings.openai_base_url
-        client = AsyncOpenAI(**client_kwargs)
+        client_kwargs["http_client"] = claim_fenced_async_client(follow_redirects=True)
+        # The queue-owned retry loop below is claim-aware. Disable SDK retries
+        # so a hidden retry cannot outlive that boundary.
+        client_kwargs["max_retries"] = 0
         reference_paths = _reference_paths(request)
         count = _count(request.prompt_plan)
         outputs: list[V2ImageProviderOutput] = []
-        async with _openai_generation_lock:
-            for index in range(count):
-                if reference_paths:
-                    outputs.extend(await self._generate_one_with_references(client, request, reference_paths, index=index))
-                else:
-                    outputs.extend(await self._generate_one(client, request, index=index))
-                if len(outputs) >= count:
-                    break
+        async with AsyncOpenAI(**client_kwargs) as client:
+            async with _openai_generation_lock:
+                for index in range(count):
+                    if reference_paths:
+                        outputs.extend(await self._generate_one_with_references(client, request, reference_paths, index=index))
+                    else:
+                        outputs.extend(await self._generate_one(client, request, index=index))
+                    if len(outputs) >= count:
+                        break
         return V2ImageProviderResult(
             provider=self.name,
             model=settings.openai_image_model,
@@ -223,6 +228,7 @@ class V2OpenAIGPTImage2Provider:
         except V2ImageProviderRateLimitError:
             raise
         except Exception as exc:
+            raise_if_stale_task_claim(exc)
             if _is_image_quota_limit(exc):
                 retry_after = _retry_after_seconds_from_exception(exc)
                 cooldown = _openai_image_rate_limiter.note_upstream_image_quota_limit(
@@ -297,6 +303,7 @@ class V2OpenAIGPTImage2Provider:
         except V2ImageProviderRateLimitError:
             raise
         except Exception as exc:
+            raise_if_stale_task_claim(exc)
             if _is_image_quota_limit(exc):
                 retry_after = _retry_after_seconds_from_exception(exc)
                 cooldown = _openai_image_rate_limiter.note_upstream_image_quota_limit(
@@ -430,11 +437,13 @@ async def _call_openai_image_operation(operation, *, timeout_seconds: float | No
         try:
             return await asyncio.wait_for(operation(), timeout=timeout)
         except TimeoutError as exc:
+            raise_if_stale_task_claim(exc)
             last_error = exc
             if attempt >= _OPENAI_TRANSIENT_MAX_ATTEMPTS:
                 raise
             await asyncio.sleep(_openai_transient_retry_delay(attempt, exc))
         except Exception as exc:
+            raise_if_stale_task_claim(exc)
             last_error = exc
             if _is_image_quota_limit(exc):
                 raise

@@ -42,10 +42,10 @@ from app.services.visual_signals import build_case_visual_signals
 
 def fresh_client() -> TestClient:
     test_dir = Path(tempfile.mkdtemp(prefix="alchemy_v2_test_"))
-    repository.reset()
     claude_orchestrator_service.reset_orchestrator_observability()
     object.__setattr__(settings, "data_dir", test_dir)
     object.__setattr__(settings, "storage_dir", test_dir / "storage")
+    repository.reset()
     object.__setattr__(settings, "default_agent_model", "gpt-4.1-mini")
     object.__setattr__(settings, "image_generation_provider", "mock_image")
     object.__setattr__(settings, "openai_api_key", "sk-test-openai")
@@ -283,23 +283,37 @@ def test_v2_creative_run_allows_template_without_prompt() -> None:
     assert response.json()["run_id"].startswith("run_")
 
 
-def test_provider_sync_publishes_seed_cases() -> None:
+def test_provider_sync_publishes_seed_cases(monkeypatch) -> None:
     client = fresh_client()
-    providers = client.get("/api/v2/resource-providers").json()["providers"]
-    assert providers[0]["provider_id"] == "github_evolinkai_gpt_image_cases"
+    original_remote_sync = settings.enable_remote_github_sync
+    object.__setattr__(settings, "enable_remote_github_sync", True)
+    try:
+        import app.services.resource_sync as resource_sync_service
 
-    response = client.post("/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync")
-    assert response.status_code == 202
-    sync = response.json()
-    assert sync["status"] == "completed"
-    assert sync["stats"]["cases_published"] >= 6
-    assert sync["stats"]["case_index_path"].endswith("case_index.json")
+        def unexpected_remote_fetch():
+            raise AssertionError("seed mode must not access remote GitHub sync")
 
-    lookup = client.get(
-        f"/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync-runs/{sync['sync_run_id']}"
-    )
-    assert lookup.status_code == 200
-    assert lookup.json()["sync_run_id"] == sync["sync_run_id"]
+        monkeypatch.setattr(resource_sync_service, "fetch_evolinkai_github_cases", unexpected_remote_fetch)
+        providers = client.get("/api/v2/resource-providers").json()["providers"]
+        assert providers[0]["provider_id"] == "github_evolinkai_gpt_image_cases"
+
+        response = client.post(
+            "/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync",
+            params={"mode": "seed"},
+        )
+        assert response.status_code == 202
+        sync = response.json()
+        assert sync["status"] == "completed"
+        assert sync["stats"]["cases_published"] >= 6
+        assert sync["stats"]["case_index_path"].endswith("case_index.json")
+
+        lookup = client.get(
+            f"/api/v2/resource-providers/github_evolinkai_gpt_image_cases/sync-runs/{sync['sync_run_id']}"
+        )
+        assert lookup.status_code == 200
+        assert lookup.json()["sync_run_id"] == sync["sync_run_id"]
+    finally:
+        object.__setattr__(settings, "enable_remote_github_sync", original_remote_sync)
 
 
 def test_case_search_and_template_detail() -> None:
@@ -3529,7 +3543,10 @@ def test_creative_run_async_entry_is_pollable() -> None:
     run = fetched.json()
     assert run["run_id"] == queued["run_id"]
     assert run["status"] == "completed"
+    assert run["trace_id"] == queued["trace_id"]
+    assert run["created_at"] == queued["created_at"]
     assert run["prompt_plan"]
+    assert len(run["generation_jobs"]) == 1
     assert run["generation_jobs"][0]["outputs"]
 
     completed_status = client.get("/api/v2/task-queue/status").json()
@@ -3651,7 +3668,7 @@ def test_creative_run_async_preflights_user_balance_before_runtime(monkeypatch) 
     assert queue_status["counts"].get("queued", 0) == 0
 
 
-def test_task_worker_startup_releases_own_running_locks() -> None:
+def test_task_release_requires_the_current_worker_claim() -> None:
     client = fresh_client()
     response = client.post(
         "/api/v2/creative/runs/async",
@@ -3666,11 +3683,21 @@ def test_task_worker_startup_releases_own_running_locks() -> None:
     assert claimed is not None
     assert claimed.run_id == queued["run_id"]
 
-    assert task_queue_service.release_worker_running_tasks("other-worker") == 0
+    foreign_claim = task_queue_service.QueuedTask(
+        task_id=claimed.task_id,
+        kind=claimed.kind,
+        run_id=claimed.run_id,
+        payload=claimed.payload,
+        attempts=claimed.attempts,
+        max_attempts=claimed.max_attempts,
+        worker_id="other-worker",
+        claim_token=claimed.claim_token,
+    )
+    assert task_queue_service.release_task(foreign_claim) is False
     queue_status = client.get("/api/v2/task-queue/status").json()
     assert queue_status["counts"]["running"] == 1
 
-    assert task_queue_service.release_worker_running_tasks("v2-worker-1") == 1
+    assert task_queue_service.release_task(claimed) is True
     queue_status = client.get("/api/v2/task-queue/status").json()
     assert queue_status["counts"]["queued"] == 1
     assert queue_status["counts"].get("running", 0) == 0
@@ -3678,6 +3705,7 @@ def test_task_worker_startup_releases_own_running_locks() -> None:
     reclaimed = task_queue_service.claim_next_task("v2-worker-1")
     assert reclaimed is not None
     assert reclaimed.run_id == queued["run_id"]
+    assert reclaimed.claim_token != claimed.claim_token
 
 
 def test_openai_image_operation_has_outer_timeout(monkeypatch) -> None:
@@ -3725,6 +3753,67 @@ def test_openai_image_high_resolution_timeout_is_900_seconds() -> None:
             "openai_image_high_resolution_timeout_seconds",
             original_high_resolution_timeout,
         )
+
+
+def test_direct_image_job_returns_retryable_capacity_response_before_provider_call() -> None:
+    client = fresh_client()
+    body = {
+        "run_id": "run_capacity_direct",
+        "prompt_plan": {"plan_id": "plan_capacity_direct", "mode": "smart_enhance", "prompt": "offline capacity test"},
+    }
+    with task_queue_service.generation_capacity():
+        response = client.post("/api/v2/image/jobs", json=body)
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "5"
+    assert response.json()["detail"]["error_code"] == "generation_capacity"
+    assert response.json()["detail"]["retryable"] is True
+    assert repository.image_jobs == {}
+
+
+def test_v2_queue_capacity_returns_retryable_429_without_publishing_rejected_run() -> None:
+    client = fresh_client()
+    original_limit = settings.task_queue_max_pending
+    object.__setattr__(settings, "task_queue_max_pending", 1)
+    try:
+        payload = {"user_prompt": "Create a simple offline fake image.", "output": {"count": 1}}
+        first = client.post("/api/v2/creative/runs/async", json=payload)
+        second = client.post("/api/v2/creative/runs/async", json=payload)
+        assert first.status_code == 202
+        assert second.status_code == 429
+        assert second.headers["retry-after"] == "30"
+        assert second.json()["detail"]["error_code"] == "task_queue_full"
+        assert second.json()["detail"]["retryable"] is True
+        assert len(repository.creative_runs) == 0
+        assert task_queue_service.task_queue_stats()["counts"] == {"queued": 1}
+    finally:
+        object.__setattr__(settings, "task_queue_max_pending", original_limit)
+
+
+def test_v2_worker_capacity_retry_reuses_same_durable_task() -> None:
+    client = fresh_client()
+    class RuntimeShouldNotRun:
+        async def complete_queued_run(self, request, run_id: str) -> CreativeRun:
+            raise AssertionError("worker must retain task when generation capacity is unavailable")
+
+    with task_queue_service.generation_capacity():
+        response = client.post(
+            "/api/v2/creative/runs/async",
+            json={"user_prompt": "Create a simple offline fake image.", "output": {"count": 1}},
+        )
+        assert response.status_code == 202
+        run_id = response.json()["run_id"]
+        with task_queue_service._connect() as connection:
+            original_task = connection.execute("SELECT task_id FROM v2_tasks WHERE run_id = ?", (run_id,)).fetchone()[0]
+        assert queue_worker_service.process_next_task_once(RuntimeShouldNotRun(), "capacity-worker") is True
+
+    with task_queue_service._connect() as connection:
+        row = connection.execute(
+            "SELECT task_id, status, attempts FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row["task_id"] == original_task
+    assert row["status"] == "queued"
+    assert row["attempts"] == 0
 
 
 def test_openai_image_timeout_error_is_retryable_with_detail() -> None:

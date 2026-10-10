@@ -1,6 +1,11 @@
 import os
 from pathlib import Path
 
+# Mock-provider tests must not export SDK/native telemetry. CI and documented
+# local commands also set these before the Python interpreter starts.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+os.environ["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+
 import pytest
 
 os.environ["CODEX_AUTH_FILE"] = str(Path(__file__).parent / ".missing_auth.json")

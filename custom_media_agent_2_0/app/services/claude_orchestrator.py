@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
+import threading
 import shutil
 import signal
 import subprocess
@@ -64,6 +66,12 @@ _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
     "upstream_context_canceled",
 }
 _CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v12_template_visual_grammar"
+_DECISION_CACHE_MAX_ENTRIES = 128
+_DECISION_CACHE_MAX_BYTES = 8 * 1024 * 1024
+_DECISION_CACHE_MAX_ENTRY_BYTES = 64 * 1024
+_DECISION_CACHE_DATABASES: dict[str, None] = {}
+_DECISION_CACHE_SCHEMA_LOCK = threading.Lock()
+_DECISION_CACHE_DATABASES_MAX = 8
 _CLAUDE_INLINE_JSON_CHAR_BUDGET = 1500
 _CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET = 1100
 _CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET = 240
@@ -3763,31 +3771,104 @@ def _read_semantic_cached_decision(metadata: dict[str, Any]) -> tuple[str, dict[
 def _write_cached_decision(cache_key: str, raw_decision: dict[str, Any], *, metadata: dict[str, Any]) -> None:
     if not settings.claude_orchestrator_cache_enabled:
         return
-    cache = _read_cache_store()
-    cache[cache_key] = {
+    entry = {
         "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,
         "created_at": utc_now().isoformat(),
         "metadata": metadata,
         "decision": raw_decision,
     }
     try:
-        settings.claude_orchestrator_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        settings.claude_orchestrator_cache_path.write_text(
-            json.dumps(cache, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        payload = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
+        payload_bytes = len(payload.encode("utf-8"))
+        if payload_bytes > _DECISION_CACHE_MAX_ENTRY_BYTES:
+            return
+        connection = _decision_cache_connect()
+        try:
+            with connection:
+                connection.execute(
+                    "INSERT INTO decisions(cache_key, payload, created_at, payload_bytes) VALUES(?, ?, ?, ?) "
+                    "ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload, "
+                    "created_at=excluded.created_at, payload_bytes=excluded.payload_bytes",
+                    (cache_key, payload, entry["created_at"], payload_bytes),
+                )
+                rows = connection.execute(
+                    "SELECT cache_key, payload_bytes FROM decisions "
+                    "ORDER BY created_at DESC, cache_key DESC LIMIT ?",
+                    (_DECISION_CACHE_MAX_ENTRIES,),
+                ).fetchall()
+                retained: list[str] = []
+                total_bytes = 0
+                for row in rows:
+                    size = int(row["payload_bytes"])
+                    if total_bytes + size > _DECISION_CACHE_MAX_BYTES:
+                        continue
+                    retained.append(str(row["cache_key"]))
+                    total_bytes += size
+                if retained:
+                    placeholders = ",".join("?" for _ in retained)
+                    connection.execute(f"DELETE FROM decisions WHERE cache_key NOT IN ({placeholders})", retained)
+                else:
+                    connection.execute("DELETE FROM decisions")
+        finally:
+            connection.close()
     except Exception:
         return
 
 
 def _read_cache_store() -> dict[str, Any]:
-    if not settings.claude_orchestrator_cache_path.exists():
-        return {}
     try:
-        parsed = json.loads(settings.claude_orchestrator_cache_path.read_text(encoding="utf-8"))
-        return parsed if isinstance(parsed, dict) else {}
+        connection = _decision_cache_connect()
     except Exception:
         return {}
+    try:
+        rows = connection.execute(
+            "SELECT cache_key, payload, payload_bytes FROM decisions "
+            "ORDER BY created_at DESC, cache_key DESC LIMIT ?",
+            (_DECISION_CACHE_MAX_ENTRIES,),
+        )
+        result: dict[str, Any] = {}
+        total_bytes = 0
+        for row in rows:
+            size = int(row["payload_bytes"])
+            if size > _DECISION_CACHE_MAX_ENTRY_BYTES or total_bytes + size > _DECISION_CACHE_MAX_BYTES:
+                continue
+            result[str(row["cache_key"])] = json.loads(row["payload"])
+            total_bytes += size
+        return result
+    except Exception:
+        return {}
+    finally:
+        connection.close()
+
+
+def _decision_cache_connect() -> sqlite3.Connection:
+    path = settings.claude_orchestrator_cache_path.with_name("claude_orchestrator_cache.sqlite3")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=2.0)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=2000")
+    key = str(path.resolve())
+    if key not in _DECISION_CACHE_DATABASES:
+        with _DECISION_CACHE_SCHEMA_LOCK:
+            if key not in _DECISION_CACHE_DATABASES:
+                try:
+                    connection.execute("PRAGMA journal_mode=WAL")
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS decisions (
+                            cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL,
+                            created_at TEXT NOT NULL, payload_bytes INTEGER NOT NULL
+                        )"""
+                    )
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS decisions_recent_idx ON decisions(created_at DESC)"
+                    )
+                    _DECISION_CACHE_DATABASES[key] = None
+                    while len(_DECISION_CACHE_DATABASES) > _DECISION_CACHE_DATABASES_MAX:
+                        _DECISION_CACHE_DATABASES.pop(next(iter(_DECISION_CACHE_DATABASES)))
+                except Exception:
+                    connection.close()
+                    raise
+    return connection
 
 
 def _cached_decision_payload(entry: Any) -> dict[str, Any] | None:

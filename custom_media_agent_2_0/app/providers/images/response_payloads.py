@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from app.providers.images.claim_fenced_http import claim_fenced_async_client
 from app.providers.images.base import V2ImageProviderOutput, V2ImageProviderRuntimeError
 
 
@@ -208,7 +209,7 @@ async def _fetch_image_url_as_b64(url: str, *, timeout_seconds: float) -> tuple[
     timeout = httpx.Timeout(max(1.0, timeout_seconds), connect=min(20.0, max(1.0, timeout_seconds)))
     last_error: httpx.HTTPError | None = None
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with claim_fenced_async_client(timeout=timeout, follow_redirects=True) as client:
             for attempt in range(1, 4):
                 try:
                     response = await client.get(url)

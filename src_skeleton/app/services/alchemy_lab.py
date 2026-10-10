@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import random
 import re
+import threading
 import time
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from app.repositories.sqlite_calls import SQLiteStorageBusy, sqlite_calls
 
 from app.repositories import repository
+from app.repositories.sqlite_json import SQLiteJsonMap, connect
 from app.schemas import GenerationJob, JobStatus
 from app.services.alchemy_lab_quality import (
     QUALITY_ENHANCEMENT_OPTIONS,
@@ -39,11 +42,15 @@ from app.services.image_service import run_submitted_image_job, submit_image_job
 from app.services.utils import make_id, now_iso
 from app.storage import media_store
 
+logger = logging.getLogger(__name__)
+
 
 MAX_SELECTED_STYLES = 8
 MAX_IMAGES_PER_STYLE = 4
 MAX_TOTAL_IMAGES = 12
 MAX_CONCURRENT_GENERATIONS = 1
+MAX_CONCURRENT_LAB_SESSIONS = 2
+LAB_SQLITE_CAPACITY_WAIT_SECONDS = 1.0
 MAX_RETRIES_PER_VARIANT = 1
 MAX_GENERATION_INTERVAL_SECONDS = 60
 DEFAULT_GENERATION_INTERVAL_SECONDS = 8
@@ -295,13 +302,147 @@ class LabHistoryItem(BaseModel):
     source: str | None = None
 
 
-@dataclass
 class AlchemyLabStore:
-    sessions: dict[str, ExplorationSession]
+    def __init__(self, database_path: Path | None = None) -> None:
+        self._database_path_override = Path(database_path) if database_path else None
+        self.sessions = SQLiteJsonMap(
+            lambda: self.database_path,
+            "lab_sessions",
+            validator=ExplorationSession.model_validate_json,
+            index_fields=lambda session: {
+                "session_id": str(session.veyra_user_id) if session.veyra_user_id is not None else None,
+                "sort_at": session.updated_at,
+            },
+        )
+
+    @property
+    def database_path(self) -> Path:
+        if self._database_path_override is not None:
+            return self._database_path_override
+        return repository.database_path
 
     def save(self, session: ExplorationSession) -> ExplorationSession:
         self.sessions[session.id] = session
         return session
+
+    def save_runner_state(self, session: ExplorationSession) -> ExplorationSession:
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            latest_json = self.sessions.get_record_json_on(connection, session.id)
+            if latest_json is None:
+                raise KeyError(session.id)
+            latest = ExplorationSession.model_validate_json(latest_json)
+            # Favorites are independently user-owned updates. A runner's older
+            # snapshot must never roll them back while saving progress/results.
+            session.favorites = list(latest.favorites)
+            self.sessions.put_on(connection, session.id, session)
+            connection.commit()
+            return session
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def update_favorites(self, session_id: str, variant_ids: list[str]) -> ExplorationSession | None:
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            payload = self.sessions.get_record_json_on(connection, session_id)
+            if payload is None:
+                connection.rollback()
+                return None
+            session = ExplorationSession.model_validate_json(payload)
+            valid_ids = {variant.id for variant in session.variants}
+            session.favorites = [variant_id for variant_id in variant_ids if variant_id in valid_ids]
+            session.updated_at = now_iso()
+            self.sessions.put_on(connection, session_id, session)
+            connection.commit()
+            return session
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def recover_interrupted_sessions(self, *, batch_size: int = 128) -> int:
+        recovered = 0
+        while True:
+            connection = connect(self.database_path)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    "SELECT record_key, payload FROM v1_records "
+                    "WHERE namespace='lab_sessions' "
+                    "AND json_extract(payload, '$.status') IN ('queued', 'running') "
+                    "ORDER BY rowid LIMIT ?",
+                    (max(1, int(batch_size)),),
+                ).fetchall()
+                if not rows:
+                    connection.commit()
+                    return recovered
+                for row in rows:
+                    session = ExplorationSession.model_validate_json(row["payload"])
+                    completed_count = _completed_variant_count(session)
+                    failed_count = _failed_variant_count(session)
+                    terminal_variants = session.variants and all(
+                        variant.status in {"succeeded", "failed"} for variant in session.variants
+                    )
+                    if terminal_variants:
+                        session.status = (
+                            "completed"
+                            if failed_count == 0
+                            else "partial_success"
+                            if completed_count > 0
+                            else "failed"
+                        )
+                        session.updated_at = now_iso()
+                        session.progress = {
+                            **(session.progress or {}),
+                            "status": session.status,
+                            "failed": failed_count,
+                            "completed": completed_count,
+                            "message": (
+                                "全部生成结果已完成。"
+                                if session.status == "completed"
+                                else f"恢复已完成的结果：成功 {completed_count} 张，失败 {failed_count} 张。"
+                            ),
+                            "updated_at": session.updated_at,
+                        }
+                        self.sessions.put_on(connection, session.id, session)
+                        recovered += 1
+                        continue
+                    failure = ExplorationError(
+                        code="worker_interrupted",
+                        message="The server restarted before this Lab session completed. It was not replayed automatically; create a new session to retry.",
+                        retryable=False,
+                        detail={"recovery": "process_restart", "automatic_provider_replay": False},
+                    )
+                    session.errors = [*session.errors, failure]
+                    session.variants = [
+                        variant.model_copy(update={"status": "failed", "error": failure})
+                        if variant.status in {"queued", "running"} else variant
+                        for variant in session.variants
+                    ]
+                    session.status = "failed" if not _completed_variant_count(session) else "partial_success"
+                    session.updated_at = now_iso()
+                    session.progress = {
+                        **(session.progress or {}),
+                        "status": session.status,
+                        "failed": _failed_variant_count(session),
+                        "completed": _completed_variant_count(session),
+                        "message": failure.message,
+                        "updated_at": session.updated_at,
+                    }
+                    self.sessions.put_on(connection, session.id, session)
+                    recovered += 1
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
 
     def get(self, session_id: str) -> ExplorationSession | None:
         return self.sessions.get(session_id)
@@ -310,8 +451,38 @@ class AlchemyLabStore:
         self.sessions.clear()
 
 
-lab_store = AlchemyLabStore(sessions={})
+lab_store = AlchemyLabStore()
 _background_tasks: set[asyncio.Task] = set()
+_LAB_SESSION_CAPACITY = threading.BoundedSemaphore(MAX_CONCURRENT_LAB_SESSIONS)
+
+
+async def _run_lab_sqlite_call(function, *args, **kwargs):
+    deadline = asyncio.get_running_loop().time() + LAB_SQLITE_CAPACITY_WAIT_SECONDS
+    while True:
+        try:
+            return await sqlite_calls.run(function, *args, **kwargs)
+        except SQLiteStorageBusy as exc:
+            if not exc.capacity_full or asyncio.get_running_loop().time() >= deadline:
+                raise
+            await asyncio.sleep(0.01)
+
+
+async def _run_lab_checkpoint_call(function, *args, **kwargs):
+    """Keep an admitted runner's durable checkpoint alive through transient SQLite pressure."""
+    delay = 0.01
+    while True:
+        try:
+            return await sqlite_calls.run(function, *args, **kwargs)
+        except SQLiteStorageBusy:
+            # The runner already owns a bounded Lab session lease. Waiting here
+            # keeps its successful output snapshot and task ownership alive
+            # without putting another item in the SQLite executor queue.
+            await asyncio.sleep(delay)
+            delay = min(0.25, delay * 2)
+
+
+async def _save_runner_state(session: ExplorationSession) -> ExplorationSession:
+    return await _run_lab_checkpoint_call(lab_store.save_runner_state, session)
 
 
 FALLBACK_STYLE_PRESETS = [
@@ -443,11 +614,54 @@ def limits() -> dict[str, int]:
 
 
 async def create_exploration_session(request: ExplorationRequest, *, veyra_user_id: int | None = None) -> ExplorationSession:
-    session = await prepare_exploration_session(request, veyra_user_id=veyra_user_id)
-    if _should_run_inline(session.request):
-        return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
-    _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
-    return session
+    if not _LAB_SESSION_CAPACITY.acquire(blocking=False):
+        raise SQLiteStorageBusy("Lab session capacity is busy; retry shortly.")
+    operation = _create_admitted_exploration_session(request, veyra_user_id=veyra_user_id)
+    try:
+        task = asyncio.create_task(operation)
+    except BaseException:
+        operation.close()
+        _LAB_SESSION_CAPACITY.release()
+        raise
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # The SQLite worker may already be committing a queued session. Keep
+        # its admission lease with the shielded owner task until it either
+        # hands the session to a runner or exits without a durable session.
+        _background_tasks.add(task)
+
+        def observe_abandoned_creation(done_task: asyncio.Task) -> None:
+            _background_tasks.discard(done_task)
+            if done_task.cancelled():
+                return
+            error = done_task.exception()
+            if error is not None:
+                logger.error(
+                    "Canceled Lab create operation failed before runner handoff.",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(observe_abandoned_creation)
+        raise
+
+
+async def _create_admitted_exploration_session(
+    request: ExplorationRequest,
+    *,
+    veyra_user_id: int | None = None,
+) -> ExplorationSession:
+    transferred_to_runner = False
+    try:
+        session = await prepare_exploration_session(request, veyra_user_id=veyra_user_id)
+        if _should_run_inline(session.request):
+            return await run_exploration_session(session.id, veyra_user_id=veyra_user_id)
+        _schedule_exploration_session(session.id, veyra_user_id=veyra_user_id)
+        transferred_to_runner = True
+        return session
+    finally:
+        if not transferred_to_runner:
+            _LAB_SESSION_CAPACITY.release()
 
 
 async def prepare_exploration_session(request: ExplorationRequest, *, veyra_user_id: int | None = None) -> ExplorationSession:
@@ -472,8 +686,6 @@ async def prepare_exploration_session(request: ExplorationRequest, *, veyra_user
         reference_plan=reference_plan,
         intent_plan=intent_plan,
     )
-    lab_store.save(session)
-
     prompts = [_compose_prompt(session.id, request, style, reference_plan=reference_plan, intent_plan=intent_plan) for style in selected]
     session.prompts = prompts
     session.variants = [
@@ -491,11 +703,11 @@ async def prepare_exploration_session(request: ExplorationRequest, *, veyra_user
     ]
     session.updated_at = now_iso()
     session.progress = _progress_payload(total=len(session.variants), status="queued", message="已建立任务，将逐张生成。")
-    return lab_store.save(session)
+    return await _run_lab_sqlite_call(lab_store.save, session)
 
 
 async def run_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> ExplorationSession:
-    session = lab_store.get(session_id)
+    session = await _run_lab_sqlite_call(lab_store.get, session_id)
     if not session:
         raise ValueError("Exploration session not found.")
     # The persisted session owner is authoritative.  A background task's
@@ -517,11 +729,12 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
         message="正在准备提示词增强，然后逐张串行生成。",
     )
     session.updated_at = now_iso()
-    lab_store.save(session)
+    await _save_runner_state(session)
     await _ensure_session_prompts_enhanced(session)
 
-    media_session = repository.save_session(
-        _lab_media_session(session.id, title=f"Alchemy Lab: {session.request.idea[:48]}")
+    media_session = await _run_lab_sqlite_call(
+        repository.save_session,
+        _lab_media_session(session.id, title=f"Alchemy Lab: {session.request.idea[:48]}"),
     )
     prompt_by_id = {prompt.id: prompt for prompt in session.prompts}
 
@@ -531,7 +744,7 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
             return _skipped_variant(variant, fatal_provider_error)
         variant.status = "running"
         session.updated_at = now_iso()
-        lab_store.save(session)
+        await _save_runner_state(session)
         prompt = prompt_by_id[variant.prompt_id]
         last_variant = variant
         for attempt in range(MAX_RETRIES_PER_VARIANT + 1):
@@ -581,7 +794,7 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
                 message=f"正在生成第 {index + 1}/{total} 张。",
             )
             session.updated_at = now_iso()
-            lab_store.save(session)
+            await _save_runner_state(session)
             result = await run_variant(variant)
         _replace_variant(session, result)
         session.errors = [item.error for item in session.variants if item.error]
@@ -597,7 +810,7 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
             message=_variant_progress_message(index=index, total=total, result=result),
         )
         session.updated_at = now_iso()
-        lab_store.save(session)
+        await _save_runner_state(session)
         if wait_seconds > 0:
             await asyncio.sleep(wait_seconds)
 
@@ -619,7 +832,7 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
         status=session.status,
         message=f"串行生成结束：成功 {len(succeeded)} 张，失败 {len(failed)} 张。",
     )
-    return lab_store.save(session)
+    return await _save_runner_state(session)
 
 
 def get_exploration_session(session_id: str, *, veyra_user_id: int | None = None, is_admin: bool = False) -> ExplorationSession | None:
@@ -642,11 +855,7 @@ def update_favorites(session_id: str, selection: FavoriteSelection, *, veyra_use
     session = get_exploration_session(session_id, veyra_user_id=veyra_user_id, is_admin=is_admin)
     if not session:
         return None
-    valid_ids = {variant.id for variant in session.variants}
-    favorites = [variant_id for variant_id in selection.variant_ids if variant_id in valid_ids]
-    session.favorites = favorites
-    session.updated_at = now_iso()
-    return lab_store.save(session)
+    return lab_store.update_favorites(session_id, selection.variant_ids)
 
 
 def _public_reference_plan(reference_plan: dict[str, Any]) -> dict[str, Any]:
@@ -777,7 +986,7 @@ async def _ensure_session_prompts_enhanced(session: ExplorationSession) -> None:
             "updated_at": now_iso(),
         }
         session.updated_at = now_iso()
-        lab_store.save(session)
+        await _save_runner_state(session)
         enhanced.append(
             await enhance_lab_prompt(
                 request=session.request,
@@ -789,20 +998,25 @@ async def _ensure_session_prompts_enhanced(session: ExplorationSession) -> None:
         )
     session.prompts = enhanced
     session.updated_at = now_iso()
-    lab_store.save(session)
+    await _save_runner_state(session)
 
 
 def _schedule_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> None:
     task = asyncio.create_task(_run_exploration_session_guarded(session_id, veyra_user_id=veyra_user_id))
     _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+
+    def release_session_capacity(done_task: asyncio.Task) -> None:
+        _background_tasks.discard(done_task)
+        _LAB_SESSION_CAPACITY.release()
+
+    task.add_done_callback(release_session_capacity)
 
 
 async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: int | None = None) -> None:
     try:
         await run_exploration_session(session_id, veyra_user_id=veyra_user_id)
     except Exception as exc:
-        session = lab_store.get(session_id)
+        session = await _run_lab_checkpoint_call(lab_store.get, session_id)
         if not session:
             return
         error = ExplorationError(
@@ -826,7 +1040,7 @@ async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: in
             message=f"后台任务异常停止：成功 {succeeded} 张，失败 {failed} 张。",
         )
         session.updated_at = now_iso()
-        lab_store.save(session)
+        await _save_runner_state(session)
 
 
 def _replace_variant(session: ExplorationSession, replacement: GenerationVariant) -> None:
