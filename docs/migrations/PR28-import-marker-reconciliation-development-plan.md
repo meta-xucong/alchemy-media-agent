@@ -90,4 +90,6 @@ receipt 是首次导入来源的处理证明，不是当前表计数或文件哈
 - V2 favorites/history 原子导入与 receipt：245 passed；V2 完整 `custom_media_agent_2_0/tests`：698 passed，1 条既有 deprecation warning。最终迭代只改 V1 history、离线盘点工具和测试/文档，V2 生产代码未再变。
 - Python 编译与 `git diff --check` 通过。
 
-这些组存在重叠，不相加。测试进程显式设置 `ORT_DISABLE_TELEMETRY=1`、`OPENAI_AGENTS_DISABLE_TRACING=1`；V1、V2 因依赖版本冲突分开运行。中途审计发现并修正了 malformed schema 误报、owner-evidence 表漏检和两种不一致半 marker 可读/写来源的问题；不可能代表旧安装的测试夹具也已更正为无 receipt 的 legacy 状态。没有运行真实 Provider、浏览器、VPS 或生产数据库。最终独立 Audit 与 Source Fidelity 尚待本次候选 SHA 的回执；在收到 PASS 前不得推送或请求合并。
+这些组存在重叠，不相加。测试进程显式设置 `ORT_DISABLE_TELEMETRY=1`、`OPENAI_AGENTS_DISABLE_TRACING=1`；V1、V2 因依赖版本冲突分开运行。中途审计发现并修正了 malformed schema 误报、owner-evidence 表漏检和两种不一致半 marker 可读/写来源的问题；不可能代表旧安装的测试夹具也已更正为无 receipt 的 legacy 状态。没有运行真实 Provider、浏览器、VPS 或生产数据库。
+
+实现候选 `00aabbe6f61840427e6f5373f5a36c2ce2bda639` 已收到独立只读 Audit PASS 与 Source Fidelity PASS；审计结论覆盖代码范围，VPS 旧数据盘点和迁移仍未完成。本段为记录审计回执的文档补充，不改变生产代码或来源矩阵。推送后仍需查看 PR CI 结果，CI 通过后才达到代码合并就绪。
