@@ -60,7 +60,7 @@ receipt 是首次导入来源的处理证明，不是当前表计数或文件哈
 - 显式接收四种 namespace 与数据库路径；可按需检查一个或多个 namespace，不导入应用配置或执行 bootstrap。退出码只覆盖本次传入的范围；完整迁移盘点必须显式传入四个 namespace。
 - 使用只读 SQLite URI 并在单一只读事务中检查 marker、receipt 和计数；不创建不存在的数据库，不建表，不更新 schema/marker。输入应是通过 SQLite backup API 得到的离线一致副本；不要直接把正在写入的 WAL 数据库文件复制给该命令。
 - 每个 namespace 报告 marker 状态、receipt 是否存在且结构合法、当前目标表计数、数据库读取错误类别。不得把当前行数与首次 `record_count` 不同直接判为损坏。
-- 对已存在的 marker/data 表校验必需列；表名存在但列结构不兼容时归类为 `schema_incomplete`，不得仅因 `COUNT(*)` 可执行就认定结构有效。receipt 表需具备完整字段且以 namespace/migration_key 为主键，否则归类为 `receipt_invalid`。
+- 对已存在的 marker/data 表校验必需列；表名存在但列结构不兼容时归类为 `schema_incomplete`，不得仅因 `COUNT(*)` 可执行就认定结构有效。V1 history 有状态表时还必须验证 owner-evidence 表具备 output_id、owner_id、owner_conflict；receipt 表需具备完整字段且以 namespace/migration_key 为主键，否则归类为 `receipt_invalid`。
 - 默认 stdout 为脱敏 JSON；不包含绝对路径、原始 record/output/session/user ID、完整 SQLite 错误字符串或业务 payload。必要的文件定位由调用者本地掌握。
 - exit code：所有 namespace 可读且状态已分类为 0；存在 `legacy_completion_unverified` 或 marker/receipt/schema 异常为 2；输入无效/数据库不可读为 3。命令不执行任何修复。
 - 文档明确：inventory 不是数据完整性对账、生产迁移批准或恢复许可。

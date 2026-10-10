@@ -21,6 +21,10 @@ def _create_v1(path: Path, namespace: str, *, marker: bool, receipt: bool, parti
                     session_id TEXT, created_epoch REAL NOT NULL, updated_epoch REAL NOT NULL,
                     payload TEXT NOT NULL)"""
             )
+            connection.execute(
+                "CREATE TABLE v1_history_owner_evidence("
+                "output_id TEXT PRIMARY KEY, owner_id INTEGER NOT NULL, owner_conflict INTEGER NOT NULL DEFAULT 0)"
+            )
             if marker:
                 connection.execute("INSERT INTO v1_history_state VALUES('jsonl_imported', '1')")
                 if not partial:
@@ -125,6 +129,21 @@ def test_v1_history_partial_markers_are_not_misclassified_as_uninitialized(tmp_p
     path = tmp_path / "partial.sqlite3"
     _create_v1(path, "v1_history", marker=True, receipt=False, partial=True)
     assert inspect_database("v1_history", path)["status"] == "incomplete_completion_marker"
+
+
+def test_v1_history_marker_requires_owner_evidence_schema(tmp_path):
+    path = tmp_path / "missing-owner-evidence.sqlite3"
+    _create_v1(path, "v1_history", marker=True, receipt=True)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE v1_history_owner_evidence")
+    assert inspect_database("v1_history", path)["status"] == "schema_incomplete"
+
+    malformed = tmp_path / "malformed-owner-evidence.sqlite3"
+    _create_v1(malformed, "v1_history", marker=True, receipt=True)
+    with sqlite3.connect(malformed) as connection:
+        connection.execute("DROP TABLE v1_history_owner_evidence")
+        connection.execute("CREATE TABLE v1_history_owner_evidence(output_id TEXT)")
+    assert inspect_database("v1_history", malformed)["status"] == "schema_incomplete"
 
 
 def test_inventory_detects_receipt_without_marker_table_and_marker_without_data_table(tmp_path):

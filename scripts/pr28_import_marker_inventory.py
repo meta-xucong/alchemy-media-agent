@@ -122,6 +122,14 @@ def inspect_database(namespace: str, path: Path) -> dict[str, Any]:
                 if receipt and receipt.get("valid"):
                     result["receipt"] = receipt
                 return result
+            if not _has_columns(
+                connection,
+                "v1_history_owner_evidence",
+                {"output_id", "owner_id", "owner_conflict"},
+            ):
+                return {"namespace": namespace, "status": "schema_incomplete", "record_count_now": None}
+            if not _table_exists(connection, "v1_history_owner_evidence"):
+                return {"namespace": namespace, "status": "schema_incomplete", "record_count_now": None}
             states = {
                 str(row[0]): str(row[1])
                 for row in connection.execute(
