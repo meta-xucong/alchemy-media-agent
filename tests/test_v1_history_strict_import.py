@@ -36,6 +36,7 @@ def _clear_markers(store, *, owner_only=False):
         if owner_only:
             connection.execute("DELETE FROM v1_history_state WHERE state_key='owner_evidence_backfilled'")
             connection.execute("DELETE FROM v1_history_owner_evidence")
+            connection.execute("DELETE FROM v1_import_receipts WHERE namespace='history'")
         else:
             connection.execute("DELETE FROM v1_history_state")
             connection.execute("DELETE FROM v1_import_receipts WHERE namespace='history'")
@@ -151,7 +152,7 @@ def test_owner_backfill_is_atomic_retryable_and_does_not_reimport_history(tmp_pa
         receipt = connection.execute(
             "SELECT importer_id, importer_version, record_count FROM v1_import_receipts WHERE namespace='history'"
         ).fetchone()
-    assert receipt == ("v1.history.jsonl", 1, 1)
+    assert receipt is None
 
 
 def test_v1_orphan_receipt_blocks_legacy_history_replay(tmp_path):
@@ -194,6 +195,28 @@ def test_v1_owner_evidence_marker_without_history_marker_blocks_stale_source_rep
         assert connection.execute(
             "SELECT COUNT(*) FROM v1_import_receipts WHERE namespace='history'"
         ).fetchone()[0] == 0
+
+
+def test_v1_strict_receipt_with_missing_owner_marker_blocks_evidence_replay(tmp_path):
+    store = LocalMediaStore(tmp_path)
+    _source(store, json.dumps(_record("out_original", veyra_user_id=41)))
+    store._ensure_history_index()
+    before = _snapshot(store)
+    _source(store, json.dumps(_record("out_new_stale", veyra_user_id=77)))
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        connection.execute("DELETE FROM v1_history_state WHERE state_key='owner_evidence_backfilled'")
+        connection.commit()
+
+    with pytest.raises(ValueError, match="import_state_inconsistent"):
+        store._ensure_history_index()
+
+    assert _snapshot(store)["v1_history_records"] == before["v1_history_records"]
+    assert _snapshot(store)["v1_history_owner_evidence"] == before["v1_history_owner_evidence"]
+    assert dict(_snapshot(store)["v1_history_state"]) == {"jsonl_imported": "1"}
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT importer_id, importer_version, record_count FROM v1_import_receipts WHERE namespace='history'"
+        ).fetchone() == ("v1.history.jsonl", 1, 1)
 
 
 @pytest.mark.parametrize("owner", [None, 0, "0", "", "  ", 41, "41", "+41", "  +41  "])

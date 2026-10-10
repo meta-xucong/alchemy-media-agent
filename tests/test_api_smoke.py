@@ -3550,7 +3550,8 @@ def test_v1_conflicting_history_owners_fail_closed_after_owner_evidence_backfill
     )
     assert media_store.get_history_record(output_id, include_missing=True)["_veyra_owner_conflict"] is True
 
-    # Simulate an existing installation whose index predates owner-evidence tracking.
+    # Simulate a legacy installation whose index predates owner-evidence
+    # tracking. A current strict receipt cannot exist on that historical DB.
     connection = connect(tmp_path / "repository.sqlite3")
     try:
         with connection:
@@ -3558,6 +3559,7 @@ def test_v1_conflicting_history_owners_fail_closed_after_owner_evidence_backfill
             connection.execute(
                 "DELETE FROM v1_history_state WHERE state_key='owner_evidence_backfilled'"
             )
+            connection.execute("DELETE FROM v1_import_receipts WHERE namespace='history'")
     finally:
         connection.close()
 

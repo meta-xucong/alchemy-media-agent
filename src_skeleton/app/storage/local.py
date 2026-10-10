@@ -459,14 +459,19 @@ class LocalMediaStore:
                 ).fetchone() is not None
                 if history_imported and owner_evidence_backfilled:
                     return
-                if owner_evidence_backfilled and not history_imported:
-                    # This partial state must not fall through to first import:
-                    # doing so could replay stale source rows after a prior
-                    # history index or its marker was removed.
-                    raise LegacyHistoryImportError(0, "import_state_inconsistent")
-                if not history_imported and connection.execute(
+                strict_receipt_exists = connection.execute(
                     "SELECT 1 FROM v1_import_receipts WHERE namespace='history'"
-                ).fetchone():
+                ).fetchone() is not None
+                if (
+                    (owner_evidence_backfilled and not history_imported)
+                    or (history_imported and not owner_evidence_backfilled and strict_receipt_exists)
+                ):
+                    # This partial state must not fall through to first import:
+                    # doing so could replay stale source rows or refresh
+                    # authorization evidence from a source after a strict
+                    # receipt proves both markers were committed atomically.
+                    raise LegacyHistoryImportError(0, "import_state_inconsistent")
+                if not history_imported and strict_receipt_exists:
                     raise LegacyHistoryImportError(0, "import_state_inconsistent")
                 try:
                     source = self.history_file.open("rb")

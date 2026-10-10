@@ -78,9 +78,9 @@ PR：#28，仍为 Draft。
 
 <!-- PR28_CANDIDATE_SOURCE_MATRIX -->
 
-- Candidate overlay: 25 files; SHA-256 `f87929409d085069e43307c10c47fcc5bebbae23107339c1fc70a3e96811eaed`.
+- Candidate overlay: 25 files; SHA-256 `8563d445f8ea6b15a4777667c8e62697c5417f5941e2b1d20d50bc136ffb882d`.
 - Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.
-- Expanded old-to-candidate manifest: 51 files; SHA-256 `fb767ef9303d643d32a76813c97f8afe6845eb6781d1244b30c65cdab75fa589`.
+- Expanded old-to-candidate manifest: 51 files; SHA-256 `b25cf8e22bd5263bb24eb47c89b91331d9327490b0a1919e1abe852dfdb2e6f9`.
 - Expanded digest uses section 2 encoding; merge the original matrix with this overlay by path, replacing target blobs and adding new paths.
 
 | Source file | Old release blob | Original target blob | Candidate blob | Scope / authority |
@@ -109,7 +109,7 @@ PR：#28，仍为 Draft。
 | `src_skeleton/app/repositories/sqlite_json.py` | `ABSENT` | `4c719e7603cc3723d75ac392f8782810220bbe73` | `4c719e7603cc3723d75ac392f8782810220bbe73` | TARGET_STORAGE; V1 indexed columns, filtered reads and WAL schema |
 | `src_skeleton/app/services/favorites.py` | `febcf1f481e6feaaa5c71804826bd264ecf22520` | `346906f72590f7690524a9266cbbfb4165260e6b` | `e7c52cd1c3ae20dd600bc8f7ec66d6fbb1218718` | THIN_ADAPTER; validated atomic favorites import with repair retry |
 | `src_skeleton/app/services/retention_settings.py` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | PLATFORM_SHELL; V1 user-edited retention JSON and fallback defaults |
-| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `f567798790d38b9ae99e47c5392fcffe42132e51` | DIRECT_REUSE; V1 fail-closed JSONL history and owner-evidence import |
+| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `7e4f6250e45c6b8ee9194220817c5a12c6e805eb` | DIRECT_REUSE; V1 fail-closed JSONL history and owner-evidence import |
 
 <!-- /PR28_CANDIDATE_SOURCE_MATRIX -->
 
