@@ -134,6 +134,17 @@ def test_cli_uses_distinct_exit_code_for_legacy_markers(tmp_path, capsys):
     assert result["results"][0]["status"] == "legacy_completion_unverified"
 
 
+def test_cli_argument_errors_do_not_echo_database_paths(tmp_path, capsys):
+    private_path = tmp_path / "private-database-location.sqlite3"
+    try:
+        main(["--db", f"unknown_namespace={private_path}"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("invalid namespace was accepted")
+    assert str(private_path) not in capsys.readouterr().err
+
+
 def test_invalid_receipt_is_redacted_and_classified(tmp_path):
     path = tmp_path / "bad-receipt.sqlite3"
     _create_v1(path, "v1_favorites", marker=True, receipt=False)

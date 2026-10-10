@@ -225,14 +225,18 @@ def _parse_mapping(raw: str) -> tuple[str, Path]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", action="append", type=_parse_mapping, required=True, metavar="NAMESPACE=PATH")
+    parser.add_argument("--db", action="append", required=True, metavar="NAMESPACE=PATH")
     args = parser.parse_args(argv)
-    namespaces = [namespace for namespace, _ in args.db]
+    try:
+        databases = [_parse_mapping(raw) for raw in args.db]
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
+    namespaces = [namespace for namespace, _ in databases]
     if len(set(namespaces)) != len(namespaces):
         parser.error("each namespace may be supplied at most once")
     results: list[dict[str, Any]] = []
     unreadable = False
-    for namespace, path in args.db:
+    for namespace, path in databases:
         try:
             results.append(inspect_database(namespace, path))
         except (OSError, sqlite3.Error, ValueError):
