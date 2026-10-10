@@ -523,3 +523,5 @@ Source Fidelity A2 对 `23fcea1f` 的反馈发现，`fetchone()` 虽然逐行消
 **切换阻断：**线上仍是 PR 前版本，且 repository SQLite 文件不存在。磁盘历史/图片及 task queue DB 可保留各自已有内容，但当前代码和路由审查未找到能从旧运行进程完整导出 V1 session/job/asset/output、V2 repository/Lab session RAM 状态的管理员快照接口；现有单 Job/单 session 读取路由不能证明完整性。进程重启会使纯 RAM 状态不可恢复。因此不能把当前磁盘备份或健康检查当成完成迁移，也不能直接部署 PR。
 
 下一阶段必须先提供可审计的迁移桥：在旧进程仍运行时，以受限只读、流式、可校验方式导出必要内存态；对 V1/V2/Lab 分别记录实体计数、ID/owner/关联校验和，保护文件权限并加密/限时保存；在隔离副本上 dry-run 导入新 SQLite，证明数量、归属、状态与输出引用一致，失败时保留原服务和原始数据。确认方案和恢复路径后，才安排维护窗口执行 cutover，再按同一 SHA 验证服务、历史可见性、重启恢复、RSS、延迟和磁盘。此预检不授权生产迁移、服务重启或部署。
+
+脱敏的原始观测摘要以 append-only 证据保存在 [`docs/evidence/pr28-vps-readonly-preflight-2026-10-10.md`](evidence/pr28-vps-readonly-preflight-2026-10-10.md)，不包含用户记录内容或凭据。
