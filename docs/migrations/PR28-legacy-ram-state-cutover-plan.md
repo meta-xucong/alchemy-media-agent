@@ -17,7 +17,7 @@ PR：#28，仍为 Draft。
 - 旧版参考提交：`3915b24d0cdab6cc626ad5a7d07c0839e5239064`
 - 目标基线：`a582b37d32ac6317ca9b24a900c8e2de83286906`
 - 源清单摘要算法：路径按 UTF-8 字节序排序；每行按 `path NUL source_git_blob NUL target_git_blob LF` 拼接后做 SHA-256。
-- 源清单摘要（36 个直接来源文件）：`c0d1f4db459b9a6952646fad88b607ef61636e0fc665b8a1e718ea4c6a5a0d36`
+- 源清单摘要（38 个直接来源文件）：`75dc6244e548a0b7e60ad4342eac9d61bcd2135563e0f89cf9e93946998542b8`
 
 | 源文件 | 旧版 Git blob | 目标 Git blob | 映射类别 / 数据权威 |
 |---|---|---|---|
@@ -41,10 +41,12 @@ PR：#28，仍为 Draft。
 | `custom_media_agent_2_0/app/services/case_index_store.py` | `74f7db118b47c3982a1a68ac64d5d6e89e918914` | `74f7db118b47c3982a1a68ac64d5d6e89e918914` | `PLATFORM_SHELL`；V2 case index 的文件写入实现 |
 | `custom_media_agent_2_0/app/services/case_assets.py` | `1c363be051bfffa62fc6c62325391121d98238b2` | `1c363be051bfffa62fc6c62325391121d98238b2` | `PLATFORM_SHELL`；V2 remote snapshot 读取和 case thumbnail 派生缓存 |
 | `custom_media_agent_2_0/app/services/github_archive.py` | `33a10065ae8f9c6d6514a90a4a14da1de0f8567d` | `33a10065ae8f9c6d6514a90a4a14da1de0f8567d` | `PLATFORM_SHELL`；V2 remote snapshot 下载/写入实现 |
+| `custom_media_agent_2_0/app/services/runtime_model_settings.py` | `06a92205d798f68c408c399476a85f7b3506055d` | `06a92205d798f68c408c399476a85f7b3506055d` | `PLATFORM_SHELL`；V2 runtime model settings JSON 持久化和启动加载 |
 | `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `THIN_ADAPTER`；V2 文件收藏到 SQLite 的既有迁移边界 |
 | `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `DIRECT_REUSE`；V2 JSONL 历史投影 |
 | `custom_media_agent_2_0/app/services/output_storage.py` | `116a9363429b5c849ff7ab249dfc4f4bace8e560` | `116a9363429b5c849ff7ab249dfc4f4bace8e560` | `PLATFORM_SHELL`；V2 原图、history thumbnail/preview 文件写入 |
 | `custom_media_agent_2_0/app/services/uploaded_assets.py` | `7f731275535e6e544b1670cc49f8493dcd597657` | `7f731275535e6e544b1670cc49f8493dcd597657` | `PLATFORM_SHELL`；V2 上传文件及关联持久记录写入 |
+| `custom_media_agent_2_0/app/services/safety.py` | `810c567503b45935d4cc3d1f34fae841d0769227` | `810c567503b45935d4cc3d1f34fae841d0769227` | `DIRECT_REUSE`；V2 safety decision 持久化调用 |
 | `custom_media_agent_2_0/app/services/queue_worker.py` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `DIRECT_REUSE`；任务 worker 对 V2 仓库的写入路径 |
 | `custom_media_agent_2_0/app/services/resource_sync.py` | `30fa9be04e43c2c3b56dd1fa06512c072df158ff` | `30fa9be04e43c2c3b56dd1fa06512c072df158ff` | `DIRECT_REUSE`；资源同步 worker 对 V2 仓库的写入路径 |
 | `custom_media_agent_2_0/app/workers/resource_sync_worker.py` | `c52b93b82abc8dd0603522a5a67388e7a29b9787` | `c52b93b82abc8dd0603522a5a67388e7a29b9787` | `PLATFORM_SHELL`；实际同步 worker 入口与初始化路径 |
@@ -53,7 +55,7 @@ PR：#28，仍为 Draft。
 | `custom_media_agent_2_0/app/services/generation.py` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `DIRECT_REUSE`；V2 generation 写入调用链 |
 | `custom_media_agent_2_0/app/services/veyra_billing_settings.py` | `b508f8216a4c83d9efb3851c0734e05f872a74a8` | `b508f8216a4c83d9efb3851c0734e05f872a74a8` | `PLATFORM_SHELL`；V2 billing rules 的独立 JSON 持久化实现 |
 | `custom_media_agent_2_0/app/services/veyra_usage.py` | `b8e6e10102a809b8b4ba22760f3ca608266e1be6` | `b8e6e10102a809b8b4ba22760f3ca608266e1be6` | `PLATFORM_SHELL`；V2 usage JSONL 读写实现 |
-| `custom_media_agent_2_0/app/services/claude_orchestrator.py` | `c7eaf398d9eae95f97e16b35435d67067536e412` | `b2ad712ae5a882cc1b23cd157ae91b2530da7a89` | `PLATFORM_SHELL`；V2 checkpoint/workspace/cache 文件路径与持久化实现 |
+| `custom_media_agent_2_0/app/services/claude_orchestrator.py` | `c7eaf398d9eae95f97e16b35435d67067536e412` | `b2ad712ae5a882cc1b23cd157ae91b2530da7a89` | `PLATFORM_SHELL`；V2 checkpoint/workspace 路径；旧版 JSON cache 与目标版新增 SQLite decision cache 的差异 |
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2-api.service` | `24c09cde1d69dc43470dac5dd09a85b28c6cac5f` | `24c09cde1d69dc43470dac5dd09a85b28c6cac5f` | `PLATFORM_SHELL`；V2 API 独立进程启动配置 |
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2-sync-worker.service` | `ef0c7dc77bca0fab1b4e8a4ff3dd340088d185d4` | `ef0c7dc77bca0fab1b4e8a4ff3dd340088d185d4` | `PLATFORM_SHELL`；资源同步 worker 独立进程启动配置 |
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2-worker.service` | `744fd43f6b4258b15ab4187e23206558d9b9a321` | `744fd43f6b4258b15ab4187e23206558d9b9a321` | `PLATFORM_SHELL`；任务 worker 独立进程启动配置 |
@@ -80,12 +82,13 @@ V1/V2 收藏 JSON、图片历史清单/JSONL、上传/输出图片文件、V2 ta
 | V1 `.env` / runtime settings | `persist_runtime_settings_to_env` 会写运行配置，文件可能含 provider secrets。配置值与凭据分开盘点；非秘密运行参数按键核对并安全重放，secret 通过既有 secret 管理单独配置，禁止复制进报告或 RAM bundle。 |
 | V1/V2 usage JSONL、favorites JSON、image-history JSONL、Lab upload manifests | 各自的持久来源；先全文件预检，再在隔离环境核对计数/引用。不得让 lazy importer 静默跳过坏行或提前写完成标记。 |
 | V2 `veyra_billing_settings.json` | 独立业务配置，含 V1/V2 billing rule；在目标启用 billing 前需受控保留并对账，不能只依赖默认值或旧 `.env` 推断。 |
+| V2 `runtime_model_settings.json` | API 启动会加载、管理路由会更新；属于有效运行配置。切换前按 schema 预检并安全重放/迁移，启用生成前逐 provider/model 对账。 |
 | V2 case index / provider seed | 与 repository PromptCase 数据交叉核对；确认内容可由冻结 seed/上游重新构建后，可作为派生数据重建，否则保留源文件并校验摘要。 |
 | V2 task-queue SQLite | 与 V2 repository DB 分开。队列条目、claim 和运行态按独立 schema/策略对账，不伪装成 repository namespace；未批准 active task 处置前不导入并恢复执行。 |
 | V2 remote snapshots | 外部同步快照/缓存来源；先盘点 manifest、来源版本和引用，再决定保留或重新下载。未验证前保留原件，不将其当作 RAM 仓库的替代快照。 |
 | V1/V2 原始上传、输出图片与 Lab 文件 | 媒体源数据；不写进 SQLite。保持原数据根或独立安全复制，并核对规范路径、存在性、大小与 SHA-256。 |
 | V2 case/history thumbnails | 派生缩略图；仅在来源 case/image 校验完整且重建流程通过后，允许排除并重建。 |
-| V2 Claude orchestrator workspace/checkpoint 和 cache | workspace 可能含 prompt、检查点或敏感上下文；不作为可重放业务记录导入。隔离保留原件，按活动 checkpoint 清点并等待处置。配置中的 cache path 实际通过 `with_name` 写为 `claude_orchestrator_cache.sqlite3`；缓存可重建，但只在原件保留、验证无活动依赖且清理策略批准后才可重建/淘汰。 |
+| V2 Claude orchestrator workspace/checkpoint 和 cache | workspace 可能含 prompt、检查点或敏感上下文；不作为可重放业务记录导入。隔离保留原件，按活动 checkpoint 清点并等待处置。冻结旧版将配置路径 `claude_orchestrator_cache.json` 作为 JSON cache 读写；它可重建，但因可能含敏感上下文，先加密留档并清点活动依赖，获批后才能淘汰。目标版另新增 `claude_orchestrator_cache.sqlite3` decision cache；该 target-only cache 在 staging/生产新目标均从空库启动，不将旧 JSON cache 转换成其权威记录。 |
 
 以上策略来自冻结源码配置和写入点，不证明 VPS 每个文件实际存在或与默认路径一致。目标 V1 `output_delete_claims` 是删除过程的短期并发 claim，不存在旧版对应项；新 staging DB 初始化为空，不从旧 Job/历史推导 claim。
 
@@ -95,7 +98,7 @@ V1/V2 收藏 JSON、图片历史清单/JSONL、上传/输出图片文件、V2 ta
 |---|---|---|
 | V2 API | 请求路由可写入九个 repository namespace；另有持久 history、上传、billing 和 task-queue 路径，分别按上表处理。 | `custom_media_agent_2_0/app/main.py`、`app/repositories/memory.py` 及相应 service。 |
 | V2 resource-sync worker | `providers`、`sync_runs`、`prompt_cases`；会更新 case index 文件，并可预热缩略图缓存。 | `app/workers/resource_sync_worker.py`、`app/services/resource_sync.py`、`app/services/case_index_store.py`。 |
-| V2 task worker | `creative_runs`、`image_jobs`、`outputs`、`safety_decisions`；依具体生成路径更新关联记录。 | `app/workers/task_queue_worker.py`、`app/services/queue_worker.py`、`app/agents/runtime.py`、`app/services/generation.py`。 |
+| V2 task worker | `creative_runs`、`image_jobs`、`outputs`、`safety_decisions`；依具体生成路径更新关联记录。 | `app/workers/task_queue_worker.py`、`app/services/queue_worker.py`、`app/agents/runtime.py`、`app/services/generation.py`、`app/services/safety.py`。 |
 
 该表是冻结源代码中的可能写入边界，不是 VPS 运行态的进程清单或进程 SHA 证明。Exporter 开发时还需逐条追踪 API route 到 repository method，并列出各 namespace/key 的唯一合并规则；如果实机发现额外 worker/写入路径，manifest 必须扩展后再冻结。
 
