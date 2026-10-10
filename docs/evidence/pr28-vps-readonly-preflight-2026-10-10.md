@@ -29,7 +29,7 @@ container memory:  444,723,200 bytes at capture
 container limits:  memory.max=max; cpu.max=max 100000
 ```
 
-V1 media storage is mounted read-write into the container. V2 image storage is mounted read-only; the task queue database is on its separately configured persistent path. The release is the pre-PR version; PR #28 is not deployed.
+V1 media storage is mounted read-write into the container. The V2 storage bind mounted into the V1 container is read-only; this does not establish the permissions seen by separate V2 systemd processes. The task queue database is on its separately configured persistent path. V2 unit activity was checked, but the active V2 processes' resolved code SHA was not verified. The release is the pre-PR version; PR #28 is not deployed.
 
 ## Interpretation and limits
 
