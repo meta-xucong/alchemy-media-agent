@@ -36,6 +36,21 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
+def _has_columns(connection: sqlite3.Connection, table: str, required: set[str]) -> bool:
+    if not _table_exists(connection, table):
+        return True
+    columns = {str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')}
+    return required.issubset(columns)
+
+
+def _primary_key_columns(connection: sqlite3.Connection, table: str) -> tuple[str, ...]:
+    rows = connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+    return tuple(
+        str(row[1])
+        for row in sorted((row for row in rows if int(row[5]) > 0), key=lambda row: int(row[5]))
+    )
+
+
 def _table_count(connection: sqlite3.Connection, table: str) -> int | None:
     if not _table_exists(connection, table):
         return None
@@ -53,7 +68,7 @@ def _receipt_row(
         return None
     columns = {str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')}
     expected = {key_column, "importer_id", "importer_version", "record_count", "completed_at"}
-    if not expected.issubset(columns):
+    if not expected.issubset(columns) or _primary_key_columns(connection, table) != (key_column,):
         return {"valid": False}
     row = connection.execute(
         f'SELECT importer_id, importer_version, record_count, completed_at FROM "{table}" '
@@ -93,6 +108,11 @@ def inspect_database(namespace: str, path: Path) -> dict[str, Any]:
                 "v1.history.jsonl",
                 "v1_history_records",
             )
+            if not _has_columns(connection, table, {"state_key", "state_value"}) or not _has_columns(
+                connection, data_table,
+                {"sequence", "output_id", "session_id", "created_epoch", "updated_epoch", "payload"},
+            ):
+                return {"namespace": namespace, "status": "schema_incomplete", "record_count_now": None}
             if not _table_exists(connection, table):
                 receipt = _receipt_row(connection, "v1_import_receipts", "namespace", "history", importer)
                 status = "uninitialized" if receipt is None else (
@@ -122,6 +142,10 @@ def inspect_database(namespace: str, path: Path) -> dict[str, Any]:
                 "v1.favorites.json",
                 "v1_favorites",
             )
+            if not _has_columns(connection, table, {"state_key", "state_value"}) or not _has_columns(
+                connection, data_table, {"output_id", "owner_key", "owner_id", "created_at", "updated_at"}
+            ):
+                return {"namespace": namespace, "status": "schema_incomplete", "record_count_now": None}
             if not _table_exists(connection, table):
                 receipt = _receipt_row(connection, "v1_import_receipts", "namespace", "favorites", importer)
                 status = "uninitialized" if receipt is None else (
@@ -150,6 +174,11 @@ def inspect_database(namespace: str, path: Path) -> dict[str, Any]:
                 "v2.history.jsonl",
                 "v2_image_history",
             )
+            if not _has_columns(connection, marker_table, {"migration_key", "completed_at"}) or not _has_columns(
+                connection, data_table,
+                {"output_id", "job_id", "owner_id", "created_epoch", "updated_epoch", "payload"},
+            ):
+                return {"namespace": namespace, "status": "schema_incomplete", "record_count_now": None}
             if not _table_exists(connection, marker_table):
                 receipt = _receipt_row(connection, receipt_table, "migration_key", marker_key, importer)
                 status = "uninitialized" if receipt is None else (
@@ -173,6 +202,10 @@ def inspect_database(namespace: str, path: Path) -> dict[str, Any]:
                 "v2.favorites.json",
                 "favorites",
             )
+            if not _has_columns(connection, marker_table, {"migration_key", "completed_at"}) or not _has_columns(
+                connection, data_table, {"output_id", "owner_key", "owner_id", "created_at", "updated_at"}
+            ):
+                return {"namespace": namespace, "status": "schema_incomplete", "record_count_now": None}
             if not _table_exists(connection, marker_table):
                 receipt = _receipt_row(connection, receipt_table, "migration_key", marker_key, importer)
                 status = "uninitialized" if receipt is None else (

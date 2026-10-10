@@ -15,7 +15,12 @@ def _create_v1(path: Path, namespace: str, *, marker: bool, receipt: bool, parti
         )
         if namespace == "v1_history":
             connection.execute("CREATE TABLE v1_history_state(state_key TEXT PRIMARY KEY, state_value TEXT NOT NULL)")
-            connection.execute("CREATE TABLE v1_history_records(output_id TEXT)")
+            connection.execute(
+                """CREATE TABLE v1_history_records(
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT, output_id TEXT NOT NULL UNIQUE,
+                    session_id TEXT, created_epoch REAL NOT NULL, updated_epoch REAL NOT NULL,
+                    payload TEXT NOT NULL)"""
+            )
             if marker:
                 connection.execute("INSERT INTO v1_history_state VALUES('jsonl_imported', '1')")
                 if not partial:
@@ -24,7 +29,12 @@ def _create_v1(path: Path, namespace: str, *, marker: bool, receipt: bool, parti
             receipt_namespace = "history"
         else:
             connection.execute("CREATE TABLE v1_favorite_state(state_key TEXT PRIMARY KEY, state_value TEXT NOT NULL)")
-            connection.execute("CREATE TABLE v1_favorites(output_id TEXT)")
+            connection.execute(
+                """CREATE TABLE v1_favorites(
+                    output_id TEXT NOT NULL, owner_key TEXT NOT NULL, owner_id INTEGER,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(output_id, owner_key))"""
+            )
             if marker:
                 connection.execute("INSERT INTO v1_favorite_state VALUES('legacy_imported', 'now')")
             importer = "v1.favorites.json"
@@ -34,7 +44,15 @@ def _create_v1(path: Path, namespace: str, *, marker: bool, receipt: bool, parti
                 "INSERT INTO v1_import_receipts VALUES(?, ?, 1, 12, 'now')",
                 (receipt_namespace, importer),
             )
-        connection.execute("INSERT INTO " + ("v1_history_records" if namespace == "v1_history" else "v1_favorites") + " VALUES('private-id')")
+        if namespace == "v1_history":
+            connection.execute(
+                "INSERT INTO v1_history_records(output_id, created_epoch, updated_epoch, payload) "
+                "VALUES('private-id', 0, 0, '{}')"
+            )
+        else:
+            connection.execute(
+                "INSERT INTO v1_favorites VALUES('private-id', '', NULL, 'now', 'now')"
+            )
 
 
 def _create_v2(path: Path, namespace: str, *, marker: bool, receipt: bool):
@@ -50,7 +68,19 @@ def _create_v2(path: Path, namespace: str, *, marker: bool, receipt: bool):
                 "favorite_import_receipts", "v2.favorites.json",
             )
         connection.execute(f'CREATE TABLE "{marker_table}"(migration_key TEXT PRIMARY KEY, completed_at TEXT NOT NULL)')
-        connection.execute(f'CREATE TABLE "{data_table}"(item_id TEXT)')
+        if namespace == "v2_history":
+            connection.execute(
+                """CREATE TABLE v2_image_history(
+                    output_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, owner_id INTEGER,
+                    created_epoch REAL NOT NULL, updated_epoch REAL NOT NULL, payload TEXT NOT NULL)"""
+            )
+        else:
+            connection.execute(
+                """CREATE TABLE favorites(
+                    output_id TEXT NOT NULL, owner_key TEXT NOT NULL, owner_id INTEGER,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(output_id, owner_key))"""
+            )
         connection.execute(
             f'''CREATE TABLE "{receipt_table}"(
                 migration_key TEXT PRIMARY KEY, importer_id TEXT NOT NULL,
@@ -61,7 +91,14 @@ def _create_v2(path: Path, namespace: str, *, marker: bool, receipt: bool):
             connection.execute(f'INSERT INTO "{marker_table}" VALUES(?, ?)', (key, "now"))
         if receipt:
             connection.execute(f'INSERT INTO "{receipt_table}" VALUES(?, ?, 1, 12, ?)', (key, importer, "now"))
-        connection.execute(f'INSERT INTO "{data_table}" VALUES(?)', ("private-id",))
+        if namespace == "v2_history":
+            connection.execute(
+                "INSERT INTO v2_image_history VALUES('private-id', 'job', NULL, 0, 0, '{}')"
+            )
+        else:
+            connection.execute(
+                "INSERT INTO favorites VALUES('private-id', '', NULL, 'now', 'now')"
+            )
 
 
 def test_inventory_distinguishes_legacy_marker_from_strict_receipt_and_allows_native_changes(tmp_path):
@@ -105,6 +142,39 @@ def test_inventory_detects_receipt_without_marker_table_and_marker_without_data_
     with sqlite3.connect(missing_data) as connection:
         connection.execute("DROP TABLE v2_image_history")
     assert inspect_database("v2_history", missing_data)["status"] == "schema_incomplete"
+
+
+def test_inventory_rejects_existing_tables_with_incomplete_columns(tmp_path):
+    malformed_data = tmp_path / "malformed-data.sqlite3"
+    with sqlite3.connect(malformed_data) as connection:
+        connection.execute(
+            "CREATE TABLE v2_image_history_migration(migration_key TEXT PRIMARY KEY, completed_at TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO v2_image_history_migration VALUES('jsonl', 'now')")
+        connection.execute("CREATE TABLE v2_image_history(wrong_column TEXT)")
+        connection.execute(
+            """CREATE TABLE v2_image_history_import_receipts(
+                migration_key TEXT PRIMARY KEY, importer_id TEXT NOT NULL,
+                importer_version INTEGER NOT NULL, record_count INTEGER NOT NULL,
+                completed_at TEXT NOT NULL)"""
+        )
+        connection.execute(
+            "INSERT INTO v2_image_history_import_receipts VALUES('jsonl', 'v2.history.jsonl', 1, 4, 'now')"
+        )
+    assert inspect_database("v2_history", malformed_data)["status"] == "schema_incomplete"
+
+    malformed_marker = tmp_path / "malformed-marker.sqlite3"
+    with sqlite3.connect(malformed_marker) as connection:
+        connection.execute("CREATE TABLE favorite_migrations(wrong_column TEXT)")
+        connection.execute("CREATE TABLE favorites(output_id TEXT, owner_key TEXT, owner_id INTEGER, created_at TEXT, updated_at TEXT)")
+    with sqlite3.connect(malformed_marker) as connection:
+        connection.execute(
+            """CREATE TABLE favorite_import_receipts(
+                migration_key TEXT PRIMARY KEY, importer_id TEXT NOT NULL,
+                importer_version INTEGER NOT NULL, record_count INTEGER NOT NULL,
+                completed_at TEXT NOT NULL)"""
+        )
+    assert inspect_database("v2_favorites", malformed_marker)["status"] == "schema_incomplete"
 
 
 def test_inventory_does_not_create_missing_database_or_leak_paths_ids_or_payload(tmp_path, capsys):
@@ -156,6 +226,21 @@ def test_invalid_receipt_is_redacted_and_classified(tmp_path):
     assert result["status"] == "receipt_invalid"
     assert "private-unexpected" not in json.dumps(result)
     assert "secret" not in json.dumps(result)
+
+
+def test_receipt_table_without_unique_namespace_key_is_invalid(tmp_path):
+    path = tmp_path / "receipt-without-key.sqlite3"
+    _create_v1(path, "v1_favorites", marker=True, receipt=False)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE v1_import_receipts")
+        connection.execute(
+            "CREATE TABLE v1_import_receipts(namespace TEXT, importer_id TEXT, importer_version INTEGER, "
+            "record_count INTEGER, completed_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO v1_import_receipts VALUES('favorites', 'v1.favorites.json', 1, 12, 'now')"
+        )
+    assert inspect_database("v1_favorites", path)["status"] == "receipt_invalid"
 
 
 def test_unknown_namespace_is_rejected_without_opening_database(tmp_path):

@@ -78,9 +78,9 @@ PR：#28，仍为 Draft。
 
 <!-- PR28_CANDIDATE_SOURCE_MATRIX -->
 
-- Candidate overlay: 25 files; SHA-256 `afdad936dd6900206c685192b79f64b3ea71a866c4242ba10654ce85ef947183`.
+- Candidate overlay: 25 files; SHA-256 `39244dd769d02a1b6d9f1a0bea31408686b7707d0671fe77611ca8e63ce7f90e`.
 - Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.
-- Expanded old-to-candidate manifest: 51 files; SHA-256 `c08ecc90ca75b59fbf19dd36d9b7132f61ae0f124b4e81095672454f317bde46`.
+- Expanded old-to-candidate manifest: 51 files; SHA-256 `c614dbedae723e7c5dbe5d2013297666dbf6c9c3dccac2b8570788608ad2f615`.
 - Expanded digest uses section 2 encoding; merge the original matrix with this overlay by path, replacing target blobs and adding new paths.
 
 | Source file | Old release blob | Original target blob | Candidate blob | Scope / authority |
@@ -104,7 +104,7 @@ PR：#28，仍为 Draft。
 | `custom_media_agent_2_0/app/services/task_queue.py` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `8b2b81ab442478e70e875cc9c36bac0eccfd6db8` | V2_DEPENDENCY; claim protocol, checkpoint schema and bounded async admission |
 | `custom_media_agent_2_0/app/workers/task_queue_worker.py` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `36336b2f43ac7325c698c29b402cd7da36bab536` | V2_DEPENDENCY; unique process identity, no old bulk release |
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2.env.example` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `73718048234d7eb29c0ea630aa79f4f4dbf5ccea` | V2_CONFIGURATION; queue limit, claim timeout and generation lease example settings |
-| `scripts/pr28_import_marker_inventory.py` | `ABSENT` | `ABSENT` | `ac18965c86739e8469225c702d078e2c8e2e5be3` | OFFLINE_DIAGNOSTIC; read-only import marker inventory |
+| `scripts/pr28_import_marker_inventory.py` | `ABSENT` | `ABSENT` | `3cee3bf92cf2fd434ef60082f75f13583f7f9471` | OFFLINE_DIAGNOSTIC; read-only import marker inventory |
 | `src_skeleton/app/main.py` | `c190ff437f53e31863333848eb7c2bf767ac3032` | `f0b2e9562fca4250046e2f1c05bbd11381dfbc3d` | `096b8053e07011166020ba1092530fa797600f73` | PLATFORM_SHELL; sanitized fail-closed legacy import API responses |
 | `src_skeleton/app/repositories/sqlite_json.py` | `ABSENT` | `4c719e7603cc3723d75ac392f8782810220bbe73` | `4c719e7603cc3723d75ac392f8782810220bbe73` | TARGET_STORAGE; V1 indexed columns, filtered reads and WAL schema |
 | `src_skeleton/app/services/favorites.py` | `febcf1f481e6feaaa5c71804826bd264ecf22520` | `346906f72590f7690524a9266cbbfb4165260e6b` | `e7c52cd1c3ae20dd600bc8f7ec66d6fbb1218718` | THIN_ADAPTER; validated atomic favorites import with repair retry |
