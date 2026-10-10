@@ -512,4 +512,14 @@ Source Fidelity A2 对 `23fcea1f` 的反馈发现，`fetchone()` 虽然逐行消
 
 调整后完整 V1 API smoke：`tests/test_api_smoke.py` **97 passed，6 条既有 FastAPI lifecycle deprecation warnings，260.17 秒**。V2 `custom_media_agent_2_0/tests/test_v2_api.py` **173 passed，1 条既有 Starlette deprecation warning**。这覆盖 V1 API smoke（含该文件中的 Lab API 用例）及 V2 API 测试，不等同于整个仓库所有测试、浏览器/provider 验收、生产数据库迁移或 VPS 资源验收。旧版宽范围 V2 provider-seed-sync 失败的历史根因仍未证明；本次结果只说明它未在 V2 API 文件运行中复现。
 
-本轮只有 `tests/test_api_smoke.py` 测试夹具变化，须经独立审计确认夹具没有弱化产品断言，再更新 Draft PR 描述并保留 Draft。生产旧数据仍需单独只读盘点与 dry-run 数量/ID/owner 对账；在对账报告及回滚方案可审阅前，不执行线上迁移。VPS acceptance 另需先明确运行 SHA、只读基线和维护/回滚步骤；本轮未连接或修改 VPS。
+该测试夹具提交只改变测试与文档；经独立审计后可更新 Draft PR 描述并保留 Draft。生产旧数据仍需单独只读盘点与 dry-run 数量/ID/owner 对账；在对账报告及回滚方案可审阅前，不执行线上迁移或服务切换。
+
+#### VPS 旧库/运行态只读预检（2026-10-10）
+
+只读 SSH 确认当前 release Git HEAD 和 `origin/main` 均为 `3915b24d0cdab6cc626ad5a7d07c0839e5239064`；容器内 `/app/app/main.py` 与该 release 的 V1 `main.py` SHA-256 一致。容器状态 Up、restart count 为 0；V1 `/healthz` 与 V2 `/api/v2/health` 均为 HTTP 200，V2 API、sync worker、task worker 三个 systemd unit 均 active。PR #28 的 SQLite repository 改动尚未部署。
+
+只读容量快照：主机 RAM 总量约 1.9 GiB、available 821 MiB；根盘 30 GiB、可用约 6.4 GiB。V1 media storage 约 2.8 GiB，V2 storage 约 2.2 GiB。`/var/lib/alchemy` 下发现的 SQLite 文件为 V1 `api_access/keys.sqlite3`（28,672 bytes）与 V2 `task_queue.sqlite3`（137,433,088 bytes）；未发现 V1/V2 `repository.sqlite3`。容器 `memory.current` 采样为 444,723,200 bytes，`memory.max=max`，CPU cgroup 未设 quota；这只是静态健康基线，不是并发/RSS 验收。V1 storage 以读写挂载，V2 storage 为只读挂载；V2 task queue 数据库位于独立持久路径。未读取图片、提示词、用户记录内容，未修改数据库/文件、重启或部署服务。
+
+**切换阻断：**线上仍是 PR 前版本，且 repository SQLite 文件不存在。磁盘历史/图片及 task queue DB 可保留各自已有内容，但当前代码和路由审查未找到能从旧运行进程完整导出 V1 session/job/asset/output、V2 repository/Lab session RAM 状态的管理员快照接口；现有单 Job/单 session 读取路由不能证明完整性。进程重启会使纯 RAM 状态不可恢复。因此不能把当前磁盘备份或健康检查当成完成迁移，也不能直接部署 PR。
+
+下一阶段必须先提供可审计的迁移桥：在旧进程仍运行时，以受限只读、流式、可校验方式导出必要内存态；对 V1/V2/Lab 分别记录实体计数、ID/owner/关联校验和，保护文件权限并加密/限时保存；在隔离副本上 dry-run 导入新 SQLite，证明数量、归属、状态与输出引用一致，失败时保留原服务和原始数据。确认方案和恢复路径后，才安排维护窗口执行 cutover，再按同一 SHA 验证服务、历史可见性、重启恢复、RSS、延迟和磁盘。此预检不授权生产迁移、服务重启或部署。
