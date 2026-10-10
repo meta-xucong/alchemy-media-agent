@@ -24,7 +24,7 @@
 
 1. **未完成标记：** 只有严格校验完整来源后，才能在同一 SQLite 事务内导入记录、所有权证据、首次导入 receipt 和完成标记。
 2. **含严格 receipt 的完成标记：** receipt 证明该库由指定严格导入器完成首次导入，并记录当时解析的记录数；它不声称来源文件与当前 SQLite 内容持续一致，也不阻止后续合法业务写入。
-3. **无 receipt 的旧完成标记：** 分类为 `legacy_completion_unverified`。运行时保持 SQLite 当前状态，不自动重放、不自动删标记、不覆盖、不猜 owner。
+3. **无 receipt 的旧完成标记：** 分类为 `legacy_completion_unverified`。运行时保持 SQLite 当前状态，不自动重放、不自动删标记、不覆盖、不猜 owner。V1 history 的 `owner_evidence_backfilled` 单独存在但缺 `jsonl_imported` 属于不一致状态，必须 fail closed；仅 `jsonl_imported` 存在时才可走原有只补 owner evidence 路径。
 4. **来源与 SQLite 当前状态不一致：** 默认分类为“待对账差异”，不能仅凭 source-only 推断漏导入；它也可能是合法删除。只有冻结快照、备份、审计日志/明确删除证据和人工批准组成证据后，才允许另行制定精确、可回滚的修复。
 5. **只读盘点：** 不初始化应用、不触发导入、恢复、Provider、队列或写入；数据库使用 SQLite `mode=ro`。仅输出脱敏状态、计数、schema/marker 摘要及错误类别，不输出 prompt、业务 payload、原始 ID、凭据或图片内容。
 
@@ -69,7 +69,7 @@ receipt 是首次导入来源的处理证明，不是当前表计数或文件哈
 
 1. 四个导入器均在同一事务写入严格 receipt 和完成标记；坏来源时二者都不存在且本批数据回滚。
 2. 重复初始化不会重新消费来源或改变 receipt。
-3. 旧 completion marker 无 receipt 时仍不回放来源；inventory 报 `legacy_completion_unverified`。
+3. 旧 completion marker 无 receipt 时仍不回放来源；inventory 报 `legacy_completion_unverified`。V1 history 仅有 owner-evidence marker 时 fail closed，不回放历史来源。
 4. receipt 字段错误、只有 receipt 无 marker、marker/receipt importer 不匹配均被明确分类，不改变库。
 5. 表存在但缺必需列时归类为 schema 异常，即使 `COUNT(*)` 可执行也不能报严格 receipt。
 6. inventory 对不存在 DB 不创建文件；运行前后数据库主文件和 WAL/SHM 字节、marker、表计数一致。

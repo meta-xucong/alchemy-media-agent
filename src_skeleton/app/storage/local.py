@@ -459,6 +459,11 @@ class LocalMediaStore:
                 ).fetchone() is not None
                 if history_imported and owner_evidence_backfilled:
                     return
+                if owner_evidence_backfilled and not history_imported:
+                    # This partial state must not fall through to first import:
+                    # doing so could replay stale source rows after a prior
+                    # history index or its marker was removed.
+                    raise LegacyHistoryImportError(0, "import_state_inconsistent")
                 if not history_imported and connection.execute(
                     "SELECT 1 FROM v1_import_receipts WHERE namespace='history'"
                 ).fetchone():

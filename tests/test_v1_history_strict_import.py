@@ -170,6 +170,32 @@ def test_v1_orphan_receipt_blocks_legacy_history_replay(tmp_path):
         ).fetchone()[0] == 1
 
 
+def test_v1_owner_evidence_marker_without_history_marker_blocks_stale_source_replay(tmp_path):
+    store = LocalMediaStore(tmp_path)
+    store._ensure_history_index()
+    _source(store, json.dumps(_record("out_stale_source")))
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        connection.execute(
+            "INSERT INTO v1_history_state(state_key, state_value) VALUES('owner_evidence_backfilled', '1')"
+        )
+        connection.commit()
+
+    with pytest.raises(ValueError, match="import_state_inconsistent"):
+        store._ensure_history_index()
+
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM v1_history_records").fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM v1_history_state WHERE state_key='owner_evidence_backfilled'"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM v1_history_state WHERE state_key='jsonl_imported'"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM v1_import_receipts WHERE namespace='history'"
+        ).fetchone()[0] == 0
+
+
 @pytest.mark.parametrize("owner", [None, 0, "0", "", "  ", 41, "41", "+41", "  +41  "])
 def test_legacy_ownerless_and_integer_string_owners_remain_supported(tmp_path, owner):
     store = LocalMediaStore(tmp_path)
