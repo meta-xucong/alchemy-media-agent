@@ -26,6 +26,7 @@ from app.schemas import (
     CreateRevisionRunRequest,
     CreateUploadedAssetRequest,
     CreateUploadedAssetResponse,
+    CreativeRun,
     FeedbackEvent,
     HealthIsolation,
     HealthResponse,
@@ -69,7 +70,16 @@ from app.services.veyra_billing_settings import (
     update_billing_settings,
 )
 from app.services.queue_worker import QueueWorker
-from app.services.task_queue import enqueue_creative_task, get_run_snapshot, initialize_task_queue, task_queue_stats
+from app.services.task_queue import (
+    QueueCapacityExceeded,
+    QueueStorageBusy,
+    enqueue_creative_task,
+    run_with_generation_capacity,
+    get_run_snapshot,
+    initialize_task_queue_async,
+    task_queue_stats,
+)
+from app.services.generation_capacity import GenerationCapacityExceeded, GenerationCapacityStorageBusy
 from app.services.uploaded_assets import (
     complete_uploaded_asset,
     create_uploaded_asset,
@@ -119,7 +129,7 @@ async def lifespan(_: FastAPI):
     creative_manager.refresh_runtime_config()
     refresh_visual_review_agent()
     bootstrap_v2_repository(seed_cases=True)
-    initialize_task_queue()
+    await initialize_task_queue_async()
     startup_sync_task: asyncio.Task | None = None
     search_prewarm_task: asyncio.Task | None = None
     resource_sync_task: asyncio.Task | None = None
@@ -139,7 +149,7 @@ async def lifespan(_: FastAPI):
     if settings.task_queue_inline_worker_enabled:
         queue_worker_stop = asyncio.Event()
         queue_worker_task = asyncio.create_task(
-            QueueWorker(creative_manager, worker_id="v2-api-inline-worker").run_forever(queue_worker_stop)
+            QueueWorker(creative_manager).run_forever(queue_worker_stop)
         )
     yield
     if startup_sync_task and not startup_sync_task.done():
@@ -162,6 +172,45 @@ async def _prewarm_case_search_index() -> None:
 
 
 app = FastAPI(title="Custom Media Agent 2.0 API", version=settings.version, lifespan=lifespan)
+
+
+def _generation_capacity_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": "5"},
+        detail={
+            "error_code": "generation_capacity",
+            "message": "Image generation is busy. Please retry shortly.",
+            "retryable": True,
+            "retry_after_seconds": 5,
+        },
+    )
+
+
+def _task_queue_capacity_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": "30"},
+        detail={
+            "error_code": "task_queue_full",
+            "message": "The image task queue is full. Please retry shortly.",
+            "retryable": True,
+            "retry_after_seconds": 30,
+        },
+    )
+
+
+def _local_database_busy_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        headers={"Retry-After": "5"},
+        detail={
+            "error_code": "local_database_busy",
+            "message": "Local image work storage is busy. Please retry shortly.",
+            "retryable": True,
+            "retry_after_seconds": 5,
+        },
+    )
 if settings.cors_allow_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -495,16 +544,38 @@ async def _require_output_visible(request: Request, output_id: str, authorizatio
 @app.post("/api/v2/creative/runs", status_code=202)
 async def create_creative_run(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
     _require_creative_asset_count(body.assets)
-    return await creative_manager.run(_with_veyra_user(body, request, authorization))
+    try:
+        return await run_with_generation_capacity(
+            lambda: creative_manager.run(_with_veyra_user(body, request, authorization))
+        )
+    except GenerationCapacityExceeded as exc:
+        raise _generation_capacity_http_error() from exc
+    except GenerationCapacityStorageBusy as exc:
+        raise _local_database_busy_http_error() from exc
 
 
 @app.post("/api/v2/creative/runs/async", status_code=202)
 async def create_creative_run_async(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
     _require_creative_asset_count(body.assets)
     body = _with_veyra_user(body, request, authorization)
-    queued = creative_manager.queue_run(body)
-    enqueue_creative_task(kind="creative_run", request_payload=body.model_dump(mode="json"), queued_run=queued)
+    return await _enqueue_creative_run(body, kind="creative_run")
+
+
+def _persist_queued_run(request: CreateCreativeRunRequest, *, kind: str) -> CreativeRun:
+    # queued_run_json is the sole admission record. Do not publish a repository
+    # row before admission: rejection or cancellation must not leave an orphan.
+    queued = creative_manager.build_queued_run(request)
+    enqueue_creative_task(kind=kind, request_payload=request.model_dump(mode="json"), queued_run=queued)
     return queued
+
+
+async def _enqueue_creative_run(request: CreateCreativeRunRequest, *, kind: str) -> CreativeRun:
+    try:
+        return await _run_sqlite_api_call(_persist_queued_run, request, kind=kind)
+    except QueueCapacityExceeded as exc:
+        raise _task_queue_capacity_http_error() from exc
+    except QueueStorageBusy as exc:
+        raise _local_database_busy_http_error() from exc
 
 
 @app.post("/api/v2/uploads", response_model=CreateUploadedAssetResponse)
@@ -792,7 +863,14 @@ def provider_sync_run(provider_id: str, sync_run_id: str, request: Request, auth
 
 @app.post("/api/v2/image/jobs", status_code=202)
 async def image_job(body: CreateImageJobRequest, request: Request, authorization: str = Header(default="")):
-    return await create_image_job(_image_job_with_veyra_user(body, request, authorization))
+    try:
+        return await run_with_generation_capacity(
+            lambda: create_image_job(_image_job_with_veyra_user(body, request, authorization))
+        )
+    except GenerationCapacityExceeded as exc:
+        raise _generation_capacity_http_error() from exc
+    except GenerationCapacityStorageBusy as exc:
+        raise _local_database_busy_http_error() from exc
 
 
 @app.get("/api/v2/image/history", response_model=ImageHistoryResponse)
@@ -944,7 +1022,12 @@ async def output_revision(output_id: str, body: CreateRevisionRunRequest, reques
             status_code=404,
             detail={"error_code": code, "message": "Revision source output or job not found."},
         ) from exc
-    return await creative_manager.run(request)
+    try:
+        return await run_with_generation_capacity(lambda: creative_manager.run(request))
+    except GenerationCapacityExceeded as exc:
+        raise _generation_capacity_http_error() from exc
+    except GenerationCapacityStorageBusy as exc:
+        raise _local_database_busy_http_error() from exc
 
 
 @app.post("/api/v2/outputs/{output_id}/revisions/async", status_code=202)
@@ -958,6 +1041,4 @@ async def output_revision_async(output_id: str, body: CreateRevisionRunRequest, 
             status_code=404,
             detail={"error_code": code, "message": "Revision source output or job not found."},
         ) from exc
-    queued = creative_manager.queue_run(request)
-    enqueue_creative_task(kind="revision_run", request_payload=request.model_dump(mode="json"), queued_run=queued)
-    return queued
+    return await _enqueue_creative_run(request, kind="revision_run")

@@ -155,6 +155,25 @@ class InMemoryV2Repository:
     def get_image_job(self, job_id: str) -> ImageJob | None:
         return self.image_jobs.get(job_id)
 
+    def delete_image_job(self, job_id: str) -> ImageJob | None:
+        """Remove only an uncommitted running job, atomically with its check."""
+        connection = connect(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            payload = self.image_jobs.get_json_on(connection, job_id)
+            job = ImageJob.model_validate_json(payload) if payload else None
+            if job is None or job.status != "running" or job.outputs:
+                connection.commit()
+                return None
+            self.image_jobs.delete_on(connection, job_id)
+            connection.commit()
+            return job
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def get_output(self, output_id: str) -> ImageOutput | None:
         return self.outputs.get(output_id)
 

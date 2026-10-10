@@ -15,7 +15,7 @@ PR：#28，仍为 Draft。
 ## 2. 冻结基线和源映射
 
 - 旧版参考提交：`3915b24d0cdab6cc626ad5a7d07c0839e5239064`
-- 目标基线：`a582b37d32ac6317ca9b24a900c8e2de83286906`
+- 原始目标基线：`a582b37d32ac6317ca9b24a900c8e2de83286906`；以下 38 文件矩阵只冻结这一历史目标，不代表修正后的最终候选。
 - 源清单摘要算法：路径按 UTF-8 字节序排序；每行按 `path NUL source_git_blob NUL target_git_blob LF` 拼接后做 SHA-256。
 - 源清单摘要（38 个直接来源文件）：`75dc6244e548a0b7e60ad4342eac9d61bcd2135563e0f89cf9e93946998542b8`
 
@@ -60,6 +60,49 @@ PR：#28，仍为 Draft。
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2-sync-worker.service` | `ef0c7dc77bca0fab1b4e8a4ff3dd340088d185d4` | `ef0c7dc77bca0fab1b4e8a4ff3dd340088d185d4` | `PLATFORM_SHELL`；资源同步 worker 独立进程启动配置 |
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2-worker.service` | `744fd43f6b4258b15ab4187e23206558d9b9a321` | `744fd43f6b4258b15ab4187e23206558d9b9a321` | `PLATFORM_SHELL`；任务 worker 独立进程启动配置 |
 
+## 2.1 PR #27 依赖与候选版本冻结规则
+
+原始目标 `a582b37d` 和仅修改文档的 `b72c75f8` 不包含 PR #27 `af505d08` 的 V2 queue claim fencing、generation capacity lease 和成功 checkpoint 保护。不能把已审计的旧目标矩阵当作这些保护已进入 PR #28 的证据。本轮候选集成这些必要的 V2 保护，保留 PR #28 的 SQLite repository、异步 SQLite 边界及其既有修正；依赖以最终候选源码与回归结果为准，不以 PR 编号或另一个分支的测试代替。
+
+本轮包含范围仅为 V2 queue/capacity/provider 调度闭环及其 API、worker、repository 接口适配。PR #27 的 V1/Lab capacity guardrails 和无关的 V2 upload/history 限额保护未在本轮引入；不能把这个子集称为合并整个 PR #27，也不能声称 PR #28 替代其全部范围。其他部署依赖需另行审计和验收。
+
+候选必须共同覆盖 queue claim/token 与 heartbeat、stale worker 拒写、generation admission/lease、provider dispatch 检查、成功 checkpoint 恢复及 API/standalone worker 入口。它们保护后续执行边界，**不提供当前旧 RAM 进程的完整 exporter，也不批准恢复活动任务**。queue DB 与 repository DB 仍是两个持久存储，不能据此宣称二者具备单一跨库原子快照。
+
+新增列也不提供混合新旧二进制的安全性：旧 queue 的 complete/fail/retry 仍可只按 `task_id` 写入，旧 standalone 启动还会按 worker label bulk-release，因此新 token/claim generation 无法约束仍在运行的旧写入者。只有先解决当前 RAM 导出/业务处置阻断，再让所有旧 API inline worker、standalone worker 及其他 queue writer 停止写入，逐进程确认替代者使用同一已验证 fencing 协议/候选代码后，才可恢复 dispatch。不得滚动共用同一 queue DB，让旧无栅栏写入者与新候选并存；此要求不是现在重启旧进程的许可。
+
+下面的候选补充矩阵在集成完成后按最终文件内容冻结；未列出的原始 38 文件沿用上表目标 blob。新增来源和修改来源均单列，`ABSENT` 表示对应提交中没有该文件。候选 blob 是 Git blob SHA-1，审计提交的 SHA 由 PR/提交记录绑定，不把尚未生成的自引用 commit SHA 写成既成事实。任一列明来源再次变更，都需更新补充矩阵并重跑源保真检查和相关回归；本轮文档修正不是生产切换验收。
+
+<!-- PR28_CANDIDATE_SOURCE_MATRIX -->
+
+- Candidate overlay: 19 files; SHA-256 `d52abc3c42102688340874907cea2f594c74f82118e70cb74fc33b21e7c35628`.
+- Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.
+- Expanded old-to-candidate manifest: 50 files; SHA-256 `e3479260b46079e8c0d91449ce9380dbe131830b0ad504cbc1387307f626a11c`.
+- Expanded digest uses section 2 encoding; merge the original matrix with this overlay by path, replacing target blobs and adding new paths.
+
+| Source file | Old release blob | Original target blob | Candidate blob | Scope / authority |
+|---|---|---|---|---|
+| `custom_media_agent_2_0/app/agents/runtime.py` | `29114b3641958bf74eacdf55cdf218986deeef8c` | `29114b3641958bf74eacdf55cdf218986deeef8c` | `64356f788643398bf9eec5ae73f03ec07a0a583d` | V2_DEPENDENCY; claim-aware run, output and billing persistence boundaries |
+| `custom_media_agent_2_0/app/config.py` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `028d02004231333e7ebefa217bae06405581fcf8` | V2_DEPENDENCY; queue/claim/capacity settings |
+| `custom_media_agent_2_0/app/main.py` | `4c7d0a00665cea66b651bc892ac684941fe6a6f3` | `18680401fb96c9eea0ee21b31c351ff927f6f332` | `db07166cf45e459218ac591dd9eee6f60a90d3d5` | V2_ADAPTER; async admission, capacity errors and inline-worker identity |
+| `custom_media_agent_2_0/app/providers/images/claim_fenced_http.py` | `ABSENT` | `ABSENT` | `d95baf0c17e5c23669d1f02f7775a5ea3dc2f541` | V2_DEPENDENCY; shared claim check at wire-request boundary |
+| `custom_media_agent_2_0/app/providers/images/doubao_image.py` | `5d21f7ae7dce64d525c54fcf9d3908ac64cef0fb` | `5d21f7ae7dce64d525c54fcf9d3908ac64cef0fb` | `605ef62d62dc77697f3389eb4f5551e1014b06ab` | V2_DEPENDENCY; fenced provider dispatch |
+| `custom_media_agent_2_0/app/providers/images/gemini_image.py` | `772006ea72d10d13a812afbd87e2c1624b601901` | `772006ea72d10d13a812afbd87e2c1624b601901` | `c000b5920cfb670acdabafef4ec37b79d36564ce` | V2_DEPENDENCY; fenced provider dispatch |
+| `custom_media_agent_2_0/app/providers/images/openai_gpt_image_2.py` | `5bcd48939a44402f8c72c82fc583665a373717c4` | `5bcd48939a44402f8c72c82fc583665a373717c4` | `0fc8edfa280bb07285d8ed001b06910884036f73` | V2_DEPENDENCY; fenced provider dispatch |
+| `custom_media_agent_2_0/app/providers/images/response_payloads.py` | `9c93947564b2a05c3cae8057b627dd9263483c25` | `9c93947564b2a05c3cae8057b627dd9263483c25` | `8512ae8cb582f8a8512288ca8066b8bb40be6cf4` | V2_DEPENDENCY; fenced output download |
+| `custom_media_agent_2_0/app/repositories/memory.py` | `6bb600b30098237b7b7c231bf283422ba0a0d59f` | `189521be3c933a46517b6b77798c125ffeccbd65` | `282c8e0b59c5287c78b96dc00ab3745d7d092939` | V2_ADAPTER; atomic conditional stale-running image-job cleanup |
+| `custom_media_agent_2_0/app/repositories/sqlite_json.py` | `ABSENT` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | TARGET_STORAGE; V2 case index columns, filtered reads and WAL schema |
+| `custom_media_agent_2_0/app/services/asset_binding.py` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | DIRECT_REUSE; task-runtime asset lookup leading to uploaded_assets hydration |
+| `custom_media_agent_2_0/app/services/generation.py` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `3fefe202af88c5e50429c19672d9700f2cc3fe7c` | V2_DEPENDENCY; claim-aware generation persistence/checkpoint boundary |
+| `custom_media_agent_2_0/app/services/generation_capacity.py` | `ABSENT` | `ABSENT` | `3f4ef455560c2627496d64b72a5b13413f58f1ec` | V2_DEPENDENCY; cross-process lease, stale recovery and cancellation safety |
+| `custom_media_agent_2_0/app/services/queue_worker.py` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `f1e07daeb10b3aadd43fa8ab09e75ea6387e6d07` | V2_DEPENDENCY; heartbeat, guarded transitions and success recovery |
+| `custom_media_agent_2_0/app/services/task_queue.py` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `8b2b81ab442478e70e875cc9c36bac0eccfd6db8` | V2_DEPENDENCY; claim protocol, checkpoint schema and bounded async admission |
+| `custom_media_agent_2_0/app/workers/task_queue_worker.py` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `36336b2f43ac7325c698c29b402cd7da36bab536` | V2_DEPENDENCY; unique process identity, no old bulk release |
+| `custom_media_agent_2_0/deploy/systemd/alchemy-v2.env.example` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `73718048234d7eb29c0ea630aa79f4f4dbf5ccea` | V2_CONFIGURATION; queue limit, claim timeout and generation lease example settings |
+| `src_skeleton/app/repositories/sqlite_json.py` | `ABSENT` | `4c719e7603cc3723d75ac392f8782810220bbe73` | `4c719e7603cc3723d75ac392f8782810220bbe73` | TARGET_STORAGE; V1 indexed columns, filtered reads and WAL schema |
+| `src_skeleton/app/services/retention_settings.py` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | PLATFORM_SHELL; V1 user-edited retention JSON and fallback defaults |
+
+<!-- /PR28_CANDIDATE_SOURCE_MATRIX -->
+
 ## 3. 权威数据与目标映射
 
 | 旧权威来源 | 目标 PR #28 存储 | 迁移时必须保留 |
@@ -80,11 +123,12 @@ V1/V2 收藏 JSON、图片历史清单/JSONL、上传/输出图片文件、V2 ta
 |---|---|
 | V1 API access-key SQLite | 独立认证数据；不进入普通快照或测试夹具。新环境通过受控凭据迁移/重新签发恢复，验证方式只记录计数和脱敏指纹。 |
 | V1 `.env` / runtime settings | `persist_runtime_settings_to_env` 会写运行配置，文件可能含 provider secrets。配置值与凭据分开盘点；非秘密运行参数按键核对并安全重放，secret 通过既有 secret 管理单独配置，禁止复制进报告或 RAM bundle。 |
+| V1 `<media_store.root>/retention_settings.json` | 用户可编辑的独立保留策略；`services/retention_settings.py` 通过管理路由读写。保留原文件、摘要及 `retention_days`、`delete_protected_data`、`updated_at`，核对有效值和 `persisted`。文件缺失/解析失败会回退 `retention_days=30`、`delete_protected_data=false`，不能把默认返回当作迁移成功。源确实不存在时也需记录缺失证据和显式接受的默认策略。此读写证据不证明存在自动删除任务，不据此声称缺文件已造成自动删除。 |
 | V1/V2 usage JSONL、favorites JSON、image-history JSONL、Lab upload manifests | 各自的持久来源；先全文件预检，再在隔离环境核对计数/引用。不得让 lazy importer 静默跳过坏行或提前写完成标记。 |
 | V2 `veyra_billing_settings.json` | 独立业务配置，含 V1/V2 billing rule；在目标启用 billing 前需受控保留并对账，不能只依赖默认值或旧 `.env` 推断。 |
 | V2 `runtime_model_settings.json` | API 启动会加载、管理路由会更新；属于有效运行配置。切换前按 schema 预检并安全重放/迁移，启用生成前逐 provider/model 对账。 |
 | V2 case index / provider seed | 与 repository PromptCase 数据交叉核对；确认内容可由冻结 seed/上游重新构建后，可作为派生数据重建，否则保留源文件并校验摘要。 |
-| V2 task-queue SQLite | 与 V2 repository DB 分开。队列条目、claim 和运行态按独立 schema/策略对账，不伪装成 repository namespace；未批准 active task 处置前不导入并恢复执行。 |
+| V2 task-queue SQLite | 与 V2 repository DB 分开。队列条目、claim 和运行态按独立 schema/策略对账，不伪装成 repository namespace；候选新增 claim token/generation、成功 checkpoint、capacity lease 等 schema 差异需逐列清点。候选 async 准入采用纯 queued-run builder → 单次 queue INSERT，准入前不写 repository；尚未消费的 run 只存在 `queued_run_json` 可能是合法状态，需核对 task/run ID、trace、created_at 和完整 snapshot，不能仅因 repository 缺少 run 就当作孤儿或补写。不能凭旧 running 状态合成有效新 claim/lease，也不让初始化/过期恢复替代获批的状态转换。未批准 active task 处置前不导入并恢复执行。 |
 | V2 remote snapshots | 外部同步快照/缓存来源；先盘点 manifest、来源版本和引用，再决定保留或重新下载。未验证前保留原件，不将其当作 RAM 仓库的替代快照。 |
 | V1/V2 原始上传、输出图片与 Lab 文件 | 媒体源数据；不写进 SQLite。保持原数据根或独立安全复制，并核对规范路径、存在性、大小与 SHA-256。 |
 | V2 case/history thumbnails | 派生缩略图；仅在来源 case/image 校验完整且重建流程通过后，允许排除并重建。 |
@@ -98,7 +142,7 @@ V1/V2 收藏 JSON、图片历史清单/JSONL、上传/输出图片文件、V2 ta
 |---|---|---|
 | V2 API | 请求路由可写入九个 repository namespace；另有持久 history、上传、billing 和 task-queue 路径，分别按上表处理。 | `custom_media_agent_2_0/app/main.py`、`app/repositories/memory.py` 及相应 service。 |
 | V2 resource-sync worker | `providers`、`sync_runs`、`prompt_cases`；会更新 case index 文件，并可预热缩略图缓存。 | `app/workers/resource_sync_worker.py`、`app/services/resource_sync.py`、`app/services/case_index_store.py`。 |
-| V2 task worker | `creative_runs`、`image_jobs`、`outputs`、`safety_decisions`；依具体生成路径更新关联记录。 | `app/workers/task_queue_worker.py`、`app/services/queue_worker.py`、`app/agents/runtime.py`、`app/services/generation.py`、`app/services/safety.py`。 |
+| V2 task worker | 八个 namespace：`providers`、`sync_runs`、`prompt_cases`、`creative_runs`、`image_jobs`、`outputs`、`uploaded_assets`、`safety_decisions`；九个映射中仅未找到 `feedback_events` 写入路径。启动 bootstrap/seed sync 可写前三项；生成/安全检查写中间业务记录；asset binding 从持久 asset manifest 加载时会回填 `uploaded_assets`。 | `app/workers/task_queue_worker.py` → `app/services/bootstrap.py` → `app/services/resource_sync.py`；`app/services/queue_worker.py` → `app/agents/runtime.py` → `app/services/generation.py` / `app/services/safety.py` / `app/services/asset_binding.py` → `app/services/uploaded_assets.py:get_uploaded_asset`。 |
 
 该表是冻结源代码中的可能写入边界，不是 VPS 运行态的进程清单或进程 SHA 证明。Exporter 开发时还需逐条追踪 API route 到 repository method，并列出各 namespace/key 的唯一合并规则；如果实机发现额外 worker/写入路径，manifest 必须扩展后再冻结。
 
@@ -121,7 +165,7 @@ V2 的 `InMemoryV2Repository` 是进程内单例，不是跨进程共享内存�
 
 1. 对 V1 API、V2 API、V2 resource-sync worker、V2 task worker 和 Lab 写入建立可观测的全域维护/写入栅栏；拒绝新的写入与后台 generation handoff，并等待已准入写入到达终态。V2 三个独立进程必须回报同一 snapshot epoch 和确切运行代码指纹；导出期间保持该 epoch。若无法协调全域屏障或任一进程缺席/不匹配，则中止，不导出“最佳努力”快照。
 2. 在旧进程内按固定 namespace 顺序逐条读取；JSON 编码器流式输出，不构造全库副本。导出记录带 namespace、稳定 key、原始序号（事件）及经 schema 校验的 payload。输出到受限权限的本地文件，执行完成后关闭并 fsync。
-3. 清单必须有格式版本、source release SHA、每个进程的进程身份/单元名/代码指纹、snapshot epoch、开始/结束时间、各 namespace 数量/字节数/sha256、媒体清单摘要、完整完成标记。任何序列化失败、重复 key、跨进程 payload/owner 冲突、超时、维护屏障丢失都使 bundle 不完整且不可导入。
+3. 清单必须有格式版本、source release SHA、每个进程的进程身份/单元名/代码指纹、snapshot epoch、开始/结束时间、各 namespace 数量/字节数/sha256、媒体清单摘要、完整完成标记。事件保留 session 内原始序号；其他具有稳定排序语义的来源也保留插入顺序（包括 V1 同时间 Job），不能只按 key 重新插入。任何序列化失败、重复 key、跨进程 payload/owner 冲突、超时、维护屏障丢失都使 bundle 不完整且不可导入。
 4. 快照包含提示词和私人会话资料，应加密、限制读取权限和短期保留；报告/日志只保留计数、ID hash、状态分布及错误类别，不输出 prompt、事件 payload、凭据或图片内容。
 
 该 exporter 必须是只读的：不清理历史、不修正 owner、不恢复或重新排队运行态 Job、不触发 provider。活动 Job/Lab session 的导入状态策略尚未获用户/产品明确批准；默认 dry-run 只报告其原始状态并阻断可写导入，不自动重放任务。
@@ -134,23 +178,38 @@ V2 的 `InMemoryV2Repository` 是进程内单例，不是跨进程共享内存�
 
 - 精确验证源 release、格式/schema 版本、完整标记、namespace 集合、条目数、字节数与每个流 SHA-256；流式读取并限制最大单条记录体积，超限明确失败，不截断或跳过。
 - 使用目标 Pydantic schema 验证所有记录；禁止隐式字段丢弃、owner 修复、ID 重写和“坏记录跳过”。未知字段/版本按不兼容失败处理。
+- 逐条执行源→目标 canonical full-payload equality/digest 对账。原始源 payload 在受限加密 bundle 中保持不变，并按批准的短期保留策略管理；迁移前冻结版本化转换表，逐字段注明来源、目标、理由和批准依据，包括新增字段默认值、明确的时间/枚举表示转换和 ownerless Session 的目标表示。没有登记的字段增加、删除、改名或值变化均失败；不能先经目标 schema 丢弃未知字段再比较。将批准转换后的完整源 payload 与从目标 DB 重新读出的完整 payload 用同一规范编码比较：UTF-8、对象键排序、固定 JSON 分隔符、保留数组顺序与全部字段、禁止 NaN/Infinity，不做未批准的字符串/数值归一化。每条 SHA-256 与按稳定 namespace/key/序号排序的全量流摘要必须一致；转换清单自身也带版本和摘要。提示词、metadata、错误细节、嵌套输出、Lab variants、事件和收藏内容都在比较范围内。计数、ID、状态、owner 与链接仅为补充检查，不能代替完整 payload 对账。
 - 对每个 namespace 比较源/目标计数、ID 集合摘要、状态及 owner 分布；比较 Job.outputs 与规范 outputs、session/job/output/asset/run/reference/favorite/event 链接，显式报告孤儿、重复 ID 和 owner 冲突。V1 ownerless sessions/events 必须保持 ownerless/unverified，不作为导入失败，但报告受限访问记录数；不得自动猜测 owner。
+- 验证派生 SQL 列及索引，不能只写 `namespace, record_key, payload`。V1 Job 的 `session_id`、`job_type`、`sort_at=updated_at or created_at`、`idempotency_key` 必须与完整 payload 一致；核对 `v1_records_jobs_idx`、`v1_records_idem_idx`、`v1_records_scoped_idem_idx` 的定义，保留独立 `idempotency` map 并验证其目标 Job。通过 `list_jobs(session_id=...)`、`list_jobs(job_type=..., session_id=...)`、带 session/owner 的幂等读取验证预期 ID 集合、同时间稳定顺序和跨 session 不命中。只要 `get_job(id)` 正确但 filtered readback 缺记录，就必须失败。
+- V2 `prompt_cases` 的派生列 `provider_id`、`active=int(is_active)`、`quality=quality_score`、`index_version` 必须与 payload 一致；核对 `v2_records_provider_idx`、`v2_records_case_sort_idx` 的定义。用 `list_cases(active_only=True/False)` 验证启用集合及 quality/ID 排序、`get_active_index_version()` 验证版本，并以只读 SQL 的 provider/active/version 过滤核对期望集合。禁止用删除/替换 provider 来测试索引。直接 `get_case(id)` 的正确性不能代替这些过滤读取。
 - 在目标 app/bootstrap 触发任何 history lazy import 之前，对源 JSONL/manifest 做完整语法和完整性预检；坏行不得跳过，也不得留下 `jsonl_imported`/`owner_evidence_backfilled` 完成标记。导入后显式核对 `v1_history_records` 与 `v1_history_owner_evidence` 的计数、ID/owner/conflict 摘要和所有源 history 行。目标表不完整或完成标记已写而校验不一致则阻断，不以再次启动自动补救。
 - 将目标专属 `output_delete_claims` 初始计数验证为 0；它不是旧数据实体，不从其他记录合成。
 - 图片/上传文件不搬入数据库；对每个文件引用核对规范化路径边界、存在性、大小及内容摘要。脱离允许存储根、缺失或摘要不同均阻断 cutover。
 - 原始运行态 queued/running 保持为未决项；dry-run 不调用 Provider，不把状态悄悄转为成功/失败，不触发启动恢复。必须单列并等待切换政策。
 - 输出只生成脱敏报告和 staging DB 摘要；不将 prompts、私有事件、API keys 或图片字节写入普通日志。
 
+### 6.1 初次启动不是只读检查
+
+对账应由离线显式连接及无启动钩子的 repository/readback 完成；仅限全新 staging 路径，不能为读取而启动 API 或 worker。V1/Lab 启动恢复会修改中断记录；V2 API lifespan 会加载配置、bootstrap provider/cases、初始化 queue，并可按配置启动 remote sync、周期 resource sync 和 inline queue worker。standalone task worker 也先 bootstrap，资源 worker 先 bootstrap 再同步。旧 task worker 还有 `release_worker_running_tasks`，候选替换为 claim/heartbeat/fencing 流程；新 claim/lease 的过期恢复及成功 checkpoint 恢复依然是状态转换，不是 migration readback。
+
+因此，先完成无副作用的完整对账并保存不可变恢复点，再在另一份可丢弃副本演练启动。显式隔离 provider/账单网络，禁用 inline/standalone task consumption、remote/startup/定时 sync 和所有不获准的恢复入口；现有开关不能保证 bootstrap 不写，不能把“worker disabled”视为完整只读模式。演练必须对启动前后完整 payload、queue/lease/checkpoint、case index 和文件摘要做差异核对；仅接受已批准转换。未知差异、未获批活动任务或没有可验证隔离方式时阻断启动，不通过重启自动修复对账差异。
+
+### 6.2 有界离线反例检查
+
+`tests/test_pr28_migration_reconciliation.py` 验证历史/候选清单摘要，并直接从本地字节计算 Git blob SHA-1，防止所有候选来源在审计后漂移；不依赖浅克隆中缺失的历史 Git 对象。其数据检查只使用合成记录与临时 SQLite 文件，证明完整 payload 或 direct-ID 读取正确仍可能遗漏索引可见性，同时覆盖 canonical payload 变化、独立 retention policy 默认值和 WAL 一致备份。它不连接 VPS、不调用 provider、不启动 app/worker，也不实现或证明生产 exporter/importer。运行入口：`python -m pytest -q tests/test_pr28_migration_reconciliation.py`。
+
 ## 7. 切换、回滚与停止条件
 
 通过 dry-run 不等于切换通过。正式切换还需维护窗口和全写屏障：最后一次完整快照、隔离导入、逐域对账、备份 staging DB/旁路文件、验证健康检查，然后只在零新写入期间切换服务指向。切换后开放新写入前保存回滚点。
 
+SQLite 备份必须覆盖 WAL 中已提交的数据：在维护栅栏内使用 SQLite backup API 创建独立一致备份，或在停止该持久库全部写入者/连接、成功完成并核实 checkpoint 后复制完整数据库；不能仅复制仍在使用的 `.sqlite3` 主文件，也不能手工删除 `-wal`/`-shm` 作为备份步骤。repository、task queue、认证库和其他 SQLite 分别备份，在同一已验证无写入 epoch 清单中记录各自摘要和旁路配置/媒体摘要；单库 backup 不提供跨库一致性。离线恢复每份备份并运行 `PRAGMA integrity_check`、完整 payload/索引/readback 对账及媒体引用校验，记录恢复演练证据后才能把它称作回滚点。此流程不授权关闭仍持有未导出 RAM 状态的旧进程。
+
 旧 RAM-only 服务一旦停止，未导出的记录不可由旧版本恢复。新 SQLite 已接受写入后，简单回滚旧版本会丢失切换后的新增/更新；除非有经验证的反向增量导出或正向修复方案，否则回滚目标必须是继续使用持久化版本并前向恢复，而非切回旧内存仓库。
 
-任何以下情况均停止：快照不完整；源进程/代码版本未逐个核实；V2 三进程快照缺失或 epoch 不一致；跨进程同 key payload/owner 冲突；源版本不符；活动写入未静止；schema/JSONL 校验失败；目标 history/owner-evidence 表或迁移完成标记与源不一致；计数/ID/owner/引用不一致；媒体文件缺失/越界/摘要不符；运行态任务没有获批处置；磁盘或 staging 容量不足；或 rollback 只能依赖已经消失的 RAM state。
+任何以下情况均停止：快照不完整；源进程/代码版本未逐个核实；V2 三进程快照缺失或 epoch 不一致；跨进程同 key payload/owner 冲突；源版本或候选源码映射不符；PR #27 必需保护未进入最终候选或回归未通过；活动写入未静止；schema/JSONL 校验失败；未登记转换或 canonical full-payload/digest 不一致；SQL 派生列/索引/filtered readback 不一致；目标 history/owner-evidence 表或迁移完成标记与源不一致；计数/ID/owner/引用不一致；保留策略等配置缺失或默认为未批准值；媒体文件缺失/越界/摘要不符；运行态任务没有获批处置；启动副作用未经隔离/批准；WAL 备份不一致或恢复演练失败；磁盘或 staging 容量不足；或 rollback 只能依赖已经消失的 RAM state。
 
 ## 8. 当前阶段完成标准与下一阶段入口
 
-当前阶段只完成事实核验、映射冻结和切换协议，不实现导出 API/脚本、不构造生产快照、不写生产 SQLite、不重启 VPS。当前阶段可通过的标准是：Source Fidelity A2 和独立 Audit A2 均对本文件、源清单摘要和映射矩阵给出同版本 PASS；文档链接、命名空间映射、已有 VPS 证据措辞准确。
+当前迁移文档阶段只完成事实核验、映射冻结和切换协议；本轮候选还需完成独立的 PR #27 V2 依赖集成和回归。不实现导出 API/脚本、不构造生产快照、不写生产 SQLite、不重启 VPS。当前阶段可通过的标准是：Source Fidelity 和独立 Audit 均对同一最终候选、本文件、原始及补充源清单摘要和映射矩阵给出 PASS；文档链接、命名空间映射、已有 VPS 证据措辞准确；候选依赖回归与有界离线检查通过。历史 A2 结论不能自动沿用到本轮变更。
 
 完成文档审计后仍有一个**外部恢复能力阻断**：当前运行中的旧进程没有完整导出入口。若必须保留 RAM-only 记录，保持运行并评估可否在不重启该进程的条件下取得可信快照；不可行时，需要用户明确选择“保持旧服务/接受明确列出的部分恢复/放弃无法导出的 RAM-only 记录”中的业务处置。未获该决定前，不开发会暗示当前实例可安全 cutover 的脚本，也不合并/部署 PR #28。

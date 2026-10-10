@@ -22,6 +22,7 @@ from app.services.generation import create_image_job, create_running_image_job
 from app.services.ids import new_id
 from app.services.prompting import compose_prompt_plan, summarize_intent, summaries_from_cases
 from app.services.safety import run_safety_check
+from app.services import task_queue
 from app.services.task_queue import update_task_snapshot
 
 try:
@@ -57,6 +58,10 @@ class CreativeManagerRuntime:
         return await self._run_deterministic_manager(request)
 
     def queue_run(self, request: CreateCreativeRunRequest) -> CreativeRun:
+        return repository.save_creative_run(self.build_queued_run(request))
+
+    def build_queued_run(self, request: CreateCreativeRunRequest) -> CreativeRun:
+        """Build the initial snapshot without creating a second durable authority."""
         now = utc_now()
         mode = request.mode_hint or ("template_customize" if request.template_case_id else "smart_enhance")
         run = CreativeRun(
@@ -69,10 +74,13 @@ class CreativeManagerRuntime:
             created_at=now,
             updated_at=now,
         )
-        return repository.save_creative_run(run)
+        return run
 
     async def complete_queued_run(self, request: CreateCreativeRunRequest, run_id: str) -> CreativeRun:
-        existing = repository.get_creative_run(run_id)
+        checkpoint = task_queue.get_success_checkpoint()
+        if checkpoint is not None:
+            return task_queue.restore_success_checkpoint(checkpoint)
+        existing = task_queue.get_run_snapshot(run_id) or repository.get_creative_run(run_id)
         try:
             return await self._run_deterministic_manager(
                 request,
@@ -80,6 +88,8 @@ class CreativeManagerRuntime:
                 trace_id=existing.trace_id if existing else None,
                 created_at=existing.created_at if existing else None,
             )
+        except task_queue.StaleTaskClaim:
+            raise
         except Exception as exc:
             now = utc_now()
             fallback = existing or CreativeRun(
@@ -98,7 +108,7 @@ class CreativeManagerRuntime:
                     "updated_at": now,
                 }
             )
-            return repository.save_creative_run(failed)
+            return task_queue.persist_claimed_operation(lambda: repository.save_creative_run(failed))
 
     def _build_sdk_agent_if_available(self):
         if not AGENTS_SDK_AVAILABLE or Agent is None:
@@ -447,7 +457,7 @@ class CreativeManagerRuntime:
             created_at=created,
             updated_at=utc_now(),
         )
-        return repository.save_creative_run(run)
+        return task_queue.persist_claimed_operation(lambda: repository.save_creative_run(run))
 
     def _save_run_stage(
         self,
@@ -486,12 +496,10 @@ class CreativeManagerRuntime:
             created_at=created_at,
             updated_at=utc_now(),
         )
-        saved = repository.save_creative_run(run)
-        try:
-            update_task_snapshot(saved)
-        except Exception:
-            pass
-        return saved
+        claim = task_queue.current_claim()
+        if claim is not None and not update_task_snapshot(run, claim=claim):
+            raise task_queue.StaleTaskClaim("The V2 task claim was superseded before run progress was saved.")
+        return task_queue.persist_claimed_operation(lambda: repository.save_creative_run(run))
 
     def _build_retrieval_plan(
         self,
