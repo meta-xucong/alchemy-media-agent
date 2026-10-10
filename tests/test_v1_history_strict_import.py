@@ -38,6 +38,7 @@ def _clear_markers(store, *, owner_only=False):
             connection.execute("DELETE FROM v1_history_owner_evidence")
         else:
             connection.execute("DELETE FROM v1_history_state")
+            connection.execute("DELETE FROM v1_import_receipts WHERE namespace='history'")
 
 
 def _assert_import_error(store, *, line=2):
@@ -117,6 +118,11 @@ def test_repaired_source_retries_entire_import_and_keeps_existing_durable_rows(t
     assert {row[1] for row in after["v1_history_records"]} == {"out_durable", "out_new", "out_repaired"}
     assert ("out_durable", 41, 1) in after["v1_history_owner_evidence"]
     assert dict(after["v1_history_state"]) == {"jsonl_imported": "1", "owner_evidence_backfilled": "1"}
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        receipt = connection.execute(
+            "SELECT importer_id, importer_version, record_count FROM v1_import_receipts WHERE namespace='history'"
+        ).fetchone()
+    assert receipt == ("v1.history.jsonl", 1, 3)
     assert store.get_history_record("out_durable", include_missing=True)["_veyra_owner_conflict"] is True
 
 
@@ -141,6 +147,27 @@ def test_owner_backfill_is_atomic_retryable_and_does_not_reimport_history(tmp_pa
     assert ("out_durable", 41, 1) in after["v1_history_owner_evidence"]
     assert dict(after["v1_history_state"])["owner_evidence_backfilled"] == "1"
     assert store.get_history_record("out_previously_deleted", include_missing=True) is None
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        receipt = connection.execute(
+            "SELECT importer_id, importer_version, record_count FROM v1_import_receipts WHERE namespace='history'"
+        ).fetchone()
+    assert receipt == ("v1.history.jsonl", 1, 1)
+
+
+def test_v1_orphan_receipt_blocks_legacy_history_replay(tmp_path):
+    store = LocalMediaStore(tmp_path)
+    _source(store, json.dumps(_record("out_once")))
+    store._ensure_history_index()
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        connection.execute("DELETE FROM v1_history_state WHERE state_key='jsonl_imported'")
+        connection.execute("DELETE FROM v1_history_state WHERE state_key='owner_evidence_backfilled'")
+        connection.commit()
+    with pytest.raises(ValueError, match="import_state_inconsistent"):
+        store._ensure_history_index()
+    with sqlite3.connect(store.root / "repository.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM v1_history_records WHERE output_id='out_once'"
+        ).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize("owner", [None, 0, "0", "", "  ", 41, "41", "+41", "  +41  "])

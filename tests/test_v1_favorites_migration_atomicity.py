@@ -36,6 +36,7 @@ def test_v1_parallel_first_favorites_reads_import_once_without_losing_rows(tmp_p
     try:
         connection.execute("DELETE FROM v1_favorite_state")
         connection.execute("DELETE FROM v1_favorites")
+        connection.execute("DELETE FROM v1_import_receipts WHERE namespace='favorites'")
         connection.commit()
     finally:
         connection.close()
@@ -73,12 +74,47 @@ def legacy_source(tmp_path, monkeypatch):
             rows = connection.execute(
                 f"SELECT output_id, owner_id, created_at, updated_at FROM {tables[0]} ORDER BY output_id"
             ).fetchall()
-            markers = connection.execute(f"SELECT COUNT(*) FROM {tables[1]}").fetchone()[0]
+            markers = connection.execute(
+                f"SELECT COUNT(*) FROM {tables[1]} WHERE state_key='legacy_imported'"
+            ).fetchone()[0]
             return rows, markers
         finally:
             connection.close()
 
     return path, snapshot
+
+
+def test_v1_favorites_first_import_writes_atomic_versioned_receipt(legacy_source):
+    path, _snapshot = legacy_source
+    path.write_text(
+        json.dumps({"items": [{"output_id": "receipt-a"}, {"output_id": "receipt-b"}]}),
+        encoding="utf-8",
+    )
+    assert favorites.list_favorite_ids(include_legacy_public=True) == {"receipt-a", "receipt-b"}
+    with sqlite3.connect(path.parents[1] / "repository.sqlite3") as connection:
+        receipt = connection.execute(
+            "SELECT importer_id, importer_version, record_count FROM v1_import_receipts WHERE namespace='favorites'"
+        ).fetchone()
+        marker_count = connection.execute(
+            "SELECT COUNT(*) FROM v1_favorite_state WHERE state_key='legacy_imported'"
+        ).fetchone()[0]
+    assert receipt == ("v1.favorites.json", 1, 2)
+    assert marker_count == 1
+
+
+def test_v1_orphan_receipt_blocks_legacy_replay(legacy_source):
+    path, _snapshot = legacy_source
+    path.write_text(json.dumps({"items": [{"output_id": "must-not-replay"}]}), encoding="utf-8")
+    favorites.list_favorite_ids(include_legacy_public=True)
+    with sqlite3.connect(path.parents[1] / "repository.sqlite3") as connection:
+        before = connection.execute("SELECT output_id, owner_id FROM v1_favorites").fetchall()
+        connection.execute("DELETE FROM v1_favorite_state WHERE state_key='legacy_imported'")
+        connection.commit()
+    with pytest.raises(favorites.LegacyFavoritesImportError, match="inconsistent"):
+        favorites.list_favorite_ids(include_legacy_public=True)
+    with sqlite3.connect(path.parents[1] / "repository.sqlite3") as connection:
+        after = connection.execute("SELECT output_id, owner_id FROM v1_favorites").fetchall()
+        assert after == before
 
 
 @pytest.mark.parametrize("invalid_item", [

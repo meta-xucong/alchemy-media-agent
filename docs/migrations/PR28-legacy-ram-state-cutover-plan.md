@@ -4,6 +4,8 @@
 阶段：迁移可行性与协议冻结；不是生产迁移或切换许可。
 PR：#28，仍为 Draft。
 
+首次导入标记与旧库对账准备的实现边界见[开发计划](PR28-import-marker-reconciliation-development-plan.md)；该计划与本切换协议互补，不授权修改生产数据。
+
 ## 1. 目标与当前结论
 
 目标是把旧 V1、V2 和 Alchemy Lab 进程内权威记录安全迁入 PR #28 的 SQLite 存储，同时保持 ID、所有者、关联关系、状态、收藏和图片引用一致。
@@ -30,9 +32,9 @@ PR：#28，仍为 Draft。
 | `src_skeleton/app/services/veyra_usage.py` | `942c08b6083baafa6809fe2d368a9586bac70cef` | `942c08b6083baafa6809fe2d368a9586bac70cef` | `PLATFORM_SHELL`；V1 usage JSONL 读写实现 |
 | `src_skeleton/app/services/alchemy_lab.py` | `5254f0e03fe407d9d2a6b4ea7db7e5e2d4110c21` | `de31e51cc8019e53043c88c07dde0f35a0444b4d` | `DIRECT_REUSE`；Lab session / variant / favorite 语义 |
 | `src_skeleton/app/services/alchemy_lab_uploads.py` | `5c05cddccc5801a1a36e840cc14687db4126a0b7` | `5c05cddccc5801a1a36e840cc14687db4126a0b7` | `PLATFORM_SHELL`；Lab 上传资产文件/manifest 写入实现 |
-| `src_skeleton/app/services/favorites.py` | `febcf1f481e6feaaa5c71804826bd264ecf22520` | `346906f72590f7690524a9266cbbfb4165260e6b` | `THIN_ADAPTER`；文件收藏到 SQLite 的既有迁移边界 |
+| `src_skeleton/app/services/favorites.py` | `febcf1f481e6feaaa5c71804826bd264ecf22520` | `346906f72590f7690524a9266cbbfb4165260e6b` | `e7c52cd1c3ae20dd600bc8f7ec66d6fbb1218718`；文件收藏到 SQLite 的既有迁移边界 |
 | `src_skeleton/app/services/session_service.py` | `af9baa3e57de1635d4d4134826129d6716d3e0d1` | `2d5a8bc60570949c87bbf48bb03b1f5353fb0417` | `DIRECT_REUSE`；旧 Session 创建没有 owner 赋值 |
-| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `DIRECT_REUSE`；媒体文件与文件型历史来源 |
+| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `7b5154a27251902d8078f2dc58e4c311614fc232`；媒体文件与文件型历史来源 |
 | `custom_media_agent_2_0/app/config.py` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `DIRECT_REUSE`；V2 数据根配置 |
 | `custom_media_agent_2_0/app/main.py` | `4c7d0a00665cea66b651bc892ac684941fe6a6f3` | `18680401fb96c9eea0ee21b31c351ff927f6f332` | `PLATFORM_SHELL`；V2 路由枚举与公开投影 |
 | `custom_media_agent_2_0/app/repositories/memory.py` | `6bb600b30098237b7b7c231bf283422ba0a0d59f` | `189521be3c933a46517b6b77798c125ffeccbd65` | `DIRECT_REUSE`；V2 仓库命名空间与关联语义 |
@@ -42,8 +44,8 @@ PR：#28，仍为 Draft。
 | `custom_media_agent_2_0/app/services/case_assets.py` | `1c363be051bfffa62fc6c62325391121d98238b2` | `1c363be051bfffa62fc6c62325391121d98238b2` | `PLATFORM_SHELL`；V2 remote snapshot 读取和 case thumbnail 派生缓存 |
 | `custom_media_agent_2_0/app/services/github_archive.py` | `33a10065ae8f9c6d6514a90a4a14da1de0f8567d` | `33a10065ae8f9c6d6514a90a4a14da1de0f8567d` | `PLATFORM_SHELL`；V2 remote snapshot 下载/写入实现 |
 | `custom_media_agent_2_0/app/services/runtime_model_settings.py` | `06a92205d798f68c408c399476a85f7b3506055d` | `06a92205d798f68c408c399476a85f7b3506055d` | `PLATFORM_SHELL`；V2 runtime model settings JSON 持久化和启动加载 |
-| `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `THIN_ADAPTER`；V2 文件收藏到 SQLite 的既有迁移边界 |
-| `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `DIRECT_REUSE`；V2 JSONL 历史投影 |
+| `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `31b45823f1490f4e85f785c81a854769855e1a16`；V2 文件收藏到 SQLite 的既有迁移边界 |
+| `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `0e46b63f938583d4b6d488e5a55dbda488655ea6`；V2 JSONL 历史投影 |
 | `custom_media_agent_2_0/app/services/output_storage.py` | `116a9363429b5c849ff7ab249dfc4f4bace8e560` | `116a9363429b5c849ff7ab249dfc4f4bace8e560` | `PLATFORM_SHELL`；V2 原图、history thumbnail/preview 文件写入 |
 | `custom_media_agent_2_0/app/services/uploaded_assets.py` | `7f731275535e6e544b1670cc49f8493dcd597657` | `7f731275535e6e544b1670cc49f8493dcd597657` | `PLATFORM_SHELL`；V2 上传文件及关联持久记录写入 |
 | `custom_media_agent_2_0/app/services/safety.py` | `810c567503b45935d4cc3d1f34fae841d0769227` | `810c567503b45935d4cc3d1f34fae841d0769227` | `DIRECT_REUSE`；V2 safety decision 持久化调用 |
@@ -76,9 +78,9 @@ PR：#28，仍为 Draft。
 
 <!-- PR28_CANDIDATE_SOURCE_MATRIX -->
 
-- Candidate overlay: 24 files; SHA-256 `84f88603fc31605772af8a38dfaff1d2e991a38afc40f190001c0a15cdf64865`.
+- Candidate overlay: 25 files; SHA-256 `39c4a7b70f4833522b63ba11d48d19187ddf89bc6a4bad9d90c5de4ddab84099`.
 - Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.
-- Expanded old-to-candidate manifest: 50 files; SHA-256 `b64f707f72f233f0106543535aa6182a77571d8ce5762970e14b436c87e17991`.
+- Expanded old-to-candidate manifest: 51 files; SHA-256 `6f049d32908ea655fa0484b83426ef3d39246a53a5c0b27711688e965daf7722`.
 - Expanded digest uses section 2 encoding; merge the original matrix with this overlay by path, replacing target blobs and adding new paths.
 
 | Source file | Old release blob | Original target blob | Candidate blob | Scope / authority |
@@ -94,19 +96,20 @@ PR：#28，仍为 Draft。
 | `custom_media_agent_2_0/app/repositories/memory.py` | `6bb600b30098237b7b7c231bf283422ba0a0d59f` | `189521be3c933a46517b6b77798c125ffeccbd65` | `282c8e0b59c5287c78b96dc00ab3745d7d092939` | V2_ADAPTER; atomic conditional stale-running image-job cleanup |
 | `custom_media_agent_2_0/app/repositories/sqlite_json.py` | `ABSENT` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | TARGET_STORAGE; V2 case index columns, filtered reads and WAL schema |
 | `custom_media_agent_2_0/app/services/asset_binding.py` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | DIRECT_REUSE; task-runtime asset lookup leading to uploaded_assets hydration |
-| `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `d7e3eec82441e2d851a375f9ba108516a71b4907` | THIN_ADAPTER; validated atomic favorites import with repair retry |
+| `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `31b45823f1490f4e85f785c81a854769855e1a16` | THIN_ADAPTER; validated atomic favorites import with repair retry |
 | `custom_media_agent_2_0/app/services/generation.py` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `3fefe202af88c5e50429c19672d9700f2cc3fe7c` | V2_DEPENDENCY; claim-aware generation persistence/checkpoint boundary |
 | `custom_media_agent_2_0/app/services/generation_capacity.py` | `ABSENT` | `ABSENT` | `3f4ef455560c2627496d64b72a5b13413f58f1ec` | V2_DEPENDENCY; cross-process lease, stale recovery and cancellation safety |
-| `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `db6923e2a442e3cb7169ce04da70ef151029b687` | DIRECT_REUSE; V2 fail-closed JSONL history import |
+| `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `0e46b63f938583d4b6d488e5a55dbda488655ea6` | DIRECT_REUSE; V2 fail-closed JSONL history import |
 | `custom_media_agent_2_0/app/services/queue_worker.py` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `f1e07daeb10b3aadd43fa8ab09e75ea6387e6d07` | V2_DEPENDENCY; heartbeat, guarded transitions and success recovery |
 | `custom_media_agent_2_0/app/services/task_queue.py` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `8b2b81ab442478e70e875cc9c36bac0eccfd6db8` | V2_DEPENDENCY; claim protocol, checkpoint schema and bounded async admission |
 | `custom_media_agent_2_0/app/workers/task_queue_worker.py` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `36336b2f43ac7325c698c29b402cd7da36bab536` | V2_DEPENDENCY; unique process identity, no old bulk release |
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2.env.example` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `73718048234d7eb29c0ea630aa79f4f4dbf5ccea` | V2_CONFIGURATION; queue limit, claim timeout and generation lease example settings |
+| `scripts/pr28_import_marker_inventory.py` | `ABSENT` | `ABSENT` | `0844d48261f9010e185351e147d37f607dd4e28d` | OFFLINE_DIAGNOSTIC; read-only import marker inventory |
 | `src_skeleton/app/main.py` | `c190ff437f53e31863333848eb7c2bf767ac3032` | `f0b2e9562fca4250046e2f1c05bbd11381dfbc3d` | `096b8053e07011166020ba1092530fa797600f73` | PLATFORM_SHELL; sanitized fail-closed legacy import API responses |
 | `src_skeleton/app/repositories/sqlite_json.py` | `ABSENT` | `4c719e7603cc3723d75ac392f8782810220bbe73` | `4c719e7603cc3723d75ac392f8782810220bbe73` | TARGET_STORAGE; V1 indexed columns, filtered reads and WAL schema |
-| `src_skeleton/app/services/favorites.py` | `febcf1f481e6feaaa5c71804826bd264ecf22520` | `346906f72590f7690524a9266cbbfb4165260e6b` | `cf7628b7e05748872bdd786cef026013ad532158` | THIN_ADAPTER; validated atomic favorites import with repair retry |
+| `src_skeleton/app/services/favorites.py` | `febcf1f481e6feaaa5c71804826bd264ecf22520` | `346906f72590f7690524a9266cbbfb4165260e6b` | `e7c52cd1c3ae20dd600bc8f7ec66d6fbb1218718` | THIN_ADAPTER; validated atomic favorites import with repair retry |
 | `src_skeleton/app/services/retention_settings.py` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | PLATFORM_SHELL; V1 user-edited retention JSON and fallback defaults |
-| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `8e222b41fe28ed7906a5acc54af4e077e488b71d` | DIRECT_REUSE; V1 fail-closed JSONL history and owner-evidence import |
+| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `7b5154a27251902d8078f2dc58e4c311614fc232` | DIRECT_REUSE; V1 fail-closed JSONL history and owner-evidence import |
 
 <!-- /PR28_CANDIDATE_SOURCE_MATRIX -->
 
@@ -205,6 +208,14 @@ V2 的 `InMemoryV2Repository` 是进程内单例，不是跨进程共享内存�
 ### 6.2 有界离线反例检查
 
 `tests/test_pr28_migration_reconciliation.py` 验证历史/候选清单摘要，并按第 2.1 节的文本规范从当前工作树计算 Git blob SHA-1，防止所有候选来源在审计后发生实质漂移；不依赖 Git index 或浅克隆中缺失的历史 Git 对象。回归覆盖 LF/CRLF 同源一致性，以及实际内容、尾部空白、末尾换行、独立 CR 和 BOM 修改仍改变指纹；未声明的文件类型必须拒绝。其数据检查只使用合成记录与临时 SQLite 文件，证明完整 payload 或 direct-ID 读取正确仍可能遗漏索引可见性，同时覆盖 canonical payload 变化、独立 retention policy 默认值和 WAL 一致备份。它不连接 VPS、不调用 provider、不启动 app/worker，也不实现或证明生产 exporter/importer。运行入口：`python -m pytest -q tests/test_pr28_migration_reconciliation.py`。
+
+### 6.3 严格导入 provenance 与旧 marker 盘点
+
+后续首次导入会在写入完成标记的同一 SQLite 事务中写入版本化 receipt：V1 存入 `v1_import_receipts`，V2 history/favorites 分别存入专属 receipt 表。receipt 记录 importer ID/version、当次实际验证处理的来源记录数与完成时间。它只证明首次导入路径和当时处理量，不是来源文件哈希、不代表当前 SQLite 行数，也不声称后续增删与来源文件保持一致。V1/V2 的既有旧 marker 不会自动补 receipt；当 marker 已存在但 receipt 缺失时仍不会重放来源。
+
+使用 `python scripts/pr28_import_marker_inventory.py --db NAMESPACE=PATH [--db ...]` 可对通过 SQLite backup API 得到的冻结一致副本只读盘点，namespace 为 `v1_history`、`v1_favorites`、`v2_history` 或 `v2_favorites`。工具不导入应用、不执行 schema 初始化，在一个 `mode=ro` 事务中读取，只输出脱敏 marker/receipt 状态和当前目标表行数，不输出路径或业务 ID/payload；不一致时返回非零分类状态。不要直接复制正在写入的 WAL 主文件。它不解析旧来源文件，也不判断 source-only / DB-only 差异的业务意图，因此不是完整数据对账或修复工具。
+
+`legacy_completion_unverified` 必须保持为待核验状态。导入后合法删除会使旧来源继续含有对应行；因此不能把 source-only 直接补回数据库。生产对账仍要求先生成一致的受限快照、核对 SQLite/WAL 和来源文件、结合删除/审计/备份证据，形成逐条 allowlist 并经批准；无足够证据的差异不改。inventory 的 `strict_import_receipt` 只提升首次导入可追溯性，不代替该流程。
 
 ## 7. 切换、回滚与停止条件
 

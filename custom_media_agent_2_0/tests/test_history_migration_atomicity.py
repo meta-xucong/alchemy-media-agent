@@ -94,6 +94,15 @@ def test_invalid_history_record_rolls_back_and_can_be_repaired(history_path, inv
     assert response.total == 2
     assert {item.output_id for item in response.items} == {first.output_id, second.output_id}
     assert len(_state()[1]) == 1
+    connection = image_history._history_connect()
+    try:
+        receipt = connection.execute(
+            "SELECT importer_id, importer_version, record_count FROM v2_image_history_import_receipts "
+            "WHERE migration_key='jsonl'"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert tuple(receipt) == ("v2.history.jsonl", 1, 2)
 
 
 def test_failed_history_import_restores_preexisting_rows_and_updates(history_path):
@@ -131,6 +140,26 @@ def test_invalid_utf8_is_sanitized_and_retryable(history_path):
     assert _state() == ([], [])
     _write(history_path, _item())
     assert image_history.get_image_history_item("out-a") == _item()
+
+
+def test_v2_orphan_history_receipt_blocks_legacy_replay(history_path):
+    _write(history_path, _item())
+    image_history._ensure_history_index()
+    connection = image_history._history_connect()
+    try:
+        connection.execute("DELETE FROM v2_image_history_migration WHERE migration_key='jsonl'")
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(image_history.LegacyHistoryImportError, match="inconsistent"):
+        image_history._ensure_history_index()
+    connection = image_history._history_connect()
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM v2_image_history WHERE output_id='out-a'"
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
 
 
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])

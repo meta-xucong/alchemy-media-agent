@@ -16,6 +16,10 @@ class LegacyFavoritesImportError(ValueError):
     """A repairable legacy-source failure with no source payload in its message."""
 
 
+_STRICT_IMPORTER_ID = "v2.favorites.json"
+_STRICT_IMPORTER_VERSION = 1
+
+
 _INITIALIZED_PATHS: dict[str, None] = {}
 _INITIALIZED_PATHS_MAX = 8
 _SCHEMA_LOCK = threading.Lock()
@@ -56,6 +60,15 @@ def _connect() -> sqlite3.Connection:
                     connection.execute(
                         """CREATE TABLE IF NOT EXISTS favorite_migrations (
                             migration_key TEXT PRIMARY KEY,
+                            completed_at TEXT NOT NULL
+                        )"""
+                    )
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS favorite_import_receipts (
+                            migration_key TEXT PRIMARY KEY,
+                            importer_id TEXT NOT NULL,
+                            importer_version INTEGER NOT NULL,
+                            record_count INTEGER NOT NULL,
                             completed_at TEXT NOT NULL
                         )"""
                     )
@@ -274,9 +287,16 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
         ).fetchone():
             connection.commit()
             return
+        if connection.execute(
+            "SELECT 1 FROM favorite_import_receipts WHERE migration_key='legacy_json'"
+        ).fetchone():
+            raise LegacyFavoritesImportError(
+                "Legacy V2 favorites import state is inconsistent; inspect the database before retrying."
+            )
         if not path.exists():
             connection.commit()
             return
+        imported_count = 0
         with path.open("r", encoding="utf-8") as handle:
             for item in _iter_json_array_items(handle):
                 output_id, owner_id, created_at, updated_at = _validated_legacy_item(item)
@@ -286,9 +306,17 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
                        updated_at=MAX(favorites.updated_at, excluded.updated_at)""",
                     (output_id, _owner_key(owner_id), owner_id, created_at, updated_at),
                 )
+                imported_count += 1
+        completed_at = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            """INSERT INTO favorite_import_receipts(
+                   migration_key, importer_id, importer_version, record_count, completed_at
+               ) VALUES('legacy_json', ?, ?, ?, ?)""",
+            (_STRICT_IMPORTER_ID, _STRICT_IMPORTER_VERSION, imported_count, completed_at),
+        )
         connection.execute(
             "INSERT INTO favorite_migrations(migration_key, completed_at) VALUES('legacy_json', ?)",
-            (datetime.now(timezone.utc).isoformat(),),
+            (completed_at,),
         )
         connection.commit()
     except (ValueError, OSError, RecursionError, OverflowError) as exc:

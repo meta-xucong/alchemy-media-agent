@@ -54,6 +54,7 @@ def test_v2_parallel_first_favorites_reads_import_once_without_losing_rows(tmp_p
     try:
         connection.execute("DELETE FROM favorite_migrations")
         connection.execute("DELETE FROM favorites")
+        connection.execute("DELETE FROM favorite_import_receipts WHERE migration_key='legacy_json'")
         connection.commit()
     finally:
         connection.close()
@@ -95,6 +96,40 @@ def legacy_source(tmp_path, monkeypatch):
             connection.close()
 
     return path, snapshot
+
+
+def test_v2_favorites_first_import_writes_atomic_versioned_receipt(legacy_source):
+    path, _snapshot = legacy_source
+    path.write_text(
+        json.dumps({"items": [{"output_id": "receipt-a"}, {"output_id": "receipt-b"}]}),
+        encoding="utf-8",
+    )
+    assert favorites.list_favorite_ids(include_all=True) == {"receipt-a", "receipt-b"}
+    with sqlite3.connect(favorites._database_path()) as connection:
+        receipt = connection.execute(
+            "SELECT importer_id, importer_version, record_count FROM favorite_import_receipts "
+            "WHERE migration_key='legacy_json'"
+        ).fetchone()
+        marker_count = connection.execute(
+            "SELECT COUNT(*) FROM favorite_migrations WHERE migration_key='legacy_json'"
+        ).fetchone()[0]
+    assert receipt == ("v2.favorites.json", 1, 2)
+    assert marker_count == 1
+
+
+def test_v2_orphan_receipt_blocks_legacy_favorites_replay(legacy_source):
+    path, _snapshot = legacy_source
+    path.write_text(json.dumps({"items": [{"output_id": "must-not-replay"}]}), encoding="utf-8")
+    favorites.list_favorite_ids(include_all=True)
+    with sqlite3.connect(favorites._database_path()) as connection:
+        before = connection.execute("SELECT output_id, owner_id FROM favorites").fetchall()
+        connection.execute("DELETE FROM favorite_migrations WHERE migration_key='legacy_json'")
+        connection.commit()
+    with pytest.raises(favorites.LegacyFavoritesImportError, match="inconsistent"):
+        favorites.list_favorite_ids(include_all=True)
+    with sqlite3.connect(favorites._database_path()) as connection:
+        after = connection.execute("SELECT output_id, owner_id FROM favorites").fetchall()
+        assert after == before
 
 
 @pytest.mark.parametrize("invalid_item", [

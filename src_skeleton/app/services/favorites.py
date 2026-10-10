@@ -16,6 +16,10 @@ class LegacyFavoritesImportError(ValueError):
     """A repairable legacy-source failure with no source payload in its message."""
 
 
+_STRICT_IMPORTER_ID = "v1.favorites.json"
+_STRICT_IMPORTER_VERSION = 1
+
+
 def favorites_path() -> Path:
     """Legacy JSON path, kept intact as the one-time import source."""
     return media_store.root / "favorites" / "image_favorites.json"
@@ -232,6 +236,13 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
             state_key TEXT PRIMARY KEY, state_value TEXT NOT NULL
         )"""
     )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS v1_import_receipts (
+            namespace TEXT PRIMARY KEY, importer_id TEXT NOT NULL,
+            importer_version INTEGER NOT NULL, record_count INTEGER NOT NULL,
+            completed_at TEXT NOT NULL
+        )"""
+    )
     path = favorites_path()
     connection.execute("BEGIN IMMEDIATE")
     try:
@@ -240,9 +251,16 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
         ).fetchone():
             connection.commit()
             return
+        if connection.execute(
+            "SELECT 1 FROM v1_import_receipts WHERE namespace='favorites'"
+        ).fetchone():
+            raise LegacyFavoritesImportError(
+                "Legacy V1 favorites import state is inconsistent; inspect the database before retrying."
+            )
         if not path.exists():
             connection.commit()
             return
+        imported_count = 0
         with path.open("r", encoding="utf-8") as handle:
             for item in _iter_items(handle):
                 output_id, owner_id, created_at, updated_at = _validated_legacy_item(item)
@@ -252,9 +270,17 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
                        updated_at=MAX(v1_favorites.updated_at, excluded.updated_at)""",
                     (output_id, _owner_key(owner_id), owner_id, created_at, updated_at),
                 )
+                imported_count += 1
+        completed_at = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            """INSERT INTO v1_import_receipts(
+                   namespace, importer_id, importer_version, record_count, completed_at
+               ) VALUES('favorites', ?, ?, ?, ?)""",
+            (_STRICT_IMPORTER_ID, _STRICT_IMPORTER_VERSION, imported_count, completed_at),
+        )
         connection.execute(
             "INSERT INTO v1_favorite_state(state_key, state_value) VALUES('legacy_imported', ?)",
-            (datetime.now(timezone.utc).isoformat(),),
+            (completed_at,),
         )
         connection.commit()
     except (ValueError, OSError, RecursionError, OverflowError) as exc:

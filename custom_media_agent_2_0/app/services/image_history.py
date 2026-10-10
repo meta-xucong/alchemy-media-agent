@@ -20,6 +20,8 @@ from app.services.output_storage import delete_output_storage
 _HISTORY_DATABASES: OrderedDict[str, None] = OrderedDict()
 _HISTORY_SCHEMA_LOCK = threading.Lock()
 _HISTORY_DATABASES_MAX = 8
+_STRICT_IMPORTER_ID = "v2.history.jsonl"
+_STRICT_IMPORTER_VERSION = 1
 
 
 class LegacyHistoryImportError(ValueError):
@@ -221,6 +223,15 @@ def _history_connect() -> sqlite3.Connection:
                             migration_key TEXT PRIMARY KEY, completed_at TEXT NOT NULL
                         )"""
                     )
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS v2_image_history_import_receipts (
+                            migration_key TEXT PRIMARY KEY,
+                            importer_id TEXT NOT NULL,
+                            importer_version INTEGER NOT NULL,
+                            record_count INTEGER NOT NULL,
+                            completed_at TEXT NOT NULL
+                        )"""
+                    )
                     _HISTORY_DATABASES[key] = None
                     _HISTORY_DATABASES.move_to_end(key)
                     while len(_HISTORY_DATABASES) > _HISTORY_DATABASES_MAX:
@@ -269,6 +280,12 @@ def _ensure_history_index() -> None:
         ).fetchone():
             connection.commit()
             return
+        if connection.execute(
+            "SELECT 1 FROM v2_image_history_import_receipts WHERE migration_key='jsonl'"
+        ).fetchone():
+            raise LegacyHistoryImportError(
+                "Legacy V2 image history import state is inconsistent; inspect the database before retrying."
+            )
         path = settings.image_history_path
         try:
             path.stat()
@@ -278,6 +295,7 @@ def _ensure_history_index() -> None:
             return
         except OSError:
             raise LegacyHistoryImportError("Legacy V2 image history could not be read.") from None
+        imported_count = 0
         try:
             with path.open("r", encoding="utf-8") as handle:
                 for line_number, line in enumerate(handle, start=1):
@@ -303,6 +321,7 @@ def _ensure_history_index() -> None:
                         if previous and previous[0] != owner_id:
                             raise ValueError("History output owners must agree.")
                         _upsert_history_item(connection, item)
+                        imported_count += 1
                     except (ValueError, OverflowError, RecursionError):
                         raise LegacyHistoryImportError(
                             f"Legacy V2 image history has an invalid record at line {line_number}."
@@ -311,9 +330,16 @@ def _ensure_history_index() -> None:
             raise LegacyHistoryImportError("Legacy V2 image history is not valid UTF-8.") from None
         except OSError:
             raise LegacyHistoryImportError("Legacy V2 image history could not be read.") from None
+        completed_at = datetime.now().astimezone().isoformat()
+        connection.execute(
+            """INSERT INTO v2_image_history_import_receipts(
+                   migration_key, importer_id, importer_version, record_count, completed_at
+               ) VALUES('jsonl', ?, ?, ?, ?)""",
+            (_STRICT_IMPORTER_ID, _STRICT_IMPORTER_VERSION, imported_count, completed_at),
+        )
         connection.execute(
             "INSERT INTO v2_image_history_migration(migration_key, completed_at) VALUES('jsonl', ?)",
-            (datetime.now().astimezone().isoformat(),),
+            (completed_at,),
         )
         connection.commit()
     except Exception:

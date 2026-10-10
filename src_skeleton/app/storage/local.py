@@ -24,6 +24,10 @@ class LegacyHistoryImportError(ValueError):
         super().__init__(f"Legacy history import failed at line {line_number}: {reason}")
 
 
+_STRICT_HISTORY_IMPORTER_ID = "v1.history.jsonl"
+_STRICT_HISTORY_IMPORTER_VERSION = 1
+
+
 class LocalMediaStore:
     def __init__(self, root: Path | None = None):
         self.root = root or settings.media_storage_root
@@ -428,6 +432,13 @@ class LocalMediaStore:
                     state_value TEXT NOT NULL
                 )"""
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS v1_import_receipts (
+                    namespace TEXT PRIMARY KEY, importer_id TEXT NOT NULL,
+                    importer_version INTEGER NOT NULL, record_count INTEGER NOT NULL,
+                    completed_at TEXT NOT NULL
+                )"""
+            )
             history_imported = connection.execute(
                 "SELECT 1 FROM v1_history_state WHERE state_key='jsonl_imported'"
             ).fetchone() is not None
@@ -448,6 +459,10 @@ class LocalMediaStore:
                 ).fetchone() is not None
                 if history_imported and owner_evidence_backfilled:
                     return
+                if not history_imported and connection.execute(
+                    "SELECT 1 FROM v1_import_receipts WHERE namespace='history'"
+                ).fetchone():
+                    raise LegacyHistoryImportError(0, "import_state_inconsistent")
                 try:
                     source = self.history_file.open("rb")
                 except FileNotFoundError:
@@ -457,6 +472,7 @@ class LocalMediaStore:
                 except OSError:
                     raise LegacyHistoryImportError(0, "source_access_error") from None
                 line_number = 0
+                imported_count = 0
                 try:
                     with source:
                         for line_number, line in enumerate(source, start=1):
@@ -469,6 +485,7 @@ class LocalMediaStore:
                                 self._upsert_history_owner_evidence(connection, record)
                             else:
                                 self._upsert_history_index(connection, record)
+                                imported_count += 1
                 except OSError:
                     raise LegacyHistoryImportError(line_number + 1, "source_read_error") from None
                 connection.execute(
@@ -478,6 +495,14 @@ class LocalMediaStore:
                     "INSERT OR REPLACE INTO v1_history_state(state_key, state_value) "
                     "VALUES('owner_evidence_backfilled', '1')"
                 )
+                if not history_imported:
+                    completed_at = datetime.now(timezone.utc).isoformat()
+                    connection.execute(
+                        """INSERT INTO v1_import_receipts(
+                               namespace, importer_id, importer_version, record_count, completed_at
+                           ) VALUES('history', ?, ?, ?, ?)""",
+                        (_STRICT_HISTORY_IMPORTER_ID, _STRICT_HISTORY_IMPORTER_VERSION, imported_count, completed_at),
+                    )
         finally:
             connection.close()
 
