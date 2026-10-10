@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.agents import AGENTS_SDK_AVAILABLE, CreativeManagerRuntime
 from app.config import ensure_runtime_dirs, settings
@@ -50,9 +50,9 @@ from app.services.case_intelligence import (
 )
 from app.services.claude_orchestrator import get_orchestrator_status
 from app.services.generation import create_image_job
-from app.services.favorites import list_favorite_ids, set_favorite
+from app.services.favorites import LegacyFavoritesImportError, list_favorite_ids, set_favorite
 from app.services.history_reference_assets import create_reference_asset_from_history_output
-from app.services.image_history import delete_image_history_item, list_image_history
+from app.services.image_history import LegacyHistoryImportError, delete_image_history_item, list_image_history
 from app.services.history_thumbnails import read_history_preview, read_history_thumbnail
 from app.services.ids import new_id
 from app.services.media_acceleration import signed_output_url as signed_v2_output_url
@@ -172,6 +172,18 @@ async def _prewarm_case_search_index() -> None:
 
 
 app = FastAPI(title="Custom Media Agent 2.0 API", version=settings.version, lifespan=lifespan)
+
+
+@app.exception_handler(LegacyHistoryImportError)
+@app.exception_handler(LegacyFavoritesImportError)
+async def _legacy_import_error_response(_request: Request, exc: Exception) -> JSONResponse:
+    code = "history_import_blocked" if isinstance(exc, LegacyHistoryImportError) else "favorites_import_blocked"
+    logger.warning("Legacy data import blocked: %s", code)
+    return JSONResponse(status_code=503, content={"detail": {
+        "error_code": code,
+        "message": "Stored legacy data requires repair before this operation can continue.",
+        "retryable": False,
+    }})
 
 
 def _generation_capacity_http_error() -> HTTPException:

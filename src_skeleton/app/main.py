@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
@@ -120,6 +120,8 @@ from app.services.veyra_auth import (
 )
 from app.services.veyra_usage import list_veyra_usage
 from app.storage import media_store
+from app.storage.local import LegacyHistoryImportError
+from app.services.favorites import LegacyFavoritesImportError
 from app.runtime_paths import (
     LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
     local_runtime_descriptor_enabled,
@@ -129,6 +131,20 @@ from app.runtime_paths import (
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 logger = logging.getLogger(__name__)
+
+
+@app.exception_handler(LegacyHistoryImportError)
+@app.exception_handler(LegacyFavoritesImportError)
+async def _legacy_import_error_response(_request: Request, exc: Exception) -> JSONResponse:
+    # Corrupt stored data requires operator repair, not an automatic client
+    # retry. Never expose the legacy payload or parser exception to the caller.
+    code = "history_import_blocked" if isinstance(exc, LegacyHistoryImportError) else "favorites_import_blocked"
+    logger.warning("Legacy data import blocked: %s", code)
+    return JSONResponse(status_code=503, content={"detail": {
+        "error_code": code,
+        "message": "Stored legacy data requires repair before this operation can continue.",
+        "retryable": False,
+    }})
 
 
 async def _run_sqlite_api_call(function, *args, **kwargs):

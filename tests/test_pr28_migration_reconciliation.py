@@ -25,6 +25,19 @@ from app.services.retention_settings import get_retention_settings, save_retenti
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN = ROOT / "docs/migrations/PR28-legacy-ram-state-cutover-plan.md"
+AUDITED_TEXT_SUFFIXES = (".py", ".service", ".env.example")
+
+
+def _candidate_source_blob(path: Path) -> str:
+    """Hash declared text sources as LF Git blobs using current working-tree bytes.
+
+    Only checkout CRLF is normalized; bare CR, BOM, whitespace, and all other
+    bytes remain significant. Do not read a potentially stale Git index or
+    require historical objects to be available in shallow/source-only checkouts.
+    """
+    assert path.name.endswith(AUDITED_TEXT_SUFFIXES), f"Undeclared text source: {path}"
+    content = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha1(f"blob {len(content)}\0".encode("ascii") + content).hexdigest()
 
 
 def _canonical_digest(payload: object) -> str:
@@ -57,6 +70,38 @@ def test_original_source_manifest_remains_the_frozen_38_file_history():
     assert digest.hexdigest() == "75dc6244e548a0b7e60ad4342eac9d61bcd2135563e0f89cf9e93946998542b8"
 
 
+@pytest.mark.parametrize("suffix", AUDITED_TEXT_SUFFIXES)
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_candidate_text_source_blob_has_lf_crlf_parity(tmp_path, suffix, newline):
+    path = tmp_path / f"source{suffix}"
+    canonical = "# UTF-8 source: caf\u00e9\nvalue = 1\n".encode("utf-8")
+    expected = hashlib.sha1(f"blob {len(canonical)}\0".encode("ascii") + canonical).hexdigest()
+    path.write_bytes(canonical.replace(b"\n", newline))
+    assert _candidate_source_blob(path) == expected
+
+
+@pytest.mark.parametrize("changed", [
+    b"value = 2\r\n",  # Real content change, even in a CRLF checkout.
+    b"value = 1 \n",  # Trailing whitespace is significant.
+    b"value = 1",  # A missing final newline is significant.
+    b"value = 1\r",  # A bare CR is not a checkout CRLF line ending.
+    b"\xef\xbb\xbfvalue = 1\n",  # A BOM is not removed.
+])
+def test_candidate_text_source_blob_detects_working_tree_mutations(tmp_path, changed):
+    path = tmp_path / "source.py"
+    path.write_bytes(b"value = 1\n")
+    audited_blob = _candidate_source_blob(path)
+    path.write_bytes(changed)
+    assert _candidate_source_blob(path) != audited_blob
+
+
+def test_candidate_source_blob_rejects_undeclared_file_types(tmp_path):
+    path = tmp_path / "source.bin"
+    path.write_bytes(b"binary\r\ncontent")
+    with pytest.raises(AssertionError, match="Undeclared text source"):
+        _candidate_source_blob(path)
+
+
 def test_candidate_source_overlay_and_expanded_manifest_are_internally_consistent():
     document = PLAN.read_text(encoding="utf-8")
     original = re.findall(
@@ -81,9 +126,8 @@ def test_candidate_source_overlay_and_expanded_manifest_are_internally_consisten
     expanded_digest = hashlib.sha256()
     for path in sorted(full, key=lambda path: path.encode("utf-8")):
         expanded_digest.update(f"{path}\0{full[path][0]}\0{full[path][1]}\n".encode("utf-8"))
-        # Git blob hashing needs no Git executable or old objects in shallow CI.
-        content = (ROOT / path).read_bytes()
-        actual_blob = hashlib.sha1(f"blob {len(content)}\0".encode("ascii") + content).hexdigest()
+        # No Git executable, index contents, or old objects in shallow CI.
+        actual_blob = _candidate_source_blob(ROOT / path)
         assert actual_blob == full[path][1], f"Candidate source drifted after audit: {path}"
     assert f"Expanded old-to-candidate manifest: {len(full)} files; SHA-256 `{expanded_digest.hexdigest()}`" in document
 

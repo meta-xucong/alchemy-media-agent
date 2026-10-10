@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import heapq
 import json
+import math
 import re
 import sqlite3
 import tempfile
@@ -12,6 +13,15 @@ from typing import Any, Iterator
 
 from app.config import settings
 from app.repositories.sqlite_json import connect
+
+
+class LegacyHistoryImportError(ValueError):
+    """A retryable legacy-source failure with no source payload in its message."""
+
+    def __init__(self, line_number: int, reason: str):
+        self.line_number = line_number
+        self.reason = reason
+        super().__init__(f"Legacy history import failed at line {line_number}: {reason}")
 
 
 class LocalMediaStore:
@@ -427,19 +437,40 @@ class LocalMediaStore:
             if history_imported and owner_evidence_backfilled:
                 return
             with connection:
-                if self.history_file.exists():
-                    with self.history_file.open("r", encoding="utf-8") as source:
-                        for line in source:
+                # Serialize initializers before observing migration state. A
+                # waiter must not replay a source after another import commits.
+                connection.execute("BEGIN IMMEDIATE")
+                history_imported = connection.execute(
+                    "SELECT 1 FROM v1_history_state WHERE state_key='jsonl_imported'"
+                ).fetchone() is not None
+                owner_evidence_backfilled = connection.execute(
+                    "SELECT 1 FROM v1_history_state WHERE state_key='owner_evidence_backfilled'"
+                ).fetchone() is not None
+                if history_imported and owner_evidence_backfilled:
+                    return
+                try:
+                    source = self.history_file.open("rb")
+                except FileNotFoundError:
+                    # No source is not proof of a completed import. An empty
+                    # store still works, and a later restored source is checked.
+                    return
+                except OSError:
+                    raise LegacyHistoryImportError(0, "source_access_error") from None
+                line_number = 0
+                try:
+                    with source:
+                        for line_number, line in enumerate(source, start=1):
                             if not line.strip():
                                 continue
-                            try:
-                                record = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
+                            record = _parse_legacy_history_record(line, line_number)
                             if history_imported:
+                                # Existing completion is authoritative: backfill
+                                # owner evidence only, never resurrect deleted rows.
                                 self._upsert_history_owner_evidence(connection, record)
                             else:
                                 self._upsert_history_index(connection, record)
+                except OSError:
+                    raise LegacyHistoryImportError(line_number + 1, "source_read_error") from None
                 connection.execute(
                     "INSERT OR REPLACE INTO v1_history_state(state_key, state_value) VALUES('jsonl_imported', '1')"
                 )
@@ -521,6 +552,100 @@ class LocalMediaStore:
             if output_format:
                 return path, output_format, path.parent.name
         return None
+
+
+def _parse_legacy_history_record(line: bytes, line_number: int) -> dict[str, Any]:
+    try:
+        record = json.loads(
+            line.decode("utf-8"),
+            parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
+            object_pairs_hook=_unique_json_object,
+        )
+    except (ValueError, UnicodeError, RecursionError):
+        # Decoder messages and chained exceptions can contain source material.
+        raise LegacyHistoryImportError(line_number, "invalid_json") from None
+    if not _valid_legacy_history_record(record):
+        raise LegacyHistoryImportError(line_number, "invalid_record") from None
+    try:
+        # JSON escapes can decode to lone surrogates, even from valid UTF-8
+        # source bytes. They cannot be persisted as a lossless SQLite payload.
+        json.dumps(record, ensure_ascii=False).encode("utf-8")
+    except (UnicodeError, RecursionError):
+        raise LegacyHistoryImportError(line_number, "invalid_record") from None
+    return record
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("Non-finite JSON number")
+
+
+def _finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("Non-finite JSON number")
+    return parsed
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _valid_legacy_history_record(record: Any) -> bool:
+    # Historical manifests may omit everything except the output ID. Validate
+    # present known fields without synthesizing defaults or dropping metadata.
+    if not isinstance(record, dict) or not isinstance(record.get("id"), str) or not record["id"].strip():
+        return False
+    if "\x00" in record["id"]:
+        return False
+    if "job_id" in record and (not isinstance(record["job_id"], str) or "\x00" in record["job_id"]):
+        return False
+    for field in (
+        "session_id", "format", "created_at", "updated_at", "url", "thumbnail_url", "preview_url",
+        "provider", "model", "requested_provider", "requested_model", "asset_mode", "original_prompt",
+        "final_prompt", "prompt", "size", "version_parent_id", "source_app", "idempotency_key",
+        "work_intensity", "work_intensity_label", "record_label", "source",
+    ):
+        if record.get(field) is not None and not isinstance(record[field], str):
+            return False
+    for field in ("width", "height"):
+        if record.get(field) is not None and type(record[field]) is not int:
+            return False
+    for field in (
+        "provider_fallback", "asset_plan", "provider_input_plan", "visual_review", "prompt_plan", "alchemy_lab",
+    ):
+        if record.get(field) is not None and not isinstance(record[field], dict):
+            return False
+    for field in ("asset_intents", "asset_vision_profiles"):
+        if record.get(field) is not None and (
+            not isinstance(record[field], list) or any(not isinstance(item, dict) for item in record[field])
+        ):
+            return False
+    for field in ("veyra_legacy_public", "can_delete", "favorite", "_veyra_owner_conflict"):
+        if field in record and type(record[field]) is not bool:
+            return False
+    owner = record.get("veyra_user_id")
+    if owner is None or owner == "":
+        return True
+    if isinstance(owner, str):
+        owner = owner.strip()
+        if not owner:
+            return True
+        if re.fullmatch(r"\+?[0-9]+", owner) is None:
+            return False
+        try:
+            owner = int(owner)
+        except ValueError:
+            return False
+    # Preserve ownerless zero and legacy integer strings, but never coerce an
+    # invalid explicit owner into public/ownerless history or a different owner.
+    # Even integral floats may already have rounded a different source owner.
+    return type(owner) is int and 0 <= owner <= 2**63 - 1
 
 
 def _history_owner_id(record: dict[str, Any]) -> int | None:

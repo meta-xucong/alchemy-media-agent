@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -9,6 +10,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from app.config import settings
+
+
+class LegacyFavoritesImportError(ValueError):
+    """A repairable legacy-source failure with no source payload in its message."""
 
 
 _INITIALIZED_PATHS: dict[str, None] = {}
@@ -63,22 +68,86 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
-def _positive_int_or_none(value: Any) -> int | None:
-    try:
-        parsed = int(value or 0)
-    except (TypeError, ValueError):
+def _legacy_owner_id(value: Any) -> int | None:
+    # Legacy writers emitted integers/null. Float tokens may already have lost
+    # owner identity through JSON rounding, even when they look integral here.
+    if value is None:
         return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        digits = value[1:] if value.startswith("+") else value
+        if not digits.isascii() or not digits.isdecimal():
+            raise LegacyFavoritesImportError("Legacy V2 favorite has an invalid owner ID.")
+    elif isinstance(value, bool) or not isinstance(value, int):
+        raise LegacyFavoritesImportError("Legacy V2 favorite has an invalid owner ID.")
+    parsed = int(value)
+    if not 0 <= parsed <= 2**63 - 1:
+        raise LegacyFavoritesImportError("Legacy V2 favorite has an invalid owner ID.")
     return parsed if parsed > 0 else None
+
+
+def _validated_legacy_item(item: Any) -> tuple[str, int | None, str, str]:
+    if not isinstance(item, dict):
+        raise LegacyFavoritesImportError("Legacy V2 favorite item must be an object.")
+    output_id = item.get("output_id")
+    if not isinstance(output_id, str) or not output_id.strip() or "\x00" in output_id:
+        raise LegacyFavoritesImportError("Legacy V2 favorite has an invalid output ID.")
+    owner_id = _legacy_owner_id(item.get("veyra_user_id"))
+    for field in ("created_at", "updated_at"):
+        if item.get(field) is not None and not isinstance(item[field], str):
+            raise LegacyFavoritesImportError("Legacy V2 favorite has an invalid timestamp.")
+    created_at = item.get("created_at") or ""
+    updated_at = item.get("updated_at") or created_at
+    return output_id.strip(), owner_id, created_at, updated_at
 
 
 def _owner_key(owner_id: int | None) -> str:
     return str(owner_id) if owner_id is not None else ""
 
 
+def _reject_json_constant(_value: str):
+    raise LegacyFavoritesImportError("Legacy V2 favorites contain a non-finite JSON number.")
+
+
+def _finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise LegacyFavoritesImportError("Legacy V2 favorites contain a non-finite JSON number.")
+    return parsed
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise LegacyFavoritesImportError("Legacy V2 favorites contain duplicate object keys.")
+        result[key] = value
+    return result
+
+
+def _validate_json_strings(value: Any) -> None:
+    # Validate only the current decoded value, never collect the source's items.
+    if isinstance(value, str):
+        value.encode("utf-8")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            key.encode("utf-8")
+            _validate_json_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_json_strings(item)
+
+
 class _StreamingJSONReader:
     def __init__(self, handle) -> None:
         self.handle = handle
-        self.decoder = JSONDecoder()
+        self.decoder = JSONDecoder(
+            parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
+            object_pairs_hook=_unique_json_object,
+        )
         self.buffer = ""
         self.position = 0
         self.eof = False
@@ -106,7 +175,7 @@ class _StreamingJSONReader:
         self.position += 1
 
     def skip_whitespace(self) -> None:
-        while (char := self.peek()) is not None and char.isspace():
+        while (char := self.peek()) is not None and char in " \t\r\n":
             self.position += 1
 
     def value(self):
@@ -123,6 +192,7 @@ class _StreamingJSONReader:
                     if token_may_continue and not self.eof:
                         self._fill()
                         continue
+                _validate_json_strings(value)
                 self.position = end
                 return value
 
@@ -158,12 +228,22 @@ def _iter_json_array_items(handle, *, array_name: str = "items"):
         reader.position += 1
     reader.consume("{")
     found_array = False
+    seen_keys: set[str] = set()
+    root_key_chars = 0
     reader.skip_whitespace()
     if reader.peek() != "}":
         while True:
             key = reader.value()
             if not isinstance(key, str):
                 raise ValueError("Legacy V2 favorites object contains a non-string key.")
+            if key in seen_keys:
+                raise LegacyFavoritesImportError("Legacy V2 favorites contain duplicate object keys.")
+            # Legacy writers emit only "items". Permit bounded extra metadata
+            # without retaining an arbitrary number or size of root key names.
+            if len(seen_keys) >= 64 or root_key_chars + len(key) > 64 * 1024:
+                raise LegacyFavoritesImportError("Legacy V2 favorites have excessive root metadata.")
+            seen_keys.add(key)
+            root_key_chars += len(key)
             reader.consume(":")
             if key == array_name:
                 if found_array:
@@ -194,28 +274,30 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
         ).fetchone():
             connection.commit()
             return
-        if path.exists():
-            with path.open("r", encoding="utf-8") as handle:
-                for item in _iter_json_array_items(handle):
-                    if not isinstance(item, dict):
-                        continue
-                    output_id = str(item.get("output_id") or "").strip()
-                    if not output_id:
-                        continue
-                    owner_id = _positive_int_or_none(item.get("veyra_user_id"))
-                    created_at = str(item.get("created_at") or "")
-                    updated_at = str(item.get("updated_at") or created_at)
-                    connection.execute(
-                        """INSERT INTO favorites(output_id, owner_key, owner_id, created_at, updated_at)
-                           VALUES(?, ?, ?, ?, ?) ON CONFLICT(output_id, owner_key) DO UPDATE SET
-                           updated_at=MAX(favorites.updated_at, excluded.updated_at)""",
-                        (output_id, _owner_key(owner_id), owner_id, created_at, updated_at),
-                    )
+        if not path.exists():
+            connection.commit()
+            return
+        with path.open("r", encoding="utf-8") as handle:
+            for item in _iter_json_array_items(handle):
+                output_id, owner_id, created_at, updated_at = _validated_legacy_item(item)
+                connection.execute(
+                    """INSERT INTO favorites(output_id, owner_key, owner_id, created_at, updated_at)
+                       VALUES(?, ?, ?, ?, ?) ON CONFLICT(output_id, owner_key) DO UPDATE SET
+                       updated_at=MAX(favorites.updated_at, excluded.updated_at)""",
+                    (output_id, _owner_key(owner_id), owner_id, created_at, updated_at),
+                )
         connection.execute(
             "INSERT INTO favorite_migrations(migration_key, completed_at) VALUES('legacy_json', ?)",
             (datetime.now(timezone.utc).isoformat(),),
         )
         connection.commit()
+    except (ValueError, OSError, RecursionError, OverflowError) as exc:
+        connection.rollback()
+        if isinstance(exc, LegacyFavoritesImportError):
+            raise
+        raise LegacyFavoritesImportError(
+            "Legacy V2 favorites import failed; repair the source and retry."
+        ) from None
     except Exception:
         connection.rollback()
         raise

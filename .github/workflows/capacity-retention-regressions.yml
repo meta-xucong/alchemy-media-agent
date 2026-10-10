@@ -15,11 +15,40 @@ on:
 permissions:
   contents: read
 
+env:
+  # Set before Python/native libraries initialize, not after an OCR session.
+  ORT_DISABLE_TELEMETRY: "1"
+  OPENAI_AGENTS_DISABLE_TRACING: "1"
+
 concurrency:
   group: retention-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  windows-source-fidelity:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONPATH: src_skeleton
+      MEDIA_STORAGE_ROOT: ${{ runner.temp }}/media-source-fidelity
+      CODEX_AUTH_FILE: /tmp/nonexistent-media-auth.json
+      CLAUDE_SETTINGS_FILE: /tmp/nonexistent-media-claude.json
+      MEDIA_AGENT_MODE: mock
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install source and migration contract test dependencies
+        run: python -m pip install pytest pydantic==2.13.4 python-dotenv==1.2.2
+      - name: Verify Windows source fidelity and LF versus CRLF invariance
+        run: python -m pytest -q tests/test_pr28_migration_reconciliation.py
+
   v1-retention:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -58,6 +87,8 @@ jobs:
           tests/test_lab_snapshot_concurrency.py
           tests/test_v1_event_stream_thread_handoff.py
           tests/test_pr28_migration_reconciliation.py
+          tests/test_v1_history_strict_import.py
+          tests/test_v1_import_error_api.py
       - name: Run the complete V1 API smoke file with mock providers
         run: python -m pytest -q tests/test_api_smoke.py
       - name: Check diff hygiene

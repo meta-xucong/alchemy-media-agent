@@ -70,20 +70,22 @@ PR：#28，仍为 Draft。
 
 新增列也不提供混合新旧二进制的安全性：旧 queue 的 complete/fail/retry 仍可只按 `task_id` 写入，旧 standalone 启动还会按 worker label bulk-release，因此新 token/claim generation 无法约束仍在运行的旧写入者。只有先解决当前 RAM 导出/业务处置阻断，再让所有旧 API inline worker、standalone worker 及其他 queue writer 停止写入，逐进程确认替代者使用同一已验证 fencing 协议/候选代码后，才可恢复 dispatch。不得滚动共用同一 queue DB，让旧无栅栏写入者与新候选并存；此要求不是现在重启旧进程的许可。
 
-下面的候选补充矩阵在集成完成后按最终文件内容冻结；未列出的原始 38 文件沿用上表目标 blob。新增来源和修改来源均单列，`ABSENT` 表示对应提交中没有该文件。候选 blob 是 Git blob SHA-1，审计提交的 SHA 由 PR/提交记录绑定，不把尚未生成的自引用 commit SHA 写成既成事实。任一列明来源再次变更，都需更新补充矩阵并重跑源保真检查和相关回归；本轮文档修正不是生产切换验收。
+下面的候选补充矩阵在集成完成后按最终文件内容冻结；未列出的原始 38 文件沿用上表目标 blob。新增来源和修改来源均单列，`ABSENT` 表示对应提交中没有该文件。候选 blob 是按下述文本规范计算的 Git blob SHA-1，审计提交的 SHA 由 PR/提交记录绑定，不把尚未生成的自引用 commit SHA 写成既成事实。任一列明来源再次变更，都需更新补充矩阵并重跑源保真检查和相关回归；本轮文档修正不是生产切换验收。
+
+源路径均相对于仓库根；V1 前缀为 `src_skeleton/`，V2 前缀为 `custom_media_agent_2_0/`。下文 V2 进程表中缩写的 `app/...` 均沿用 V2 前缀，不指 V1 的同名 package。候选清单只声明 `.py`、`.service`、`.env.example` 为文本来源：读取当前工作树文件字节，仅把 `CRLF` 替换为 `LF`，然后计算 `SHA-1(b"blob " + ASCII(规范字节长度) + NUL + 规范字节)`。这与当前 LF Git 源 blob 一致，允许 Windows 的 CRLF checkout；不删除 BOM、不转换独立 CR、不修剪空白、不改变编码或内容。检查不使用可能落后于工作树的 index，也不依赖 Git 可执行文件或历史对象；真实内容编辑仍必须失败。该规则不是任意 Git clean filter 的模拟：若新增二进制来源、`-text`、`working-tree-encoding` 或其他改变来源字节的 filter，必须重新审计并显式扩展规范，不能直接沿用此文本清单。原始 38 文件历史矩阵及其摘要保持不变。
 
 <!-- PR28_CANDIDATE_SOURCE_MATRIX -->
 
-- Candidate overlay: 19 files; SHA-256 `d52abc3c42102688340874907cea2f594c74f82118e70cb74fc33b21e7c35628`.
+- Candidate overlay: 24 files; SHA-256 `84f88603fc31605772af8a38dfaff1d2e991a38afc40f190001c0a15cdf64865`.
 - Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.
-- Expanded old-to-candidate manifest: 50 files; SHA-256 `e3479260b46079e8c0d91449ce9380dbe131830b0ad504cbc1387307f626a11c`.
+- Expanded old-to-candidate manifest: 50 files; SHA-256 `b64f707f72f233f0106543535aa6182a77571d8ce5762970e14b436c87e17991`.
 - Expanded digest uses section 2 encoding; merge the original matrix with this overlay by path, replacing target blobs and adding new paths.
 
 | Source file | Old release blob | Original target blob | Candidate blob | Scope / authority |
 |---|---|---|---|---|
 | `custom_media_agent_2_0/app/agents/runtime.py` | `29114b3641958bf74eacdf55cdf218986deeef8c` | `29114b3641958bf74eacdf55cdf218986deeef8c` | `64356f788643398bf9eec5ae73f03ec07a0a583d` | V2_DEPENDENCY; claim-aware run, output and billing persistence boundaries |
 | `custom_media_agent_2_0/app/config.py` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `028d02004231333e7ebefa217bae06405581fcf8` | V2_DEPENDENCY; queue/claim/capacity settings |
-| `custom_media_agent_2_0/app/main.py` | `4c7d0a00665cea66b651bc892ac684941fe6a6f3` | `18680401fb96c9eea0ee21b31c351ff927f6f332` | `db07166cf45e459218ac591dd9eee6f60a90d3d5` | V2_ADAPTER; async admission, capacity errors and inline-worker identity |
+| `custom_media_agent_2_0/app/main.py` | `4c7d0a00665cea66b651bc892ac684941fe6a6f3` | `18680401fb96c9eea0ee21b31c351ff927f6f332` | `af7631d34d13f8ec83a59371cf5080cf2fee0bf5` | V2_ADAPTER; async admission, capacity errors, inline-worker identity and sanitized legacy import failures |
 | `custom_media_agent_2_0/app/providers/images/claim_fenced_http.py` | `ABSENT` | `ABSENT` | `d95baf0c17e5c23669d1f02f7775a5ea3dc2f541` | V2_DEPENDENCY; shared claim check at wire-request boundary |
 | `custom_media_agent_2_0/app/providers/images/doubao_image.py` | `5d21f7ae7dce64d525c54fcf9d3908ac64cef0fb` | `5d21f7ae7dce64d525c54fcf9d3908ac64cef0fb` | `605ef62d62dc77697f3389eb4f5551e1014b06ab` | V2_DEPENDENCY; fenced provider dispatch |
 | `custom_media_agent_2_0/app/providers/images/gemini_image.py` | `772006ea72d10d13a812afbd87e2c1624b601901` | `772006ea72d10d13a812afbd87e2c1624b601901` | `c000b5920cfb670acdabafef4ec37b79d36564ce` | V2_DEPENDENCY; fenced provider dispatch |
@@ -92,14 +94,19 @@ PR：#28，仍为 Draft。
 | `custom_media_agent_2_0/app/repositories/memory.py` | `6bb600b30098237b7b7c231bf283422ba0a0d59f` | `189521be3c933a46517b6b77798c125ffeccbd65` | `282c8e0b59c5287c78b96dc00ab3745d7d092939` | V2_ADAPTER; atomic conditional stale-running image-job cleanup |
 | `custom_media_agent_2_0/app/repositories/sqlite_json.py` | `ABSENT` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | TARGET_STORAGE; V2 case index columns, filtered reads and WAL schema |
 | `custom_media_agent_2_0/app/services/asset_binding.py` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | DIRECT_REUSE; task-runtime asset lookup leading to uploaded_assets hydration |
+| `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `d7e3eec82441e2d851a375f9ba108516a71b4907` | THIN_ADAPTER; validated atomic favorites import with repair retry |
 | `custom_media_agent_2_0/app/services/generation.py` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `3fefe202af88c5e50429c19672d9700f2cc3fe7c` | V2_DEPENDENCY; claim-aware generation persistence/checkpoint boundary |
 | `custom_media_agent_2_0/app/services/generation_capacity.py` | `ABSENT` | `ABSENT` | `3f4ef455560c2627496d64b72a5b13413f58f1ec` | V2_DEPENDENCY; cross-process lease, stale recovery and cancellation safety |
+| `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `db6923e2a442e3cb7169ce04da70ef151029b687` | DIRECT_REUSE; V2 fail-closed JSONL history import |
 | `custom_media_agent_2_0/app/services/queue_worker.py` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `f1e07daeb10b3aadd43fa8ab09e75ea6387e6d07` | V2_DEPENDENCY; heartbeat, guarded transitions and success recovery |
 | `custom_media_agent_2_0/app/services/task_queue.py` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `8b2b81ab442478e70e875cc9c36bac0eccfd6db8` | V2_DEPENDENCY; claim protocol, checkpoint schema and bounded async admission |
 | `custom_media_agent_2_0/app/workers/task_queue_worker.py` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `36336b2f43ac7325c698c29b402cd7da36bab536` | V2_DEPENDENCY; unique process identity, no old bulk release |
 | `custom_media_agent_2_0/deploy/systemd/alchemy-v2.env.example` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `967bf46d7e59e938cde170b3942846c2d3c864f5` | `73718048234d7eb29c0ea630aa79f4f4dbf5ccea` | V2_CONFIGURATION; queue limit, claim timeout and generation lease example settings |
+| `src_skeleton/app/main.py` | `c190ff437f53e31863333848eb7c2bf767ac3032` | `f0b2e9562fca4250046e2f1c05bbd11381dfbc3d` | `096b8053e07011166020ba1092530fa797600f73` | PLATFORM_SHELL; sanitized fail-closed legacy import API responses |
 | `src_skeleton/app/repositories/sqlite_json.py` | `ABSENT` | `4c719e7603cc3723d75ac392f8782810220bbe73` | `4c719e7603cc3723d75ac392f8782810220bbe73` | TARGET_STORAGE; V1 indexed columns, filtered reads and WAL schema |
+| `src_skeleton/app/services/favorites.py` | `febcf1f481e6feaaa5c71804826bd264ecf22520` | `346906f72590f7690524a9266cbbfb4165260e6b` | `cf7628b7e05748872bdd786cef026013ad532158` | THIN_ADAPTER; validated atomic favorites import with repair retry |
 | `src_skeleton/app/services/retention_settings.py` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | PLATFORM_SHELL; V1 user-edited retention JSON and fallback defaults |
+| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `8e222b41fe28ed7906a5acc54af4e077e488b71d` | DIRECT_REUSE; V1 fail-closed JSONL history and owner-evidence import |
 
 <!-- /PR28_CANDIDATE_SOURCE_MATRIX -->
 
@@ -182,7 +189,8 @@ V2 的 `InMemoryV2Repository` 是进程内单例，不是跨进程共享内存�
 - 对每个 namespace 比较源/目标计数、ID 集合摘要、状态及 owner 分布；比较 Job.outputs 与规范 outputs、session/job/output/asset/run/reference/favorite/event 链接，显式报告孤儿、重复 ID 和 owner 冲突。V1 ownerless sessions/events 必须保持 ownerless/unverified，不作为导入失败，但报告受限访问记录数；不得自动猜测 owner。
 - 验证派生 SQL 列及索引，不能只写 `namespace, record_key, payload`。V1 Job 的 `session_id`、`job_type`、`sort_at=updated_at or created_at`、`idempotency_key` 必须与完整 payload 一致；核对 `v1_records_jobs_idx`、`v1_records_idem_idx`、`v1_records_scoped_idem_idx` 的定义，保留独立 `idempotency` map 并验证其目标 Job。通过 `list_jobs(session_id=...)`、`list_jobs(job_type=..., session_id=...)`、带 session/owner 的幂等读取验证预期 ID 集合、同时间稳定顺序和跨 session 不命中。只要 `get_job(id)` 正确但 filtered readback 缺记录，就必须失败。
 - V2 `prompt_cases` 的派生列 `provider_id`、`active=int(is_active)`、`quality=quality_score`、`index_version` 必须与 payload 一致；核对 `v2_records_provider_idx`、`v2_records_case_sort_idx` 的定义。用 `list_cases(active_only=True/False)` 验证启用集合及 quality/ID 排序、`get_active_index_version()` 验证版本，并以只读 SQL 的 provider/active/version 过滤核对期望集合。禁止用删除/替换 provider 来测试索引。直接 `get_case(id)` 的正确性不能代替这些过滤读取。
-- 在目标 app/bootstrap 触发任何 history lazy import 之前，对源 JSONL/manifest 做完整语法和完整性预检；坏行不得跳过，也不得留下 `jsonl_imported`/`owner_evidence_backfilled` 完成标记。导入后显式核对 `v1_history_records` 与 `v1_history_owner_evidence` 的计数、ID/owner/conflict 摘要和所有源 history 行。目标表不完整或完成标记已写而校验不一致则阻断，不以再次启动自动补救。
+- 在目标 app/bootstrap 触发任何 history lazy import 之前，对源 JSONL/manifest 做完整语法和完整性预检。候选的 V1/V2 history 首次导入现在对坏行 fail closed：失败必须回滚本次导入，不能静默跳过后写入 V1 `jsonl_imported`/`owner_evidence_backfilled` 或 V2 `jsonl` 完成标记；修复输入后才可重新导入。导入后显式核对 V1 `v1_history_records` / `v1_history_owner_evidence`、V2 `v2_image_history` 的计数、ID/owner/conflict 摘要和所有源 history 行。此保护不自动修复旧版本已写入的完成标记或已有不完整表；完成标记已存在但校验不一致时必须阻断，并由单独获批的恢复流程处理，不能以再次启动自动补救。V1/V2 favorites 的首次 JSON 导入同样必须完整验证后原子提交记录与完成标记；history/favorites 导入错误在 API 边界仅返回脱敏的修复提示，不向客户端暴露源 payload，也不建议自动重试未修复输入。
+- 四个首次导入入口（V1/V2 history、V1/V2 favorites）在输入失败时回滚本次记录/owner-evidence 写入与新完成标记，保留原来源供修复后重试；来源缺失时不写完成标记，之后恢复来源仍需验证。历史写入器产生的整数/null owner 保持兼容；显式 owner 接受 SQLite 整数范围内的非负整数及去除外围空白后的 ASCII 十进制整数字符串（可带 `+`），0/null/缺失/空字符串沿用 ownerless 语义。所有浮点 owner token（包括 `1.0`、`1e0`）均拒绝，因为 JSON 浮点解码可能已把不同的原始 ID 舍入为同一个整数；布尔值、负数、越界值和其他字符串形式也拒绝，不能静默改成 public/ownerless 或另一 owner。此处的修复后重试只适用于未完成的导入，不授权清除旧完成标记或自动重放历史数据；已有完成标记仍需人工对账及单独获批的恢复。
 - 将目标专属 `output_delete_claims` 初始计数验证为 0；它不是旧数据实体，不从其他记录合成。
 - 图片/上传文件不搬入数据库；对每个文件引用核对规范化路径边界、存在性、大小及内容摘要。脱离允许存储根、缺失或摘要不同均阻断 cutover。
 - 原始运行态 queued/running 保持为未决项；dry-run 不调用 Provider，不把状态悄悄转为成功/失败，不触发启动恢复。必须单列并等待切换政策。
@@ -196,9 +204,11 @@ V2 的 `InMemoryV2Repository` 是进程内单例，不是跨进程共享内存�
 
 ### 6.2 有界离线反例检查
 
-`tests/test_pr28_migration_reconciliation.py` 验证历史/候选清单摘要，并直接从本地字节计算 Git blob SHA-1，防止所有候选来源在审计后漂移；不依赖浅克隆中缺失的历史 Git 对象。其数据检查只使用合成记录与临时 SQLite 文件，证明完整 payload 或 direct-ID 读取正确仍可能遗漏索引可见性，同时覆盖 canonical payload 变化、独立 retention policy 默认值和 WAL 一致备份。它不连接 VPS、不调用 provider、不启动 app/worker，也不实现或证明生产 exporter/importer。运行入口：`python -m pytest -q tests/test_pr28_migration_reconciliation.py`。
+`tests/test_pr28_migration_reconciliation.py` 验证历史/候选清单摘要，并按第 2.1 节的文本规范从当前工作树计算 Git blob SHA-1，防止所有候选来源在审计后发生实质漂移；不依赖 Git index 或浅克隆中缺失的历史 Git 对象。回归覆盖 LF/CRLF 同源一致性，以及实际内容、尾部空白、末尾换行、独立 CR 和 BOM 修改仍改变指纹；未声明的文件类型必须拒绝。其数据检查只使用合成记录与临时 SQLite 文件，证明完整 payload 或 direct-ID 读取正确仍可能遗漏索引可见性，同时覆盖 canonical payload 变化、独立 retention policy 默认值和 WAL 一致备份。它不连接 VPS、不调用 provider、不启动 app/worker，也不实现或证明生产 exporter/importer。运行入口：`python -m pytest -q tests/test_pr28_migration_reconciliation.py`。
 
 ## 7. 切换、回滚与停止条件
+
+“来源缺失时不写完成标记”只保证之后的首次导入仍可验证，不证明任意旧文件恢复都是安全的。如果未完成导入的目标库已经发生原生新增、更新或删除，再恢复陈旧来源必须先离线对账；运行时没有足够的 tombstone 证据自动判断每条恢复记录是否应该存在。防复活回归覆盖的是已有完成标记不重放，不能扩展成“任意来源恢复都不会复活记录”。严格解析/事务也不能替代来源文件的维护写屏障。
 
 通过 dry-run 不等于切换通过。正式切换还需维护窗口和全写屏障：最后一次完整快照、隔离导入、逐域对账、备份 staging DB/旁路文件、验证健康检查，然后只在零新写入期间切换服务指向。切换后开放新写入前保存回滚点。
 
@@ -210,6 +220,6 @@ SQLite 备份必须覆盖 WAL 中已提交的数据：在维护栅栏内使用 S
 
 ## 8. 当前阶段完成标准与下一阶段入口
 
-当前迁移文档阶段只完成事实核验、映射冻结和切换协议；本轮候选还需完成独立的 PR #27 V2 依赖集成和回归。不实现导出 API/脚本、不构造生产快照、不写生产 SQLite、不重启 VPS。当前阶段可通过的标准是：Source Fidelity 和独立 Audit 均对同一最终候选、本文件、原始及补充源清单摘要和映射矩阵给出 PASS；文档链接、命名空间映射、已有 VPS 证据措辞准确；候选依赖回归与有界离线检查通过。历史 A2 结论不能自动沿用到本轮变更。
+迁移文档阶段限定为事实核验、映射冻结和切换协议。PR #27 的必要 V2 依赖子集已在候选提交 `d7b97c7af777ceba7fa85db4a6b5d94aa9539720` 中集成；第 2.1 节列明的未引入范围保持不变。本轮新增阶段是四个 history/favorites 入口的严格原子导入、脱敏 API 错误及跨 LF/CRLF checkout 的源保真修正，不能把历史依赖集成或历史测试结果当成本轮验收。不实现导出 API/脚本、不构造生产快照、不写生产 SQLite、不重启 VPS。当前阶段可通过的标准是：Source Fidelity 和独立 Audit 均对同一最终候选、本文件、原始及补充源清单摘要和映射矩阵给出 PASS；文档链接、命名空间映射、已有 VPS 证据措辞准确；候选依赖回归、严格导入回归与有界离线检查通过。历史 A2 结论不能自动沿用到本轮变更。
 
 完成文档审计后仍有一个**外部恢复能力阻断**：当前运行中的旧进程没有完整导出入口。若必须保留 RAM-only 记录，保持运行并评估可否在不重启该进程的条件下取得可信快照；不可行时，需要用户明确选择“保持旧服务/接受明确列出的部分恢复/放弃无法导出的 RAM-only 记录”中的业务处置。未获该决定前，不开发会暗示当前实例可安全 cutover 的脚本，也不合并/部署 PR #28。

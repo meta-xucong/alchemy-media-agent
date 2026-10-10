@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 import tempfile
@@ -19,6 +20,10 @@ from app.services.output_storage import delete_output_storage
 _HISTORY_DATABASES: OrderedDict[str, None] = OrderedDict()
 _HISTORY_SCHEMA_LOCK = threading.Lock()
 _HISTORY_DATABASES_MAX = 8
+
+
+class LegacyHistoryImportError(ValueError):
+    """A legacy source could not be imported; its contents must not be exposed."""
 
 
 def persist_image_job_history(job: ImageJob) -> None:
@@ -249,30 +254,106 @@ def _upsert_history_item(connection: sqlite3.Connection, item: ImageHistoryItem)
 
 
 def _ensure_history_index() -> None:
-    """Import legacy JSONL once, one validated record at a time, without retaining it."""
+    """Atomically import complete legacy JSONL once, one validated record at a time."""
     connection = _history_connect()
     try:
+        # Completed databases must not replay their source or need a write lock.
         if connection.execute(
             "SELECT 1 FROM v2_image_history_migration WHERE migration_key='jsonl'"
         ).fetchone():
             return
-        with connection:
-            if settings.image_history_path.exists():
-                with settings.image_history_path.open("r", encoding="utf-8") as handle:
-                    for line in handle:
-                        if not line.strip():
-                            continue
-                        try:
-                            item = ImageHistoryItem.model_validate_json(line)
-                        except (json.JSONDecodeError, ValueError):
-                            continue
+        # Serialize the marker check with the import, even in autocommit mode.
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute(
+            "SELECT 1 FROM v2_image_history_migration WHERE migration_key='jsonl'"
+        ).fetchone():
+            connection.commit()
+            return
+        path = settings.image_history_path
+        try:
+            path.stat()
+        except FileNotFoundError:
+            # A source restored later still needs its first import.
+            connection.commit()
+            return
+        except OSError:
+            raise LegacyHistoryImportError("Legacy V2 image history could not be read.") from None
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        json.loads(
+                            line,
+                            parse_float=_finite_json_float,
+                            parse_constant=_finite_json_float,
+                            object_pairs_hook=_unique_json_object,
+                        )
+                        # Preserve the schema's JSON coercions and Unicode checks.
+                        item = ImageHistoryItem.model_validate_json(line)
+                        if any(not value.strip() or "\x00" in value for value in (item.output_id, item.job_id)):
+                            raise ValueError("History identity is invalid.")
+                        owner_id = _legacy_history_owner_id(item.metadata)
+                        previous = connection.execute(
+                            "SELECT owner_id FROM v2_image_history WHERE output_id=?", (item.output_id,)
+                        ).fetchone()
+                        # An ambiguous legacy duplicate must not change who can
+                        # see an output, even when it would win by timestamp.
+                        if previous and previous[0] != owner_id:
+                            raise ValueError("History output owners must agree.")
                         _upsert_history_item(connection, item)
-            connection.execute(
-                "INSERT OR REPLACE INTO v2_image_history_migration(migration_key, completed_at) VALUES('jsonl', ?)",
-                (datetime.now().astimezone().isoformat(),),
-            )
+                    except (ValueError, OverflowError, RecursionError):
+                        raise LegacyHistoryImportError(
+                            f"Legacy V2 image history has an invalid record at line {line_number}."
+                        ) from None
+        except UnicodeError:
+            raise LegacyHistoryImportError("Legacy V2 image history is not valid UTF-8.") from None
+        except OSError:
+            raise LegacyHistoryImportError("Legacy V2 image history could not be read.") from None
+        connection.execute(
+            "INSERT INTO v2_image_history_migration(migration_key, completed_at) VALUES('jsonl', ?)",
+            (datetime.now().astimezone().isoformat(),),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
+
+
+def _finite_json_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("History JSON numbers must be finite.")
+    return number
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("History JSON object fields must be unique.")
+        result[key] = value
+    return result
+
+
+def _legacy_history_owner_id(metadata: dict[str, Any]) -> int | None:
+    value = metadata.get("veyra_user_id")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    # Float tokens can lose owner identity before validation through rounding.
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError("History owner must be an integer.")
+    if isinstance(value, str):
+        value = value.strip().removeprefix("+")
+        if not value.isascii() or not value.isdecimal():
+            raise ValueError("History owner must be a decimal integer.")
+    owner_id = int(value)
+    if not 0 <= owner_id <= 2**63 - 1:
+        raise ValueError("History owner must be a nonnegative SQLite integer.")
+    return owner_id or None
 
 
 def _template_case_id(job: ImageJob) -> str | None:
