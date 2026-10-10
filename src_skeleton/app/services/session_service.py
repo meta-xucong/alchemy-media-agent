@@ -9,7 +9,7 @@ from app.services.utils import make_id, now_iso
 VIDEO_PLATFORM_MIGRATION_NOTICE = "视频生成已迁移到 aiself 首页的独立平台，请前往 aiself 首页使用；Alchemy 仅支持图片生成。"
 
 
-def create_session(request: CreateSessionRequest) -> Session:
+def create_session(request: CreateSessionRequest, *, veyra_user_id: int | None = None) -> Session:
     return repository.save_session(
         Session(
             id=make_id("ses"),
@@ -17,11 +17,17 @@ def create_session(request: CreateSessionRequest) -> Session:
             title=request.title,
             orchestration_mode=request.orchestration_mode,
             created_at=now_iso(),
+            veyra_user_id=veyra_user_id,
         )
     )
 
 
-async def handle_message(session_id: str, request: MessageRequest) -> MessageResponse:
+async def handle_message(
+    session_id: str,
+    request: MessageRequest,
+    *,
+    veyra_user_id: int | None = None,
+) -> MessageResponse:
     target = _resolve_target(request)
     job_ids: list[str] = []
     if target == "unsupported_video":
@@ -39,6 +45,7 @@ async def handle_message(session_id: str, request: MessageRequest) -> MessageRes
             moderation=request.preferences.get("moderation"),
             output_compression=request.preferences.get("output_compression"),
             provider_preference=request.preferences.get("provider_preference"),
+            veyra_user_id=veyra_user_id,
         )
         job_ids.append(job.id)
         assistant_text = "已创建图片生成任务。"

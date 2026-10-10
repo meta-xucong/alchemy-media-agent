@@ -148,6 +148,22 @@ async def submit_image_job(
             "variables": variables,
         }
     )
+    key = idempotency_key or _idempotency_key(
+        session_id,
+        prompt_plan.model_dump_json(),
+        asset_ids,
+        provider_preference,
+        work_intensity,
+        asset_mode,
+    )
+    existing = repository.get_job_by_idempotency_key(
+        key,
+        session_id=session_id,
+        owner_id=veyra_user_id,
+    )
+    if existing:
+        return PreparedImageJob(existing)
+
     trace_id = make_id("trace")
     created_at = now_iso()
     job = GenerationJob(
@@ -158,7 +174,7 @@ async def submit_image_job(
         asset_mode=asset_mode,
         asset_plan=advanced_asset_plan,
         prompt_plan=prompt_plan,
-        idempotency_key=idempotency_key,
+        idempotency_key=key,
         trace_id=trace_id,
         created_at=created_at,
         updated_at=created_at,
@@ -180,18 +196,6 @@ async def submit_image_job(
         job.updated_at = now_iso()
         return PreparedImageJob(repository.save_job(job))
 
-    key = idempotency_key or _idempotency_key(
-        session_id,
-        prompt_plan.model_dump_json(),
-        asset_ids,
-        provider_preference,
-        work_intensity,
-        asset_mode,
-    )
-    existing = repository.get_job_by_idempotency_key(key)
-    if existing:
-        return PreparedImageJob(existing)
-    job.idempotency_key = key
     job.status = JobStatus.generating
     job.provenance = {
         "asset_mode": asset_mode,
@@ -282,6 +286,14 @@ async def create_image_job(
         output_compression=output_compression,
         asset_ids=asset_ids,
     )
+    if idempotency_key:
+        existing = repository.get_job_by_idempotency_key(
+            idempotency_key,
+            session_id=session_id,
+            owner_id=veyra_user_id,
+        )
+        if existing:
+            return existing
     trace_id = make_id("trace")
     created_at = now_iso()
     job = GenerationJob(
@@ -298,6 +310,18 @@ async def create_image_job(
         updated_at=created_at,
     )
     if asset_error:
+        key = idempotency_key or _idempotency_key(
+            session_id,
+            prompt_plan.model_dump_json(),
+            asset_ids,
+            provider_preference,
+            work_intensity,
+            asset_mode,
+        )
+        existing = repository.get_job_by_idempotency_key(key, session_id=session_id, owner_id=veyra_user_id)
+        if existing:
+            return existing
+        job.idempotency_key = key
         job.status = JobStatus.failed
         job.error = ProviderError(
             code=asset_error.code,
@@ -309,6 +333,18 @@ async def create_image_job(
 
     safety_error = check_generation_prompt(prompt)
     if safety_error:
+        key = idempotency_key or _idempotency_key(
+            session_id,
+            prompt_plan.model_dump_json(),
+            asset_ids,
+            provider_preference,
+            work_intensity,
+            asset_mode,
+        )
+        existing = repository.get_job_by_idempotency_key(key, session_id=session_id, owner_id=veyra_user_id)
+        if existing:
+            return existing
+        job.idempotency_key = key
         job.status = JobStatus.rejected
         job.error = safety_error
         job.updated_at = now_iso()
@@ -350,7 +386,7 @@ async def create_image_job(
         work_intensity,
         asset_mode,
     )
-    existing = repository.get_job_by_idempotency_key(key)
+    existing = repository.get_job_by_idempotency_key(key, session_id=session_id, owner_id=veyra_user_id)
     if existing:
         return existing
     job.idempotency_key = key
@@ -370,9 +406,11 @@ async def create_image_job(
 
 
 async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> GenerationJob | None:
-    source_job, source_output = _revision_source(job_id, request.output_id)
+    source_job, source_output = resolve_revision_source(job_id, request.output_id)
     if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
         return None
+
+    _persist_restored_revision_source(source_job)
 
     patch = build_revision_patch(output_id=request.output_id, feedback=request.feedback, preserve=request.preserve)
     prompt_plan = apply_patch_to_plan(source_job.prompt_plan, patch)
@@ -403,10 +441,18 @@ async def revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_us
     return await _run_image_request(revision, image_request, edit=True)
 
 
-async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, veyra_user_id: int | None = None) -> PreparedImageJob | None:
-    source_job, source_output = _revision_source(job_id, request.output_id)
+async def submit_revise_image_job(
+    job_id: str,
+    request: ReviseImageRequest,
+    *,
+    veyra_user_id: int | None = None,
+    resolved_source: tuple[GenerationJob | None, GenerationOutput | None] | None = None,
+) -> PreparedImageJob | None:
+    source_job, source_output = resolved_source or resolve_revision_source(job_id, request.output_id)
     if not source_job or not source_output or not source_job.prompt_plan or source_output.job_id != source_job.id:
         return None
+
+    _persist_restored_revision_source(source_job)
 
     patch = build_revision_patch(output_id=request.output_id, feedback=request.feedback, preserve=request.preserve)
     prompt_plan = apply_patch_to_plan(source_job.prompt_plan, patch)
@@ -439,12 +485,17 @@ async def submit_revise_image_job(job_id: str, request: ReviseImageRequest, *, v
     return PreparedImageJob(saved, image_request, edit=True)
 
 
-def _revision_source(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
+def resolve_revision_source(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
     source_job = repository.get_job(job_id)
     source_output = repository.get_output(output_id)
     if source_job and source_output:
         return source_job, source_output
     return _restore_revision_source_from_history(job_id, output_id)
+
+
+def _persist_restored_revision_source(source_job: GenerationJob) -> None:
+    if (source_job.raw_response_summary or {}).get("restored_from_history") is True:
+        repository.save_job(source_job)
 
 
 def _restore_revision_source_from_history(job_id: str, output_id: str) -> tuple[GenerationJob | None, GenerationOutput | None]:
@@ -501,7 +552,6 @@ def _restore_revision_source_from_history(job_id: str, output_id: str) -> tuple[
         },
     )
     source_job.outputs = [source_output]
-    repository.save_job(source_job)
     return source_job, source_output
 
 

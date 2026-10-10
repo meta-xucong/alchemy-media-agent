@@ -20,6 +20,7 @@ from app.services.output_review import review_image_job
 from app.services.output_storage import save_provider_output
 from app.services.prompt_transform.transformer import fallback_prompt_plan, transform_prompt_plan
 from app.services.reference_delivery import reference_delivery_audit
+from app.services import task_queue
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
 from app.services.veyra_billing_settings import get_billing_rule
 from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
@@ -76,7 +77,7 @@ async def create_running_image_job(request: CreateImageJobRequest) -> ImageJob:
         created_at=now,
         updated_at=now,
     )
-    return repository.save_image_job(job)
+    return task_queue.persist_claimed_operation(lambda: repository.save_image_job(job))
 
 
 async def create_image_job(
@@ -117,17 +118,19 @@ async def create_image_job(
             )
         )
     if not repository.get_image_job(job_id):
-        repository.save_image_job(
-            ImageJob(
-                job_id=job_id,
-                run_id=request.run_id,
-                status="running",
-                provider_id=provider.name,
-                model=_requested_model(request.provider_hint) or "unknown",
-                prompt_plan=request.prompt_plan,
-                outputs=[],
-                created_at=created_at,
-                updated_at=utc_now(),
+        task_queue.persist_claimed_operation(
+            lambda: repository.save_image_job(
+                ImageJob(
+                    job_id=job_id,
+                    run_id=request.run_id,
+                    status="running",
+                    provider_id=provider.name,
+                    model=_requested_model(request.provider_hint) or "unknown",
+                    prompt_plan=request.prompt_plan,
+                    outputs=[],
+                    created_at=created_at,
+                    updated_at=utc_now(),
+                )
             )
         )
     billing_result = None
@@ -141,6 +144,7 @@ async def create_image_job(
 
     fallback_error = None
     try:
+        _ensure_claim_before_provider_request(job_id)
         result = await provider.generate(
             V2ImageProviderRequest(
                 run_id=request.run_id,
@@ -151,6 +155,7 @@ async def create_image_job(
     except V2ImageProviderNotConfiguredError as exc:
         if _can_fallback_to_mock(request.provider_hint):
             fallback_provider = await get_v2_image_provider("mock_image")
+            _ensure_claim_before_provider_request(job_id)
             result = await fallback_provider.generate(
                 V2ImageProviderRequest(
                     run_id=request.run_id,
@@ -164,6 +169,7 @@ async def create_image_job(
     except V2ImageProviderError as exc:
         if _can_fallback_to_mock(request.provider_hint):
             fallback_provider = await get_v2_image_provider("mock_image")
+            _ensure_claim_before_provider_request(job_id)
             result = await fallback_provider.generate(
                 V2ImageProviderRequest(
                     run_id=request.run_id,
@@ -175,42 +181,57 @@ async def create_image_job(
         else:
             return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
 
+    try:
+        task_queue.ensure_current_claim()
+    except task_queue.StaleTaskClaim:
+        _discard_uncommitted_running_job(job_id)
+        raise
     if billing_required:
         try:
             billing_result = await VeyraSub2APIClient().debit(
                 user_id=int(request.veyra_user_id or 0),
                 amount=billing_rule.charge_amount,
-                idempotency_key=f"{billing_rule.key}:image:{job_id}",
+                idempotency_key=_billing_idempotency_key(billing_rule, job_id),
                 source=billing_rule.source,
-                reference_id=job_id,
+                reference_id=_billing_reference_id(job_id),
             )
         except (VeyraInsufficientBalance, VeyraAuthError) as exc:
             return _save_job(_failed_job(request, provider_id=result.provider, error=_billing_provider_error(exc), job_id=job_id, created_at=created_at))
 
-    saved = _save_job(
-        _job_from_result(
-            request,
-            result,
-            fallback_error=fallback_error,
-            job_id=job_id,
-            created_at=created_at,
-            billing_result=billing_result,
-            _qr_preservation_enabled=_qr_preservation_enabled is True,
-        )
-    )
-    if billing_result:
-        record_veyra_usage(
-            VeyraUsageRecord(
-                user_id=billing_result.user_id,
-                amount=billing_result.amount,
-                balance_after=billing_result.balance_after,
-                idempotency_key=billing_result.idempotency_key,
-                reference_id=job_id,
-                source=billing_rule.source,
-                replayed=billing_result.replayed,
+    def persist_result() -> ImageJob:
+        saved = _save_job_unfenced(
+            _job_from_result(
+                request,
+                result,
+                fallback_error=fallback_error,
+                job_id=job_id,
+                created_at=created_at,
+                billing_result=billing_result,
+                _qr_preservation_enabled=_qr_preservation_enabled is True,
             )
         )
-    return saved
+        if billing_result:
+            record_veyra_usage(
+                VeyraUsageRecord(
+                    user_id=billing_result.user_id,
+                    amount=billing_result.amount,
+                    balance_after=billing_result.balance_after,
+                    idempotency_key=billing_result.idempotency_key,
+                    reference_id=job_id,
+                    source=billing_rule.source,
+                    replayed=billing_result.replayed,
+                )
+            )
+        return saved
+
+    try:
+        return task_queue.persist_claimed_operation(
+            persist_result,
+            on_persisted=task_queue.checkpoint_completed_generation,
+        )
+    except task_queue.StaleTaskClaim:
+        _discard_uncommitted_running_job(job_id)
+        raise
 
 
 def _job_from_result(
@@ -424,10 +445,44 @@ def _default_score(metadata: dict, *, fallback_error: V2ImageProviderError | Non
 
 
 def _save_job(job: ImageJob) -> ImageJob:
+    try:
+        return task_queue.persist_claimed_operation(lambda: _save_job_unfenced(job))
+    except task_queue.StaleTaskClaim:
+        _discard_uncommitted_running_job(job.job_id)
+        raise
+
+
+def _save_job_unfenced(job: ImageJob) -> ImageJob:
     reviewed = review_image_job(job)
     saved = repository.save_image_job(reviewed)
     persist_image_job_history(saved)
     return saved
+
+
+def _discard_uncommitted_running_job(job_id: str) -> None:
+    job = repository.get_image_job(job_id)
+    if job is not None and job.status == "running" and not job.outputs:
+        repository.delete_image_job(job_id)
+
+
+def _ensure_claim_before_provider_request(job_id: str) -> None:
+    try:
+        task_queue.ensure_current_claim()
+    except task_queue.StaleTaskClaim:
+        _discard_uncommitted_running_job(job_id)
+        raise
+
+
+def _billing_idempotency_key(billing_rule, job_id: str) -> str:
+    claim = task_queue.current_claim()
+    if claim is not None:
+        return f"{billing_rule.key}:task:{claim.task_id}"
+    return f"{billing_rule.key}:image:{job_id}"
+
+
+def _billing_reference_id(job_id: str) -> str:
+    claim = task_queue.current_claim()
+    return claim.task_id if claim is not None else job_id
 
 
 def _should_bill_veyra(request: CreateImageJobRequest, *, billing_rule=None) -> bool:
