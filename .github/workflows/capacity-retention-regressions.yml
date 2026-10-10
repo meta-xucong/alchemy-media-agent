@@ -33,7 +33,7 @@ jobs:
         shell: bash
     env:
       PYTHONPATH: src_skeleton
-      MEDIA_STORAGE_ROOT: ${{ runner.temp }}/media-source-fidelity
+      MEDIA_STORAGE_ROOT: ${{ github.workspace }}/.ci-media-source-fidelity
       CODEX_AUTH_FILE: /tmp/nonexistent-media-auth.json
       CLAUDE_SETTINGS_FILE: /tmp/nonexistent-media-claude.json
       MEDIA_AGENT_MODE: mock
