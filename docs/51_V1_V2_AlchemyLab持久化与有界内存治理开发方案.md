@@ -503,3 +503,13 @@ Source Fidelity A2 对 `f63f08e…` 指出，第 428 行附近历史章节仍写
 Source Fidelity A2 对 `23fcea1f` 的反馈发现，`fetchone()` 虽然逐行消费 payload，但用 `observed_owners` 集合保存每个不同 owner，仍可能让额外状态随不同 owner 数量 O(N) 增长。因此，`16c47f…` 候选不通过 Source Fidelity。现改为常量空间记录首个显式 owner 与一个 sticky conflict 标志；即便冲突已发现仍继续扫描剩余所有 Job，保持完整冲突语义。SQL spy 样例增加第三个、位于首个冲突后的不同 owner，验证冲突后仍消费至游标结束且不调用 `fetchall()`。本修正后的候选必须重新运行 V1 组、重新计算 fingerprint，并由两路审计针对同一提交复审；`16c47f…` 的审计收据作废。
 
 修正代码提交 `dbf9332ffc310d502640f4e47467ec05aa021f9f` 已通过独立 Audit A2 与 Source Fidelity A2；两者独立复算均为 44 个 Python 路径、指纹 `6d25a394f9e254f3622595ec9e013e2e3c835bcf9392e403a5b6bb1b462c9ab7`。Audit A2 对幂等权限与 ownerless claim 扫描给出 PASS；Source Fidelity 确认文档、实现和回归覆盖一致。主控最终代码树验证：V1 相关组合 80 passed、6 条既有 FastAPI 生命周期弃用警告；V2 seed-sync 1 passed，V2 favorites/migration/retention/SQLite 14 passed、1 条既有 Starlette 弃用警告；变更文件 compileall 与 diff check 通过。两位审计者针对代码提交后，本次只追加审计收据与状态说明，没有改动任何 Python 文件，Python 指纹保持不变。此阶段仅放行推送/更新 Draft PR #28；不合并、不部署。全套 smoke、浏览器、真实 Provider、旧 session 数据迁移及 VPS 资源验收仍未执行。
+
+#### 受控 API smoke 补测（2026-10-10）
+
+上一轮完整 `tests/test_api_smoke.py` 首次运行为 95 passed、2 failed。逐项核对后，两项均是测试执行条件不稳定：Lab 后台 runner 的测试轮询连续执行且不让出调度，未给异步任务实际完成窗口；V1 资产跨账号用例未隔离 Veyra bridge account lookup，断言被桥接错误 502 截断。它们不是产品代码修复的证据，也不应用于掩盖真正的 API 行为差异。
+
+测试夹具最小调整：Lab 测试使用 TestClient lifespan，保留真实 asyncio sleep 让出一次事件循环，并用最多 5 秒、每 10 毫秒轮询的有界等待验证完成状态及三张成功卡片；跨账号资产测试将 `load_account` 固定为本地确定性 user/admin fixture，让测试只验证资产 owner 授权。产品源码未改，Veyra 行为未被宣称通过。
+
+调整后完整 V1 API smoke：`tests/test_api_smoke.py` **97 passed，6 条既有 FastAPI lifecycle deprecation warnings，260.17 秒**。V2 `custom_media_agent_2_0/tests/test_v2_api.py` **173 passed，1 条既有 Starlette deprecation warning**。这覆盖 V1 API smoke（含该文件中的 Lab API 用例）及 V2 API 测试，不等同于整个仓库所有测试、浏览器/provider 验收、生产数据库迁移或 VPS 资源验收。旧版宽范围 V2 provider-seed-sync 失败的历史根因仍未证明；本次结果只说明它未在 V2 API 文件运行中复现。
+
+本轮只有 `tests/test_api_smoke.py` 测试夹具变化，须经独立审计确认夹具没有弱化产品断言，再更新 Draft PR 描述并保留 Draft。生产旧数据仍需单独只读盘点与 dry-run 数量/ID/owner 对账；在对账报告及回滚方案可审阅前，不执行线上迁移。VPS acceptance 另需先明确运行 SHA、只读基线和维护/回滚步骤；本轮未连接或修改 VPS。

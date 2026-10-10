@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import time
 from pathlib import Path
 from io import BytesIO
 
@@ -820,49 +821,52 @@ def test_alchemy_lab_generation_interval_is_applied(monkeypatch):
 
 def test_alchemy_lab_live_provider_returns_async_session_and_serializes(monkeypatch):
     sleeps = []
+    original_sleep = alchemy_lab_module.asyncio.sleep
 
     async def fake_sleep(delay):
         sleeps.append(delay)
+        await original_sleep(0)
 
     class LiveLikeMockProvider(MockImageProvider):
         name = "openai_gpt_image"
 
     monkeypatch.setitem(image_service_module.registry.image_providers, "openai_gpt_image", LiveLikeMockProvider())
     monkeypatch.setattr(alchemy_lab_module.asyncio, "sleep", fake_sleep)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/lab/rare-style-explorer/sessions",
+            json={
+                "idea": "串行节奏测试海报",
+                "selected_style_ids": ["M001", "C002"],
+                "target_count": 3,
+                "images_per_style": 2,
+                "generation_interval_seconds": 0.5,
+                "provider_preference": "openai_gpt_image",
+            },
+        )
 
-    response = client.post(
-        "/api/lab/rare-style-explorer/sessions",
-        json={
-            "idea": "串行节奏测试海报",
-            "selected_style_ids": ["M001", "C002"],
-            "target_count": 3,
-            "images_per_style": 2,
-            "generation_interval_seconds": 0.5,
-            "provider_preference": "openai_gpt_image",
-        },
-    )
+        assert response.status_code == 200
+        payload = response.json()
+        session_id = payload["session"]["id"]
+        assert payload["async"] is True
+        assert payload["session"]["status"] == "queued"
+        assert count_cards(payload["board"]) == 3
+        assert all(card["status"] == "queued" for group in payload["board"]["groups"] for card in group["cards"])
 
-    assert response.status_code == 200
-    payload = response.json()
-    session_id = payload["session"]["id"]
-    assert payload["async"] is True
-    assert payload["session"]["status"] == "queued"
-    assert count_cards(payload["board"]) == 3
-    assert all(card["status"] == "queued" for group in payload["board"]["groups"] for card in group["cards"])
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            poll = client.get(f"/api/lab/rare-style-explorer/sessions/{session_id}")
+            assert poll.status_code == 200
+            board = poll.json()["board"]
+            if board["status"] == "completed":
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("Lab async session did not complete.")
 
-    for _ in range(10):
-        poll = client.get(f"/api/lab/rare-style-explorer/sessions/{session_id}")
-        assert poll.status_code == 200
-        board = poll.json()["board"]
-        if board["status"] == "completed":
-            break
-    else:
-        pytest.fail("Lab async session did not complete.")
-
-    assert board["status"] == "completed"
-    assert count_cards(board, "succeeded") == 3
-    assert sleeps == [0.5, 0.5]
+        assert board["status"] == "completed"
+        assert count_cards(board, "succeeded") == 3
+        assert sleeps == [0.5, 0.5]
 
 
 def test_alchemy_lab_schema_matches_real_api_responses():
@@ -4356,6 +4360,11 @@ def test_v1_asset_uploads_are_bound_to_current_veyra_account(monkeypatch):
     settings.veyra_auth_enabled = True
     settings.veyra_internal_token = "bridge-secret"
     settings.veyra_session_secret = "session-secret"
+    async def fake_load_account(user_id: int):
+        role = "admin" if user_id == 99 else "user"
+        return type("Account", (), {"user_id": user_id, "role": role})()
+
+    monkeypatch.setattr(main_module, "load_account", fake_load_account)
     try:
         client = TestClient(app)
         owner_token = _issue_test_veyra_session_token(42)
