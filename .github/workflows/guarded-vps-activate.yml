@@ -821,7 +821,7 @@ jobs:
             -e MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS=false \
             --entrypoint python "$candidate_image" \
             /app/scripts/prepare_v1_history_index.py --storage-root /app/.media_storage --verify || fail_post active_v1_history_index_unready
-          runuser -u alchemy -- env V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
+          runuser -u alchemy -- env CODEX_AUTH_FILE=/dev/null V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
             V2_IMAGE_HISTORY_PATH="$v2_history_path" V2_TASK_QUEUE_DB_PATH="$v2_queue_db" \
             "$candidate_release/custom_media_agent_2_0/.venv/bin/python" \
             "$candidate_release/scripts/verify_v2_history_reads.py" \
