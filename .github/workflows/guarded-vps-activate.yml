@@ -165,6 +165,13 @@ jobs:
             printf '%s' "$value"
           }
 
+          verify_v3_runtime_storage_roots() {
+            local bootstrap_env_file="$1"
+            docker inspect "$v1_container" | python3 "$candidate_release/scripts/vps_cutover_guard.py" \
+              verify-v3-storage-roots --v1-media-root "$v1_media" \
+              --bootstrap-env-file "$bootstrap_env_file"
+          }
+
           require_v2() {
             local unit
             for unit in "${v2_units[@]}"; do
@@ -683,6 +690,8 @@ jobs:
           require_disk_floor "$v2_history_dir" || stop_pre v2_history_disk_floor_not_met
           mkdir -p "$maintenance_backup_root"
           require_disk_floor "$maintenance_backup_root" || stop_pre backup_disk_floor_not_met
+          verify_v3_runtime_storage_roots "$old_env" || stop_pre v3_storage_roots_unverified
+          verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || stop_pre candidate_v3_storage_roots_unverified
           before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
@@ -736,6 +745,8 @@ jobs:
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null || true)" != true ] || stop_pre v1_still_running
           systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && stop_pre maintenance_timer_restarted
           systemctl is-active --quiet alchemy-v3-storage-maintenance.service && stop_pre maintenance_service_restarted
+          verify_v3_runtime_storage_roots "$old_env" || stop_pre durable_v3_storage_roots_changed_while_fencing
+          verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || stop_pre candidate_v3_storage_roots_changed_while_fencing
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
             --v3-projects-root "$v1_media/v3_projects" || stop_pre durable_work_changed_while_fencing
@@ -757,6 +768,7 @@ jobs:
           remove_v1 || fail_post candidate_container_remove_failed
           candidate_services_started=1
           compose_for "$candidate_release" up -d --no-build alchemy-media-agent >/dev/null || fail_post candidate_container_start_failed
+          verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || fail_post candidate_v3_storage_roots_unverified
           systemctl start alchemy-v2-api.service >/dev/null || fail_post v2_api_start_failed
           systemctl is-active --quiet alchemy-v2-api.service || fail_post v2_api_not_active
           wait_for_200 http://127.0.0.1:8017/healthz || fail_post v1_health_failed

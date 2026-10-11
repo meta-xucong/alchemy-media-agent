@@ -11,7 +11,8 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import posixpath
 import shutil
 import sqlite3
 import stat
@@ -73,6 +74,163 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     )}
 
 
+def _read_v3_bootstrap_environment(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        raise CutoverBlocked("v3_bootstrap_environment_unreadable") from None
+    relevant = {
+        "ALCHEMY_V3_PROJECT_DIR", "ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT",
+        "MEDIA_AGENT_RUNTIME_ENV_FILE", "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    }
+    values: dict[str, str] = {}
+    for line in lines:
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.startswith("export "):
+            entry = entry[7:].lstrip()
+        key, separator, raw_value = entry.partition("=")
+        key = key.strip()
+        if key not in relevant:
+            tokens = key.split(None, 1)
+            if tokens and tokens[0] in relevant:
+                raise CutoverBlocked("v3_storage_environment_ambiguous")
+            continue
+        if not separator or key in values:
+            raise CutoverBlocked("v3_storage_environment_ambiguous")
+        value = raw_value.strip()
+        if value.startswith(("'", '"')):
+            quote = value[0]
+            closing = value.find(quote, 1)
+            trailing = value[closing + 1:].strip() if closing >= 0 else "invalid"
+            if closing < 0 or (trailing and not trailing.lstrip().startswith("#")):
+                raise CutoverBlocked("v3_storage_environment_ambiguous")
+            value = value[1:closing]
+        else:
+            value = value.split(" #", 1)[0].strip()
+        values[key] = value
+    return values
+
+
+def verify_v3_storage_roots(
+    container_inspect: object, v1_media_root: Path, bootstrap_env_file: Path | None = None,
+) -> dict:
+    """Verify V3's effective container roots map to the guarded host mount."""
+    if not isinstance(container_inspect, list) or len(container_inspect) != 1:
+        raise CutoverBlocked("v3_container_inspect_ambiguous")
+    container = container_inspect[0]
+    config = container.get("Config") if isinstance(container, dict) else None
+    mounts = container.get("Mounts") if isinstance(container, dict) else None
+    if not isinstance(config, dict) or not isinstance(mounts, list):
+        raise CutoverBlocked("v3_container_inspect_invalid")
+
+    workdir = config.get("WorkingDir") or "/"
+    if not isinstance(workdir, str) or not workdir.startswith("/"):
+        raise CutoverBlocked("v3_container_workdir_invalid")
+    env_items = config.get("Env")
+    if not isinstance(env_items, list):
+        raise CutoverBlocked("v3_storage_environment_ambiguous")
+    relevant = {
+        "ALCHEMY_V3_PROJECT_DIR", "ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT",
+        "MEDIA_AGENT_RUNTIME_ENV_FILE", "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    }
+    env: dict[str, str] = {}
+    for item in env_items:
+        if not isinstance(item, str) or "=" not in item:
+            raise CutoverBlocked("v3_storage_environment_ambiguous")
+        key, value = item.split("=", 1)
+        if key not in relevant:
+            continue
+        if key in env:
+            raise CutoverBlocked("v3_storage_environment_ambiguous")
+        env[key] = value
+    bootstrap_env = _read_v3_bootstrap_environment(bootstrap_env_file)
+    effective_env = {**bootstrap_env, **env}
+    runtime_pointers = (
+        "MEDIA_AGENT_RUNTIME_ENV_FILE", "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    )
+    if any(bootstrap_env.get(key) for key in runtime_pointers) or any(
+        effective_env.get(key) for key in runtime_pointers
+    ):
+        raise CutoverBlocked("v3_runtime_env_file_unsupported")
+
+    def resolved_container_path(value: str) -> str:
+        if not value:
+            raise CutoverBlocked("v3_storage_root_invalid")
+        path = PurePosixPath(value)
+        if not path.is_absolute():
+            path = PurePosixPath(workdir) / path
+        return posixpath.normpath(str(path))
+
+    project_value = effective_env.get("ALCHEMY_V3_PROJECT_DIR") or "/app/.media_storage/v3_projects"
+    job_base = effective_env.get("ALCHEMY_V3_JOB_DIR") or effective_env.get("MEDIA_STORAGE_ROOT") or "/app/.media_storage"
+    project_root = resolved_container_path(project_value)
+    jobs_root = resolved_container_path(str(PurePosixPath(job_base) / "v3_jobs"))
+    expected_project = "/app/.media_storage/v3_projects"
+    expected_jobs = "/app/.media_storage/v3_jobs"
+    for key, value in bootstrap_env.items():
+        if not value:
+            continue
+        if key == "ALCHEMY_V3_PROJECT_DIR" and resolved_container_path(value) != expected_project:
+            raise CutoverBlocked("v3_storage_root_mismatch")
+        if (
+            key in {"ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT"}
+            and resolved_container_path(value) != "/app/.media_storage"
+        ):
+            raise CutoverBlocked("v3_storage_root_mismatch")
+    if project_root != expected_project or jobs_root != expected_jobs:
+        raise CutoverBlocked("v3_storage_root_mismatch")
+
+    try:
+        expected_host_root = v1_media_root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise CutoverBlocked("v3_storage_mount_mismatch") from None
+    storage_mounts = [mount for mount in mounts if isinstance(mount, dict)
+                      and mount.get("Destination") == "/app/.media_storage"]
+    if len(storage_mounts) != 1:
+        raise CutoverBlocked("v3_storage_mount_mismatch")
+    storage_mount = storage_mounts[0]
+    source = storage_mount.get("Source")
+    if not isinstance(source, str) or not source:
+        raise CutoverBlocked("v3_storage_mount_mismatch")
+    try:
+        actual_host_root = Path(source).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise CutoverBlocked("v3_storage_mount_mismatch") from None
+    if actual_host_root != expected_host_root or storage_mount.get("RW") is not True:
+        raise CutoverBlocked("v3_storage_mount_mismatch")
+    for relative_root in ("v3_projects", "v3_jobs"):
+        try:
+            if not _within(expected_host_root / relative_root, [expected_host_root]):
+                raise CutoverBlocked("v3_storage_root_mismatch")
+        except (OSError, RuntimeError):
+            raise CutoverBlocked("v3_storage_root_mismatch") from None
+
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            raise CutoverBlocked("v3_storage_mount_mismatch")
+        destination = mount.get("Destination")
+        if not isinstance(destination, str) or not destination.startswith("/"):
+            raise CutoverBlocked("v3_storage_mount_mismatch")
+        normalized = posixpath.normpath(destination)
+        for record_root in (expected_project, expected_jobs):
+            if normalized == record_root or normalized.startswith(record_root + "/"):
+                raise CutoverBlocked("v3_storage_mount_shadowing")
+
+    return {
+        "status": "verified",
+        "v3_projects_root": project_root,
+        "v3_jobs_root": jobs_root,
+        "v1_media_mount": str(actual_host_root),
+    }
+
+
 def inspect_active_work(v1_database: Path, v2_queue_database: Path, v3_projects: Path) -> dict:
     counts = {"v1_active_jobs": 0, "v3_active_jobs": 0, "v3_planning_operations": 0,
               "v2_queued_or_running_tasks": 0, "v2_unexpired_generation_leases": 0,
@@ -132,7 +290,16 @@ def inspect_active_work(v1_database: Path, v2_queue_database: Path, v3_projects:
         root = v3_projects.parent / directory_name
         if not root.exists():
             continue
-        for path in root.rglob("*.json"):
+        # These are the V3 stores' authoritative record paths. Project
+        # directories also contain timeline.json and timeline backup arrays;
+        # interpreting every JSON below v3_projects as a ProjectRecord makes
+        # valid auxiliary history block a cutover. Keep malformed canonical
+        # project/job records fail-closed while ignoring non-record sidecars.
+        record_paths = (
+            root.glob("project_*/project.json") if kind == "project"
+            else root.glob("job_*.json")
+        )
+        for path in record_paths:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -707,6 +874,9 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--v1-database", required=True, type=Path)
     inspect.add_argument("--v2-queue-database", required=True, type=Path)
     inspect.add_argument("--v3-projects-root", required=True, type=Path)
+    verify_v3_roots = subparsers.add_parser("verify-v3-storage-roots")
+    verify_v3_roots.add_argument("--v1-media-root", required=True, type=Path)
+    verify_v3_roots.add_argument("--bootstrap-env-file", required=True, type=Path)
     roots = subparsers.add_parser("verify-v2-storage-roots")
     roots.add_argument("--environment-file", required=True, type=Path)
     roots.add_argument("--data-dir", required=True)
@@ -748,6 +918,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "inspect-active-work":
             result = inspect_active_work(args.v1_database, args.v2_queue_database, args.v3_projects_root)
+        elif args.command == "verify-v3-storage-roots":
+            try:
+                container_inspect = json.load(sys.stdin)
+            except (OSError, json.JSONDecodeError):
+                raise CutoverBlocked("v3_container_inspect_invalid") from None
+            result = verify_v3_storage_roots(
+                container_inspect, args.v1_media_root, args.bootstrap_env_file
+            )
         elif args.command == "verify-v2-storage-roots":
             expected_roots = {
                 "V2_DATA_DIR": args.data_dir,

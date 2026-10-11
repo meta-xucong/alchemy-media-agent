@@ -97,7 +97,7 @@ def test_inspect_active_work_fails_closed_on_malformed_or_unknown_lab_state(tmp_
 def test_inspect_active_work_blocks_v3_jobs_in_nonterminal_states(tmp_path, status):
     v1, v2, projects = _databases(tmp_path)
     jobs = tmp_path / "v1" / "v3_jobs"
-    (jobs / "job.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+    (jobs / "job_1.json").write_text(json.dumps({"status": status}), encoding="utf-8")
 
     result = _MODULE.inspect_active_work(v1, v2, projects)
 
@@ -108,13 +108,14 @@ def test_inspect_active_work_blocks_v3_jobs_in_nonterminal_states(tmp_path, stat
 def test_inspect_active_work_fails_closed_on_unknown_v3_job_and_planning_states(tmp_path):
     v1, v2, projects = _databases(tmp_path)
     jobs = tmp_path / "v1" / "v3_jobs"
-    job = jobs / "job.json"
+    job = jobs / "job_1.json"
     job.write_text(json.dumps({"status": "unrecognized"}), encoding="utf-8")
     with pytest.raises(_MODULE.CutoverBlocked, match="unknown"):
         _MODULE.inspect_active_work(v1, v2, projects)
 
     job.unlink()
-    project = projects / "project.json"
+    project = projects / "project_1" / "project.json"
+    project.parent.mkdir()
     project.write_text(json.dumps({"metadata": {"doc277_planning_current_operation": {"state": "mystery"}}}), encoding="utf-8")
     with pytest.raises(_MODULE.CutoverBlocked, match="planning_state_unknown"):
         _MODULE.inspect_active_work(v1, v2, projects)
@@ -122,13 +123,237 @@ def test_inspect_active_work_fails_closed_on_unknown_v3_job_and_planning_states(
 
 def test_inspect_active_work_blocks_pending_v3_planning_operation(tmp_path):
     v1, v2, projects = _databases(tmp_path)
-    project = projects / "project.json"
+    project = projects / "project_1" / "project.json"
+    project.parent.mkdir()
     project.write_text(json.dumps({"metadata": {"doc277_planning_current_operation": {"state": "planning"}}}), encoding="utf-8")
 
     result = _MODULE.inspect_active_work(v1, v2, projects)
 
     assert result["status"] == "blocked"
     assert result["counts"]["v3_planning_operations"] == 1
+
+
+def test_inspect_active_work_ignores_project_timeline_json_arrays(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    project_dir = projects / "project_1"
+    project_dir.mkdir()
+    (project_dir / "project.json").write_text(json.dumps({"metadata": {}}), encoding="utf-8")
+    (project_dir / "timeline.json").write_text(json.dumps([]), encoding="utf-8")
+    (project_dir / "timeline.before.json").write_text(json.dumps([]), encoding="utf-8")
+
+    result = _MODULE.inspect_active_work(v1, v2, projects)
+
+    assert result["status"] == "idle"
+    assert result["counts"]["v3_planning_operations"] == 0
+
+
+def test_inspect_active_work_fails_closed_on_unreadable_authoritative_v3_project(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    project = projects / "project_1" / "project.json"
+    project.parent.mkdir()
+    project.write_text("{", encoding="utf-8")
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_state_unreadable"):
+        _MODULE.inspect_active_work(v1, v2, projects)
+
+
+def test_inspect_active_work_does_not_skip_real_project_jobs_beside_timeline(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    project_dir = projects / "project_1"
+    project_dir.mkdir()
+    (project_dir / "project.json").write_text(json.dumps({"metadata": {}}), encoding="utf-8")
+    (project_dir / "timeline.json").write_text(json.dumps([{}]), encoding="utf-8")
+    job_dir = tmp_path / "v1" / "v3_jobs"
+    (job_dir / "job_1.json").write_text(json.dumps({"status": "generating"}), encoding="utf-8")
+
+    result = _MODULE.inspect_active_work(v1, v2, projects)
+
+    assert result["status"] == "blocked"
+    assert result["counts"]["v3_active_jobs"] == 1
+
+
+def _v3_container_inspect(tmp_path, *, env=None, workdir="/app", storage_mount=None, nested_mounts=()):
+    media_root = tmp_path / "media_storage"
+    media_root.mkdir(exist_ok=True)
+    mounts = [{
+        "Destination": "/app/.media_storage",
+        "Source": str(storage_mount or media_root),
+        "RW": True,
+    }]
+    mounts.extend(nested_mounts)
+    environment = [f"{key}={value}" for key, value in (env or {}).items()]
+    return [{
+        "Config": {"Env": environment, "WorkingDir": workdir},
+        "Mounts": mounts,
+    }], media_root
+
+
+def test_v3_storage_root_verifier_accepts_actual_default_container_layout(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, env={"MEDIA_STORAGE_ROOT": ".media_storage"}
+    )
+
+    result = _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+    assert result["status"] == "verified"
+    assert result["v3_projects_root"] == "/app/.media_storage/v3_projects"
+    assert result["v3_jobs_root"] == "/app/.media_storage/v3_jobs"
+
+
+def test_v3_storage_root_verifier_accepts_equivalent_explicit_overrides(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path,
+        env={
+            "ALCHEMY_V3_PROJECT_DIR": ".media_storage/v3_projects",
+            "ALCHEMY_V3_JOB_DIR": ".media_storage",
+        },
+    )
+
+    result = _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+    assert result["status"] == "verified"
+
+
+def test_v3_storage_root_verifier_accepts_canonical_bootstrap_env_path(tmp_path):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    env_file = tmp_path / "bootstrap.env"
+    env_file.write_text("MEDIA_STORAGE_ROOT=.media_storage\n", encoding="utf-8")
+
+    result = _MODULE.verify_v3_storage_roots(inspect, media_root, env_file)
+
+    assert result["status"] == "verified"
+
+
+@pytest.mark.parametrize(
+    "pointer",
+    [
+        "MEDIA_AGENT_RUNTIME_ENV_FILE",
+        "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    ],
+)
+def test_v3_storage_root_verifier_fails_closed_on_runtime_env_file_pointer(tmp_path, pointer):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    env_file = tmp_path / "bootstrap.env"
+    env_file.write_text(f"{pointer}=/etc/alchemy/runtime.env\n", encoding="utf-8")
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_runtime_env_file_unsupported"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root, env_file)
+
+
+@pytest.mark.parametrize(
+    "pointer",
+    [
+        "MEDIA_AGENT_RUNTIME_ENV_FILE",
+        "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    ],
+)
+def test_v3_storage_root_verifier_fails_closed_on_container_runtime_env_file_pointer(tmp_path, pointer):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, env={pointer: "/etc/alchemy/runtime.env"}
+    )
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_runtime_env_file_unsupported"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_bootstrap_env_path_override(tmp_path):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    env_file = tmp_path / "bootstrap.env"
+    env_file.write_text("ALCHEMY_V3_PROJECT_DIR=/srv/v3/projects\n", encoding="utf-8")
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_root_mismatch"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root, env_file)
+
+
+def test_v3_storage_root_verifier_does_not_hide_bootstrap_path_override_behind_container_env(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, env={"MEDIA_STORAGE_ROOT": ".media_storage"}
+    )
+    env_file = tmp_path / "bootstrap.env"
+    env_file.write_text("MEDIA_STORAGE_ROOT=/srv/media\n", encoding="utf-8")
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_root_mismatch"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root, env_file)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_duplicate_bootstrap_path(tmp_path):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    env_file = tmp_path / "bootstrap.env"
+    env_file.write_text("MEDIA_STORAGE_ROOT=.media_storage\nMEDIA_STORAGE_ROOT=/srv/media\n", encoding="utf-8")
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_environment_ambiguous"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root, env_file)
+
+
+@pytest.mark.parametrize("env", [
+    {"ALCHEMY_V3_PROJECT_DIR": "/srv/v3/projects"},
+    {"ALCHEMY_V3_JOB_DIR": "/srv/v3/jobs"},
+    {"MEDIA_STORAGE_ROOT": "/srv/media"},
+])
+def test_v3_storage_root_verifier_fails_closed_on_runtime_override_outside_mount(tmp_path, env):
+    inspect, media_root = _v3_container_inspect(tmp_path, env=env)
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_root_mismatch"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_when_expected_bind_mount_differs(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, storage_mount=tmp_path / "other-media"
+    )
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_mount_mismatch"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_duplicate_path_environment(tmp_path):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    inspect[0]["Config"]["Env"] = ["MEDIA_STORAGE_ROOT=.media_storage", "MEDIA_STORAGE_ROOT=/srv/media"]
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_environment_ambiguous"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_malformed_environment_entry(tmp_path):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    inspect[0]["Config"]["Env"] = ["MEDIA_STORAGE_ROOT"]
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_environment_ambiguous"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_nested_mount_shadowing(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path,
+        nested_mounts=[{
+            "Destination": "/app/.media_storage/v3_jobs",
+            "Source": str(tmp_path / "other-jobs"),
+            "RW": True,
+        }],
+    )
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_mount_shadowing"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_cli_reads_inspect_json_without_echoing_environment(tmp_path, monkeypatch, capsys):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, env={"MEDIA_STORAGE_ROOT": ".media_storage", "UNRELATED_SECRET": "hidden"}
+    )
+    bootstrap_env = tmp_path / "bootstrap.env"
+    bootstrap_env.write_text("# only relevant path values are reported\n", encoding="utf-8")
+    monkeypatch.setattr(_MODULE.sys, "stdin", __import__("io").StringIO(json.dumps(inspect)))
+
+    assert _MODULE.main([
+        "verify-v3-storage-roots", "--v1-media-root", str(media_root),
+        "--bootstrap-env-file", str(bootstrap_env),
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert '"status":"verified"' in output
+    assert "hidden" not in output
 
 
 def test_backup_and_restore_preserve_database_and_source_epoch(tmp_path):

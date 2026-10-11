@@ -450,3 +450,66 @@ This exercises the helper and rollback branches, but it is not a complete
 activation workflow or real systemd/Nginx/Docker integration rehearsal. It does
 not validate disk-full behavior, SSH interruption, service-account UID mapping
 on the VPS, or public health checks. Those remain mandatory live-cutover gates.
+
+### Live-cutover inventory correction (2026-10-11)
+
+The first guarded activation attempt against merged SHA `46749ae9` stopped before
+maintenance, service shutdown, or backup with `v3_state_unreadable`. The V3
+JSON files were valid. Read-only inventory found 41 JSON arrays under
+`v3_projects`: 40 `timeline.json` files and one `timeline.before.json` backup.
+The production `v3_jobs` records were JSON objects. The failed attempt left the
+active release and public service unchanged; the active release remained
+`5a33c05e`, all three V2 units and Nginx stayed active, and public V2 health
+returned 200.
+
+The mismatch was in the cutover inventory layer: it recursively interpreted
+every JSON sidecar below `v3_projects` as a `ProjectRecord`. The product store
+defines the authoritative paths as `project_*/project.json` for projects and
+`job_*.json` for V3 jobs. Timeline files are supporting history and do not own
+the current active-work state. The guard now inspects only those canonical
+record paths; malformed or unknown states in a canonical record still block
+cutover. Regression tests cover valid timeline arrays beside a project, a
+pending planning operation in the canonical project record, malformed
+canonical project JSON, and an active canonical V3 job.
+
+Focused local validation on the correction worktree: deployment guard,
+activation contract, and release runtime tests: 59 passed, 5 POSIX-only skips
+on Windows. This correction has not yet been merged or deployed. The previous
+activation attempt was safely stopped; no production data or services were
+changed by it.
+
+### Runtime V3 storage-root verification (2026-10-11)
+
+An independent review noted that V3 supports project/job storage overrides,
+while the cutover inventory initially assumed both roots were siblings below
+the mounted media directory. A read-only inspection of the active VPS container
+confirmed `WorkingDir=/app`, no `ALCHEMY_V3_PROJECT_DIR` or
+`ALCHEMY_V3_JOB_DIR`, `MEDIA_STORAGE_ROOT=.media_storage`, and the bind mount
+`/var/lib/alchemy/v1/media_storage -> /app/.media_storage`. The source code
+resolves those effective roots to `/app/.media_storage/v3_projects` and
+`/app/.media_storage/v3_jobs`, matching the host directories inspected by the
+guard.
+
+The activation workflow now verifies Docker inspect configuration plus the
+bootstrap `.env` for both the active container and the candidate release. The
+guard fails closed if the effective project/job roots differ from the canonical
+mounted directories, if the media bind mount differs from the expected host
+root, if duplicate/malformed path settings make configuration ambiguous, or if
+a nested mount would shadow either state root. Nonempty runtime-env file
+pointers are rejected for cutover because their contents could add path
+overrides outside Docker `Config.Env`. The candidate configuration is checked
+before maintenance and again after the V3 container starts, before health
+admission. Inspect JSON is consumed from stdin and only sanitized paths/status
+are emitted, never the complete container environment or env-file contents.
+The active configuration is rechecked after the V3 container is stopped and
+before backup, closing the environment-to-fence window.
+
+The VPS is still on the pre-cutover release; this is a guard correction, not a
+deployment receipt. The earlier activation stopped before maintenance and
+changed no production state. The revised workflow must pass CI, independent
+review, and a new guarded cutover before deployment can be claimed.
+
+Local validation on the runtime-env follow-up commit: the deployment guard,
+activation contract, and release runtime tests report 75 passed and 5
+POSIX-only skips on Windows; `py_compile` and `git diff --check` pass. GitHub
+Actions and the second independent review are pending for the frozen commit.
