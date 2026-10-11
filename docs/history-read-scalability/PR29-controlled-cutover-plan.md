@@ -404,3 +404,27 @@ This remains code/test evidence only; no VPS or production cutover was run.
 - No VPS action, merge, or deployment was performed. Linux probes used isolated
   temporary databases and do not substitute for service-account cutover
   rehearsal.
+
+### WAL permission-test fixture correction
+
+An independent review of `df1b96a4` found that the WAL journal-directory test
+used the SQLite connection context manager, which commits/rolls back but does
+not close the connection. That left writable sidecar handles alive while the
+directory was changed to `0555`, so the negative test did not prove the
+no-sidecar denial case.
+
+The fixture now explicitly closes the database before changing permissions and,
+for WAL mode, asserts that `-wal` and `-shm` are absent. A separate POSIX control
+case intentionally keeps a connection open to retain writable sidecars, then
+proves the probe and a real insert/commit work with the directory non-writable.
+This distinguishes the two SQLite-supported conditions. No production code was
+changed for this finding.
+
+Focused deployment guard, activation contract, and runtime tests on the updated
+fixture: 56 passed, 5 skipped on Windows (the five POSIX permission cases).
+Linux uid-1000 probes cover missing versus existing WAL sidecars, main database
+mode `0444`, and unwritable DELETE/WAL journal directories. A broader related
+V1/Lab/deployment run before this test-only correction was 304 passed, 4 skipped;
+it was not repeated after the fixture-only change. An independent read-only
+review of the corrected fixture remains required before the isolated cutover
+drill. No VPS operation was performed.

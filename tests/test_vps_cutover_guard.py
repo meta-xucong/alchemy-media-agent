@@ -455,15 +455,49 @@ def test_v2_write_access_probe_rejects_unwritable_journal_directory(tmp_path, jo
     root = tmp_path / "v2"
     root.mkdir()
     database = root / "queue.sqlite3"
-    with sqlite3.connect(database) as connection:
+    connection = sqlite3.connect(database)
+    try:
         assert connection.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0].upper() == journal_mode
         connection.execute("CREATE TABLE tasks(value TEXT)")
+        connection.commit()
+    finally:
+        connection.close()
+    if journal_mode == "WAL":
+        assert not Path(f"{database}-wal").exists()
+        assert not Path(f"{database}-shm").exists()
     root.chmod(0o555)
     try:
         with pytest.raises(_MODULE.CutoverBlocked, match="write_probe_database_unwritable"):
             _MODULE.verify_v2_write_access([], [database], [])
     finally:
         root.chmod(0o700)
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="requires POSIX permission enforcement by an unprivileged user")
+def test_v2_write_access_probe_allows_existing_writable_wal_sidecars(tmp_path):
+    root = tmp_path / "v2"
+    root.mkdir()
+    database = root / "queue.sqlite3"
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].upper() == "WAL"
+        connection.execute("CREATE TABLE tasks(value TEXT)")
+        connection.commit()
+        wal = Path(f"{database}-wal")
+        shm = Path(f"{database}-shm")
+        assert wal.is_file() and shm.is_file()
+
+        root.chmod(0o555)
+        result = _MODULE.verify_v2_write_access([], [database], [])
+        connection.execute("INSERT INTO tasks VALUES ('control')")
+        connection.commit()
+        assert result["status"] == "verified"
+    finally:
+        root.chmod(0o700)
+        connection.close()
+    with sqlite3.connect(database) as reopened:
+        assert reopened.execute("SELECT value FROM tasks").fetchall() == [("control",)]
 
 
 def test_v2_write_access_probe_rejects_missing_sqlite_file(tmp_path):
