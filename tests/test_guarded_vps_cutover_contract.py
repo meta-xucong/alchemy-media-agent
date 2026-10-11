@@ -63,6 +63,21 @@ def test_activation_orders_fence_backup_prepare_verify_and_admission() -> None:
     assert "api_runtime_drop_in=\"/etc/systemd/system/alchemy-v2-api.service.d/90-alchemy-worker-ownership.conf\"" in workflow
     assert "verify-v2-storage-roots" in workflow
     assert "verify-v2-storage-unit-roots" in workflow
+    assert workflow.count("verify_v3_runtime_storage_roots || stop_pre") == 2
+    assert "docker inspect \"$v1_container\" | python3 \"$candidate_release/scripts/vps_cutover_guard.py\"" in workflow
+    assert "verify-v3-storage-roots --v1-media-root \"$v1_media\"" in workflow
+    v3_root_checks = [
+        index for index in range(len(workflow))
+        if workflow.startswith("verify_v3_runtime_storage_roots || stop_pre", index)
+    ]
+    assert len(v3_root_checks) == 2
+    first_v3_scan = workflow.index('python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work')
+    second_v3_scan = workflow.index(
+        'python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work', first_v3_scan + 1
+    )
+    docker_stop = workflow.rindex("docker stop --time 45", 0, second_v3_scan)
+    assert v3_root_checks[0] < first_v3_scan
+    assert docker_stop < v3_root_checks[1] < second_v3_scan
     assert workflow.index("verify_v2_unit_contract || stop_pre candidate_v2_unit_contract_invalid") < workflow.index(
         "verify_v2_runtime_unit_roots || stop_pre candidate_v2_unit_storage_roots_unverified"
     ) < workflow.index("candidate_services_started=1")

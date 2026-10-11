@@ -172,6 +172,112 @@ def test_inspect_active_work_does_not_skip_real_project_jobs_beside_timeline(tmp
     assert result["counts"]["v3_active_jobs"] == 1
 
 
+def _v3_container_inspect(tmp_path, *, env=None, workdir="/app", storage_mount=None, nested_mounts=()):
+    media_root = tmp_path / "media_storage"
+    media_root.mkdir(exist_ok=True)
+    mounts = [{
+        "Destination": "/app/.media_storage",
+        "Source": str(storage_mount or media_root),
+        "RW": True,
+    }]
+    mounts.extend(nested_mounts)
+    environment = [f"{key}={value}" for key, value in (env or {}).items()]
+    return [{
+        "Config": {"Env": environment, "WorkingDir": workdir},
+        "Mounts": mounts,
+    }], media_root
+
+
+def test_v3_storage_root_verifier_accepts_actual_default_container_layout(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, env={"MEDIA_STORAGE_ROOT": ".media_storage"}
+    )
+
+    result = _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+    assert result["status"] == "verified"
+    assert result["v3_projects_root"] == "/app/.media_storage/v3_projects"
+    assert result["v3_jobs_root"] == "/app/.media_storage/v3_jobs"
+
+
+def test_v3_storage_root_verifier_accepts_equivalent_explicit_overrides(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path,
+        env={
+            "ALCHEMY_V3_PROJECT_DIR": ".media_storage/v3_projects",
+            "ALCHEMY_V3_JOB_DIR": ".media_storage",
+        },
+    )
+
+    result = _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+    assert result["status"] == "verified"
+
+
+@pytest.mark.parametrize("env", [
+    {"ALCHEMY_V3_PROJECT_DIR": "/srv/v3/projects"},
+    {"ALCHEMY_V3_JOB_DIR": "/srv/v3/jobs"},
+    {"MEDIA_STORAGE_ROOT": "/srv/media"},
+])
+def test_v3_storage_root_verifier_fails_closed_on_runtime_override_outside_mount(tmp_path, env):
+    inspect, media_root = _v3_container_inspect(tmp_path, env=env)
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_root_mismatch"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_when_expected_bind_mount_differs(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, storage_mount=tmp_path / "other-media"
+    )
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_mount_mismatch"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_duplicate_path_environment(tmp_path):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    inspect[0]["Config"]["Env"] = ["MEDIA_STORAGE_ROOT=.media_storage", "MEDIA_STORAGE_ROOT=/srv/media"]
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_environment_ambiguous"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_malformed_environment_entry(tmp_path):
+    inspect, media_root = _v3_container_inspect(tmp_path)
+    inspect[0]["Config"]["Env"] = ["MEDIA_STORAGE_ROOT"]
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_environment_ambiguous"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_fails_closed_on_nested_mount_shadowing(tmp_path):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path,
+        nested_mounts=[{
+            "Destination": "/app/.media_storage/v3_jobs",
+            "Source": str(tmp_path / "other-jobs"),
+            "RW": True,
+        }],
+    )
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_storage_mount_shadowing"):
+        _MODULE.verify_v3_storage_roots(inspect, media_root)
+
+
+def test_v3_storage_root_verifier_cli_reads_inspect_json_without_echoing_environment(tmp_path, monkeypatch, capsys):
+    inspect, media_root = _v3_container_inspect(
+        tmp_path, env={"MEDIA_STORAGE_ROOT": ".media_storage", "UNRELATED_SECRET": "hidden"}
+    )
+    monkeypatch.setattr(_MODULE.sys, "stdin", __import__("io").StringIO(json.dumps(inspect)))
+
+    assert _MODULE.main(["verify-v3-storage-roots", "--v1-media-root", str(media_root)]) == 0
+
+    output = capsys.readouterr().out
+    assert '"status":"verified"' in output
+    assert "hidden" not in output
+
+
 def test_backup_and_restore_preserve_database_and_source_epoch(tmp_path):
     v1, v2, _projects = _databases(tmp_path)
     source = tmp_path / "v1" / "history.jsonl"

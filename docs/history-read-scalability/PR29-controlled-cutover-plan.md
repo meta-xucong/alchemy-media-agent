@@ -477,3 +477,30 @@ activation contract, and release runtime tests: 59 passed, 5 POSIX-only skips
 on Windows. This correction has not yet been merged or deployed. The previous
 activation attempt was safely stopped; no production data or services were
 changed by it.
+
+### Runtime V3 storage-root verification (2026-10-11)
+
+An independent review noted that V3 supports project/job storage overrides,
+while the cutover inventory initially assumed both roots were siblings below
+the mounted media directory. A read-only inspection of the active VPS container
+confirmed `WorkingDir=/app`, no `ALCHEMY_V3_PROJECT_DIR` or
+`ALCHEMY_V3_JOB_DIR`, `MEDIA_STORAGE_ROOT=.media_storage`, and the bind mount
+`/var/lib/alchemy/v1/media_storage -> /app/.media_storage`. The source code
+resolves those effective roots to `/app/.media_storage/v3_projects` and
+`/app/.media_storage/v3_jobs`, matching the host directories inspected by the
+guard.
+
+The activation workflow now verifies the running container's Docker inspect
+configuration before both active-work scans. The guard fails closed if the
+effective project/job roots differ from the canonical mounted directories, if
+the media bind mount differs from the expected host root, if duplicate path
+environment entries make configuration ambiguous, or if a nested mount would
+shadow either state root. It consumes inspect JSON from stdin and only emits
+the verified paths/status, not the full container environment. The second
+verification occurs after the V3 container is stopped and before backup,
+closing the environment-to-fence window.
+
+The VPS is still on the pre-cutover release; this is a guard correction, not a
+deployment receipt. The earlier activation stopped before maintenance and
+changed no production state. The revised workflow must pass CI, independent
+review, and a new guarded cutover before deployment can be claimed.
