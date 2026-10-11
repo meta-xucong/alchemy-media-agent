@@ -425,6 +425,28 @@ fixture: 56 passed, 5 skipped on Windows (the five POSIX permission cases).
 Linux uid-1000 probes cover missing versus existing WAL sidecars, main database
 mode `0444`, and unwritable DELETE/WAL journal directories. A broader related
 V1/Lab/deployment run before this test-only correction was 304 passed, 4 skipped;
-it was not repeated after the fixture-only change. An independent read-only
-review of the corrected fixture remains required before the isolated cutover
-drill. No VPS operation was performed.
+it was not repeated after the fixture-only change. Independent review of the
+corrected fixture passed, and a component-level isolated rehearsal was
+completed as recorded below. No VPS operation was performed.
+
+#### Isolated cutover component rehearsal
+
+After the fixture correction, a disposable Linux container was used for a
+component-level cutover rehearsal; all paths and files were temporary and all
+service/network commands were stubbed:
+
+- As an unprivileged Linux UID, the actual backup/restore helpers preserved
+  SQLite and JSONL contents, original uid/gid and `0660`/`0640` modes, private
+  backup directory/file modes (`0700`/`0600`), and post-restore SQLite writes.
+- The actual inactive-timer restoration block was executed with fake
+  `systemctl` state: a timer and oneshot service that had become active were
+  stopped and verified inactive before the simulated public reopen. A stop
+  failure took the keep-closed path and never emitted the public-reopen marker.
+- The actual post-start failure branch was executed with a stubbed verified
+  closure. It entered forward recovery and did not call the pre-start snapshot
+  restore path.
+
+This exercises the helper and rollback branches, but it is not a complete
+activation workflow or real systemd/Nginx/Docker integration rehearsal. It does
+not validate disk-full behavior, SSH interruption, service-account UID mapping
+on the VPS, or public health checks. Those remain mandatory live-cutover gates.
