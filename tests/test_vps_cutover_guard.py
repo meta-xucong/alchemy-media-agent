@@ -97,7 +97,7 @@ def test_inspect_active_work_fails_closed_on_malformed_or_unknown_lab_state(tmp_
 def test_inspect_active_work_blocks_v3_jobs_in_nonterminal_states(tmp_path, status):
     v1, v2, projects = _databases(tmp_path)
     jobs = tmp_path / "v1" / "v3_jobs"
-    (jobs / "job.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+    (jobs / "job_1.json").write_text(json.dumps({"status": status}), encoding="utf-8")
 
     result = _MODULE.inspect_active_work(v1, v2, projects)
 
@@ -108,13 +108,14 @@ def test_inspect_active_work_blocks_v3_jobs_in_nonterminal_states(tmp_path, stat
 def test_inspect_active_work_fails_closed_on_unknown_v3_job_and_planning_states(tmp_path):
     v1, v2, projects = _databases(tmp_path)
     jobs = tmp_path / "v1" / "v3_jobs"
-    job = jobs / "job.json"
+    job = jobs / "job_1.json"
     job.write_text(json.dumps({"status": "unrecognized"}), encoding="utf-8")
     with pytest.raises(_MODULE.CutoverBlocked, match="unknown"):
         _MODULE.inspect_active_work(v1, v2, projects)
 
     job.unlink()
-    project = projects / "project.json"
+    project = projects / "project_1" / "project.json"
+    project.parent.mkdir()
     project.write_text(json.dumps({"metadata": {"doc277_planning_current_operation": {"state": "mystery"}}}), encoding="utf-8")
     with pytest.raises(_MODULE.CutoverBlocked, match="planning_state_unknown"):
         _MODULE.inspect_active_work(v1, v2, projects)
@@ -122,13 +123,53 @@ def test_inspect_active_work_fails_closed_on_unknown_v3_job_and_planning_states(
 
 def test_inspect_active_work_blocks_pending_v3_planning_operation(tmp_path):
     v1, v2, projects = _databases(tmp_path)
-    project = projects / "project.json"
+    project = projects / "project_1" / "project.json"
+    project.parent.mkdir()
     project.write_text(json.dumps({"metadata": {"doc277_planning_current_operation": {"state": "planning"}}}), encoding="utf-8")
 
     result = _MODULE.inspect_active_work(v1, v2, projects)
 
     assert result["status"] == "blocked"
     assert result["counts"]["v3_planning_operations"] == 1
+
+
+def test_inspect_active_work_ignores_project_timeline_json_arrays(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    project_dir = projects / "project_1"
+    project_dir.mkdir()
+    (project_dir / "project.json").write_text(json.dumps({"metadata": {}}), encoding="utf-8")
+    (project_dir / "timeline.json").write_text(json.dumps([]), encoding="utf-8")
+    (project_dir / "timeline.before.json").write_text(json.dumps([]), encoding="utf-8")
+
+    result = _MODULE.inspect_active_work(v1, v2, projects)
+
+    assert result["status"] == "idle"
+    assert result["counts"]["v3_planning_operations"] == 0
+
+
+def test_inspect_active_work_fails_closed_on_unreadable_authoritative_v3_project(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    project = projects / "project_1" / "project.json"
+    project.parent.mkdir()
+    project.write_text("{", encoding="utf-8")
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_state_unreadable"):
+        _MODULE.inspect_active_work(v1, v2, projects)
+
+
+def test_inspect_active_work_does_not_skip_real_project_jobs_beside_timeline(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    project_dir = projects / "project_1"
+    project_dir.mkdir()
+    (project_dir / "project.json").write_text(json.dumps({"metadata": {}}), encoding="utf-8")
+    (project_dir / "timeline.json").write_text(json.dumps([{}]), encoding="utf-8")
+    job_dir = tmp_path / "v1" / "v3_jobs"
+    (job_dir / "job_1.json").write_text(json.dumps({"status": "generating"}), encoding="utf-8")
+
+    result = _MODULE.inspect_active_work(v1, v2, projects)
+
+    assert result["status"] == "blocked"
+    assert result["counts"]["v3_active_jobs"] == 1
 
 
 def test_backup_and_restore_preserve_database_and_source_epoch(tmp_path):

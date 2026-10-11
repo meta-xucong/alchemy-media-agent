@@ -450,3 +450,30 @@ This exercises the helper and rollback branches, but it is not a complete
 activation workflow or real systemd/Nginx/Docker integration rehearsal. It does
 not validate disk-full behavior, SSH interruption, service-account UID mapping
 on the VPS, or public health checks. Those remain mandatory live-cutover gates.
+
+### Live-cutover inventory correction (2026-10-11)
+
+The first guarded activation attempt against merged SHA `46749ae9` stopped before
+maintenance, service shutdown, or backup with `v3_state_unreadable`. The V3
+JSON files were valid. Read-only inventory found 41 JSON arrays under
+`v3_projects`: 40 `timeline.json` files and one `timeline.before.json` backup.
+The production `v3_jobs` records were JSON objects. The failed attempt left the
+active release and public service unchanged; the active release remained
+`5a33c05e`, all three V2 units and Nginx stayed active, and public V2 health
+returned 200.
+
+The mismatch was in the cutover inventory layer: it recursively interpreted
+every JSON sidecar below `v3_projects` as a `ProjectRecord`. The product store
+defines the authoritative paths as `project_*/project.json` for projects and
+`job_*.json` for V3 jobs. Timeline files are supporting history and do not own
+the current active-work state. The guard now inspects only those canonical
+record paths; malformed or unknown states in a canonical record still block
+cutover. Regression tests cover valid timeline arrays beside a project, a
+pending planning operation in the canonical project record, malformed
+canonical project JSON, and an active canonical V3 job.
+
+Focused local validation on the correction worktree: deployment guard,
+activation contract, and release runtime tests: 59 passed, 5 POSIX-only skips
+on Windows. This correction has not yet been merged or deployed. The previous
+activation attempt was safely stopped; no production data or services were
+changed by it.

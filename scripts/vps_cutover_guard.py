@@ -132,7 +132,16 @@ def inspect_active_work(v1_database: Path, v2_queue_database: Path, v3_projects:
         root = v3_projects.parent / directory_name
         if not root.exists():
             continue
-        for path in root.rglob("*.json"):
+        # These are the V3 stores' authoritative record paths. Project
+        # directories also contain timeline.json and timeline backup arrays;
+        # interpreting every JSON below v3_projects as a ProjectRecord makes
+        # valid auxiliary history block a cutover. Keep malformed canonical
+        # project/job records fail-closed while ignoring non-record sidecars.
+        record_paths = (
+            root.glob("project_*/project.json") if kind == "project"
+            else root.glob("job_*.json")
+        )
+        for path in record_paths:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
