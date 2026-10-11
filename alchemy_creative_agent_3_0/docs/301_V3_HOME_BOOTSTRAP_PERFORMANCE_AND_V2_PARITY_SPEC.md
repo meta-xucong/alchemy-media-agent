@@ -59,11 +59,34 @@ adopt the same critical-path shape while keeping its own V3 contracts.
 - `src_skeleton/app/main.py`
 - `alchemy_creative_agent_3_0/app/product_api/route_handlers.py`
 - `alchemy_creative_agent_3_0/app/project_mode/service.py`
+- `alchemy_creative_agent_3_0/app/project_mode/store.py` (narrow exception:
+  memory-bounded catalog/header reads, weak-reference object caching, and a
+  streaming maintenance iterator; no persistence or retention changes)
+- `alchemy_creative_agent_3_0/app/product_api/service.py` (narrow exception:
+  weak-reference cache for durable job records; no job state or disk format
+  changes)
 - `alchemy_creative_agent_3_0/app/product_api/outputs.py`
 - focused V3 regression tests and this document
 
 No V2 implementation is changed. No generated media, cache, log, or evidence
 artifact is committed.
+
+### 3.3 Memory-pressure correction boundary
+
+The VPS incident showed that catalog/detail reads could materialize many large
+project and job JSON records together, while process-local caches kept old
+mutable records alive. The bounded correction may change how records are read
+and retained in memory, but not which records exist or what they mean:
+
+- Project catalog pages extract only ordering and visibility headers, then
+  load full records for the selected page. The full record is rechecked for
+  current visibility before it is returned.
+- Project output request snapshots retain only fields read by the existing
+  delivery, review, and ownership predicates.
+- Maintenance recovery may iterate projects one at a time. Compatibility
+  methods that return a complete catalog continue to return every project.
+- Disk JSON, output files, job/project history, retention policy, delivery
+  gates, and authorization rules remain unchanged.
 
 ## 4. Contract changes
 

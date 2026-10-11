@@ -9,9 +9,22 @@
   };
   const image = (url, label) => {
     if (!/^\/api\/v3\/creative-agent\/(outputs|uploads)\/[A-Za-z0-9_-]+\/(preview|thumbnail|content)$/.test(String(url))) return null;
-    const node = el("img"); node.src = url; node.alt = label;
-    node.loading = "lazy"; node.style.cssText = "width:96px;height:96px;object-fit:contain;border-radius:10px";
+    const node = el("img", undefined, "v3-continuity-input-image"); node.src = url; node.alt = label;
+    node.loading = "lazy";
     return node;
+  };
+  const imageCard = (url, label, filename = "") => {
+    const card = el("article", undefined, "v3-continuity-input-card");
+    const frame = el("div", undefined, "v3-continuity-input-frame");
+    const img = image(url, label);
+    if (img) frame.append(img);
+    card.append(frame);
+    if (filename) {
+      const name = el("span", filename, "v3-continuity-input-name");
+      name.title = filename;
+      card.append(name);
+    }
+    return card;
   };
   const group = (board, title, description) => {
     const section = el("section", undefined, "v3-project-reference-group v3-mobile-reference-group");
@@ -59,9 +72,9 @@
       : state.state === "invalid" ? "原主图证据已失效；不会换用别的历史图片。请解绑或重新选择。"
       : "尚无主图。符合条件的首张正式通过图片可自动绑定，也可手动选择。" );
     anchor.dataset.continuityState = state.state;
-    if (active) { const img = image(active.preview_url, "当前连续性主图"); if (img) anchor.append(img); }
+    if (active) anchor.append(imageCard(active.preview_url, "当前连续性主图"));
     if (active || state.state === "invalid") {
-      const button = el("button", "解绑主图", "button secondary"); button.type = "button";
+      const button = el("button", "解绑主图", "button secondary v3-continuity-anchor-unbind"); button.type = "button";
       button.addEventListener("click", async () => {
         if (button.disabled) return;
         button.disabled = true;
@@ -73,9 +86,10 @@
       const inputs = Array.isArray(project.metadata.current_job_reference_inputs) ? project.metadata.current_job_reference_inputs : [];
       const direct = group(board, `本次参考图 · ${inputs.length} 张`, "仅显示当前已提交任务明确上传的原图；下一次任务不自动继承。");
       direct.dataset.referenceMode = mode;
+      const grid = el("div", undefined, "v3-continuity-input-grid");
+      direct.append(grid);
       for (const item of inputs) {
-        const card = el("article"); const img = image(item.preview_url, item.filename || "本次参考图");
-        if (img) card.append(img); card.append(el("span", item.filename || "本次参考图")); direct.append(card);
+        grid.append(imageCard(item.preview_url, item.filename || "本次参考图", item.filename || "本次参考图"));
       }
     } else if (mode === "professional_asset_binding") {
       group(board, "Professional 资产绑定", "仅使用你已明确绑定并冻结的资产版本。原有资产面板负责变更绑定。").dataset.referenceMode = mode;
@@ -83,8 +97,10 @@
       const inputs = group(board, "商品事实输入", "仅使用通过商品事实契约的参考。裁剪和特征证据不作为用户原图展示。");
       inputs.dataset.referenceMode = mode;
       const facts = project.metadata.ecommerce_project_view?.groups?.original_product_inputs?.items || [];
+      const grid = el("div", undefined, "v3-continuity-input-grid");
+      inputs.append(grid);
       for (const item of facts) {
-        const img = image(item.preview_url || item.content_url, "商品事实输入"); if (img) inputs.append(img);
+        grid.append(imageCard(item.preview_url || item.content_url, "商品事实输入"));
       }
     }
     return true;
