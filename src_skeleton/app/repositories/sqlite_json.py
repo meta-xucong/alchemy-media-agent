@@ -256,6 +256,13 @@ def connect(database_path: Path) -> sqlite3.Connection:
                     connection.execute(
                         "CREATE INDEX IF NOT EXISTS v1_events_session_idx ON v1_events(session_id, event_id)"
                     )
+                    from app.repositories.history_index import install_tracking
+
+                    install_tracking(connection)
+                    # Schema setup owns this new connection. Incomplete derived
+                    # schema can persist a blocked marker; do not return with an
+                    # implicit setup transaction or roll that marker back on close.
+                    connection.commit()
                     _INITIALIZED_DATABASES[key] = None
                     _INITIALIZED_DATABASES.move_to_end(key)
                     while len(_INITIALIZED_DATABASES) > _INITIALIZED_DATABASES_MAX:

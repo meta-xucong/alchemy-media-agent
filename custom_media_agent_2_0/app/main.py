@@ -50,9 +50,10 @@ from app.services.case_intelligence import (
 )
 from app.services.claude_orchestrator import get_orchestrator_status
 from app.services.generation import create_image_job
-from app.services.favorites import LegacyFavoritesImportError, list_favorite_ids, set_favorite
+from app.services.favorites import FavoritesIndexNotReadyError, LegacyFavoritesImportError, list_favorite_ids, set_favorite
 from app.services.history_reference_assets import create_reference_asset_from_history_output
-from app.services.image_history import LegacyHistoryImportError, delete_image_history_item, list_image_history
+from app.services.image_history import HistoryIndexNotReadyError, LegacyHistoryImportError, delete_image_history_item, list_image_history
+from app.services.history_counts import HistoryCountIndexError
 from app.services.history_thumbnails import read_history_preview, read_history_thumbnail
 from app.services.ids import new_id
 from app.services.media_acceleration import signed_output_url as signed_v2_output_url
@@ -121,6 +122,18 @@ async def _run_sqlite_api_call(function, *args, **kwargs):
         ) from exc
 
 
+async def _run_sqlite_read_api_call(function, *args, **kwargs):
+    """Queue only opted-in history reads within the shared bounded worker pool."""
+    try:
+        return await sqlite_calls.run_read(function, *args, **kwargs)
+    except SQLiteStorageBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error_code": "storage_busy", "message": "Storage is busy; retry the request."},
+            headers={"Retry-After": "1"},
+        ) from exc
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_runtime_dirs()
@@ -172,6 +185,27 @@ async def _prewarm_case_search_index() -> None:
 
 
 app = FastAPI(title="Custom Media Agent 2.0 API", version=settings.version, lifespan=lifespan)
+
+
+@app.exception_handler(HistoryCountIndexError)
+@app.exception_handler(HistoryIndexNotReadyError)
+async def _history_count_index_error_response(_request: Request, _exc: HistoryCountIndexError) -> JSONResponse:
+    logger.warning("V2 history derived counts require operator verification.")
+    return JSONResponse(status_code=503, content={"detail": {
+        "error_code": "history_index_unavailable",
+        "message": "History is temporarily unavailable. An operator must verify and rebuild the history index.",
+        "retryable": False,
+    }})
+
+
+@app.exception_handler(FavoritesIndexNotReadyError)
+async def _favorites_index_not_ready_response(_request: Request, _exc: FavoritesIndexNotReadyError) -> JSONResponse:
+    logger.warning("V2 favorites require explicit preparation.")
+    return JSONResponse(status_code=503, content={"detail": {
+        "error_code": "favorites_index_unavailable",
+        "message": "Favorites are temporarily unavailable. An operator must prepare the favorites index.",
+        "retryable": False,
+    }})
 
 
 @app.exception_handler(LegacyHistoryImportError)
@@ -324,18 +358,20 @@ async def veyra_history(
     request: Request,
     limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    favorite: bool = False,
     authorization: str = Header(default=""),
 ):
     if not settings.veyra_auth_enabled:
-        return await _run_sqlite_api_call(
-            list_image_history, limit=limit, offset=offset,
+        return await _run_sqlite_read_api_call(
+            list_image_history, limit=limit, offset=offset, favorite=favorite,
             veyra_user_id=None, include_legacy_public=True, include_all=True,
         )
     context = await _veyra_request_context(request, authorization)
-    return await _run_sqlite_api_call(
+    return await _run_sqlite_read_api_call(
         list_image_history,
         limit=limit,
         offset=offset,
+        favorite=favorite,
         veyra_user_id=context["user_id"],
         include_legacy_public=True,
         include_all=context["is_admin"],
@@ -890,15 +926,17 @@ async def image_history(
     request: Request,
     limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    favorite: bool = False,
     authorization: str = Header(default=""),
 ):
     if not settings.veyra_auth_enabled:
-        return await _run_sqlite_api_call(list_image_history, limit=limit, offset=offset)
+        return await _run_sqlite_read_api_call(list_image_history, limit=limit, offset=offset, favorite=favorite)
     context = await _veyra_request_context(request, authorization)
-    return await _run_sqlite_api_call(
+    return await _run_sqlite_read_api_call(
         list_image_history,
         limit=limit,
         offset=offset,
+        favorite=favorite,
         veyra_user_id=context["user_id"],
         include_legacy_public=True,
         include_all=context["is_admin"],

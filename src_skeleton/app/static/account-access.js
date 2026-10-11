@@ -325,6 +325,7 @@ for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${proje
       button.setAttribute("aria-selected", String(active));
     });
     if (view === "access") refresh();
+    document.dispatchEvent(new CustomEvent("alchemy:account-view", { detail: { view } }));
   }
 
   function bind() {
@@ -352,7 +353,12 @@ for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${proje
       if (opener) {
         event.preventDefault();
         if (typeof window.openAccountCenter === "function") window.openAccountCenter(opener.dataset.accountOpen || "overview");
-        else if (opener.dataset.mobileOpen === "account") window.setTimeout(() => setView(opener.dataset.accountOpen || "overview"), 0);
+        else if (opener.dataset.mobileOpen === "account") window.setTimeout(() => {
+          const view = opener.dataset.accountOpen || "overview";
+          const panel = accountShell().querySelector(`[data-account-view="${view}"]`);
+          // The mobile shell sets the view before loading its visible sections.
+          if (!panel || panel.hidden) setView(view);
+        }, 0);
       }
     });
     window.addEventListener("pagehide", () => { state.epoch += 1; clearSecret(); if ($("#accountAccessSecretDialog")?.open) $("#accountAccessSecretDialog").close(); });

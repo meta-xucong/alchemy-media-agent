@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.config import settings
+from app.services.image_history import prepare_history_reads
 import app.services.veyra_auth as veyra_auth_module
 from app.main import app
 import app.main as main_module
@@ -252,6 +253,7 @@ def test_veyra_optional_routes_degrade_when_auth_disabled(tmp_path) -> None:
     object.__setattr__(settings, "image_history_path", tmp_path / "history.jsonl")
     object.__setattr__(settings, "veyra_usage_path", tmp_path / "usage.jsonl")
     settings.image_history_path.write_text(_history_line("out_legacy", None) + "\n", encoding="utf-8")
+    prepare_history_reads()
     settings.veyra_usage_path.write_text(
         '{"user_id":42,"amount":1.5,"balance_after":8.5,"idempotency_key":"a","reference_id":"job_1","created_at":"2026-06-11T00:00:00Z"}\n',
         encoding="utf-8",
@@ -420,6 +422,7 @@ def test_veyra_history_filters_by_session_user(tmp_path, monkeypatch: pytest.Mon
         + "\n",
         encoding="utf-8",
     )
+    prepare_history_reads()
 
     async def fake_account(self, user_id: int):
         return veyra_auth_module.VeyraAccount(user_id=user_id, email=f"{user_id}@example.com", role="user", balance=9.5, status="active")
@@ -454,6 +457,7 @@ def test_veyra_history_allows_legacy_public_for_signed_in_user(tmp_path, monkeyp
         + "\n",
         encoding="utf-8",
     )
+    prepare_history_reads()
 
     async def fake_account(self, user_id: int):
         return veyra_auth_module.VeyraAccount(user_id=user_id, email=f"{user_id}@example.com", role="user", balance=9.5, status="active")
@@ -493,6 +497,7 @@ def test_veyra_history_admin_can_see_all_users(tmp_path, monkeypatch: pytest.Mon
         + "\n",
         encoding="utf-8",
     )
+    prepare_history_reads()
 
     async def fake_account(self, user_id: int):
         return veyra_auth_module.VeyraAccount(user_id=user_id, email="admin@example.com", role="admin", balance=9.5, status="active")

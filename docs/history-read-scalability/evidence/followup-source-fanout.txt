@@ -1,0 +1,3 @@
+.....duplicate_fanout_evidence=[{"sources": 100, "sessions": 50, "python_peak_bytes": 21356, "sqlite_vm_steps_rounded": 10000, "source_rows": 100}, {"sources": 1000, "sessions": 500, "python_peak_bytes": 21073, "sqlite_vm_steps_rounded": 116000, "source_rows": 1000}, {"sources": 10000, "sessions": 5000, "python_peak_bytes": 21073, "sqlite_vm_steps_rounded": 1165000, "source_rows": 10000}]
+..
+7 passed, 28 deselected in 1.38s

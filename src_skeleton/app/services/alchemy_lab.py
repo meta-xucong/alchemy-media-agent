@@ -895,19 +895,16 @@ def _public_reference_plan(reference_plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_lab_history(*, limit: int = 50, include_mock: bool = False, veyra_user_id: int | None = None, is_admin: bool = False) -> dict[str, Any]:
-    records = media_store.list_history_records(limit=10000)
-    if veyra_user_id is not None and not is_admin:
-        records = [record for record in records if _lab_record_owner_id(record) == veyra_user_id]
-    items = [
-        item
-        for item in (_lab_history_item_from_record(record) for record in records)
-        if item is not None
-    ]
-    if not include_mock:
-        items = [item for item in items if not _is_mock_lab_history_item(item)]
-    items.sort(key=lambda item: item.created_at or item.updated_at or "", reverse=True)
-    return {"items": [item.model_dump() for item in items[:limit]], "total": len(items)}
+def list_lab_history(*, limit: int = 50, include_mock: bool = False, veyra_user_id: int | None = None, is_admin: bool = False, metrics=None) -> dict[str, Any]:
+    from app.repositories.history_index import read_history_page
+
+    records, total = read_history_page(
+        media_store, surface="lab", owner_id=veyra_user_id,
+        all_owners=is_admin or veyra_user_id is None,
+        include_mock=include_mock, limit=limit, metrics=metrics,
+    )
+    items = [_lab_history_item_from_record(record) for record in records]
+    return {"items": [item.model_dump() for item in items if item is not None], "total": total}
 
 
 def _lab_record_owner_id(record: dict[str, Any]) -> int | None:

@@ -14,7 +14,11 @@ from urllib.parse import quote
 from app.config import settings
 from app.repositories import repository
 from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageOutput
-from app.services.favorites import delete_favorite, list_favorite_ids
+from app.services.favorites import (
+    attach_ready_favorites, delete_favorite, favorite_scope_predicate,
+    list_favorite_ids, prepare_favorites_index,
+)
+from app.services.history_counts import HistoryCountIndexError, ensure_history_counts, read_history_count
 from app.services.output_storage import delete_output_storage
 
 _HISTORY_DATABASES: OrderedDict[str, None] = OrderedDict()
@@ -26,6 +30,16 @@ _STRICT_IMPORTER_VERSION = 1
 
 class LegacyHistoryImportError(ValueError):
     """A legacy source could not be imported; its contents must not be exposed."""
+
+
+class HistoryIndexNotReadyError(RuntimeError):
+    """Explicit preparation is required; request paths must not scan legacy data."""
+
+
+def prepare_history_reads() -> None:
+    """Operator-only cold work, separated from ordinary admitted history reads."""
+    _ensure_history_index()
+    prepare_favorites_index()
 
 
 def persist_image_job_history(job: ImageJob) -> None:
@@ -63,6 +77,13 @@ def persist_image_job_history(job: ImageJob) -> None:
             with connection:
                 for item in items:
                     _upsert_history_item(connection, item)
+                # Native writes establish the indexed authority before creating
+                # its append-only JSONL mirror. Reads must not mistake that
+                # mirror for a pending legacy import on the next request.
+                connection.execute(
+                    "INSERT OR IGNORE INTO v2_image_history_migration(migration_key, completed_at) "
+                    "VALUES('jsonl', ?)", (datetime.now().astimezone().isoformat(),),
+                )
         finally:
             connection.close()
         with settings.image_history_path.open("a", encoding="utf-8") as handle:
@@ -78,8 +99,8 @@ def list_image_history(
     veyra_user_id: int | None = None,
     include_legacy_public: bool = True,
     include_all: bool = False,
+    favorite: bool = False,
 ) -> ImageHistoryResponse:
-    _ensure_history_index()
     safe_offset = max(0, offset)
     if not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
         return ImageHistoryResponse(items=[], total=0)
@@ -93,20 +114,52 @@ def list_image_history(
             clauses.append("owner_id=?")
             params.append(veyra_user_id)
     where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
-    connection = _history_connect()
+    connection = _history_connect(prepare=False)
     try:
-        total = int(connection.execute("SELECT COUNT(*) FROM v2_image_history" + where_sql, params).fetchone()[0])
-        rows = list(connection.execute(
-            "SELECT payload FROM v2_image_history" + where_sql +
-            " ORDER BY created_epoch DESC, job_id DESC LIMIT ? OFFSET ?",
-            [*params, max(0, int(limit)), safe_offset],
-        ))
+        if favorite:
+            attach_ready_favorites(connection)
+            connection.execute("PRAGMA temp_store=FILE")
+            connection.execute("PRAGMA temp.cache_size=-2048")
+            connection.execute("PRAGMA history_favorites.cache_size=-2048")
+        # Keep total and page consistent while a concurrent WAL writer updates
+        # history. Neither this snapshot nor pagination decodes unreturned rows.
+        connection.execute("BEGIN")
+        if favorite:
+            total, rows = _favorite_history_page(
+                connection, limit=max(0, int(limit)), offset=safe_offset,
+                veyra_user_id=veyra_user_id, include_legacy_public=include_legacy_public,
+                include_all=include_all,
+            )
+        else:
+            total = read_history_count(
+                connection, owner_id=veyra_user_id, include_public=include_legacy_public, include_all=include_all,
+            )
+            page_sql = "SELECT payload FROM v2_image_history" + where_sql
+            if not include_all and veyra_user_id is not None and include_legacy_public:
+                # The predicates are disjoint. SQLite can merge their already
+                # ordered owner-index streams instead of sorting every visible row
+                # for an OR query. The owner stream remains first for equal keys.
+                page_sql = (
+                    "SELECT payload, created_epoch, job_id FROM v2_image_history WHERE owner_id=? "
+                    "UNION ALL SELECT payload, created_epoch, job_id FROM v2_image_history WHERE owner_id IS NULL"
+                )
+            rows = list(connection.execute(
+                page_sql +
+                " ORDER BY created_epoch DESC, job_id DESC LIMIT ? OFFSET ?",
+                [*params, max(0, int(limit)), safe_offset],
+            ))
+        if len(rows) != min(max(0, int(limit)), max(0, total - safe_offset)):
+            raise HistoryCountIndexError("V2 history page disagrees with derived total; verify and rebuild counts.")
+        # The consistent count/page is now captured. Do not pin the history WAL
+        # snapshot while decoding or querying the independent favorites store.
+        connection.commit()
         history_items = [ImageHistoryItem.model_validate_json(row[0]) for row in rows]
-        favorite_ids = list_favorite_ids(
+        favorite_ids = {item.output_id for item in history_items} if favorite else list_favorite_ids(
             veyra_user_id=veyra_user_id,
             include_legacy_public=include_legacy_public,
             include_all=include_all,
             output_ids=[item.output_id for item in history_items],
+            require_ready=True,
         )
         items = []
         for item in history_items:
@@ -119,6 +172,41 @@ def list_image_history(
         return ImageHistoryResponse(items=items, total=total)
     finally:
         connection.close()
+
+
+def _favorite_history_page(
+    connection: sqlite3.Connection, *, limit: int, offset: int,
+    veyra_user_id: int | None, include_legacy_public: bool, include_all: bool,
+) -> tuple[int, list[sqlite3.Row]]:
+    predicate, params = favorite_scope_predicate(
+        veyra_user_id=veyra_user_id, include_legacy_public=include_legacy_public, include_all=include_all,
+    )
+    # CROSS JOIN fixes the small-candidate-first loop order. DISTINCT preserves
+    # one result when a favorite has both an owner and a legacy-public record.
+    source = (
+        " FROM (SELECT DISTINCT output_id FROM history_favorites.favorites WHERE " + predicate + ") AS f"
+        " CROSS JOIN v2_image_history AS h ON h.output_id=f.output_id"
+    )
+    order = " ORDER BY h.created_epoch DESC, h.job_id DESC"
+    if not include_all and veyra_user_id is not None:
+        if include_legacy_public:
+            source += " WHERE (h.owner_id=? OR h.owner_id IS NULL)"
+            # Match the unfiltered merge's owner-first/public-second ties.
+            order += ", (h.owner_id IS NULL)"
+        else:
+            source += " WHERE h.owner_id=?"
+        params.append(veyra_user_id)
+    order += ", h.rowid"
+    total = int(connection.execute("SELECT COUNT(*)" + source, params).fetchone()[0])
+    ids = [row[0] for row in connection.execute(
+        "SELECT h.output_id" + source + order + " LIMIT ? OFFSET ?", [*params, limit, offset],
+    )]
+    # Only bounded page IDs reach Python. The SQL sort carries scalar keys,
+    # never full payloads; exact counting and sorting still cost O(favorites).
+    rows = [connection.execute(
+        "SELECT payload FROM v2_image_history WHERE output_id=?", (output_id,),
+    ).fetchone() for output_id in ids]
+    return total, rows
 
 
 def get_image_history_item(output_id: str) -> ImageHistoryItem | None:
@@ -196,12 +284,46 @@ def delete_image_history_item(output_id: str) -> dict[str, Any]:
     }
 
 
-def _history_connect() -> sqlite3.Connection:
+def _history_connect(*, prepare: bool = True) -> sqlite3.Connection:
     db_path = settings.image_history_path.with_name("image_history_index.sqlite3")
+    if not prepare and not db_path.exists() and _history_source_has_data():
+        raise HistoryIndexNotReadyError("V2 history requires a completed legacy import.")
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(db_path, timeout=3.0)
+    # URI interpretation is needed for the fixed read-only favorites ATTACH;
+    # the main database itself remains the configured V2 filesystem path.
+    connection = sqlite3.connect(db_path, timeout=3.0, uri=True)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout=3000")
+    # REPLACE must fire its implicit DELETE trigger as well as INSERT so the
+    # disposable count buckets stay exact on all managed write paths.
+    connection.execute("PRAGMA recursive_triggers=ON")
+    if not prepare:
+        try:
+            objects = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE name IN "
+                "('v2_image_history', 'v2_image_history_page_idx', 'v2_image_history_global_page_idx', "
+                "'v2_image_history_migration', 'v2_image_history_import_receipts')"
+            )}
+            if not objects and not _history_source_has_data():
+                # A brand-new, genuinely empty store has no unbounded work.
+                connection.close()
+                return _history_connect()
+            if len(objects) != 5:
+                raise HistoryIndexNotReadyError("V2 history requires explicit preparation.")
+            ensure_history_counts(connection, allow_initialize=False)
+            if not connection.execute(
+                "SELECT 1 FROM v2_image_history_migration WHERE migration_key='jsonl'"
+            ).fetchone():
+                if connection.execute(
+                    "SELECT 1 FROM v2_image_history_import_receipts WHERE migration_key='jsonl'"
+                ).fetchone():
+                    raise LegacyHistoryImportError("Legacy V2 image history import state is inconsistent.")
+                if _history_source_has_data():
+                    raise HistoryIndexNotReadyError("V2 history requires a completed legacy import.")
+            return connection
+        except Exception:
+            connection.close()
+            raise
     key = str(db_path.resolve())
     if key not in _HISTORY_DATABASES:
         with _HISTORY_SCHEMA_LOCK:
@@ -217,6 +339,10 @@ def _history_connect() -> sqlite3.Connection:
                     connection.execute(
                         "CREATE INDEX IF NOT EXISTS v2_image_history_page_idx "
                         "ON v2_image_history(owner_id, created_epoch DESC, job_id DESC)"
+                    )
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS v2_image_history_global_page_idx "
+                        "ON v2_image_history(created_epoch DESC, job_id DESC)"
                     )
                     connection.execute(
                         """CREATE TABLE IF NOT EXISTS v2_image_history_migration (
@@ -239,7 +365,21 @@ def _history_connect() -> sqlite3.Connection:
                 except Exception:
                     connection.close()
                     raise
+    try:
+        ensure_history_counts(connection)
+    except Exception:
+        connection.close()
+        raise
     return connection
+
+
+def _history_source_has_data() -> bool:
+    try:
+        return settings.image_history_path.stat().st_size > 0
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise HistoryIndexNotReadyError("V2 history requires operator verification.") from None
 
 
 def _upsert_history_item(connection: sqlite3.Connection, item: ImageHistoryItem) -> None:

@@ -195,6 +195,9 @@ def test_v1_delete_mid_cleanup_failure_keeps_owner_anchor_for_retry(tmp_path, mo
     assert "veyra_user_id" not in repository.get_job(duplicate_job_id).outputs[0].metadata
 
     client = TestClient(main.app)
+    from app.repositories.history_index import prepare_history_index
+
+    prepare_history_index(media_store)
     non_owner_history = client.get(
         "/v1/image/history?limit=10",
         headers={"Authorization": f"Bearer {_issue_user_token(77)}"},
@@ -1086,6 +1089,9 @@ def test_v1_job_only_owner_remains_retryable_when_ownerless_history_cleanup_hits
         return original_delete_history(requested_output_id)
 
     monkeypatch.setattr(media_store, "delete_history_record", fail_history_delete_once)
+    from app.repositories.history_index import prepare_history_index
+
+    prepare_history_index(media_store)
     with pytest.raises(HTTPException) as failed_attempt:
         asyncio.run(main.delete_image_history_item(output_id, _request(), f"Bearer {owner_token}"))
     assert failed_attempt.value.status_code == 503

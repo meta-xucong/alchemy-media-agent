@@ -38,6 +38,7 @@ def test_history_page_uses_migrated_sqlite_index_and_preserves_latest_duplicate(
         raise AssertionError("history index must not load the whole JSONL file")
 
     monkeypatch.setattr(type(history_path), "read_text", forbidden_read_text)
+    image_history._ensure_history_index()
     response = image_history.list_image_history(limit=5, offset=3, include_all=True)
 
     assert response.total == 20

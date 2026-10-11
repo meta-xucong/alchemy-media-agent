@@ -295,15 +295,57 @@ def _ensure_imported(connection: sqlite3.Connection) -> None:
         raise
 
 
+def favorite_reads_ready(connection: sqlite3.Connection, *, storage_root: Path) -> bool:
+    """Bounded read-only gate. False means an untouched, empty favorite store."""
+    from app.repositories.history_index import HistoryIndexUnavailable
+
+    names = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+        "('v1_favorites','v1_favorite_state','v1_import_receipts')"
+    )}
+    source_exists = (storage_root / "favorites" / "image_favorites.json").exists()
+    receipt = ("v1_import_receipts" in names and connection.execute(
+        "SELECT 1 FROM v1_import_receipts WHERE namespace='favorites'"
+    ).fetchone() is not None)
+    if "v1_favorites" not in names:
+        if source_exists or receipt or "v1_favorite_state" in names:
+            raise HistoryIndexUnavailable("Favorites require explicit preparation before reads.")
+        return False
+    if "v1_favorite_state" not in names:
+        raise HistoryIndexUnavailable("Favorites state requires explicit preparation before reads.")
+    imported = connection.execute(
+        "SELECT 1 FROM v1_favorite_state WHERE state_key='legacy_imported'"
+    ).fetchone() is not None
+    # Existing pre-receipt migrations legitimately have the completion marker
+    # alone; preserve the strict importer's grandfathering rule.
+    if (receipt and not imported) or (source_exists and not imported):
+        raise HistoryIndexUnavailable("Favorites require explicit preparation before reads.")
+    return True
+
+
+def prepare_favorites_index() -> None:
+    """Explicit maintenance: retain the existing strict import/rollback contract."""
+    connection = connect(media_store.root / "repository.sqlite3")
+    try:
+        _ensure_imported(connection)
+    finally:
+        connection.close()
+
+
 def list_favorite_ids(
     *,
     veyra_user_id: int | None = None,
     include_legacy_public: bool = True,
     output_ids: Iterable[str] | None = None,
+    prepared_only: bool = False,
 ) -> set[str]:
     connection = connect(media_store.root / "repository.sqlite3")
     try:
-        _ensure_imported(connection)
+        if prepared_only:
+            if not favorite_reads_ready(connection, storage_root=media_store.root):
+                return set()
+        else:
+            _ensure_imported(connection)
         clauses: list[str] = []
         params: list[Any] = []
         if veyra_user_id is not None:

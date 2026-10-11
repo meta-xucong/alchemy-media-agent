@@ -123,6 +123,16 @@ class InMemoryV2Repository:
     def list_cases(self, active_only: bool = True) -> list[PromptCase]:
         return self.prompt_cases.list_values(active_only=active_only)
 
+    def has_active_cases(self) -> bool:
+        """Test bootstrap readiness without loading the active case catalog."""
+        connection = connect(self.database_path)
+        try:
+            return connection.execute(
+                "SELECT 1 FROM v2_records WHERE namespace='prompt_cases' AND active=1 LIMIT 1"
+            ).fetchone() is not None
+        finally:
+            connection.close()
+
     def get_case(self, case_id: str) -> PromptCase | None:
         return self.prompt_cases.get(case_id)
 
