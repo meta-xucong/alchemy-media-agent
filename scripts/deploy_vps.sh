@@ -60,6 +60,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Production VPS changes must use the guarded candidate/activation workflow.
+# Keep --local for development, but refuse the former in-place remote path
+# before checking credentials or touching files, services, Docker, or Git.
+if [[ "$LOCAL_MODE" != "1" ]]; then
+  echo "Direct VPS deployment is disabled. Build a guarded candidate, review its receipt, then use guarded-vps-activate.yml." >&2
+  exit 2
+fi
+
 run_as_root() {
   if [[ "${EUID}" -eq 0 ]]; then
     "$@"

@@ -70,11 +70,9 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     candidate = (root / ".github" / "workflows" / "guarded-vps-candidate.yml").read_text(encoding="utf-8")
     activate = (root / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
 
-    assert "vps_prepare_v2_runtime.sh" in deploy
-    assert "verify_v2_runtime_before_v1_start()" in deploy
-    assert deploy.rindex("\nensure_v2_runtime") < deploy.rindex("\nverify_v2_runtime_before_v1_start")
-    assert deploy.rindex("\nverify_v2_runtime_before_v1_start") < deploy.rindex("\nstart_stack")
-    assert deploy.rindex("\nrestart_v2_services_if_present") > deploy.rindex("\nstart_stack")
+    assert 'if [[ "$LOCAL_MODE" != "1" ]]; then' in deploy
+    assert deploy.index('if [[ "$LOCAL_MODE" != "1" ]]; then') < deploy.index("run_as_root()")
+    assert "Direct VPS deployment is disabled" in deploy
     assert "prepare_v2_runtime()" in candidate
     assert "python3 -m venv" in candidate
     assert "--write-manifest" in candidate
@@ -85,57 +83,18 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "--verify" in activate
     migration = (root / "scripts" / "vps_migrate_release_layout.sh").read_text(encoding="utf-8")
     nginx = (root / "alchemy-media-agent.nginx.conf").read_text(encoding="utf-8")
-    assert "git -C \"${REPOSITORY_ROOT}\" worktree add --detach" in migration
-    assert "v2_runtime_guard.py" in migration
-    assert "__ALCHEMY_RELEASE_LINK__" in migration
-    assert "compose_cmd=(docker compose)" in migration
-    assert "compose_cmd=(docker-compose)" in migration
-    assert 'units_installed=1' in migration
-    assert "VPS_ALCHEMY_SUB2API=untouched" in migration
-    assert 'runtime_requirements="${candidate}/custom_media_agent_2_0/requirements.txt"' in migration
-    assert migration.index('v2_runtime_guard.py" --release "${candidate}" --verify') < migration.index('ln -sfn "${candidate}" "${DEPLOY_LINK}"')
-    assert "ensure_access_bridge_secret" in migration
-    assert "ALCHEMY_ACCESS_BRIDGE_SECRET" in migration
-    assert "ensure_veyra_auth_config" in migration
-    assert "VEYRA_AUTH_ENABLED" in migration
-    assert "VEYRA_SUB2API_BASE_URL" in migration
-    assert "VEYRA_INTERNAL_TOKEN" in migration
-    assert "VEYRA_SESSION_SECRET" in migration
-    assert "VEYRA_BILLING_SETTINGS_URL" in migration
-    assert "refusing deployment" in migration
-    assert "configure_nginx_for_active_gateway" in migration
-    assert "alchemy-media-agent.nginx.conf" in migration
-    assert "nginx -t" in migration
-    assert "/etc/nginx/conf.d/alchemy-media-agent.conf" in migration
-    assert "nginx_legacy_removed" in migration
-    assert "report_nginx_route_summary" in migration
+    assert "retired and performs no changes" in migration
+    assert "exit 2" in migration
     assert "location ^~ /api/v2/" in nginx
     assert "location = /api/v2" in nginx
-    assert "VPS_ALCHEMY_NGINX_ROUTES" in migration
-    assert "assert_runtime_access_config" in migration
-    assert "fingerprint_value" in migration
-    assert "/proc/${api_pid}/environ" in migration
-    assert "start_v1_container" in migration
-    assert 'ALCHEMY_ACCESS_BRIDGE_SECRET: "${bridge_secret}"' in migration
-    assert '"${override_file}"' in migration
-    assert "sed -i 's/\\r$//'" in migration
-    assert "V2 env file is missing" in migration
-    assert 'APP_PORT="${APP_PORT:-8017}"' in migration
-    assert 'active release link; use scripts/vps_migrate_release_layout.sh' in deploy
+    assert "/etc/alchemy/alchemy-media-agent-maintenance" in nginx
+    assert deploy.index('if [[ "$LOCAL_MODE" != "1" ]]; then') < deploy.index(
+        'echo "${DEPLOY_DIR} is an active release link; use scripts/vps_migrate_release_layout.sh'
+    )
     workflow = (root / ".github" / "workflows" / "deploy-vps.yml").read_text(encoding="utf-8")
-    assert "Sync source to VPS" not in workflow
-    assert "vps_migrate_release_layout.sh" in workflow
-    assert "TARGET_SHA='$GITHUB_SHA'" in workflow
-    assert 'ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE"' in workflow
-    assert 'runtime_env_state="$(ssh ' in workflow
-    assert 'case "$runtime_env_state" in' in workflow
-    assert 'MISSING)' in workflow
-    assert 'Unable to verify remote runtime env state; refusing to overwrite.' in workflow
-    assert "group: deploy-vps-${{ inputs.deploy_dir }}" in workflow
-    assert "ln '$remote_env_temp' '$DEPLOY_DIR/src_skeleton/.env'" in workflow
-    assert '"$REMOTE:$remote_env_temp"' in workflow
-    assert "Runtime env appeared during initialization; refusing to overwrite." in workflow
-    assert '"$REMOTE:$DEPLOY_DIR/src_skeleton/.env"' not in workflow
+    assert "workflow is retired" in workflow
+    assert "exit 2" in workflow
+    assert "VPS_HOST" not in workflow
 
 
 def test_runtime_guard_requires_bridge_transport_import() -> None:
@@ -161,7 +120,6 @@ def test_both_image_dependency_manifests_declare_httpcore() -> None:
 
 def test_v3_brain_route_is_explicit_in_all_runtime_bootstraps() -> None:
     root = Path(__file__).parents[1]
-    workflow = (root / ".github" / "workflows" / "deploy-vps.yml").read_text(encoding="utf-8")
     bootstrap = (root / "scripts" / "bootstrap_env.ps1").read_text(encoding="utf-8")
     direct_deploy = (root / "scripts" / "deploy_vps.sh").read_text(encoding="utf-8")
     migration = (root / "scripts" / "vps_migrate_release_layout.sh").read_text(encoding="utf-8")
@@ -182,11 +140,4 @@ def test_v3_brain_route_is_explicit_in_all_runtime_bootstraps() -> None:
         assert f"{key}={value}" in example
         assert f'"{key}={value}"' in bootstrap
         assert f"{key}=${{{key}:-{value}}}" in direct_deploy
-        assert f"{key}: ${{{{ vars.{key} || '{value}' }}}}" in workflow
-        assert f"{key}=${key}" in workflow
-        assert f'"{key}={value}"' in migration
-    migration_copy = migration.index('cp -p "${live_env}" "${candidate}/src_skeleton/.env"')
-    migration_brain_defaults = migration.index('ensure_v3_brain_defaults "${candidate}/src_skeleton/.env"')
-    migration_build = migration.index('docker build -t alchemy-media-agent:latest')
-    assert migration_copy < migration_brain_defaults < migration_build
-    assert 'grep -qE "^${key}=.+$"' in migration
+    assert "retired and performs no changes" in migration

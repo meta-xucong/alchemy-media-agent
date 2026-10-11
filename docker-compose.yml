@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: ./src_skeleton/Dockerfile
+      args:
+        ALCHEMY_REVISION: ${ALCHEMY_REVISION:-unknown}
     image: alchemy-media-agent:latest
     container_name: alchemy-media-agent
     env_file:

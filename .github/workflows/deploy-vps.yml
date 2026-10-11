@@ -1,150 +1,17 @@
-name: Deploy VPS
+name: Deploy VPS (retired)
 
 on:
   workflow_dispatch:
-    inputs:
-      deploy_dir:
-        description: "Remote deploy directory"
-        default: "/opt/alchemy-media-agent"
-        required: true
-      app_port:
-        description: "Host port"
-        default: "8017"
-        required: true
 
-concurrency:
-  group: deploy-vps-${{ inputs.deploy_dir }}
-  cancel-in-progress: false
+permissions:
+  contents: read
 
 jobs:
-  deploy:
+  retired:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Prepare SSH
-        env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+      - name: Refuse the legacy in-place deployment path
         run: |
-          test -n "$VPS_HOST"
-          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
-          mkdir -p ~/.ssh
-          if test -n "${VPS_SSH_KEY_B64:-}"; then
-            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
-          else
-            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
-          fi
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
-
-      - name: Ensure runtime env exists
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
-          DEPLOY_DIR: ${{ inputs.deploy_dir }}
-          APP_PORT: ${{ inputs.app_port }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
-          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || 'https://aiself.vip/v1' }}
-          ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL || 'https://aiself.vip' }}
-          DEFAULT_IMAGE_PROVIDER: ${{ vars.DEFAULT_IMAGE_PROVIDER || 'openai_gpt_image' }}
-          OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL || 'gpt-image-2' }}
-          DEFAULT_LLM_PROVIDER: ${{ vars.DEFAULT_LLM_PROVIDER || 'anthropic' }}
-          KIMI_LLM_MODEL: ${{ vars.KIMI_LLM_MODEL || 'kimi-for-coding' }}
-          BACKUP_LLM_MODEL: ${{ vars.BACKUP_LLM_MODEL || 'gpt-5.6-terra' }}
-          OPENAI_LLM_MODEL: ${{ vars.OPENAI_LLM_MODEL || 'gpt-5.6-terra' }}
-          # Pin V3 Brain independently; DEFAULT_LLM_PROVIDER remains the general app default.
-          V3_LLM_BRAIN_ENABLED: ${{ vars.V3_LLM_BRAIN_ENABLED || 'true' }}
-          V3_LLM_BRAIN_REMOTE_ENABLED: ${{ vars.V3_LLM_BRAIN_REMOTE_ENABLED || 'true' }}
-          V3_LLM_BRAIN_PROVIDER: ${{ vars.V3_LLM_BRAIN_PROVIDER || 'openai' }}
-          V3_LLM_BRAIN_MODEL: ${{ vars.V3_LLM_BRAIN_MODEL || 'gpt-5.6-terra' }}
-          V3_LLM_BRAIN_TRANSPORT: ${{ vars.V3_LLM_BRAIN_TRANSPORT || 'chat_nonstream' }}
-          V3_LLM_BRAIN_TIMEOUT_SECONDS: ${{ vars.V3_LLM_BRAIN_TIMEOUT_SECONDS || '300' }}
-          V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS: ${{ vars.V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS || '550' }}
-          V3_LLM_BRAIN_MAX_TOKENS: ${{ vars.V3_LLM_BRAIN_MAX_TOKENS || '20000' }}
-          LAB_VISION_PROVIDER: ${{ vars.LAB_VISION_PROVIDER || 'openai' }}
-          V3_VISION_INSPECTION_PROTOCOL: ${{ vars.V3_VISION_INSPECTION_PROTOCOL || 'chat_completions' }}
-          IMAGE_WORK_INTENSITY: ${{ vars.IMAGE_WORK_INTENSITY || 'atelier' }}
-          V1_MEDIA_STORAGE_DIR: ${{ vars.V1_MEDIA_STORAGE_DIR || '/var/lib/alchemy/v1/media_storage' }}
-        run: |
-          REMOTE="${VPS_USER:-root}@${VPS_HOST}"
-          runtime_env_state="$(ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "if [ -s '$DEPLOY_DIR/src_skeleton/.env' ]; then printf PRESENT; elif [ ! -e '$DEPLOY_DIR/src_skeleton/.env' ]; then printf MISSING; else printf EMPTY; fi")"
-          case "$runtime_env_state" in
-            PRESENT)
-              echo "Existing runtime env found; preserving VPS production settings."
-              exit 0
-              ;;
-            MISSING)
-              echo "Runtime env is absent; preparing initial configuration."
-              ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "mkdir -p '$DEPLOY_DIR/src_skeleton'"
-              ;;
-            *)
-              echo "Unable to verify remote runtime env state; refusing to overwrite." >&2
-              exit 1
-              ;;
-          esac
-          umask 077
-          cat > /tmp/alchemy-media-agent.env <<EOF
-          MEDIA_AGENT_MODE=live
-          MOCK_IMAGE_PROVIDER_ENABLED=false
-          ORCHESTRATION_MODE=runtime_first
-
-          DEFAULT_IMAGE_PROVIDER=$DEFAULT_IMAGE_PROVIDER
-          DEFAULT_IMAGE_MODEL=$OPENAI_IMAGE_MODEL
-          OPENAI_IMAGE_MODEL=$OPENAI_IMAGE_MODEL
-          GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
-          GEMINI_IMAGE_BASE_URL=
-
-          DEFAULT_LLM_PROVIDER=$DEFAULT_LLM_PROVIDER
-          DEFAULT_LLM_MODEL=$KIMI_LLM_MODEL
-          BACKUP_LLM_PROVIDER=openai
-          BACKUP_LLM_MODEL=$BACKUP_LLM_MODEL
-          OPENAI_LLM_MODEL=$OPENAI_LLM_MODEL
-          V3_LLM_BRAIN_ENABLED=$V3_LLM_BRAIN_ENABLED
-          V3_LLM_BRAIN_REMOTE_ENABLED=$V3_LLM_BRAIN_REMOTE_ENABLED
-          V3_LLM_BRAIN_PROVIDER=$V3_LLM_BRAIN_PROVIDER
-          V3_LLM_BRAIN_MODEL=$V3_LLM_BRAIN_MODEL
-          V3_LLM_BRAIN_TRANSPORT=$V3_LLM_BRAIN_TRANSPORT
-          V3_LLM_BRAIN_TIMEOUT_SECONDS=$V3_LLM_BRAIN_TIMEOUT_SECONDS
-          V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS=$V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS
-          V3_LLM_BRAIN_MAX_TOKENS=$V3_LLM_BRAIN_MAX_TOKENS
-          KIMI_LLM_MODEL=$KIMI_LLM_MODEL
-          LAB_VISION_PROVIDER=$LAB_VISION_PROVIDER
-          V3_VISION_INSPECTION_PROTOCOL=$V3_VISION_INSPECTION_PROTOCOL
-          LLM_PROMPT_PLANNING_ENABLED=true
-          IMAGE_WORK_INTENSITY=$IMAGE_WORK_INTENSITY
-
-          OPENAI_API_KEY=$OPENAI_API_KEY
-          OPENAI_BASE_URL=$OPENAI_BASE_URL
-          ANTHROPIC_API_KEY=
-          ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN
-          ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL
-          GEMINI_IMAGE_API_KEY=
-          BYTEPLUS_API_KEY=
-
-          MEDIA_STORAGE_ROOT=.media_storage
-          V2_API_PROXY_BASE_URL=http://127.0.0.1:8020
-          V1_MEDIA_STORAGE_DIR=$V1_MEDIA_STORAGE_DIR
-          EOF
-          sed -i 's/^          //' /tmp/alchemy-media-agent.env
-          remote_env_temp="$DEPLOY_DIR/src_skeleton/.env.initial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o StrictHostKeyChecking=accept-new /tmp/alchemy-media-agent.env "$REMOTE:$remote_env_temp"
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$REMOTE" "chmod 600 '$remote_env_temp' && if ln '$remote_env_temp' '$DEPLOY_DIR/src_skeleton/.env'; then rm -f '$remote_env_temp'; else rm -f '$remote_env_temp'; echo 'Runtime env appeared during initialization; refusing to overwrite.' >&2; exit 1; fi"
-          rm -f /tmp/alchemy-media-agent.env
-
-      - name: Start stack
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
-          DEPLOY_DIR: ${{ inputs.deploy_dir }}
-          APP_PORT: ${{ inputs.app_port }}
-          V1_MEDIA_STORAGE_DIR: ${{ vars.V1_MEDIA_STORAGE_DIR || '/var/lib/alchemy/v1/media_storage' }}
-        run: |
-          REMOTE="${VPS_USER:-root}@${VPS_HOST}"
-          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o StrictHostKeyChecking=accept-new scripts/vps_migrate_release_layout.sh "$REMOTE:/tmp/alchemy-vps-migrate-release-layout.sh"
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" "$REMOTE" "chmod 755 /tmp/alchemy-vps-migrate-release-layout.sh && TARGET_SHA='$GITHUB_SHA' DEPLOY_LINK='$DEPLOY_DIR' APP_PORT='$APP_PORT' REPO_URL='https://github.com/meta-xucong/alchemy-media-agent.git' V1_MEDIA_STORAGE_DIR='$V1_MEDIA_STORAGE_DIR' bash /tmp/alchemy-vps-migrate-release-layout.sh"
+          echo "This workflow is retired and makes no VPS connection or changes." >&2
+          echo "Use guarded-vps-candidate.yml, inspect its receipt, then guarded-vps-activate.yml." >&2
+          exit 2
