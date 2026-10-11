@@ -111,6 +111,21 @@ def test_activation_orders_fence_backup_prepare_verify_and_admission() -> None:
     assert stopped_verification_block.index('systemctl stop alchemy-v3-storage-maintenance.service') < stopped_verification_block.index('writers_stopped=1')
 
 
+def test_activation_uses_one_v3_container_lifetime_for_both_work_inventories() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+
+    assert "v1_container_identity" in workflow
+    assert "v1_container_started_at" in workflow
+    assert workflow.count('--v3-container-started-at "$v1_container_started_at"') == 2
+    stopped_verification = workflow.index(
+        'python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work',
+        workflow.index('docker stop --time 45 "$v1_container" >/dev/null || stop_pre'),
+    )
+    assert workflow.index("v1_container_identity_changed_while_fencing") < stopped_verification
+    guard = (ROOT / "scripts" / "vps_cutover_guard.py").read_text(encoding="utf-8")
+    assert "v3_container_start_time_unreadable" in guard
+
+
 def test_emergency_closure_verifies_maintenance_or_stops_public_nginx() -> None:
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
     keep_closed = workflow[workflow.index("          keep_closed() {"):workflow.index("          rollback() {")]

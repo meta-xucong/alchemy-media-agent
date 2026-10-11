@@ -98,6 +98,8 @@ jobs:
           runtime_contract_backup=""
           maintenance_timer_was_active=0
           old_image=""
+          v1_container_identity=""
+          v1_container_started_at=""
           v1_media=""
           v2_storage=""
           v2_data=""
@@ -664,6 +666,10 @@ jobs:
           verify_release_source_tree "$candidate_release" || stop_pre candidate_release_source_tree_changed
           choose_compose || stop_pre docker_compose_unavailable
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop_pre v1_not_running
+          v1_container_identity="$(docker inspect "$v1_container" --format '{{.Id}}|{{.State.StartedAt}}')" || stop_pre v1_container_identity_unavailable
+          [[ "$v1_container_identity" == *'|'* ]] || stop_pre v1_container_identity_unavailable
+          v1_container_started_at="${v1_container_identity#*|}"
+          [ -n "$v1_container_started_at" ] || stop_pre v1_container_start_time_unavailable
           old_image="$(docker inspect "$v1_container" --format '{{.Image}}')" || stop_pre old_v1_image_identity_unavailable
           old_env="$(read_mount /app/.env)" || stop_pre old_env_mount_ambiguous
           v1_media="$(read_mount /app/.media_storage)" || stop_pre v1_media_mount_ambiguous
@@ -695,7 +701,8 @@ jobs:
           before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
-            --v3-projects-root "$v1_media/v3_projects" || stop_pre active_or_unknown_work_requires_drain
+            --v3-projects-root "$v1_media/v3_projects" \
+            --v3-container-started-at "$v1_container_started_at" || stop_pre active_or_unknown_work_requires_drain
           systemctl is-active --quiet alchemy-v3-storage-maintenance.service && stop_pre storage_maintenance_service_active
           maintenance_timer_was_active=0
           if systemctl is-active --quiet alchemy-v3-storage-maintenance.timer; then maintenance_timer_was_active=1; fi
@@ -743,13 +750,15 @@ jobs:
             systemctl is-active --quiet "$unit" && stop_pre "${unit}_still_active"
           done
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null || true)" != true ] || stop_pre v1_still_running
+          [ "$(docker inspect "$v1_container" --format '{{.Id}}|{{.State.StartedAt}}' 2>/dev/null || true)" = "$v1_container_identity" ] || stop_pre v1_container_identity_changed_while_fencing
           systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && stop_pre maintenance_timer_restarted
           systemctl is-active --quiet alchemy-v3-storage-maintenance.service && stop_pre maintenance_service_restarted
           verify_v3_runtime_storage_roots "$old_env" || stop_pre durable_v3_storage_roots_changed_while_fencing
           verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || stop_pre candidate_v3_storage_roots_changed_while_fencing
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
-            --v3-projects-root "$v1_media/v3_projects" || stop_pre durable_work_changed_while_fencing
+            --v3-projects-root "$v1_media/v3_projects" \
+            --v3-container-started-at "$v1_container_started_at" || stop_pre durable_work_changed_while_fencing
           backup_stores || stop_pre consistent_store_backup_failed
           require_disk_floor "$maintenance_backup_root" || stop_pre backup_consumed_disk_reserve
           require_post_backup_data_capacity "$maintenance_backup/database-inventory.bin" || stop_pre backup_consumed_data_reserve
