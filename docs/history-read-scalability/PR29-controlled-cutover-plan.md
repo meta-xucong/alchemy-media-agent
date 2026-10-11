@@ -508,3 +508,8 @@ The VPS is still on the pre-cutover release; this is a guard correction, not a
 deployment receipt. The earlier activation stopped before maintenance and
 changed no production state. The revised workflow must pass CI, independent
 review, and a new guarded cutover before deployment can be claimed.
+
+Local validation on the runtime-env follow-up commit: the deployment guard,
+activation contract, and release runtime tests report 75 passed and 5
+POSIX-only skips on Windows; `py_compile` and `git diff --check` pass. GitHub
+Actions and the second independent review are pending for the frozen commit.
