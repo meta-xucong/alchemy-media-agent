@@ -203,6 +203,7 @@ def test_nested_only_lab_owner_protects_generic_output_authorization(stores, mon
     # transfer access to a different account.
     other = job(9, output_id=record["id"], owner=77)
     put_jobs(repo, [other])
+    index.prepare_history_index(store)
     assert index.lookup_output_owner(store, record["id"]) == (None, True)
 
 

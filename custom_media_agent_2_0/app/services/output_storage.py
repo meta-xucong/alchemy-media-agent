@@ -171,9 +171,9 @@ def _output_path_and_type(output_id: str) -> tuple[Path | None, str]:
 
 
 def _history_item(output_id: str) -> ImageHistoryItem | None:
-    from app.services.image_history import get_image_history_item
+    from app.services.image_history import get_prepared_image_history_item
 
-    return get_image_history_item(output_id)
+    return get_prepared_image_history_item(output_id)
 
 
 def _write_thumbnail(output_id: str, content: bytes) -> Path | None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.schemas import FavoriteReferenceAssetRequest, UploadedAsset
-from app.services.image_history import get_image_history_item
+from app.services.image_history import get_prepared_image_history_item
 from app.services.output_storage import read_output_content
 from app.services.uploaded_assets import create_uploaded_asset_from_bytes
 
@@ -17,7 +17,7 @@ def create_reference_asset_from_history_output(
     clean_output_id = str(output_id or "").strip()
     if not clean_output_id:
         return None
-    history_item = get_image_history_item(clean_output_id)
+    history_item = get_prepared_image_history_item(clean_output_id)
     if not history_item:
         return None
     content = read_output_content(clean_output_id)

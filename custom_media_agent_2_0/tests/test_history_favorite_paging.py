@@ -202,7 +202,7 @@ def test_pending_history_item_lookup_is_prepared_only(configured, monkeypatch):
         lambda: (_ for _ in ()).throw(AssertionError("item request must not import legacy JSONL")),
     )
     with pytest.raises(history.HistoryIndexNotReadyError):
-        history.get_image_history_item("pending-item")
+        history.get_prepared_image_history_item("pending-item")
     assert not configured.image_history_path.with_name("image_history_index.sqlite3").exists()
 
 

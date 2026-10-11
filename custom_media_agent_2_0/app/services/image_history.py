@@ -210,8 +210,14 @@ def _favorite_history_page(
 
 
 def get_image_history_item(output_id: str) -> ImageHistoryItem | None:
-    # Item lookups are used by API reads (downloads, thumbnails and ownership
-    # checks). They must never turn a cold request into a full legacy import.
+    # Backward-compatible service lookup for internal callers that explicitly
+    # accept lazy preparation. API reads use get_prepared_image_history_item.
+    _ensure_history_index()
+    return get_prepared_image_history_item(output_id)
+
+
+def get_prepared_image_history_item(output_id: str) -> ImageHistoryItem | None:
+    """Read one item only from an already-prepared index; never import on demand."""
     connection = _history_connect(prepare=False)
     try:
         row = connection.execute(

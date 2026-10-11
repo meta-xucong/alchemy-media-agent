@@ -567,9 +567,9 @@ def _v2_output_owner_id(output_id: str) -> int | None:
     output = repository.get_output(output_id)
     metadata = output.metadata if output else {}
     if not metadata:
-        from app.services.image_history import get_image_history_item
+        from app.services.image_history import get_prepared_image_history_item
 
-        item = get_image_history_item(output_id)
+        item = get_prepared_image_history_item(output_id)
         metadata = item.metadata if item else {}
     try:
         owner_id = int((metadata or {}).get("veyra_user_id") or 0)
@@ -979,9 +979,9 @@ async def delete_history_item(output_id: str, request: Request, authorization: s
 async def favorite_history_item(output_id: str, body: FavoriteImageRequest, request: Request, authorization: str = Header(default="")):
     context = await _require_output_visible(request, output_id, authorization)
     if not await _run_sqlite_api_call(repository.get_output, output_id):
-        from app.services.image_history import get_image_history_item
+        from app.services.image_history import get_prepared_image_history_item
 
-        if not await _run_sqlite_api_call(get_image_history_item, output_id):
+        if not await _run_sqlite_api_call(get_prepared_image_history_item, output_id):
             raise HTTPException(status_code=404, detail={"error_code": "history_output_not_found", "message": "V2 history output not found."})
     return await _run_sqlite_api_call(
         set_favorite, output_id, body.favorite, veyra_user_id=context.get("user_id"), require_ready=True

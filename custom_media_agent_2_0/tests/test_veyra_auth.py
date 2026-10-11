@@ -534,6 +534,7 @@ def test_veyra_history_delete_permissions_enforced(tmp_path, monkeypatch: pytest
         + "\n",
         encoding="utf-8",
     )
+    prepare_history_reads()
 
     async def fake_account(self, user_id: int):
         role = "admin" if user_id == 1 else "user"

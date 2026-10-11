@@ -82,16 +82,16 @@
 
 2026-10-11 候选补充：在 `5a33c05e` 的已合并历史基线上治理 V1/V2/Lab 历史读取。原始 38 文件矩阵与旧版/原始目标列不变；本表的候选列绑定本轮实际源码。新增派生索引、只读调度和受控维护来源显式列入；其设计、回归、权限与文件库存边界见 `docs/history-read-scalability/`。此更新不是生产迁移完成证明。
 
-- Candidate overlay: 36 files; SHA-256 `a93155a5b9c7f62452926388d2049fae11d61d6cfeccd89289b488bf0c28ad53`.
+- Candidate overlay: 38 files; SHA-256 `79a5cd17b4e78fc8006585c331077091f7e240f73c9bad07fe71be217c48f420`.
 - Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.
-- Expanded old-to-candidate manifest: 60 files; SHA-256 `2c8c414f2b6b399ed4d9c571af370300e484a59ad0c57ee37c5a9c9e7810b0c0`.
+- Expanded old-to-candidate manifest: 61 files; SHA-256 `e75d222e7b493a218db96db93060d43f2e5aace49fafabac8b7713215cdbe754`.
 - Expanded digest uses section 2 encoding; merge the original matrix with this overlay by path, replacing target blobs and adding new paths.
 
 | Source file | Old release blob | Original target blob | Candidate blob | Scope / authority |
 |---|---|---|---|---|
 | `custom_media_agent_2_0/app/agents/runtime.py` | `29114b3641958bf74eacdf55cdf218986deeef8c` | `29114b3641958bf74eacdf55cdf218986deeef8c` | `64356f788643398bf9eec5ae73f03ec07a0a583d` | V2_DEPENDENCY; claim-aware run, output and billing persistence boundaries |
 | `custom_media_agent_2_0/app/config.py` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `c571b5084ab10245402d99e67bae6a0ab73b87d3` | `028d02004231333e7ebefa217bae06405581fcf8` | V2_DEPENDENCY; queue/claim/capacity settings |
-| `custom_media_agent_2_0/app/main.py` | `4c7d0a00665cea66b651bc892ac684941fe6a6f3` | `18680401fb96c9eea0ee21b31c351ff927f6f332` | `f9359097fff34526573dee9e5ba54f796ec8a940` | HISTORY_READ_20261011; V2_ADAPTER; async admission, capacity errors, inline-worker identity and sanitized legacy import failures |
+| `custom_media_agent_2_0/app/main.py` | `4c7d0a00665cea66b651bc892ac684941fe6a6f3` | `18680401fb96c9eea0ee21b31c351ff927f6f332` | `a8b0f4b94073a2a0fa6e6d04e0d0dc9420f2082b` | HISTORY_READ_20261011; V2_ADAPTER; async admission, capacity errors, inline-worker identity and sanitized legacy import failures |
 | `custom_media_agent_2_0/app/providers/images/claim_fenced_http.py` | `ABSENT` | `ABSENT` | `d95baf0c17e5c23669d1f02f7775a5ea3dc2f541` | V2_DEPENDENCY; shared claim check at wire-request boundary |
 | `custom_media_agent_2_0/app/providers/images/doubao_image.py` | `5d21f7ae7dce64d525c54fcf9d3908ac64cef0fb` | `5d21f7ae7dce64d525c54fcf9d3908ac64cef0fb` | `605ef62d62dc77697f3389eb4f5551e1014b06ab` | V2_DEPENDENCY; fenced provider dispatch |
 | `custom_media_agent_2_0/app/providers/images/gemini_image.py` | `772006ea72d10d13a812afbd87e2c1624b601901` | `772006ea72d10d13a812afbd87e2c1624b601901` | `c000b5920cfb670acdabafef4ec37b79d36564ce` | V2_DEPENDENCY; fenced provider dispatch |
@@ -102,11 +102,13 @@
 | `custom_media_agent_2_0/app/repositories/sqlite_json.py` | `ABSENT` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | `14eebe2baef11ca152ffc1678c97ca361d5c1f94` | TARGET_STORAGE; V2 case index columns, filtered reads and WAL schema |
 | `custom_media_agent_2_0/app/services/asset_binding.py` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | `d5668779e583bdd00283b79f281dfe854e6cba3a` | DIRECT_REUSE; task-runtime asset lookup leading to uploaded_assets hydration |
 | `custom_media_agent_2_0/app/services/bootstrap.py` | `e1d3bd1ba851b2ae0391847f5c34cbbba2a6f1b9` | `e1d3bd1ba851b2ae0391847f5c34cbbba2a6f1b9` | `04ecf5b15936742dc82c2afe391deb68e7b3ed3d` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
-| `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `8a6028a8b09a64cea049e189aadfd1c4e356d104` | HISTORY_READ_20261011; THIN_ADAPTER; validated atomic favorites import with repair retry |
+| `custom_media_agent_2_0/app/services/favorites.py` | `1b75c9edf1f370dfe2d8af0db34a121c807c809d` | `0b1b28c1bd92420117f9adea9023ab238b04be9e` | `cf455f0a2ee38b8c261b63758e788375b5377190` | HISTORY_READ_20261011; THIN_ADAPTER; validated atomic favorites import with repair retry |
 | `custom_media_agent_2_0/app/services/generation.py` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `8cdb994ec7f25be1ec560d993d4cfd3056b97cb3` | `3fefe202af88c5e50429c19672d9700f2cc3fe7c` | V2_DEPENDENCY; claim-aware generation persistence/checkpoint boundary |
 | `custom_media_agent_2_0/app/services/generation_capacity.py` | `ABSENT` | `ABSENT` | `3f4ef455560c2627496d64b72a5b13413f58f1ec` | V2_DEPENDENCY; cross-process lease, stale recovery and cancellation safety |
 | `custom_media_agent_2_0/app/services/history_counts.py` | `ABSENT` | `ABSENT` | `9763885bd08083c3cf3f50bbb9026f3854fcd5b4` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
-| `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `d79e1938d341844e4bf8011c0158aecf3b57225d` | HISTORY_READ_20261011; DIRECT_REUSE; V2 fail-closed JSONL history import |
+| `custom_media_agent_2_0/app/services/history_reference_assets.py` | `2a6b3b337f78e708a19423ea40c639521a353e17` | `2a6b3b337f78e708a19423ea40c639521a353e17` | `467b3546d71ec7b6c94335bf2c80c133bb7da86e` | HISTORY_READ_20261011; prepared-only history lookup for reference-asset API |
+| `custom_media_agent_2_0/app/services/image_history.py` | `d6ec4e5f558a07456ff92deb57ceecaebb20aa2f` | `abdd2e2fb719d477d882d5784aa5a325a158d035` | `159f2f5854142c4522be8fdad231c4b86c15c6a5` | HISTORY_READ_20261011; DIRECT_REUSE; V2 fail-closed JSONL history import |
+| `custom_media_agent_2_0/app/services/output_storage.py` | `116a9363429b5c849ff7ab249dfc4f4bace8e560` | `116a9363429b5c849ff7ab249dfc4f4bace8e560` | `bc5f60fbc271750de113a673a1187e1ff0c339db` | HISTORY_READ_20261011; history-file reads use only an already-prepared index |
 | `custom_media_agent_2_0/app/services/queue_worker.py` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `24b6a271823cca2a1776e7f184f5ba3bb2dfd7be` | `f1e07daeb10b3aadd43fa8ab09e75ea6387e6d07` | V2_DEPENDENCY; heartbeat, guarded transitions and success recovery |
 | `custom_media_agent_2_0/app/services/task_queue.py` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `d0cce383588e9f261745c6f7f5398982f0bac471` | `8b2b81ab442478e70e875cc9c36bac0eccfd6db8` | V2_DEPENDENCY; claim protocol, checkpoint schema and bounded async admission |
 | `custom_media_agent_2_0/app/workers/task_queue_worker.py` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `c4582a8b8fe2c5fab012a2fc45da7e4ae823e7a3` | `36336b2f43ac7325c698c29b402cd7da36bab536` | V2_DEPENDENCY; unique process identity, no old bulk release |
@@ -115,7 +117,7 @@
 | `scripts/prepare_v1_history_index.py` | `ABSENT` | `ABSENT` | `4a43c0bce3296e9057a996868f5b44fae5acf63a` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `scripts/prepare_v2_history_reads.py` | `ABSENT` | `ABSENT` | `b0556fca014be86db4f579b0acf3ae0307afd316` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/main.py` | `c190ff437f53e31863333848eb7c2bf767ac3032` | `f0b2e9562fca4250046e2f1c05bbd11381dfbc3d` | `905bcb90e15e01a471b88628fc468651f07b62fd` | HISTORY_READ_20261011; PLATFORM_SHELL; sanitized fail-closed legacy import API responses |
-| `src_skeleton/app/repositories/history_index.py` | `ABSENT` | `ABSENT` | `d5655ab2f0f695a5eafea3e14783821c333e0cb6` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
+| `src_skeleton/app/repositories/history_index.py` | `ABSENT` | `ABSENT` | `4de6eee61d4c1e4bedb5ae92b5dd77c555668f48` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/repositories/output_publication.py` | `ABSENT` | `ABSENT` | `4662c12a33f2f444b2d8d685fb417ebfd6c090c0` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/repositories/sqlite_calls.py` | `ABSENT` | `26b90d8d1d0208775df230f05f21f31ded6b16bb` | `c96f73f62000994c4101d7ebd9a76ad038b17ba6` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/repositories/sqlite_json.py` | `ABSENT` | `4c719e7603cc3723d75ac392f8782810220bbe73` | `350466ee1ccf3f85d3a28c2fdd657cd5df5d1a5d` | HISTORY_READ_20261011; TARGET_STORAGE; V1 indexed columns, filtered reads and WAL schema |
@@ -124,7 +126,7 @@
 | `src_skeleton/app/services/history_projection.py` | `ABSENT` | `ABSENT` | `28f3a1c34d208f15707440df8e20ffb834388fab` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/services/image_service.py` | `067693e769b4aff84af3b0eaefaf42655ba02837` | `cb66e6a375fc0150155186b83995fd7e69190c82` | `dc00b8eed0500dd14dba984c851761139eaca93d` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/services/retention_settings.py` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | `1b199826c2a72577e9fea4bdfea9df2dcde89860` | PLATFORM_SHELL; V1 user-edited retention JSON and fallback defaults |
-| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `775ebfcd6d0e8ba8bbf260b46b8f0d6d0e73771a` | HISTORY_READ_20261011; DIRECT_REUSE; V1 fail-closed JSONL history and owner-evidence import |
+| `src_skeleton/app/storage/local.py` | `f4470a6dbba12cef6586d7075d584653c42c7098` | `aa57c169788935280f1899f1edfac25e33b227f8` | `589362461109b9247212e08653b66945d303ea05` | HISTORY_READ_20261011; DIRECT_REUSE; V1 fail-closed JSONL history and owner-evidence import |
 
 <!-- /PR28_CANDIDATE_SOURCE_MATRIX -->
 
