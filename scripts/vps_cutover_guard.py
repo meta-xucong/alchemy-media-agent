@@ -74,7 +74,51 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     )}
 
 
-def verify_v3_storage_roots(container_inspect: object, v1_media_root: Path) -> dict:
+def _read_v3_bootstrap_environment(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        raise CutoverBlocked("v3_bootstrap_environment_unreadable") from None
+    relevant = {
+        "ALCHEMY_V3_PROJECT_DIR", "ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT",
+        "MEDIA_AGENT_RUNTIME_ENV_FILE", "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    }
+    values: dict[str, str] = {}
+    for line in lines:
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.startswith("export "):
+            entry = entry[7:].lstrip()
+        key, separator, raw_value = entry.partition("=")
+        key = key.strip()
+        if key not in relevant:
+            tokens = key.split(None, 1)
+            if tokens and tokens[0] in relevant:
+                raise CutoverBlocked("v3_storage_environment_ambiguous")
+            continue
+        if not separator or key in values:
+            raise CutoverBlocked("v3_storage_environment_ambiguous")
+        value = raw_value.strip()
+        if value.startswith(("'", '"')):
+            quote = value[0]
+            closing = value.find(quote, 1)
+            trailing = value[closing + 1:].strip() if closing >= 0 else "invalid"
+            if closing < 0 or (trailing and not trailing.lstrip().startswith("#")):
+                raise CutoverBlocked("v3_storage_environment_ambiguous")
+            value = value[1:closing]
+        else:
+            value = value.split(" #", 1)[0].strip()
+        values[key] = value
+    return values
+
+
+def verify_v3_storage_roots(
+    container_inspect: object, v1_media_root: Path, bootstrap_env_file: Path | None = None,
+) -> dict:
     """Verify V3's effective container roots map to the guarded host mount."""
     if not isinstance(container_inspect, list) or len(container_inspect) != 1:
         raise CutoverBlocked("v3_container_inspect_ambiguous")
@@ -90,7 +134,11 @@ def verify_v3_storage_roots(container_inspect: object, v1_media_root: Path) -> d
     env_items = config.get("Env")
     if not isinstance(env_items, list):
         raise CutoverBlocked("v3_storage_environment_ambiguous")
-    relevant = {"ALCHEMY_V3_PROJECT_DIR", "ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT"}
+    relevant = {
+        "ALCHEMY_V3_PROJECT_DIR", "ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT",
+        "MEDIA_AGENT_RUNTIME_ENV_FILE", "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    }
     env: dict[str, str] = {}
     for item in env_items:
         if not isinstance(item, str) or "=" not in item:
@@ -101,6 +149,16 @@ def verify_v3_storage_roots(container_inspect: object, v1_media_root: Path) -> d
         if key in env:
             raise CutoverBlocked("v3_storage_environment_ambiguous")
         env[key] = value
+    bootstrap_env = _read_v3_bootstrap_environment(bootstrap_env_file)
+    effective_env = {**bootstrap_env, **env}
+    runtime_pointers = (
+        "MEDIA_AGENT_RUNTIME_ENV_FILE", "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    )
+    if any(bootstrap_env.get(key) for key in runtime_pointers) or any(
+        effective_env.get(key) for key in runtime_pointers
+    ):
+        raise CutoverBlocked("v3_runtime_env_file_unsupported")
 
     def resolved_container_path(value: str) -> str:
         if not value:
@@ -110,12 +168,22 @@ def verify_v3_storage_roots(container_inspect: object, v1_media_root: Path) -> d
             path = PurePosixPath(workdir) / path
         return posixpath.normpath(str(path))
 
-    project_value = env.get("ALCHEMY_V3_PROJECT_DIR") or "/app/.media_storage/v3_projects"
-    job_base = env.get("ALCHEMY_V3_JOB_DIR") or env.get("MEDIA_STORAGE_ROOT") or "/app/.media_storage"
+    project_value = effective_env.get("ALCHEMY_V3_PROJECT_DIR") or "/app/.media_storage/v3_projects"
+    job_base = effective_env.get("ALCHEMY_V3_JOB_DIR") or effective_env.get("MEDIA_STORAGE_ROOT") or "/app/.media_storage"
     project_root = resolved_container_path(project_value)
     jobs_root = resolved_container_path(str(PurePosixPath(job_base) / "v3_jobs"))
     expected_project = "/app/.media_storage/v3_projects"
     expected_jobs = "/app/.media_storage/v3_jobs"
+    for key, value in bootstrap_env.items():
+        if not value:
+            continue
+        if key == "ALCHEMY_V3_PROJECT_DIR" and resolved_container_path(value) != expected_project:
+            raise CutoverBlocked("v3_storage_root_mismatch")
+        if (
+            key in {"ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT"}
+            and resolved_container_path(value) != "/app/.media_storage"
+        ):
+            raise CutoverBlocked("v3_storage_root_mismatch")
     if project_root != expected_project or jobs_root != expected_jobs:
         raise CutoverBlocked("v3_storage_root_mismatch")
 
@@ -808,6 +876,7 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--v3-projects-root", required=True, type=Path)
     verify_v3_roots = subparsers.add_parser("verify-v3-storage-roots")
     verify_v3_roots.add_argument("--v1-media-root", required=True, type=Path)
+    verify_v3_roots.add_argument("--bootstrap-env-file", required=True, type=Path)
     roots = subparsers.add_parser("verify-v2-storage-roots")
     roots.add_argument("--environment-file", required=True, type=Path)
     roots.add_argument("--data-dir", required=True)
@@ -854,7 +923,9 @@ def main(argv: list[str] | None = None) -> int:
                 container_inspect = json.load(sys.stdin)
             except (OSError, json.JSONDecodeError):
                 raise CutoverBlocked("v3_container_inspect_invalid") from None
-            result = verify_v3_storage_roots(container_inspect, args.v1_media_root)
+            result = verify_v3_storage_roots(
+                container_inspect, args.v1_media_root, args.bootstrap_env_file
+            )
         elif args.command == "verify-v2-storage-roots":
             expected_roots = {
                 "V2_DATA_DIR": args.data_dir,

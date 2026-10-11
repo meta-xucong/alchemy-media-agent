@@ -490,15 +490,19 @@ resolves those effective roots to `/app/.media_storage/v3_projects` and
 `/app/.media_storage/v3_jobs`, matching the host directories inspected by the
 guard.
 
-The activation workflow now verifies the running container's Docker inspect
-configuration before both active-work scans. The guard fails closed if the
-effective project/job roots differ from the canonical mounted directories, if
-the media bind mount differs from the expected host root, if duplicate path
-environment entries make configuration ambiguous, or if a nested mount would
-shadow either state root. It consumes inspect JSON from stdin and only emits
-the verified paths/status, not the full container environment. The second
-verification occurs after the V3 container is stopped and before backup,
-closing the environment-to-fence window.
+The activation workflow now verifies Docker inspect configuration plus the
+bootstrap `.env` for both the active container and the candidate release. The
+guard fails closed if the effective project/job roots differ from the canonical
+mounted directories, if the media bind mount differs from the expected host
+root, if duplicate/malformed path settings make configuration ambiguous, or if
+a nested mount would shadow either state root. Nonempty runtime-env file
+pointers are rejected for cutover because their contents could add path
+overrides outside Docker `Config.Env`. The candidate configuration is checked
+before maintenance and again after the V3 container starts, before health
+admission. Inspect JSON is consumed from stdin and only sanitized paths/status
+are emitted, never the complete container environment or env-file contents.
+The active configuration is rechecked after the V3 container is stopped and
+before backup, closing the environment-to-fence window.
 
 The VPS is still on the pre-cutover release; this is a guard correction, not a
 deployment receipt. The earlier activation stopped before maintenance and
