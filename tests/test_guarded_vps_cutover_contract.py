@@ -34,10 +34,13 @@ def test_maintenance_probe_is_readable_by_nginx_and_hits_local_origin() -> None:
     assert 'chmod 644 "$maintenance_flag"' in workflow
     assert 'chmod 600 "$maintenance_flag"' not in workflow
     assert "probe_maintenance_gate()" in workflow
+    assert "wait_for_maintenance_gate()" in workflow
+    assert 'while [ "$attempt" -lt 20 ]; do' in workflow
     assert "curl --noproxy '*' -ksS --resolve" in workflow
     assert "alchemy.aiself.vip:443:127.0.0.1" in workflow
-    assert 'maintenance_status="$(probe_maintenance_gate)"' in workflow
-    assert 'status="$(probe_maintenance_gate)"' in workflow
+    assert "--connect-timeout 1 --max-time 3" in workflow
+    assert 'wait_for_maintenance_gate || stop_pre public_maintenance_gate_not_active' in workflow
+    assert 'wait_for_maintenance_gate && gate_confirmed=1' in workflow
 
 
 def test_activation_orders_fence_backup_prepare_verify_and_admission() -> None:
@@ -152,7 +155,7 @@ def test_emergency_closure_verifies_maintenance_or_stops_public_nginx() -> None:
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
     keep_closed = workflow[workflow.index("          keep_closed() {"):workflow.index("          rollback() {")]
 
-    assert '"$status" = 503' in keep_closed
+    assert 'wait_for_maintenance_gate && gate_confirmed=1' in keep_closed
     assert '"$v1_running" = false' in keep_closed
     assert "systemctl stop nginx" in keep_closed
     assert 'systemctl is-active nginx' in keep_closed
