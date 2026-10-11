@@ -408,12 +408,15 @@ def test_restore_rejects_legacy_manifest_without_original_metadata(tmp_path):
         _MODULE.restore_backup(manifest_path, roots)
 
 
-def test_v2_write_access_probe_checks_directory_sqlite_and_append_paths(tmp_path):
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_v2_write_access_probe_checks_directory_sqlite_and_append_paths(tmp_path, journal_mode):
     root = tmp_path / "v2"
     root.mkdir()
     database = root / "queue.sqlite3"
     with sqlite3.connect(database) as connection:
+        assert connection.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0].upper() == journal_mode
         connection.execute("CREATE TABLE tasks(value TEXT)")
+        connection.execute("INSERT INTO tasks VALUES ('existing')")
     append_file = root / "history.jsonl"
     append_file.write_text("{}\n", encoding="utf-8")
 
@@ -421,6 +424,46 @@ def test_v2_write_access_probe_checks_directory_sqlite_and_append_paths(tmp_path
 
     assert result["status"] == "verified"
     assert database.exists() and append_file.read_text(encoding="utf-8") == "{}\n"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT value FROM tasks").fetchall() == [("existing",)]
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE '__alchemy_cutover_probe_%'"
+        ).fetchall() == []
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="requires POSIX permission enforcement by an unprivileged user")
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_v2_write_access_probe_rejects_read_only_database_file(tmp_path, journal_mode):
+    database = tmp_path / "queue.sqlite3"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0].upper() == journal_mode
+        connection.execute("CREATE TABLE tasks(value TEXT)")
+        connection.execute("INSERT INTO tasks VALUES ('keep')")
+    database.chmod(0o444)
+    try:
+        with pytest.raises(_MODULE.CutoverBlocked, match="write_probe_database_unwritable"):
+            _MODULE.verify_v2_write_access([], [database], [])
+    finally:
+        database.chmod(0o600)
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="requires POSIX directory permission enforcement by an unprivileged user")
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_v2_write_access_probe_rejects_unwritable_journal_directory(tmp_path, journal_mode):
+    root = tmp_path / "v2"
+    root.mkdir()
+    database = root / "queue.sqlite3"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0].upper() == journal_mode
+        connection.execute("CREATE TABLE tasks(value TEXT)")
+    root.chmod(0o555)
+    try:
+        with pytest.raises(_MODULE.CutoverBlocked, match="write_probe_database_unwritable"):
+            _MODULE.verify_v2_write_access([], [database], [])
+    finally:
+        root.chmod(0o700)
 
 
 def test_v2_write_access_probe_rejects_missing_sqlite_file(tmp_path):

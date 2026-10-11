@@ -771,7 +771,7 @@ jobs:
           python3 "$candidate_release/ops/vps-release/v2_runtime_guard.py" --release "$candidate_release" --verify || fail_post active_v2_runtime_guard_failed
           verify_v2_unit_contract || fail_post active_v2_unit_contract_invalid
           docker run --rm --network none \
-            --mount "type=bind,src=$v1_media,dst=/app/.media_storage,readonly" \
+            --mount "type=bind,src=$v1_media,dst=/app/.media_storage" \
             --mount "type=bind,src=$candidate_release/scripts/prepare_v1_history_index.py,dst=/app/scripts/prepare_v1_history_index.py,readonly" \
             -e MEDIA_STORAGE_ROOT=/app/.media_storage -e PYTHONPATH=/app \
             -e MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS=false \

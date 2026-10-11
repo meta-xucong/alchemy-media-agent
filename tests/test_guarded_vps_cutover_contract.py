@@ -203,12 +203,17 @@ def test_legacy_vps_entrypoints_stop_before_remote_side_effects() -> None:
 
 def test_v1_index_prepare_and_verify_share_the_container_storage_path() -> None:
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    verifier = (ROOT / "scripts" / "prepare_v1_history_index.py").read_text(encoding="utf-8")
     prepare = workflow[workflow.index("          prepare_and_verify_target_indexes() {"):workflow.index("          restart_v2() {")]
     assert prepare.count("--storage-root \"$v1_root_in_container\" --verify") == 1
     assert "--storage-root \"$v1_media\" --verify" not in prepare
     assert prepare.count("--mount \"type=bind,src=$v1_media,dst=$v1_root_in_container") >= 2
     assert "--storage-root \"$v1_media\" --verify" not in workflow
     assert "--storage-root /app/.media_storage --verify || fail_post active_v1_history_index_unready" in workflow
+    post_start = workflow[workflow.index("          docker run --rm --network none", workflow.index("active_v2_runtime_guard_failed")):workflow.index("active_v1_history_index_unready")]
+    assert '--mount "type=bind,src=$v1_media,dst=/app/.media_storage"' in post_start
+    assert '--mount "type=bind,src=$v1_media,dst=/app/.media_storage,readonly"' not in post_start
+    assert '"?mode=ro"' in verifier
 
 
 def test_v2_index_prepare_verify_and_write_probe_run_as_service_user() -> None:

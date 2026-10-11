@@ -356,3 +356,51 @@ The implementation performs those checks at cutover time and fails closed; a
 Linux isolated permission fixture and production cutover drill remain separate
 acceptance evidence. No VPS operation, commit, push, merge, or provider call was
 performed in this correction phase.
+
+### Incremental correction: 221dbe29 deployment-gate follow-up
+
+A read-only audit of `221dbe29f5b74b0048c702b73722b70836a9e3b1` found two
+remaining deployment-gate gaps. The correction preserves read-only business
+data verification and makes the SQLite write probe exercise actual transactional
+page writes:
+
+1. **V1 post-start verification keeps the container path but permits SQLite
+   sidecars.** The data directory bind at `/app/.media_storage` is writable in
+   this short-lived verifier container so SQLite can create required WAL/SHM
+   files when they are absent. `prepare_v1_history_index.py --verify` still
+   opens the database with URI `mode=ro` and only reads/compares index state;
+   the workflow does not use `immutable=1` or a host-path exception.
+2. **V2 write permission probe performs rollback-only DDL and DML.** For each
+   existing database it begins an immediate transaction, creates a unique
+   temporary table, inserts one row, rolls back, and confirms no table remains.
+   This tests the SQLite write/journal path rather than merely obtaining a write
+   reservation. The probe contains no application-table mutation and commits
+   no changes; failures fail closed as `write_probe_database_unwritable`.
+
+Regression coverage includes both DELETE and WAL mode normal-write controls,
+no-residue/data-preservation assertions, an unwritable main database file, an
+unwritable DELETE/WAL journal directory, and a workflow contract proving that the
+post-start bind is writable while the verifier itself stays in `mode=ro`.
+POSIX permission tests are skipped on Windows and when run as root, because
+those environments do not enforce the tested denial condition. They must run
+under an unprivileged Linux identity as part of independent cutover validation.
+This remains code/test evidence only; no VPS or production cutover was run.
+
+#### Follow-up validation receipt
+
+- Deployment/cutover plus V1/Lab storage and migration regressions: 304 passed,
+  4 skipped (the permission-denial pytest cases are skipped on this Windows
+  host), 6 existing deprecation warnings.
+- The same SQLite permission-denial cases were exercised separately in a local
+  Linux container as uid 1000: mode-0444 main databases were rejected in both
+  DELETE and WAL modes, and unwritable DELETE/WAL journal directories were rejected.
+  Normal-write controls passed in pytest for both modes, with original data
+  unchanged and no probe table left behind.
+- A closed-connection WAL database with absent `-wal`/`-shm` sidecars opened for
+  `mode=ro` SELECT in a writable temporary directory, confirming the precise
+  sidecar requirement behind the workflow change.
+- Independent read-only diff review passed. Both guarded workflow YAML files,
+  shell syntax checks, Python compilation, and `git diff --check` passed.
+- No VPS action, merge, or deployment was performed. Linux probes used isolated
+  temporary databases and do not substitute for service-account cutover
+  rehearsal.

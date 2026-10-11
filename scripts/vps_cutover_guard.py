@@ -19,6 +19,7 @@ import tempfile
 import subprocess
 import sys
 import time
+import uuid
 
 
 V1_ACTIVE = {
@@ -544,8 +545,22 @@ def verify_v2_write_access(directories: list[Path], databases: list[Path], appen
             uri = database.resolve().as_uri() + "?mode=rw"
             connection = sqlite3.connect(uri, uri=True, timeout=1.0, isolation_level=None)
             connection.execute("BEGIN IMMEDIATE")
+            probe_table = f"__alchemy_cutover_probe_{uuid.uuid4().hex}"
+            connection.execute(f'CREATE TABLE "{probe_table}" (value INTEGER NOT NULL)')
+            connection.execute(f'INSERT INTO "{probe_table}" (value) VALUES (1)')
             connection.execute("ROLLBACK")
+            residue = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (probe_table,),
+            ).fetchone()
+            if residue is not None:
+                raise CutoverBlocked("write_probe_database_rollback_failed")
         except (sqlite3.Error, OSError):
+            if connection is not None and connection.in_transaction:
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
             raise CutoverBlocked("write_probe_database_unwritable") from None
         finally:
             if connection is not None:
