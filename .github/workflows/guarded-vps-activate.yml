@@ -7,6 +7,14 @@ on:
         description: "Exact prepared candidate commit to activate"
         required: true
         type: string
+      maintenance_confirmation:
+        description: "Type CUTOVER-PR29 to acknowledge planned V1/V2 downtime"
+        required: true
+        type: string
+      minimum_free_bytes:
+        description: "Operator-selected minimum free bytes required on every affected data/backup filesystem"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -43,30 +51,81 @@ jobs:
       - name: Atomically activate and verify the prepared candidate
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          MAINTENANCE_CONFIRMATION: ${{ inputs.maintenance_confirmation }}
+          MINIMUM_FREE_BYTES: ${{ inputs.minimum_free_bytes }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$MAINTENANCE_CONFIRMATION" == "CUTOVER-PR29" ]]
+          [[ "$MINIMUM_FREE_BYTES" =~ ^[1-9][0-9]*$ ]]
+          [[ ${#MINIMUM_FREE_BYTES} -le 18 ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=accept-new \
-            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
+            "$remote" "bash -s -- '$EXPECTED_SHA' '$MINIMUM_FREE_BYTES' CUTOVER-PR29" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
           expected_sha="$1"
+          minimum_free_bytes="$2"
+          maintenance_confirmation="$3"
+          [ "$maintenance_confirmation" = CUTOVER-PR29 ] || { echo GUARDED_ACTIVATE_STOP=maintenance_confirmation_missing >&2; exit 1; }
+          [[ "$minimum_free_bytes" =~ ^[1-9][0-9]*$ ]] || { echo GUARDED_ACTIVATE_STOP=invalid_disk_budget >&2; exit 1; }
+          [ "${#minimum_free_bytes}" -le 18 ] || { echo GUARDED_ACTIVATE_STOP=invalid_disk_budget >&2; exit 1; }
+          install -d -m 755 /run/lock
+          exec 9>/run/lock/alchemy-media-agent-release.lock
+          flock -w 300 9 || { echo GUARDED_ACTIVATE_STOP=shared_release_lock_unavailable >&2; exit 1; }
           deploy_link="/opt/alchemy-media-agent"
           releases_root="/opt/alchemy-media-agent-releases"
           v1_container="alchemy-media-agent"
           public_base_url="https://alchemy.aiself.vip"
           v2_units=(alchemy-v2-api.service alchemy-v2-worker.service alchemy-v2-sync-worker.service)
           candidate_release="${releases_root}/doc276-277-${expected_sha:0:12}"
+          candidate_image="alchemy-media-agent:candidate-${expected_sha}"
+          maintenance_flag="/etc/alchemy/alchemy-media-agent-maintenance"
+          nginx_config="/etc/nginx/conf.d/alchemy-media-agent.conf"
+          maintenance_backup_root="/var/backups/alchemy"
+          maintenance_backup="${maintenance_backup_root}/pr29-${expected_sha:0:12}-$(date -u +%Y%m%dT%H%M%SZ)"
           compose_cmd=()
+          maintenance_active=0
+          writers_stopped=0
+          target_indexes_mutated=0
+          candidate_services_started=0
+          nginx_config_backup=""
+          runtime_contract_backup=""
+          maintenance_timer_was_active=0
+          old_image=""
+          v1_media=""
+          v2_storage=""
+          v2_data=""
+          v2_history_path=""
+          v2_history_dir=""
+          v2_queue_db=""
+          nginx_config_backup=""
+          runtime_contract_backup=""
+          api_runtime_env="/etc/alchemy/alchemy-v2-api-runtime.env"
+          api_runtime_drop_in="/etc/systemd/system/alchemy-v2-api.service.d/90-alchemy-worker-ownership.conf"
+
+          handle_unexpected_error() {
+            local status=$?
+            trap - ERR
+            if [ "$candidate_services_started" = 1 ]; then
+              fail_post "unhandled_exit_${status}"
+            elif [ "$maintenance_active" = 1 ] || [ "$writers_stopped" = 1 ]; then
+              rollback "unhandled_exit_${status}"
+            fi
+            exit "$status"
+          }
+          trap handle_unexpected_error ERR
 
           stop_pre() {
             printf 'GUARDED_ACTIVATE_STOP=%s\n' "$1" >&2
+            if [ "$maintenance_active" = 1 ] || [ "$writers_stopped" = 1 ]; then
+              rollback "$1"
+            fi
             exit 1
           }
 
@@ -98,12 +157,157 @@ jobs:
             done
           }
 
+          v2_env_value() {
+            local key="$1" file=/etc/alchemy/alchemy-v2.env count
+            [ -f "$file" ] || return 1
+            count="$(awk -F= -v key="$key" '$1 == key {count++} END {print count+0}' "$file")"
+            [ "$count" -le 1 ] || return 1
+            awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); sub(/\r$/, ""); print; exit}' "$file"
+          }
+
+          verify_v2_runtime_roots() {
+            local common=(verify-v2-storage-roots --environment-file /etc/alchemy/alchemy-v2.env
+              --data-dir "$v2_data" --storage-dir "$v2_storage"
+              --history-path "$v2_history_path" --queue-db "$v2_queue_db")
+            if [ -e "$api_runtime_drop_in" ] || [ -e "$api_runtime_env" ]; then
+              [ -f "$api_runtime_drop_in" ] && [ -f "$api_runtime_env" ] || return 1
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-runtime-contract \
+                --environment-file "$api_runtime_env" --drop-in "$api_runtime_drop_in" >/dev/null || return 1
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" "${common[@]}" \
+                --allow-api-drop-in "$api_runtime_drop_in" \
+                --allow-api-environment-file "$api_runtime_env"
+            else
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" "${common[@]}"
+            fi
+          }
+
+          verify_v2_runtime_unit_roots() {
+            local common=(verify-v2-storage-unit-roots --environment-file /etc/alchemy/alchemy-v2.env
+              --data-dir "$v2_data" --storage-dir "$v2_storage"
+              --history-path "$v2_history_path" --queue-db "$v2_queue_db")
+            if [ -e "$api_runtime_drop_in" ] || [ -e "$api_runtime_env" ]; then
+              [ -f "$api_runtime_drop_in" ] && [ -f "$api_runtime_env" ] || return 1
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-runtime-contract \
+                --environment-file "$api_runtime_env" --drop-in "$api_runtime_drop_in" >/dev/null || return 1
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" "${common[@]}" \
+                --allow-api-drop-in "$api_runtime_drop_in" \
+                --allow-api-environment-file "$api_runtime_env"
+            else
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" "${common[@]}"
+            fi
+          }
+
+          require_disk_floor() {
+            local path="$1" available
+            [ -d "$path" ] || return 1
+            available="$(df -PB1 "$path" | awk 'NR == 2 {print $4}')"
+            [[ "$available" =~ ^[0-9]+$ ]] && [ "$available" -ge "$minimum_free_bytes" ]
+          }
+
+          require_backup_capacity() {
+            local inventory_file="$1" estimate_json backup_required data_required directory available
+            [ -d "$maintenance_backup_root" ] || return 1
+            estimate_json="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" estimate-space \
+              --inventory-file "$inventory_file" --reserve-bytes "$minimum_free_bytes" \
+              --source "$v1_media/history/outputs.jsonl" \
+              --source "$v1_media/favorites/image_favorites.json" \
+              --source "$v2_history_path" --source "$v2_data/image_favorites.json")" || return 1
+            backup_required="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["required_backup_bytes"])' <<<"$estimate_json")" || return 1
+            data_required="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["required_data_bytes"])' <<<"$estimate_json")" || return 1
+            [[ "$backup_required" =~ ^[0-9]+$ && "$data_required" =~ ^[0-9]+$ ]] || return 1
+            available="$(df -PB1 "$maintenance_backup_root" | awk 'NR == 2 {print $4}')"
+            [[ "$available" =~ ^[0-9]+$ ]] && [ "$available" -ge "$backup_required" ] || return 1
+            for directory in "$v1_media" "$v2_data" "$v2_history_dir"; do
+              available="$(df -PB1 "$directory" | awk 'NR == 2 {print $4}')"
+              [[ "$available" =~ ^[0-9]+$ ]] && [ "$available" -ge "$data_required" ] || return 1
+            done
+          }
+
+          require_post_backup_data_capacity() {
+            local inventory_file="$1" estimate_json data_required directory available
+            estimate_json="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" estimate-space \
+              --inventory-file "$inventory_file" --reserve-bytes "$minimum_free_bytes" \
+              --source "$v1_media/history/outputs.jsonl" \
+              --source "$v1_media/favorites/image_favorites.json" \
+              --source "$v2_history_path" --source "$v2_data/image_favorites.json")" || return 1
+            data_required="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["required_data_bytes"])' <<<"$estimate_json")" || return 1
+            [[ "$data_required" =~ ^[0-9]+$ ]] || return 1
+            for directory in "$v1_media" "$v2_data" "$v2_history_dir"; do
+              available="$(df -PB1 "$directory" | awk 'NR == 2 {print $4}')"
+              [[ "$available" =~ ^[0-9]+$ ]] && [ "$available" -ge "$data_required" ] || return 1
+            done
+          }
+
+          inventory_databases() {
+            local root
+            for root in "$v1_media" "$v2_data" "$v2_history_dir"; do
+              [ -d "$root" ] || return 1
+              find "$root" -type f \( -name '*.sqlite3' -o -name '*.sqlite' -o -name '*.db' \) -print0
+            done | sort -zu
+          }
+
+          backup_stores() {
+            local inventory_file="$maintenance_backup/database-inventory.bin"
+            inventory_databases > "$inventory_file" || return 1
+            require_backup_capacity "$inventory_file" || return 1
+            local args=(backup --backup-dir "$maintenance_backup/stores"
+              --allowed-root "$v1_media" --allowed-root "$v2_data" --allowed-root "$v2_history_dir")
+            while IFS= read -r -d '' path; do args+=(--database "$path"); done < "$inventory_file"
+            # Include indexes that may not exist yet. If a failed preparation
+            # created one, the pre-start restore manifest must remove it.
+            args+=(--database "$v1_media/repository.sqlite3"
+              --database "$v2_queue_db"
+              --database "${v2_history_path%/*}/image_history_index.sqlite3"
+              --database "$v2_data/image_favorites.sqlite3")
+            for path in "$v1_media/history/outputs.jsonl" "$v1_media/favorites/image_favorites.json" \
+                         "$v2_history_path" "$v2_data/image_favorites.json"; do
+              args+=(--source "$path")
+            done
+            python3 "$candidate_release/scripts/vps_cutover_guard.py" "${args[@]}"
+          }
+
+          prepare_and_verify_target_indexes() {
+            local v1_root_in_container=/app/.media_storage
+            target_indexes_mutated=1
+            docker run --rm --network none \
+              --mount "type=bind,src=$v1_media,dst=$v1_root_in_container" \
+              --mount "type=bind,src=$candidate_release/scripts/prepare_v1_history_index.py,dst=/app/scripts/prepare_v1_history_index.py,readonly" \
+              -e MEDIA_STORAGE_ROOT="$v1_root_in_container" \
+              -e PYTHONPATH=/app \
+              -e MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS=false \
+              --entrypoint python "${candidate_image}" \
+              /app/scripts/prepare_v1_history_index.py --storage-root "$v1_root_in_container" \
+              --prepare --minimum-free-bytes "$minimum_free_bytes" || return 1
+            python3 "$candidate_release/scripts/prepare_v1_history_index.py" \
+              --storage-root "$v1_media" --verify || return 1
+            (cd "$candidate_release/custom_media_agent_2_0" && \
+              V2_DATA_DIR="$v2_data" V2_IMAGE_HISTORY_PATH="$v2_history_path" \
+              "$candidate_release/custom_media_agent_2_0/.venv/bin/python" \
+              "$candidate_release/scripts/prepare_v2_history_reads.py" \
+              --data-root "$v2_data" --history-path "$v2_history_path" \
+              --minimum-free-bytes "$minimum_free_bytes") || return 1
+            (cd "$candidate_release/custom_media_agent_2_0" && \
+              V2_DATA_DIR="$v2_data" V2_IMAGE_HISTORY_PATH="$v2_history_path" \
+              "$candidate_release/custom_media_agent_2_0/.venv/bin/python" \
+              "$candidate_release/scripts/verify_v2_history_reads.py" \
+              --data-root "$v2_data" --history-path "$v2_history_path")
+          }
+
           restart_v2() {
             local unit
             for unit in "${v2_units[@]}"; do
               systemctl restart "$unit" >/dev/null || return 1
               systemctl is-active --quiet "$unit" || return 1
             done
+          }
+
+          install_api_background_worker_contract() {
+            local env_template="$candidate_release/custom_media_agent_2_0/deploy/systemd/alchemy-v2-api-runtime.env"
+            local drop_in_template="$candidate_release/custom_media_agent_2_0/deploy/systemd/alchemy-v2-api.service.d/90-alchemy-worker-ownership.conf"
+            [ -f "$env_template" ] && [ -f "$drop_in_template" ] || return 1
+            install -d -m 755 /etc/alchemy /etc/systemd/system/alchemy-v2-api.service.d || return 1
+            install -m 600 "$env_template" "$api_runtime_env" || return 1
+            install -m 644 "$drop_in_template" "$api_runtime_drop_in" || return 1
           }
 
           state_digest() {
@@ -192,6 +396,7 @@ jobs:
               install -m 644 "$temporary_unit" "/etc/systemd/system/$unit" || { rm -f "$temporary_unit"; return 1; }
               rm -f "$temporary_unit"
             done
+            install_api_background_worker_contract || return 1
             systemctl daemon-reload
           }
 
@@ -202,6 +407,9 @@ jobs:
               systemctl cat "$unit" | grep -F "ExecStartPre=/usr/bin/python3 /usr/local/lib/alchemy/v2_runtime_guard.py --release $deploy_link --verify" >/dev/null || return 1
               systemctl cat "$unit" | grep -F "ExecStart=$deploy_link/custom_media_agent_2_0/.venv/bin/python" >/dev/null || return 1
             done
+            systemctl cat alchemy-v2-api.service | grep -Fx "EnvironmentFile=$api_runtime_env" >/dev/null || return 1
+            python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-runtime-contract \
+              --environment-file "$api_runtime_env" --drop-in "$api_runtime_drop_in" >/dev/null || return 1
           }
 
           atomic_repoint() {
@@ -259,19 +467,132 @@ jobs:
             return "$result"
           }
 
+          v1_container_state() {
+            local names
+            names="$(docker ps -a --filter "name=^/${v1_container}$" --format '{{.Names}}')" || return 1
+            if [ -z "$names" ]; then
+              printf 'absent'
+              return 0
+            fi
+            docker inspect "$v1_container" --format '{{.State.Running}}'
+          }
+
+          keep_closed() {
+            local reason="$1"
+            local gate_confirmed=0 writers_stopped=1 status unit nginx_state v1_running
+            touch "$maintenance_flag" || gate_confirmed=0
+            chmod 600 "$maintenance_flag" || gate_confirmed=0
+            if [ -f "$candidate_release/alchemy-media-agent.nginx.conf" ]; then
+              install -m 644 "$candidate_release/alchemy-media-agent.nginx.conf" "$nginx_config" || gate_confirmed=0
+            elif [ -n "$nginx_config_backup" ] && [ -f "$nginx_config_backup" ]; then
+              install -m 644 "$nginx_config_backup" "$nginx_config" || gate_confirmed=0
+            else
+              gate_confirmed=0
+            fi
+            if [ -f "$maintenance_flag" ] && grep -Fq 'if (-f /etc/alchemy/alchemy-media-agent-maintenance)' "$nginx_config" \
+                && nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1; then
+              status="$(curl -ksS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' "$public_base_url/api/v2/health" 2>/dev/null || true)"
+              [ "$status" = 503 ] && gate_confirmed=1
+            else
+              gate_confirmed=0
+            fi
+            for unit in "${v2_units[@]}"; do systemctl stop "$unit" >/dev/null 2>&1 || true; done
+            systemctl stop alchemy-v3-storage-maintenance.timer >/dev/null 2>&1 || true
+            systemctl stop alchemy-v3-storage-maintenance.service >/dev/null 2>&1 || true
+            docker stop --time 45 "$v1_container" >/dev/null 2>&1 || true
+            for unit in "${v2_units[@]}" alchemy-v3-storage-maintenance.timer alchemy-v3-storage-maintenance.service; do
+              status="$(systemctl is-active "$unit" 2>/dev/null || true)"
+              case "$status" in inactive|failed) ;; *) writers_stopped=0 ;; esac
+            done
+            v1_running="$(v1_container_state 2>/dev/null || printf 'unknown')"
+            [ "$v1_running" = false ] || [ "$v1_running" = absent ] || writers_stopped=0
+            if [ "$gate_confirmed" = 1 ] && [ "$writers_stopped" = 1 ]; then
+              printf 'GUARDED_ACTIVATE_CLOSED_FOR_RECOVERY=1|mode=maintenance_503|reason=%s|backup=%s\n' \
+                "$reason" "$maintenance_backup/stores/manifest.json" >&2
+              return 0
+            fi
+
+            # If the maintenance response cannot be proven, remove the public
+            # Nginx listener as a hard fallback; never claim CLOSED on error.
+            systemctl stop nginx >/dev/null 2>&1 || true
+            nginx_state="$(systemctl is-active nginx 2>/dev/null || true)"
+            v1_running="$(v1_container_state 2>/dev/null || printf 'unknown')"
+            writers_stopped=1
+            for unit in "${v2_units[@]}" alchemy-v3-storage-maintenance.timer alchemy-v3-storage-maintenance.service; do
+              local writer_state
+              writer_state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+              case "$writer_state" in inactive|failed) ;; *) writers_stopped=0 ;; esac
+            done
+            if { [ "$nginx_state" = inactive ] || [ "$nginx_state" = failed ]; } && \
+               { [ "$v1_running" = false ] || [ "$v1_running" = absent ]; } && [ "$writers_stopped" = 1 ]; then
+              printf 'GUARDED_ACTIVATE_CLOSED_FOR_RECOVERY=1|mode=nginx_stopped|reason=%s|backup=%s\n' \
+                "$reason" "$maintenance_backup/stores/manifest.json" >&2
+              return 0
+            fi
+            printf 'GUARDED_ACTIVATE_CLOSURE_FAILED=1|reason=%s|manual_emergency_action_required\n' "$reason" >&2
+            return 1
+          }
+
           rollback() {
             local reason="$1"
-            local rollback_ok=true
             set +e
-            atomic_repoint "$old_release" rollback || rollback_ok=false
-            compose_for "$old_release" build alchemy-media-agent >/dev/null || rollback_ok=false
-            remove_v1 || rollback_ok=false
-            compose_for "$old_release" up -d --no-build alchemy-media-agent >/dev/null || rollback_ok=false
-            restart_v2 || rollback_ok=false
-            wait_for_200 http://127.0.0.1:8017/healthz || rollback_ok=false
-            wait_for_200 http://127.0.0.1:8020/api/v2/health || rollback_ok=false
-            [ "$(realpath "$deploy_link")" = "$old_release" ] || rollback_ok=false
-            printf 'GUARDED_ACTIVATE_ROLLBACK=%s|reason=%s\n' "$rollback_ok" "$reason"
+            if [ "$candidate_services_started" = 1 ]; then
+              # Candidate startup may mutate durable state; never restore an
+              # earlier snapshot over it. Stop every candidate writer and hold 503.
+              keep_closed "$reason" || {
+                printf 'GUARDED_ACTIVATE_FORWARD_RECOVERY_REQUIRED=1|closure=unverified|active=%s\n' \
+                  "$(realpath "$deploy_link" 2>/dev/null)" >&2
+                exit 1
+              }
+              printf 'GUARDED_ACTIVATE_FORWARD_RECOVERY_REQUIRED=1|active=%s\n' \
+                "$(realpath "$deploy_link" 2>/dev/null)" >&2
+              exit 1
+            fi
+            touch "$maintenance_flag" || { keep_closed maintenance_flag_restore_failed; exit 1; }
+            chmod 600 "$maintenance_flag" || { keep_closed maintenance_flag_permission_failed; exit 1; }
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx || { keep_closed maintenance_gate_restore_failed; exit 1; }
+            if [ "$target_indexes_mutated" = 1 ]; then
+              [ -f "$maintenance_backup/stores/manifest.json" ] || { keep_closed backup_manifest_missing; exit 1; }
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" restore \
+                --manifest "$maintenance_backup/stores/manifest.json" \
+                --allowed-root "$v1_media" --allowed-root "$v2_data" --allowed-root "$v2_history_dir" \
+                || { keep_closed store_restore_failed; exit 1; }
+            fi
+            [ -n "$runtime_contract_backup" ] && [ -d "$runtime_contract_backup" ] || { keep_closed runtime_backup_missing; exit 1; }
+            [ -f "$runtime_contract_backup/v2_runtime_guard.py" ] || { keep_closed runtime_guard_backup_missing; exit 1; }
+            install -m 755 "$runtime_contract_backup/v2_runtime_guard.py" /usr/local/lib/alchemy/v2_runtime_guard.py || { keep_closed runtime_guard_restore_failed; exit 1; }
+            for unit in "${v2_units[@]}"; do
+              [ -f "$runtime_contract_backup/$unit" ] || { keep_closed "${unit}_backup_missing"; exit 1; }
+              install -m 644 "$runtime_contract_backup/$unit" "/etc/systemd/system/$unit" || { keep_closed "${unit}_restore_failed"; exit 1; }
+            done
+            install_api_background_worker_contract || { keep_closed api_runtime_contract_restore_failed; exit 1; }
+            systemctl daemon-reload || { keep_closed systemd_reload_failed; exit 1; }
+            atomic_repoint "$old_release" rollback || { keep_closed old_release_repoint_failed; exit 1; }
+            [ -n "$old_image" ] || { keep_closed old_image_identity_missing; exit 1; }
+            docker tag "$old_image" alchemy-media-agent:latest || { keep_closed old_image_restore_failed; exit 1; }
+            remove_v1 || { keep_closed candidate_container_remove_failed; exit 1; }
+            compose_for "$old_release" up -d --no-build alchemy-media-agent >/dev/null || { keep_closed old_v1_start_failed; exit 1; }
+            restart_v2 || { keep_closed old_v2_start_failed; exit 1; }
+            wait_for_200 http://127.0.0.1:8017/healthz || { keep_closed old_v1_health_failed; exit 1; }
+            wait_for_200 http://127.0.0.1:8020/api/v2/health || { keep_closed old_v2_health_failed; exit 1; }
+            [ "$(realpath "$deploy_link")" = "$old_release" ] || { keep_closed old_release_identity_failed; exit 1; }
+            verify_v2_unit_contract || { keep_closed old_v2_unit_contract_unverified; exit 1; }
+            verify_v2_runtime_roots || { keep_closed old_v2_storage_roots_unverified; exit 1; }
+            api_pid="$(systemctl show alchemy-v2-api.service --property=MainPID --value)"
+            [[ "$api_pid" =~ ^[1-9][0-9]*$ ]] || { keep_closed old_v2_api_pid_unavailable; exit 1; }
+            python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-no-background-writers \
+              --pid "$api_pid" || { keep_closed old_v2_api_background_writer_enabled; exit 1; }
+            if [ "$maintenance_timer_was_active" = 1 ]; then
+              systemctl start alchemy-v3-storage-maintenance.timer || { keep_closed old_maintenance_timer_start_failed; exit 1; }
+              systemctl is-active --quiet alchemy-v3-storage-maintenance.timer || { keep_closed old_maintenance_timer_inactive; exit 1; }
+            fi
+            [ -n "$nginx_config_backup" ] && [ -f "$nginx_config_backup" ] || { keep_closed old_nginx_backup_missing; exit 1; }
+            install -m 644 "$nginx_config_backup" "$nginx_config" || { keep_closed old_nginx_restore_failed; exit 1; }
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx || { keep_closed old_nginx_reload_failed; exit 1; }
+            rm -f "$maintenance_flag" || { keep_closed stale_maintenance_flag_remove_failed; exit 1; }
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx || { keep_closed old_public_open_reload_failed; exit 1; }
+            wait_for_200 "$public_base_url/api/v2/health" || { keep_closed old_public_health_failed; exit 1; }
+            printf 'GUARDED_ACTIVATE_ROLLBACK=verified|reason=%s\n' "$reason"
             exit 1
           }
 
@@ -279,6 +600,17 @@ jobs:
             local reason="$1"
             printf 'GUARDED_ACTIVATE_POST_SWITCH_STOP=%s\n' "$reason" >&2
             rollback "$reason"
+          }
+
+          fail_public_open() {
+            local reason="$1"
+            keep_closed "$reason" || {
+              printf 'GUARDED_ACTIVATE_FORWARD_RECOVERY_REQUIRED=1|closure=unverified|candidate=%s\n' \
+                "$candidate_release" >&2
+              exit 1
+            }
+            printf 'GUARDED_ACTIVATE_FORWARD_RECOVERY_REQUIRED=1|reason=%s|candidate=%s\n' "$reason" "$candidate_release" >&2
+            exit 1
           }
 
           [ -L "$deploy_link" ] || stop_pre deployment_link_missing
@@ -291,6 +623,7 @@ jobs:
           git -C "$candidate_release" diff --quiet || stop_pre candidate_tracked_changes
           choose_compose || stop_pre docker_compose_unavailable
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop_pre v1_not_running
+          old_image="$(docker inspect "$v1_container" --format '{{.Image}}')" || stop_pre old_v1_image_identity_unavailable
           old_env="$(read_mount /app/.env)" || stop_pre old_env_mount_ambiguous
           v1_media="$(read_mount /app/.media_storage)" || stop_pre v1_media_mount_ambiguous
           v2_storage="$(read_mount /var/lib/alchemy/v2/storage)" || stop_pre v2_storage_mount_ambiguous
@@ -299,37 +632,154 @@ jobs:
           grep -Fxq 'V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=true' "$candidate_release/src_skeleton/.env" || stop_pre candidate_face_gate_missing
           [ -f "$candidate_release/custom_media_agent_2_0/requirements.txt" ] || stop_pre candidate_v2_requirements_missing
           require_v2 || stop_pre v2_units_not_active
+          [ -f /etc/alchemy/alchemy-v2.env ] || stop_pre v2_environment_missing
+          [ -d /etc/alchemy ] || stop_pre alchemy_system_config_directory_missing
+          v2_data="$(v2_env_value V2_DATA_DIR)" || stop_pre v2_data_root_ambiguous
+          [ -n "$v2_data" ] || v2_data="$v2_storage"
+          v2_history_path="$(v2_env_value V2_IMAGE_HISTORY_PATH)" || stop_pre v2_history_path_ambiguous
+          [ -n "$v2_history_path" ] || v2_history_path="$v2_data/image_history.jsonl"
+          v2_queue_db="$(v2_env_value V2_TASK_QUEUE_DB_PATH)" || stop_pre v2_queue_path_ambiguous
+          [ -n "$v2_queue_db" ] || v2_queue_db="$v2_data/task_queue.sqlite3"
+          v2_history_dir="$(dirname "$v2_history_path")"
+          verify_v2_runtime_roots || stop_pre v2_process_storage_roots_unverified
+          [ -d "$v1_media" ] && [ -d "$v2_data" ] && [ -d "$v2_history_dir" ] || stop_pre storage_root_missing
+          [ -f "$v1_media/repository.sqlite3" ] && [ -f "$v2_queue_db" ] || stop_pre authoritative_database_missing
+          require_disk_floor "$v1_media" || stop_pre v1_disk_floor_not_met
+          require_disk_floor "$v2_data" || stop_pre v2_disk_floor_not_met
+          require_disk_floor "$v2_history_dir" || stop_pre v2_history_disk_floor_not_met
+          mkdir -p "$maintenance_backup_root"
+          require_disk_floor "$maintenance_backup_root" || stop_pre backup_disk_floor_not_met
           before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
-          [ "$(pending_planning_operation_count "$v1_media")" = 0 ] || stop_pre pending_planning_operations_require_separate_recovery
-          prepare_v2_runtime_for_release "$old_release" "$candidate_release/ops/vps-release/v2_runtime_guard.py" || stop_pre old_v2_runtime_prepare_failed
+          python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
+            --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
+            --v3-projects-root "$v1_media/v3_projects" || stop_pre active_or_unknown_work_requires_drain
+          systemctl is-active --quiet alchemy-v3-storage-maintenance.service && stop_pre storage_maintenance_service_active
+          maintenance_timer_was_active=0
+          if systemctl is-active --quiet alchemy-v3-storage-maintenance.timer; then maintenance_timer_was_active=1; fi
+          docker image inspect "$candidate_image" >/dev/null 2>&1 || stop_pre exact_candidate_image_missing
+          candidate_revision="$(docker image inspect "$candidate_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          [ "$candidate_revision" = "$expected_sha" ] || stop_pre candidate_image_revision_mismatch
           prepare_v2_runtime_for_release "$candidate_release" "$candidate_release/ops/vps-release/v2_runtime_guard.py" || stop_pre candidate_v2_runtime_prepare_failed
-          install_v2_unit_contract || stop_pre v2_unit_contract_install_failed
-          verify_v2_unit_contract || stop_pre v2_unit_contract_invalid
+          python3 "$candidate_release/ops/vps-release/v2_runtime_guard.py" --release "$candidate_release" --verify || stop_pre candidate_v2_runtime_invalid
 
+          mkdir -m 700 "$maintenance_backup" || stop_pre backup_directory_exists
+          nginx_config_backup="$maintenance_backup/alchemy-media-agent.nginx.conf"
+          runtime_contract_backup="$maintenance_backup/runtime-contract"
+          mkdir -m 700 "$runtime_contract_backup"
+          [ -f "$nginx_config" ] || stop_pre active_nginx_config_missing
+          grep -Fq 'upstream alchemy_media_agent_app' "$nginx_config" || stop_pre active_nginx_config_unrecognized
+          [ -f /usr/local/lib/alchemy/v2_runtime_guard.py ] || stop_pre active_v2_runtime_guard_missing
+          cp -p "$nginx_config" "$nginx_config_backup"
+          cp -p /usr/local/lib/alchemy/v2_runtime_guard.py "$runtime_contract_backup/v2_runtime_guard.py"
+          for unit in "${v2_units[@]}"; do cp -p "/etc/systemd/system/$unit" "$runtime_contract_backup/$unit" || stop_pre active_v2_unit_missing; done
+          if [ -e "$api_runtime_drop_in" ] || [ -e "$api_runtime_env" ]; then
+            [ -f "$api_runtime_drop_in" ] && [ -f "$api_runtime_env" ] || stop_pre api_runtime_contract_pair_incomplete
+            python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-runtime-contract \
+              --environment-file "$api_runtime_env" --drop-in "$api_runtime_drop_in" >/dev/null || stop_pre api_runtime_contract_invalid
+          fi
+
+          maintenance_active=1
+          install -m 644 "$candidate_release/alchemy-media-agent.nginx.conf" "$nginx_config" || stop_pre candidate_nginx_install_failed
+          touch "$maintenance_flag"
+          chmod 600 "$maintenance_flag"
+          nginx -t || stop_pre maintenance_nginx_config_invalid
+          systemctl reload nginx || stop_pre maintenance_nginx_reload_failed
+          maintenance_status="$(curl -ksS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' "$public_base_url/api/v2/health" 2>/dev/null || true)"
+          [ "$maintenance_status" = 503 ] || stop_pre public_maintenance_gate_not_active
+
+          if [ "$maintenance_timer_was_active" = 1 ]; then systemctl stop alchemy-v3-storage-maintenance.timer || stop_pre maintenance_timer_stop_failed; fi
+          if systemctl is-active --quiet alchemy-v3-storage-maintenance.service; then
+            systemctl stop alchemy-v3-storage-maintenance.service || stop_pre maintenance_service_stop_failed
+          fi
+          systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && stop_pre maintenance_timer_still_active
+          systemctl is-active --quiet alchemy-v3-storage-maintenance.service && stop_pre maintenance_service_still_active
+          writers_stopped=1
+          for unit in "${v2_units[@]}"; do systemctl stop "$unit" || stop_pre "${unit}_stop_failed"; done
+          docker stop --time 45 "$v1_container" >/dev/null || stop_pre v1_graceful_stop_failed
+          for unit in "${v2_units[@]}"; do
+            systemctl is-active --quiet "$unit" && stop_pre "${unit}_still_active"
+          done
+          [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null || true)" != true ] || stop_pre v1_still_running
+          systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && stop_pre maintenance_timer_restarted
+          systemctl is-active --quiet alchemy-v3-storage-maintenance.service && stop_pre maintenance_service_restarted
+          python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
+            --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
+            --v3-projects-root "$v1_media/v3_projects" || stop_pre durable_work_changed_while_fencing
+          backup_stores || stop_pre consistent_store_backup_failed
+          require_disk_floor "$maintenance_backup_root" || stop_pre backup_consumed_disk_reserve
+          require_post_backup_data_capacity "$maintenance_backup/database-inventory.bin" || stop_pre backup_consumed_data_reserve
+          rm -f "$maintenance_backup/database-inventory.bin"
+          prepare_and_verify_target_indexes || stop_pre target_history_index_prepare_or_verify_failed
+
+          # From here until the candidate has passed local readiness, requests
+          # remain fenced at Nginx, dedicated consumers stay stopped, and all
+          # durable databases have a verified snapshot.
+          docker tag "$old_image" alchemy-media-agent:rollback-pr29 || stop_pre old_image_tag_failed
+          docker tag "$candidate_image" alchemy-media-agent:latest || stop_pre candidate_image_activation_tag_failed
+          install_v2_unit_contract || stop_pre candidate_v2_unit_contract_install_failed
+          verify_v2_unit_contract || stop_pre candidate_v2_unit_contract_invalid
+          verify_v2_runtime_unit_roots || stop_pre candidate_v2_unit_storage_roots_unverified
           atomic_repoint "$candidate_release" candidate || stop_pre candidate_link_switch_failed
           remove_v1 || fail_post candidate_container_remove_failed
+          candidate_services_started=1
           compose_for "$candidate_release" up -d --no-build alchemy-media-agent >/dev/null || fail_post candidate_container_start_failed
-          restart_v2 || fail_post v2_restart_failed
+          systemctl start alchemy-v2-api.service >/dev/null || fail_post v2_api_start_failed
+          systemctl is-active --quiet alchemy-v2-api.service || fail_post v2_api_not_active
           wait_for_200 http://127.0.0.1:8017/healthz || fail_post v1_health_failed
           wait_for_200 http://127.0.0.1:8020/api/v2/health || fail_post v2_local_health_failed
-          wait_for_200 "$public_base_url/api/v2/health" || fail_post v2_public_health_failed
+          api_pid="$(systemctl show alchemy-v2-api.service --property=MainPID --value)"
+          [[ "$api_pid" =~ ^[1-9][0-9]*$ ]] || fail_post candidate_v2_api_pid_unavailable
+          python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-no-background-writers \
+            --pid "$api_pid" || fail_post candidate_v2_api_background_writer_enabled
           [ "$(realpath "$deploy_link")" = "$candidate_release" ] || fail_post active_release_mismatch
           [ "$(git -C "$(realpath "$deploy_link")" rev-parse HEAD)" = "$expected_sha" ] || fail_post active_head_mismatch
           [ "$(read_mount /app/.env)" = "$candidate_release/src_skeleton/.env" ] || fail_post candidate_env_not_bound
           python3 "$candidate_release/ops/vps-release/v2_runtime_guard.py" --release "$candidate_release" --verify || fail_post active_v2_runtime_guard_failed
           verify_v2_unit_contract || fail_post active_v2_unit_contract_invalid
+          python3 "$candidate_release/scripts/prepare_v1_history_index.py" --storage-root "$v1_media" --verify || fail_post active_v1_history_index_unready
+          (cd "$candidate_release/custom_media_agent_2_0" && \
+            V2_DATA_DIR="$v2_data" V2_IMAGE_HISTORY_PATH="$v2_history_path" \
+            "$candidate_release/custom_media_agent_2_0/.venv/bin/python" \
+            "$candidate_release/scripts/verify_v2_history_reads.py" \
+            --data-root "$v2_data" --history-path "$v2_history_path") || fail_post active_v2_history_index_unready
+          for unit in alchemy-v2-worker.service alchemy-v2-sync-worker.service; do
+            systemctl is-active --quiet "$unit" && fail_post "${unit}_started_before_admission"
+          done
           docker exec "$v1_container" grep -Fq 'review_withheld_face_integrity' /app/app/static/app.js || fail_post desktop_face_review_marker_missing
           docker exec "$v1_container" grep -Fq 'review_withheld_face_integrity' /app/app/mobile_static/mobile.js || fail_post mobile_face_review_marker_missing
           docker exec "$v1_container" python -c 'from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService; assert V3ProductApiService._doc276_face_integrity_delivery_enabled()' || fail_post face_gate_not_enabled
+          # API never owns queue or remote-sync background work. These durable
+          # settings remain in place after cutover and rollback; dedicated
+          # consumers are admitted only after all candidate checks pass.
+          systemctl start alchemy-v2-worker.service || fail_post v2_worker_start_failed
+          systemctl is-active --quiet alchemy-v2-worker.service || fail_post v2_worker_not_active
+          systemctl start alchemy-v2-sync-worker.service || fail_post v2_sync_worker_start_failed
+          systemctl is-active --quiet alchemy-v2-sync-worker.service || fail_post v2_sync_worker_not_active
+          verify_v2_runtime_roots || fail_post candidate_v2_storage_roots_unverified
+          verify_v2_unit_contract || fail_post candidate_v2_unit_contract_unverified
+          api_pid="$(systemctl show alchemy-v2-api.service --property=MainPID --value)"
+          [[ "$api_pid" =~ ^[1-9][0-9]*$ ]] || fail_post candidate_v2_api_pid_unavailable_after_admission
+          python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-no-background-writers \
+            --pid "$api_pid" || fail_post candidate_v2_api_background_writer_enabled_after_admission
+          [ "$(state_digest "$v1_media")" = "$before_digest" ] || fail_post historical_state_changed_before_public_open
+          rm -f "$maintenance_flag" || fail_post public_gate_open_failed
+          systemctl reload nginx || fail_public_open nginx_reload_after_gate_open_failed
+          maintenance_active=0
+          wait_for_200 "$public_base_url/api/v2/health" || fail_public_open v2_public_health_failed
           desktop_status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$public_base_url/creative-agent-v3?workspace=professional" || true)"
-          route_ok "$desktop_status" || fail_post desktop_route_unhealthy
+          route_ok "$desktop_status" || fail_public_open desktop_route_unhealthy
           h5_status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$public_base_url/h5" || true)"
-          route_ok "$h5_status" || fail_post h5_route_unhealthy
-          static_contains "$public_base_url/static/app.js" review_withheld_face_integrity || fail_post public_desktop_static_marker_missing
-          static_contains "$public_base_url/mobile-static/mobile.js" review_withheld_face_integrity || fail_post public_mobile_static_marker_missing
+          route_ok "$h5_status" || fail_public_open h5_route_unhealthy
+          static_contains "$public_base_url/static/app.js" review_withheld_face_integrity || fail_public_open public_desktop_static_marker_missing
+          static_contains "$public_base_url/mobile-static/mobile.js" review_withheld_face_integrity || fail_public_open public_mobile_static_marker_missing
           project_status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$public_base_url/api/v3/creative-agent/projects" || true)"
-          protected_ok "$project_status" || fail_post v3_projects_not_protected
-          [ "$(state_digest "$v1_media")" = "$before_digest" ] || fail_post historical_state_changed_after_switch
+          protected_ok "$project_status" || fail_public_open v3_projects_not_protected
+          if [ "$maintenance_timer_was_active" = 1 ]; then
+            systemctl start alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_failed
+            systemctl is-active --quiet alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_unverified
+          else
+            systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && fail_public_open maintenance_timer_unexpectedly_active
+          fi
 
           printf 'GUARDED_ACTIVATE_RESULT=pass\n'
           printf 'GUARDED_ACTIVATE_TARGET_SHA=%s\n' "$expected_sha"

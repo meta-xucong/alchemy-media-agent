@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).parents[1]
+
+
+def test_activation_requires_explicit_maintenance_and_disk_budget() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+
+    assert 'maintenance_confirmation="$3"' in workflow
+    assert '[ "$maintenance_confirmation" = CUTOVER-PR29 ]' in workflow
+    assert '[[ "$minimum_free_bytes" =~ ^[1-9][0-9]*$ ]]' in workflow
+    assert '[[ ${#MINIMUM_FREE_BYTES} -le 18 ]]' in workflow
+    assert 'require_backup_capacity "$inventory_file" || return 1' in workflow
+    assert 'require_post_backup_data_capacity "$maintenance_backup/database-inventory.bin"' in workflow
+    assert "VPS_HOST" in workflow
+
+
+def test_activation_orders_fence_backup_prepare_verify_and_admission() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    markers = [
+        'systemctl stop "$unit"',
+        "docker stop --time 45",
+        '"${unit}_still_active"',
+        "backup_stores ||",
+        "prepare_and_verify_target_indexes ||",
+        "install_v2_unit_contract || stop_pre candidate_v2_unit_contract_install_failed",
+        "candidate_services_started=1",
+        "verify_v2_history_reads.py",
+        "systemctl start alchemy-v2-worker.service",
+        'rm -f "$maintenance_flag" || fail_post public_gate_open_failed',
+        'wait_for_200 "$public_base_url/api/v2/health" || fail_public_open',
+    ]
+    stop_position = workflow.rindex(markers[0])
+    start_position = workflow.rindex(markers[4])
+    positions = [
+        stop_position,
+        workflow.index(markers[1], stop_position),
+        workflow.index(markers[2], workflow.index(markers[1], stop_position)),
+        workflow.index(markers[3], stop_position),
+        workflow.index(markers[4], start_position),
+        workflow.index(markers[5], start_position),
+        workflow.index(markers[6], start_position),
+        workflow.index(markers[7], start_position),
+        workflow.index(markers[8], start_position),
+        workflow.index(markers[9], start_position),
+    ]
+    assert positions == sorted(positions)
+    stopped_verification = workflow.index(
+        'python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work',
+        workflow.index("docker stop --time 45"),
+    )
+    assert workflow.index("docker stop --time 45") < stopped_verification < workflow.index("backup_stores ||")
+    api_runtime_env = (ROOT / "custom_media_agent_2_0" / "deploy" / "systemd" / "alchemy-v2-api-runtime.env").read_text(encoding="utf-8")
+    assert "V2_TASK_QUEUE_INLINE_WORKER_ENABLED=false" in api_runtime_env
+    assert "V2_SYNC_GITHUB_ON_STARTUP=false" in api_runtime_env
+    assert "V2_ENABLE_REMOTE_GITHUB_SYNC=false" in api_runtime_env
+    assert "verify-v2-api-no-background-writers" in workflow
+    assert "verify-v2-api-runtime-contract" in workflow
+    assert "api_runtime_env=\"/etc/alchemy/alchemy-v2-api-runtime.env\"" in workflow
+    assert "api_runtime_drop_in=\"/etc/systemd/system/alchemy-v2-api.service.d/90-alchemy-worker-ownership.conf\"" in workflow
+    assert "verify-v2-storage-roots" in workflow
+    assert "verify-v2-storage-unit-roots" in workflow
+    assert workflow.index("verify_v2_unit_contract || stop_pre candidate_v2_unit_contract_invalid") < workflow.index(
+        "verify_v2_runtime_unit_roots || stop_pre candidate_v2_unit_storage_roots_unverified"
+    ) < workflow.index("candidate_services_started=1")
+    assert "verify_v2_runtime_roots || fail_post candidate_v2_storage_roots_unverified" in workflow[
+        workflow.index("systemctl start alchemy-v2-sync-worker.service"):
+    ]
+    assert "remove_cutover_api_override" not in workflow
+    assert "v2_api_final_restart_failed" not in workflow
+    assert workflow.index("verify-v2-api-no-background-writers") < workflow.index("systemctl start alchemy-v2-worker.service")
+    assert "candidate_v2_api_background_writer_enabled_after_admission" in workflow
+    assert workflow.index("systemctl start alchemy-v2-sync-worker.service") < workflow.index(
+        "candidate_v2_api_background_writer_enabled_after_admission"
+    ) < workflow.index('rm -f "$maintenance_flag" || fail_post public_gate_open_failed')
+    assert "GUARDED_ACTIVATE_FORWARD_RECOVERY_REQUIRED" in workflow
+    assert "vps_cutover_guard.py\" restore" in workflow
+    stopped_verification_block = workflow[
+        workflow.index('if [ "$maintenance_timer_was_active" = 1 ]; then systemctl stop'):
+        workflow.index("backup_stores ||", stop_position)
+    ]
+    assert 'systemctl stop alchemy-v3-storage-maintenance.service' in stopped_verification_block
+    assert 'systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && stop_pre' in stopped_verification_block
+    assert 'require_disk_floor "$maintenance_backup_root" || stop_pre backup_consumed_disk_reserve' in workflow
+    assert stopped_verification_block.index('systemctl stop alchemy-v3-storage-maintenance.service') < stopped_verification_block.index('writers_stopped=1')
+
+
+def test_emergency_closure_verifies_maintenance_or_stops_public_nginx() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    keep_closed = workflow[workflow.index("          keep_closed() {"):workflow.index("          rollback() {")]
+
+    assert '"$status" = 503' in keep_closed
+    assert '"$v1_running" = false' in keep_closed
+    assert "systemctl stop nginx" in keep_closed
+    assert 'systemctl is-active nginx' in keep_closed
+    assert "GUARDED_ACTIVATE_CLOSED_FOR_RECOVERY" in keep_closed
+    assert "GUARDED_ACTIVATE_CLOSURE_FAILED" in keep_closed
+    assert "return 1" in keep_closed
+    assert 'keep_closed "$reason" || {' in workflow
+
+
+def test_successful_activation_restores_only_previously_active_maintenance_timer() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    assert 'maintenance_timer_was_active=0\n          if systemctl is-active --quiet alchemy-v3-storage-maintenance.timer; then maintenance_timer_was_active=1; fi' in workflow
+    success = workflow[workflow.index("systemctl start alchemy-v2-sync-worker.service"):workflow.index("GUARDED_ACTIVATE_RESULT=pass")]
+    restore = 'if [ "$maintenance_timer_was_active" = 1 ]; then'
+    verify_active = 'systemctl is-active --quiet alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_unverified'
+    preserve_inactive = 'systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && fail_public_open maintenance_timer_unexpectedly_active'
+    digest_check = '[ "$(state_digest "$v1_media")" = "$before_digest" ] || fail_post historical_state_changed_before_public_open'
+    open_gate = 'rm -f "$maintenance_flag" || fail_post public_gate_open_failed'
+    public_smoke = 'wait_for_200 "$public_base_url/api/v2/health" || fail_public_open v2_public_health_failed'
+    assert restore in success
+    assert 'systemctl start alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_failed' in success
+    assert verify_active in success and preserve_inactive in success
+    assert digest_check in success
+    assert success.index(digest_check) < success.index(open_gate) < success.index(public_smoke) < success.index(restore)
+    assert success.index(restore) < success.index(verify_active) < success.index(preserve_inactive) < workflow.index("GUARDED_ACTIVATE_RESULT=pass")
+
+
+def test_emergency_nginx_fallback_rechecks_writer_state_from_fresh_baseline() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    keep_closed = workflow[workflow.index("          keep_closed() {"):workflow.index("          rollback() {")]
+    fallback = keep_closed[keep_closed.index("systemctl stop nginx"):]
+    assert fallback.index("writers_stopped=1") < fallback.index('for unit in "${v2_units[@]}" alchemy-v3-storage-maintenance.timer')
+    assert fallback.index('for unit in "${v2_units[@]}" alchemy-v3-storage-maintenance.timer') < fallback.index('if { [ "$nginx_state" = inactive ]')
+
+
+def test_api_background_worker_ownership_is_durable_and_survives_rollback() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    runtime_env = (ROOT / "custom_media_agent_2_0" / "deploy" / "systemd" / "alchemy-v2-api-runtime.env").read_text(encoding="utf-8")
+    runtime_drop_in = (
+        ROOT / "custom_media_agent_2_0" / "deploy" / "systemd" / "alchemy-v2-api.service.d"
+        / "90-alchemy-worker-ownership.conf"
+    ).read_text(encoding="utf-8")
+    rollback = workflow[workflow.index("          rollback() {"):workflow.index("          fail_post() {")]
+
+    assert runtime_env.splitlines() == [
+        "V2_TASK_QUEUE_INLINE_WORKER_ENABLED=false",
+        "V2_SYNC_GITHUB_ON_STARTUP=false",
+        "V2_ENABLE_REMOTE_GITHUB_SYNC=false",
+    ]
+    assert runtime_drop_in.splitlines() == [
+        "[Service]", "EnvironmentFile=/etc/alchemy/alchemy-v2-api-runtime.env",
+    ]
+    assert "install_api_background_worker_contract || { keep_closed api_runtime_contract_restore_failed; exit 1; }" in rollback
+    assert rollback.index("install_api_background_worker_contract") < rollback.index("restart_v2")
+    assert "remove_cutover_api_override" not in rollback
+    assert "verify_v2_unit_contract || { keep_closed old_v2_unit_contract_unverified; exit 1; }" in rollback
+    assert "old_v2_api_background_writer_enabled" in rollback
+
+
+def test_rollback_keeps_public_gate_closed_until_old_stack_is_fully_verified() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    rollback = workflow[workflow.index("          rollback() {"):workflow.index("          fail_post() {")]
+
+    assert "rollback_ok" not in rollback
+    assert "store_restore_failed; exit 1" in rollback
+    assert "old_v2_health_failed; exit 1" in rollback
+    assert rollback.index("restore \\") < rollback.index("compose_for \"$old_release\" up")
+    assert rollback.index("restart_v2") < rollback.index("wait_for_200 http://127.0.0.1:8020/api/v2/health")
+    assert 'install -m 644 "$nginx_config_backup" "$nginx_config"' in rollback
+    assert rollback.index('install -m 644 "$nginx_config_backup" "$nginx_config"') > rollback.index("wait_for_200 http://127.0.0.1:8020/api/v2/health")
+    assert rollback.index('rm -f "$maintenance_flag"') < rollback.index('wait_for_200 "$public_base_url/api/v2/health"')
+    assert 'wait_for_200 "$public_base_url/api/v2/health" || { keep_closed old_public_health_failed; exit 1; }' in rollback
+
+
+def test_candidate_image_is_locked_and_contains_expected_revision_label() -> None:
+    candidate = (ROOT / ".github" / "workflows" / "guarded-vps-candidate.yml").read_text(encoding="utf-8")
+    activate = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "src_skeleton" / "Dockerfile").read_text(encoding="utf-8")
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "flock" in candidate and "flock" in activate
+    assert "ALCHEMY_REVISION" in candidate
+    assert "org.opencontainers.image.revision" in dockerfile
+    assert "ALCHEMY_REVISION" in compose
+    assert "candidate_image_revision_mismatch" in activate
+    assert "estimate-space" in activate
+
+
+def test_maintenance_flag_is_checked_before_any_https_route() -> None:
+    nginx = (ROOT / "alchemy-media-agent.nginx.conf").read_text(encoding="utf-8")
+    flag = "if (-f /etc/alchemy/alchemy-media-agent-maintenance)"
+    assert nginx.index(flag) < nginx.index("location / {")
+    assert "return 503;" in nginx[nginx.index(flag):nginx.index("location / {")]
+
+
+def test_legacy_vps_entrypoints_stop_before_remote_side_effects() -> None:
+    direct = (ROOT / "scripts" / "deploy_vps.sh").read_text(encoding="utf-8")
+    migration = (ROOT / "scripts" / "vps_migrate_release_layout.sh").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "deploy-vps.yml").read_text(encoding="utf-8")
+
+    assert direct.index('if [[ "$LOCAL_MODE" != "1" ]]; then') < direct.index("run_as_root()")
+    assert "Direct VPS deployment is disabled" in direct
+    assert "retired and performs no changes" in migration
+    assert "exit 2" in migration
+    assert "VPS_HOST" not in workflow
+    assert "exit 2" in workflow

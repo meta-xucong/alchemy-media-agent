@@ -57,6 +57,9 @@ jobs:
           set -euo pipefail
 
           expected_sha="$1"
+          install -d -m 755 /run/lock
+          exec 9>/run/lock/alchemy-media-agent-release.lock
+          flock -w 300 9 || { echo GUARDED_CANDIDATE_STOP=shared_release_lock_unavailable >&2; exit 1; }
           deploy_link="/opt/alchemy-media-agent"
           releases_root="/opt/alchemy-media-agent-releases"
           v1_container="alchemy-media-agent"
@@ -294,11 +297,14 @@ jobs:
           done
           prepare_v2_runtime
 
-          compose_candidate build alchemy-media-agent >/dev/null
+          ALCHEMY_REVISION="$expected_sha" compose_candidate build alchemy-media-agent >/dev/null
+          docker tag alchemy-media-agent:latest "alchemy-media-agent:candidate-${expected_sha}"
+          image_revision="$(docker image inspect "alchemy-media-agent:candidate-${expected_sha}" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          [ "$image_revision" = "$expected_sha" ] || stop candidate_image_revision_mismatch
           docker run --rm \
             --env-file "$candidate_release/src_skeleton/.env" \
             --entrypoint python \
-            alchemy-media-agent:latest \
+            "alchemy-media-agent:candidate-${expected_sha}" \
             -c 'from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService; assert V3ProductApiService._doc276_face_integrity_delivery_enabled(); print("GUARDED_CANDIDATE_IMAGE=face_gate_enabled")' \
             >/dev/null || stop candidate_image_runtime_import_invalid
 
