@@ -105,6 +105,148 @@ def test_inspect_active_work_blocks_v3_jobs_in_nonterminal_states(tmp_path, stat
     assert result["counts"]["v3_active_jobs"] == 1
 
 
+def _write_v3_job(
+    jobs: Path, *, status: str, created_at: str | None, metadata=None,
+    project_id=None, legacy_top_level_project_id=None,
+):
+    request_metadata = dict(metadata or {})
+    if project_id is not None:
+        request_metadata["project_id"] = project_id
+    payload = {
+        "status": status,
+        "request": {"metadata": request_metadata},
+    }
+    if created_at is not None:
+        payload["created_at"] = created_at
+    if legacy_top_level_project_id is not None:
+        payload["project_id"] = legacy_top_level_project_id
+    path = jobs / "job_planned.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_inspect_active_work_preserves_plans_predating_v3_container(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    jobs = tmp_path / "v1" / "v3_jobs"
+    job = _write_v3_job(jobs, status="planned", created_at="2026-09-29T23:13:35.881162+00:00")
+    before = job.read_bytes()
+
+    result = _MODULE.inspect_active_work(
+        v1, v2, projects, v3_container_started_at="2026-10-10T22:24:17.777457791Z"
+    )
+
+    assert result["status"] == "idle"
+    assert result["active_work_items"] == 0
+    assert result["counts"]["v3_active_jobs"] == 0
+    assert result["counts"]["v3_preserved_planned_jobs"] == 1
+    assert job.read_bytes() == before
+
+
+def test_inspect_active_work_blocks_plan_created_during_v3_container_lifetime(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    jobs = tmp_path / "v1" / "v3_jobs"
+    _write_v3_job(jobs, status="planned", created_at="2026-10-10T22:24:17.777457791Z")
+
+    result = _MODULE.inspect_active_work(
+        v1, v2, projects, v3_container_started_at="2026-10-10T22:24:17.777457791Z"
+    )
+
+    assert result["status"] == "blocked"
+    assert result["counts"]["v3_active_jobs"] == 1
+    assert result["counts"]["v3_preserved_planned_jobs"] == 0
+
+
+def test_inspect_active_work_blocks_old_plan_with_background_attempt_marker(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    jobs = tmp_path / "v1" / "v3_jobs"
+    _write_v3_job(
+        jobs,
+        status="planned",
+        created_at="2026-09-29T23:13:35.881162+00:00",
+        metadata={"background_generation_attempt_id": "attempt-1"},
+    )
+
+    result = _MODULE.inspect_active_work(
+        v1, v2, projects, v3_container_started_at="2026-10-10T22:24:17.777457791Z"
+    )
+
+    assert result["status"] == "blocked"
+    assert result["counts"]["v3_active_jobs"] == 1
+
+
+@pytest.mark.parametrize(
+    "project_scope_kwargs",
+    [
+        {"project_id": "project_1"},
+        {"legacy_top_level_project_id": "project_1"},
+    ],
+    ids=["persisted-request-metadata", "legacy-top-level"],
+)
+def test_inspect_active_work_keeps_old_project_plan_blocking_for_executor_queue_safety(
+    tmp_path, project_scope_kwargs
+):
+    v1, v2, projects = _databases(tmp_path)
+    jobs = tmp_path / "v1" / "v3_jobs"
+    _write_v3_job(
+        jobs,
+        status="planned",
+        created_at="2026-09-29T23:13:35.881162+00:00",
+        **project_scope_kwargs,
+    )
+
+    result = _MODULE.inspect_active_work(
+        v1, v2, projects, v3_container_started_at="2026-10-10T22:24:17.777457791Z"
+    )
+
+    assert result["status"] == "blocked"
+    assert result["counts"]["v3_active_jobs"] == 1
+    assert result["counts"]["v3_preserved_planned_jobs"] == 0
+
+
+@pytest.mark.parametrize(
+    "created_at,container_started_at",
+    [
+        (None, "2026-10-10T22:24:17.777457791Z"),
+        ("invalid", "2026-10-10T22:24:17.777457791Z"),
+        ("2026-09-29T23:13:35.881162+00:00", "invalid"),
+    ],
+)
+def test_inspect_active_work_fails_closed_on_unreadable_planned_job_times(
+    tmp_path, created_at, container_started_at
+):
+    v1, v2, projects = _databases(tmp_path)
+    jobs = tmp_path / "v1" / "v3_jobs"
+    _write_v3_job(jobs, status="planned", created_at=created_at)
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="time_unreadable"):
+        _MODULE.inspect_active_work(
+            v1, v2, projects, v3_container_started_at=container_started_at
+        )
+
+
+def test_inspect_active_work_keeps_planned_jobs_blocking_without_container_start_evidence(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    jobs = tmp_path / "v1" / "v3_jobs"
+    _write_v3_job(jobs, status="planned", created_at="2026-09-29T23:13:35.881162+00:00")
+
+    result = _MODULE.inspect_active_work(v1, v2, projects)
+
+    assert result["status"] == "blocked"
+    assert result["counts"]["v3_active_jobs"] == 1
+
+
+def test_inspect_active_work_fails_closed_on_malformed_planned_job_request_metadata(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    jobs = tmp_path / "v1" / "v3_jobs"
+    payload = {"status": "planned", "created_at": "2026-09-29T23:13:35.881162+00:00", "request": {"metadata": []}}
+    (jobs / "job_planned.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(_MODULE.CutoverBlocked, match="v3_job_request_state_unreadable"):
+        _MODULE.inspect_active_work(
+            v1, v2, projects, v3_container_started_at="2026-10-10T22:24:17.777457791Z"
+        )
+
+
 def test_inspect_active_work_fails_closed_on_unknown_v3_job_and_planning_states(tmp_path):
     v1, v2, projects = _databases(tmp_path)
     jobs = tmp_path / "v1" / "v3_jobs"

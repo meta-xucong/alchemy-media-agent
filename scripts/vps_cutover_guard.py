@@ -8,6 +8,7 @@ allowed to run and while all production writers remain stopped.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -231,10 +232,34 @@ def verify_v3_storage_roots(
     }
 
 
-def inspect_active_work(v1_database: Path, v2_queue_database: Path, v3_projects: Path) -> dict:
+def _parse_cutover_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def inspect_active_work(
+    v1_database: Path,
+    v2_queue_database: Path,
+    v3_projects: Path,
+    *,
+    v3_container_started_at: str | None = None,
+) -> dict:
+    container_started = _parse_cutover_timestamp(v3_container_started_at)
+    if v3_container_started_at is not None and container_started is None:
+        raise CutoverBlocked("v3_container_start_time_unreadable")
     counts = {"v1_active_jobs": 0, "v3_active_jobs": 0, "v3_planning_operations": 0,
               "v2_queued_or_running_tasks": 0, "v2_unexpired_generation_leases": 0,
-              "lab_active_sessions": 0}
+              "lab_active_sessions": 0, "v3_preserved_planned_jobs": 0}
     v1 = _readonly(v1_database)
     try:
         if "v1_records" not in _tables(v1):
@@ -325,9 +350,41 @@ def inspect_active_work(v1_database: Path, v2_queue_database: Path, v3_projects:
                 normalized_status = status.lower()
                 if normalized_status not in V3_KNOWN:
                     raise CutoverBlocked("v3_job_state_unknown")
-                counts["v3_active_jobs"] += normalized_status in V3_ACTIVE
+                if normalized_status == "planned":
+                    request = payload.get("request")
+                    request_metadata = request.get("metadata", {}) if isinstance(request, dict) else None
+                    if not isinstance(request_metadata, dict):
+                        raise CutoverBlocked("v3_job_request_state_unreadable")
+                    has_attempt_marker = any(
+                        marker in request_metadata
+                        for marker in ("background_generation_attempt_id", "background_generation_watchdog")
+                    )
+                    created_at = _parse_cutover_timestamp(payload.get("created_at"))
+                    if created_at is None:
+                        raise CutoverBlocked("v3_job_created_time_unreadable")
+                    # ProductJobRecord persists the canonical project scope in
+                    # request.metadata. Keep recognizing the legacy top-level
+                    # field too, so old or adapter-produced records fail closed.
+                    has_project_scope = (
+                        payload.get("project_id") is not None
+                        or request_metadata.get("project_id") is not None
+                    )
+                    if (
+                        container_started is None
+                        or has_attempt_marker
+                        or has_project_scope
+                        or created_at >= container_started
+                    ):
+                        counts["v3_active_jobs"] += 1
+                    else:
+                        # This durable plan predates the current V3 process, so
+                        # it cannot still be in that process's in-memory queue.
+                        # Preserve and report it without treating it as active.
+                        counts["v3_preserved_planned_jobs"] += 1
+                else:
+                    counts["v3_active_jobs"] += normalized_status in V3_ACTIVE
 
-    active = sum(counts.values())
+    active = sum(value for key, value in counts.items() if key != "v3_preserved_planned_jobs")
     return {"status": "idle" if active == 0 else "blocked", "scope": "durable_active_work_inventory",
             "counts": counts, "active_work_items": active}
 
@@ -874,6 +931,7 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--v1-database", required=True, type=Path)
     inspect.add_argument("--v2-queue-database", required=True, type=Path)
     inspect.add_argument("--v3-projects-root", required=True, type=Path)
+    inspect.add_argument("--v3-container-started-at", required=True)
     verify_v3_roots = subparsers.add_parser("verify-v3-storage-roots")
     verify_v3_roots.add_argument("--v1-media-root", required=True, type=Path)
     verify_v3_roots.add_argument("--bootstrap-env-file", required=True, type=Path)
@@ -917,7 +975,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect-active-work":
-            result = inspect_active_work(args.v1_database, args.v2_queue_database, args.v3_projects_root)
+            result = inspect_active_work(
+                args.v1_database,
+                args.v2_queue_database,
+                args.v3_projects_root,
+                v3_container_started_at=args.v3_container_started_at,
+            )
         elif args.command == "verify-v3-storage-roots":
             try:
                 container_inspect = json.load(sys.stdin)
