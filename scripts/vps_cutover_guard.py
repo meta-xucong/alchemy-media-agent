@@ -362,7 +362,13 @@ def inspect_active_work(
                     created_at = _parse_cutover_timestamp(payload.get("created_at"))
                     if created_at is None:
                         raise CutoverBlocked("v3_job_created_time_unreadable")
-                    has_project_scope = payload.get("project_id") is not None
+                    # ProductJobRecord persists the canonical project scope in
+                    # request.metadata. Keep recognizing the legacy top-level
+                    # field too, so old or adapter-produced records fail closed.
+                    has_project_scope = (
+                        payload.get("project_id") is not None
+                        or request_metadata.get("project_id") is not None
+                    )
                     if (
                         container_started is None
                         or has_attempt_marker

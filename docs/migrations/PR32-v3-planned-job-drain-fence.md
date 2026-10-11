@@ -29,7 +29,9 @@ counted those two records as active.
   preserved resumable Product API plan, not active work. It is reported
   separately and its file is not changed. A project-associated plan remains
   blocking because project generation can be held in the current process's
-  in-memory executor queue before the durable worker claim is written.
+  in-memory executor queue before the durable worker claim is written. The
+  canonical ProductJob storage shape is `request.metadata.project_id`; the
+  guard also recognizes the legacy top-level `project_id` field.
 - A `planned` job with a background-generation attempt marker remains active,
   regardless of timestamp.
 - Missing or malformed container-start or job-creation timestamps fail closed.

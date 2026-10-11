@@ -105,15 +105,21 @@ def test_inspect_active_work_blocks_v3_jobs_in_nonterminal_states(tmp_path, stat
     assert result["counts"]["v3_active_jobs"] == 1
 
 
-def _write_v3_job(jobs: Path, *, status: str, created_at: str | None, metadata=None, project_id=None):
+def _write_v3_job(
+    jobs: Path, *, status: str, created_at: str | None, metadata=None,
+    project_id=None, legacy_top_level_project_id=None,
+):
+    request_metadata = dict(metadata or {})
+    if project_id is not None:
+        request_metadata["project_id"] = project_id
     payload = {
         "status": status,
-        "request": {"metadata": dict(metadata or {})},
+        "request": {"metadata": request_metadata},
     }
-    if project_id is not None:
-        payload["project_id"] = project_id
     if created_at is not None:
         payload["created_at"] = created_at
+    if legacy_top_level_project_id is not None:
+        payload["project_id"] = legacy_top_level_project_id
     path = jobs / "job_planned.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -168,14 +174,24 @@ def test_inspect_active_work_blocks_old_plan_with_background_attempt_marker(tmp_
     assert result["counts"]["v3_active_jobs"] == 1
 
 
-def test_inspect_active_work_keeps_old_project_plan_blocking_for_executor_queue_safety(tmp_path):
+@pytest.mark.parametrize(
+    "project_scope_kwargs",
+    [
+        {"project_id": "project_1"},
+        {"legacy_top_level_project_id": "project_1"},
+    ],
+    ids=["persisted-request-metadata", "legacy-top-level"],
+)
+def test_inspect_active_work_keeps_old_project_plan_blocking_for_executor_queue_safety(
+    tmp_path, project_scope_kwargs
+):
     v1, v2, projects = _databases(tmp_path)
     jobs = tmp_path / "v1" / "v3_jobs"
     _write_v3_job(
         jobs,
         status="planned",
         created_at="2026-09-29T23:13:35.881162+00:00",
-        project_id="project_1",
+        **project_scope_kwargs,
     )
 
     result = _MODULE.inspect_active_work(
