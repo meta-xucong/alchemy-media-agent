@@ -52,7 +52,15 @@ class LocalMediaStore:
     def history_file(self) -> Path:
         return self.root / "history" / "outputs.jsonl"
 
-    def save_base64_output(self, *, job_id: str, output_id: str, b64_json: str, output_format: str) -> str:
+    def save_base64_output(
+        self, *, job_id: str, output_id: str, b64_json: str, output_format: str,
+        owner_id: int | None = None,
+    ) -> str:
+        from app.repositories.output_publication import reserve_output
+
+        # This must commit before even the original bytes become discoverable.
+        # A failed write or interrupted billing step leaves a private reservation.
+        reserve_output(self.root / "repository.sqlite3", output_id=output_id, job_id=job_id, owner_id=owner_id)
         ext = "jpg" if output_format == "jpeg" else output_format
         output_dir = self.generated_root / job_id
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -64,6 +72,16 @@ class LocalMediaStore:
         self.ensure_thumbnail(output_id=output_id, source_path=path)
         self.ensure_preview(output_id=output_id, source_path=path)
         return f"/v1/outputs/{output_id}/download"
+
+    def output_publication_blocked(self, output_id: str, *, candidate_job_id: str | None = None) -> bool:
+        from app.repositories.output_publication import publication_blocked_on
+
+        connection = connect(self.root / "repository.sqlite3")
+        try:
+            connection.execute("BEGIN")
+            return publication_blocked_on(connection, output_id, candidate_job_id=candidate_job_id)
+        finally:
+            connection.close()
 
     def save_asset_bytes(self, *, asset_id: str, filename: str, content: bytes) -> Path:
         target_dir = self.asset_root / asset_id
@@ -154,8 +172,16 @@ class LocalMediaStore:
         return self.generated_root / job_id / f"{output_id}.{ext}"
 
     def save_history_record(self, record: dict[str, Any]) -> None:
-        self._ensure_history_index()
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
+        # A first native append must have a real (empty) source import receipt.
+        # Otherwise a prepared empty store sees its own new JSONL as an unknown
+        # restored legacy source and correctly refuses the next history read.
+        try:
+            with self.history_file.open("x", encoding="utf-8"):
+                pass
+        except FileExistsError:
+            pass
+        self._ensure_history_index()
         connection = connect(self.root / "repository.sqlite3")
         try:
             with connection:
@@ -280,6 +306,8 @@ class LocalMediaStore:
             job_id = path.parent.name
             output_id = path.stem
             if not _looks_like_generated_job_id(job_id) or not _looks_like_generated_output_id(output_id):
+                continue
+            if self.output_publication_blocked(output_id, candidate_job_id=job_id):
                 continue
             try:
                 updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
@@ -588,12 +616,16 @@ class LocalMediaStore:
 
 
     def find_output_file(self, output_id: str) -> tuple[Path, str, str] | None:
+        if not output_id or output_id in {".", ".."} or any(char in output_id for char in "/\\\x00*?[]"):
+            return None
         outputs_root = self.generated_root
         if not outputs_root.exists():
             return None
+        resolved_root = outputs_root.resolve()
         for path in outputs_root.glob(f"*/{output_id}.*"):
             output_format = _format_from_suffix(path.suffix)
-            if output_format:
+            if (output_format and path.stem == output_id and path.is_file()
+                    and resolved_root in path.resolve().parents):
                 return path, output_format, path.parent.name
         return None
 

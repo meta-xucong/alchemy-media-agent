@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -20,13 +21,45 @@ def verify_derived_index(database: Path) -> tuple[dict, int]:
             connection.execute("BEGIN")
             state = dict(connection.execute("SELECT state_key,value FROM v1_read_state"))
             pending = int(connection.execute("SELECT COUNT(*) FROM v1_read_dirty").fetchone()[0])
-            if (state.get("version") != "1" or "blocked" in state or pending
+            if (state.get("version") != "2" or "blocked" in state or "maintenance_required" in state or pending
                     or Path(state.get("storage_root", "")) != database.parent.resolve()):
                 return {"status": "not_ready", "pending_keys": pending}, 2
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                "('v1_favorites','v1_favorite_state','v1_import_receipts')"
+            )}
+            favorite_source = (database.parent / "favorites" / "image_favorites.json").exists()
+            favorite_receipt = "v1_import_receipts" in tables and connection.execute(
+                "SELECT 1 FROM v1_import_receipts WHERE namespace='favorites'"
+            ).fetchone() is not None
+            favorites_ready = not (favorite_source or favorite_receipt or "v1_favorite_state" in tables)
+            if "v1_favorites" in tables:
+                favorites_ready = "v1_favorite_state" in tables
+                if favorites_ready:
+                    imported = connection.execute(
+                        "SELECT 1 FROM v1_favorite_state WHERE state_key='legacy_imported'"
+                    ).fetchone() is not None
+                    favorites_ready = not ((favorite_source or favorite_receipt) and not imported)
+            markers = {row[0] for row in connection.execute(
+                "SELECT state_key FROM v1_history_state WHERE state_key IN ('jsonl_imported','owner_evidence_backfilled')"
+            )}
+            receipt = connection.execute("SELECT 1 FROM v1_import_receipts WHERE namespace='history'").fetchone()
+            history_ready = (markers == {"jsonl_imported", "owner_evidence_backfilled"} or
+                             (not markers and not receipt and not (database.parent / "history" / "outputs.jsonl").exists()))
+            ordering_ready = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name='v1_read_sources_output_session_idx'"
+            ).fetchone() is not None
+            if not (favorites_ready and history_ready and ordering_ready):
+                return {"status": "not_ready", "favorites_read_ready": favorites_ready,
+                        "history_import_ready": history_ready, "source_ordering_ready": ordering_ready}, 2
             dangling = int(connection.execute(
                 "SELECT COUNT(*) FROM v1_read_winners w LEFT JOIN v1_read_sources s "
                 "ON w.kind=s.kind AND w.source_key=s.source_key "
                 "WHERE s.source_key IS NULL OR w.output_id!=s.output_id"
+            ).fetchone()[0])
+            dangling_jobs = int(connection.execute(
+                "SELECT COUNT(*) FROM v1_read_sources s LEFT JOIN v1_read_jobs j ON s.job_id=j.job_id "
+                "WHERE s.kind='job' AND s.eligible=1 AND s.non_v1=0 AND j.job_id IS NULL"
             ).fetchone()[0])
             expected = """WITH expected AS (
                 SELECT surface,scope,-1 AS owner_id,0 AS non_mock,COUNT(*) AS total
@@ -50,23 +83,27 @@ def verify_derived_index(database: Path) -> tuple[dict, int]:
                 "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'v1_read_%'"
             )}
             required = {"v1_read_records_" + event for event in ("insert", "update", "delete")}
+            required.update("v1_read_publications_" + event for event in ("insert", "update", "delete"))
             required.update("v1_read_" + table + "_" + event for table in
                             ("v1_history_records", "v1_history_owner_evidence")
                             for event in ("insert", "update", "delete"))
-            coherent = not (dangling or missing or excess or not required.issubset(triggers))
+            coherent = not (dangling or dangling_jobs or missing or excess or not required.issubset(triggers))
             return {"status": "verified" if coherent else "inconsistent",
                     "scope": "derived_internal_coherence", "dangling_winners": dangling,
+                    "dangling_job_projections": dangling_jobs,
                     "count_buckets_match": not (missing or excess),
                     "tracking_triggers_present": required.issubset(triggers)}, 0 if coherent else 2
         finally:
             connection.close()
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:
         return {"status": "blocked", "error_type": type(exc).__name__}, 2
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--storage-root", required=True, type=Path)
+    parser.add_argument("--minimum-free-bytes", type=int,
+                        help="Required for writes: operator-chosen positive free-space floor, not a size estimate.")
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--prepare", action="store_true", help="Build once or catch up committed source changes.")
     modes.add_argument("--rebuild", action="store_true", help="Rebuild only derived tables from current authorities.")
@@ -80,6 +117,26 @@ def main(argv=None) -> int:
         result, code = verify_derived_index(root / "repository.sqlite3")
         print(json.dumps(result))
         return code
+    if args.minimum_free_bytes is None or args.minimum_free_bytes <= 0:
+        parser.error("mutating maintenance requires a positive --minimum-free-bytes budget")
+    # Gate before application import, directory creation, DB open, or schema
+    # write. This is a starting-space floor, not a claim of exact peak demand.
+    try:
+        free_bytes = shutil.disk_usage(root).free
+        existing = {}
+        for name in ("repository.sqlite3", "repository.sqlite3-wal", "repository.sqlite3-shm"):
+            path = root / name
+            existing[name] = path.stat().st_size if path.exists() else 0
+    except OSError as exc:
+        print(json.dumps({"status": "blocked", "error_type": type(exc).__name__}))
+        return 2
+    preflight = {"free_bytes": free_bytes, "minimum_free_bytes": args.minimum_free_bytes,
+                 "existing_sqlite_bytes": existing,
+                 "scope": "initial_free_space_floor_not_peak_estimate"}
+    if free_bytes < args.minimum_free_bytes:
+        print(json.dumps({"status": "blocked", "error_type": "insufficient_free_space",
+                          "storage_preflight": preflight}))
+        return 2
     # Set the singleton's root before importing any application package. Never
     # allow the caller's default storage path to become an implicit destination.
     os.environ["MEDIA_STORAGE_ROOT"] = str(root)
@@ -96,18 +153,21 @@ def main(argv=None) -> int:
         except sqlite3.Error:
             markers = set()
         if not {"jsonl_imported", "owner_evidence_backfilled"}.issubset(markers):
-            print(json.dumps({"status": "blocked", "error_type": "legacy_import_pending"}))
+            print(json.dumps({"status": "blocked", "error_type": "legacy_import_pending",
+                              "storage_preflight": preflight}))
             return 2
-    from app.repositories.history_index import prepare_history_index, reconcile_history_files
-    from app.repositories.sqlite_json import connect
-    from app.storage.local import LocalMediaStore
-
-    store = LocalMediaStore(args.storage_root.resolve())
     try:
+        from app.repositories.history_index import prepare_history_index, reconcile_history_files
+        from app.repositories.sqlite_json import connect
+        from app.services.favorites import prepare_favorites_index
+        from app.storage.local import LocalMediaStore
+
+        store = LocalMediaStore(args.storage_root.resolve())
         if args.reconcile:
             reconcile_history_files(store)
         else:
             prepare_history_index(store, rebuild=args.rebuild)
+        prepare_favorites_index()
         connection = connect(store.root / "repository.sqlite3")
         try:
             connection.execute("BEGIN")
@@ -119,11 +179,13 @@ def main(argv=None) -> int:
             connection.commit()
         finally:
             connection.close()
-        print(json.dumps({"status": "ready" if pending == 0 else "catch_up_pending", "pending_keys": pending, "counts": counts}))
+        print(json.dumps({"status": "ready" if pending == 0 else "catch_up_pending", "pending_keys": pending,
+                          "counts": counts, "storage_preflight": preflight}))
         return 0 if pending == 0 else 2
     except Exception as exc:
         # SQLite/import exceptions can include private paths or source material.
-        print(json.dumps({"status": "blocked", "error_type": type(exc).__name__}))
+        print(json.dumps({"status": "blocked", "error_type": type(exc).__name__,
+                          "storage_preflight": preflight}))
         return 2
 
 

@@ -15,6 +15,7 @@ import qrcode
 import pytest
 
 from app.config import settings
+from app.services.image_history import prepare_history_reads
 import app.providers.images.doubao_image as doubao_image_provider
 import app.providers.images.openai_gpt_image_2 as openai_image_provider
 import app.providers.images.response_payloads as response_payloads
@@ -6506,6 +6507,7 @@ def test_v2_image_history_supports_offset_pagination(tmp_path) -> None:
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
         encoding="utf-8",
     )
+    prepare_history_reads()
 
     first_page = client.get("/api/v2/image/history", params={"limit": 2, "offset": 0})
     second_page = client.get("/api/v2/image/history", params={"limit": 2, "offset": 2})
@@ -6585,6 +6587,7 @@ def test_image_history_normalizes_external_thumbnail_url_to_v2_endpoint(tmp_path
         "updated_at": "2026-06-06T14:18:48.900239Z",
     }
     settings.image_history_path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    prepare_history_reads()
 
     response = client.get("/api/v2/image/history", params={"limit": 10})
 
@@ -6614,6 +6617,7 @@ def test_image_history_derives_v2_thumbnail_url_for_non_native_record(tmp_path) 
         "updated_at": "2026-06-06T14:18:48.900239Z",
     }
     settings.image_history_path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    prepare_history_reads()
 
     response = client.get("/api/v2/image/history", params={"limit": 10})
 

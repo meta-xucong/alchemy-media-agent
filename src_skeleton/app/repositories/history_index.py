@@ -22,7 +22,7 @@ from typing import Any
 
 from app.services.history_projection import job_history_item, positive_owner
 
-VERSION = 1
+VERSION = 2
 BATCH = 128
 REFRESH_SECONDS = 2.0
 READ_ROUNDS = 3
@@ -42,6 +42,7 @@ class HistoryReadMetrics:
     source_rows: int = 0
     winner_rows: int = 0
     page_decodes: int = 0
+    job_common_decodes: int = 0
     filesystem_entries: int = 0
     file_stats: int = 0
     dirty_keys: int = 0
@@ -50,6 +51,17 @@ class HistoryReadMetrics:
 
 
 _METRICS: ContextVar[HistoryReadMetrics | None] = ContextVar("history_index_metrics", default=None)
+_REFRESH_DEADLINE: ContextVar[float | None] = ContextVar("history_refresh_deadline", default=None)
+
+
+class _RefreshBudgetExpired(Exception):
+    pass
+
+
+def _budget_checkpoint() -> None:
+    deadline = _REFRESH_DEADLINE.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise _RefreshBudgetExpired
 
 
 def _metric(name: str, amount: int = 1) -> None:
@@ -91,7 +103,7 @@ def install_tracking(connection: sqlite3.Connection) -> None:
     existing = {row[0] for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'v1_read_%'"
     )}
-    required = {"v1_read_sources", "v1_read_winners", "v1_read_counts", "v1_read_dirty", "v1_read_state"}
+    required = {"v1_read_sources", "v1_read_jobs", "v1_read_winners", "v1_read_counts", "v1_read_dirty", "v1_read_state"}
     incomplete = bool("v1_read_state" in existing and not required.issubset(existing))
     statements = [
         """CREATE TABLE IF NOT EXISTS v1_read_state(
@@ -99,6 +111,8 @@ def install_tracking(connection: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS v1_read_dirty(
             kind TEXT NOT NULL, source_key TEXT NOT NULL, PRIMARY KEY(kind,source_key))""",
         "CREATE INDEX IF NOT EXISTS v1_read_dirty_sources_idx ON v1_read_dirty(kind,source_key) WHERE kind!='resolve'",
+        """CREATE TABLE IF NOT EXISTS v1_read_jobs(
+            job_id TEXT PRIMARY KEY, payload TEXT NOT NULL)""",
         """CREATE TABLE IF NOT EXISTS v1_read_sources(
             kind TEXT NOT NULL, source_key TEXT NOT NULL, output_id TEXT NOT NULL,
             job_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
@@ -111,7 +125,6 @@ def install_tracking(connection: sqlite3.Connection) -> None:
             position INTEGER NOT NULL DEFAULT 0, file_path TEXT NOT NULL DEFAULT '',
             file_exists INTEGER NOT NULL DEFAULT 0, file_regular INTEGER NOT NULL DEFAULT 0,
             payload TEXT, PRIMARY KEY(kind,source_key))""",
-        "CREATE INDEX IF NOT EXISTS v1_read_sources_output_idx ON v1_read_sources(output_id)",
         "CREATE INDEX IF NOT EXISTS v1_read_sources_job_idx ON v1_read_sources(kind,job_id)",
         "CREATE INDEX IF NOT EXISTS v1_read_sources_session_idx ON v1_read_sources(kind,session_id)",
         "CREATE INDEX IF NOT EXISTS v1_read_sources_path_idx ON v1_read_sources(file_path)",
@@ -155,6 +168,12 @@ def install_tracking(connection: sqlite3.Connection) -> None:
           INSERT INTO v1_read_dirty SELECT NEW.namespace,NEW.record_key WHERE NEW.namespace IN {tracked}
             AND NOT EXISTS(SELECT 1 FROM v1_read_dirty WHERE kind=NEW.namespace AND source_key=NEW.record_key);
         END""")
+    # Add separate triggers so existing v1 IF-NOT-EXISTS definitions cannot
+    # silently omit the newly introduced publication authority namespace.
+    for event, reference in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+        connection.execute(f"""CREATE TRIGGER IF NOT EXISTS v1_read_publications_{event.lower()}
+            AFTER {event} ON v1_records WHEN {reference}.namespace='output_publications'
+            BEGIN INSERT OR IGNORE INTO v1_read_dirty VALUES('output_publications',{reference}.record_key); END""")
     install_manifest_tracking(connection)
 
 
@@ -195,13 +214,16 @@ def _put_source(connection, **values) -> None:
 
 def _refresh_job(connection, store, job_id: str, row=None) -> None:
     from app.schemas import GenerationJob, Session
+    connection.execute("INSERT OR IGNORE INTO v1_read_dirty SELECT 'resolve',output_id FROM v1_read_sources WHERE kind='file' AND job_id=?", (job_id,))
     connection.execute("INSERT OR IGNORE INTO v1_read_dirty SELECT 'resolve',output_id FROM v1_read_sources WHERE kind='job' AND job_id=?", (job_id,))
     connection.execute("DELETE FROM v1_read_sources WHERE kind='job' AND job_id=?", (job_id,))
+    connection.execute("DELETE FROM v1_read_jobs WHERE job_id=?", (job_id,))
     row = row or connection.execute("SELECT rowid,payload FROM v1_records WHERE namespace='jobs' AND record_key=?", (job_id,)).fetchone()
     if row is None:
         return
     _metric("authority_decodes")
     job = GenerationJob.model_validate_json(row[1])
+    _budget_checkpoint()
     if job.job_type != "image":
         return
     session_row = connection.execute("SELECT payload FROM v1_records WHERE namespace='sessions' AND record_key=?", (job.session_id,)).fetchone()
@@ -211,11 +233,31 @@ def _refresh_job(connection, store, job_id: str, row=None) -> None:
     else:
         project = None
     non_v1 = str(job.idempotency_key or "").startswith(("v2:", "lab:")) or project in {V2_PROJECT, LAB_PROJECT}
+    common_saved = False
     for position, output in enumerate(job.outputs):
+        _budget_checkpoint()
         eligible = output.format in {"png", "jpeg", "webp"}
         payload = None
         if eligible and not non_v1:
-            payload = job_history_item(job, output, store).model_dump_json()
+            # Job-wide plans/prompts can be large. Store them once, rather than
+            # duplicating the complete display projection for every output.
+            output_data = dict(
+                id=output.id, url=output.url, thumbnail_url=store.thumbnail_url(output.id),
+                preview_url=store.preview_url(output.id), format=output.format,
+                width=output.width, height=output.height,
+                visual_review=output.visual_review.model_dump(mode="json") if output.visual_review else None,
+                version_parent_id=output.version_parent_id,
+                veyra_user_id=positive_owner((output.metadata or {}).get("veyra_user_id")),
+            )
+            if not common_saved:
+                common = job_history_item(job, output, store).model_dump(mode="json")
+                for name in output_data:
+                    common.pop(name)
+                connection.execute("INSERT INTO v1_read_jobs VALUES(?,?)", (
+                    job.id, json.dumps(common, ensure_ascii=False, separators=(",", ":")),
+                ))
+                common_saved = True
+            payload = json.dumps(output_data, ensure_ascii=False, separators=(",", ":"))
             _metric("job_projection_outputs")
         _put_source(connection, kind="job", source_key=json.dumps([job.id, position]),
                     output_id=output.id, job_id=job.id, session_id=job.session_id or "",
@@ -322,7 +364,7 @@ def _refresh_file(connection, store, path: Path) -> None:
                 payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
 
-def _owner(connection, output_id: str, sources) -> tuple[int | None, bool]:
+def _owner(connection, output_id: str) -> tuple[int | None, bool]:
     from app.schemas import GenerationOutput
 
     canonical = connection.execute("SELECT payload FROM v1_records WHERE namespace='outputs' AND record_key=?", (output_id,)).fetchone()
@@ -332,7 +374,10 @@ def _owner(connection, output_id: str, sources) -> tuple[int | None, bool]:
         owner = positive_owner((output.metadata or {}).get("veyra_user_id"))
         if owner is not None:
             return owner, False
-    history = next((row for row in sources if row["kind"] == "history"), None)
+    history = connection.execute(
+        "SELECT owner_id,owner_conflict FROM v1_read_sources WHERE kind='history' AND source_key=?",
+        (output_id,),
+    ).fetchone()
     if history is not None:
         evidence = connection.execute("SELECT owner_id,owner_conflict FROM v1_history_owner_evidence WHERE output_id=?", (output_id,)).fetchone()
         if history["owner_conflict"] or (evidence is not None and evidence[1]):
@@ -340,11 +385,16 @@ def _owner(connection, output_id: str, sources) -> tuple[int | None, bool]:
         owner = positive_owner(evidence[0]) if evidence is not None else positive_owner(history["owner_id"])
         if owner is not None:
             return owner, False
-    owners = {row["owner_id"] for row in sources if row["kind"] == "job" and row["owner_id"] is not None}
-    if len(owners) > 1:
+    # Aggregate the complete owner evidence without retaining duplicate rows or
+    # their display payloads. MIN/MAX are sufficient to detect any disagreement.
+    owners = connection.execute(
+        "SELECT MIN(owner_id),MAX(owner_id) FROM v1_read_sources WHERE output_id=? AND kind='job'",
+        (output_id,),
+    ).fetchone()
+    if owners[0] != owners[1]:
         return None, True
-    if owners:
-        return next(iter(owners)), False
+    if owners[0] is not None:
+        return owners[0], False
     claim = connection.execute("SELECT payload FROM v1_records WHERE namespace='output_delete_claims' AND record_key=?", (output_id,)).fetchone()
     return (positive_owner(_decode(claim[0]).get("owner_id")) if claim else None), False
 
@@ -358,6 +408,7 @@ def _bucket_keys(row):
 
 def _remove_winners(connection, output_id: str) -> None:
     for row in connection.execute("SELECT * FROM v1_read_winners WHERE output_id=?", (output_id,)):
+        _budget_checkpoint()
         for key in _bucket_keys(row):
             changed = connection.execute("UPDATE v1_read_counts SET total=total-1 WHERE surface=? AND scope=? AND owner_id=? AND non_mock=? AND total>0", key).rowcount
             if changed != 1:
@@ -375,84 +426,171 @@ def _winner(connection, row, *, surface, scope, owner_id) -> None:
         connection.execute("INSERT INTO v1_read_counts VALUES(?,?,?,?,1) ON CONFLICT(surface,scope,owner_id,non_mock) DO UPDATE SET total=total+1", key)
 
 
+def _preferred(candidate, current, owner):
+    """Legacy traversal/source precedence without sorting or retaining a group."""
+    if current is None:
+        return candidate
+    priority = {"job": 0, "history": 1, "file": 2}
+    left = (priority[candidate["kind"]], -int(owner is not None and candidate["owner_id"] == owner))
+    right = (priority[current["kind"]], -int(owner is not None and current["owner_id"] == owner))
+    if left != right:
+        return candidate if left < right else current
+    if candidate["kind"] == "job":
+        if candidate["job_sort"] != current["job_sort"]:
+            return candidate if candidate["job_sort"] > current["job_sort"] else current
+        return candidate if (candidate["sequence"], candidate["position"]) < (current["sequence"], current["position"]) else current
+    if candidate["kind"] == "file":
+        return candidate if (-candidate["sort_epoch"], candidate["sequence"]) < (-current["sort_epoch"], current["sequence"]) else current
+    return current
+
+
+# Deliberately excludes payload/file_path: a single output can have arbitrarily
+# many duplicate sources. The output/session index streams one scope at a time.
+_RESOLVE_COLUMNS = ("kind,source_key,output_id,job_id,session_id,owner_id,eligible,"
+                    "sort_epoch,sort_text,job_sort,sequence,position,is_mock")
+
+
 def _resolve(connection, output_id: str) -> None:
+    from app.repositories.output_publication import publication_blocked_on
     _metric("refreshed_outputs")
     _remove_winners(connection, output_id)
-    sources = connection.execute("SELECT * FROM v1_read_sources WHERE output_id=?", (output_id,)).fetchall()
-    _metric("source_rows", len(sources))
-    owner, conflict = _owner(connection, output_id, sources)
+    if publication_blocked_on(connection, output_id):
+        return
+    owner, conflict = _owner(connection, output_id)
     if conflict:
         return
-    for row in sources:
-        if row["kind"] == "history" and row["is_lab"] and row["file_exists"]:
-            _winner(connection, row, surface="lab", scope=GLOBAL_SCOPE,
-                    owner_id=owner if owner is not None else row["lab_owner"])
-    if any(row["non_v1"] for row in sources):
+    history = connection.execute(
+        "SELECT " + _RESOLVE_COLUMNS + ",lab_owner FROM v1_read_sources "
+        "WHERE kind='history' AND source_key=? AND is_lab=1 AND file_exists=1", (output_id,),
+    ).fetchone()
+    if history is not None:
+        _winner(connection, history, surface="lab", scope=GLOBAL_SCOPE,
+                owner_id=owner if owner is not None else history["lab_owner"])
+    if connection.execute("SELECT 1 FROM v1_read_sources WHERE output_id=? AND non_v1=1 LIMIT 1", (output_id,)).fetchone():
         return
     has_claim = connection.execute("SELECT 1 FROM v1_records WHERE namespace='output_delete_claims' AND record_key=?", (output_id,)).fetchone() is not None
-    candidates = [row for row in sources if row["eligible"] and not (has_claim and row["kind"] == "file")]
-    # Stable traversal tie order, then source priority/owner-match precedence.
-    jobs = sorted((row for row in candidates if row["kind"] == "job"), key=lambda row: (row["sequence"], row["position"]))
-    jobs.sort(key=lambda row: row["job_sort"], reverse=True)
-    history = [row for row in candidates if row["kind"] == "history"]
-    files = sorted((row for row in candidates if row["kind"] == "file"), key=lambda row: (-row["sort_epoch"], row["sequence"]))
-    ordered = jobs + history + files
-    scopes = [GLOBAL_SCOPE] + ["session:" + session for session in sorted({row["session_id"] for row in ordered if row["kind"] != "file" and row["session_id"]})]
-    for scope in scopes:
-        available = [row for row in ordered if scope == GLOBAL_SCOPE or (row["kind"] != "file" and "session:" + row["session_id"] == scope)]
-        if not available:
+    global_best = session_best = None
+    session = None
+    for row in connection.execute(
+        "SELECT " + _RESOLVE_COLUMNS + " FROM v1_read_sources "
+        "WHERE output_id=? ORDER BY session_id", (output_id,),
+    ):
+        _budget_checkpoint()
+        _metric("source_rows")
+        if row["session_id"] != session:
+            if session and session_best is not None:
+                _winner(connection, session_best, surface="v1", scope="session:" + session, owner_id=owner)
+            session, session_best = row["session_id"], None
+        if not row["eligible"] or (has_claim and row["kind"] == "file"):
             continue
-        best = min(available, key=lambda row: ({"job": 0, "history": 1, "file": 2}[row["kind"]], -int(owner is not None and row["owner_id"] == owner)))
-        _winner(connection, best, surface="v1", scope=scope, owner_id=owner)
+        global_best = _preferred(row, global_best, owner)
+        if row["kind"] != "file" and session:
+            session_best = _preferred(row, session_best, owner)
+    if session and session_best is not None:
+        _winner(connection, session_best, surface="v1", scope="session:" + session, owner_id=owner)
+    if global_best is not None:
+        _winner(connection, global_best, surface="v1", scope=GLOBAL_SCOPE, owner_id=owner)
+
+
+def _refresh_key(connection, store, kind, key) -> None:
+    if kind == "jobs":
+        _refresh_job(connection, store, key)
+    elif kind == "sessions":
+        connection.execute("INSERT OR IGNORE INTO v1_read_dirty SELECT 'jobs',record_key FROM v1_records WHERE namespace='jobs' AND session_id=?", (key,))
+        connection.execute("INSERT OR IGNORE INTO v1_read_dirty SELECT 'jobs',job_id FROM v1_read_sources WHERE kind='job' AND session_id=?", (key,))
+    elif kind == "history":
+        _refresh_manifest(connection, store, key)
+    elif kind == "file":
+        _refresh_file(connection, store, Path(key))
+    elif kind in {"outputs", "output_delete_claims", "output_publications"}:
+        _queue_output(connection, key)
+    elif kind == "resolve":
+        _resolve(connection, key)
+    else:
+        raise HistoryIndexUnavailable("Unknown history change requires an explicit rebuild.")
 
 
 def _drain(connection, store, *, deadline: float | None) -> bool:
-    while True:
-        rows = connection.execute("SELECT kind,source_key FROM v1_read_dirty WHERE kind!='resolve' ORDER BY kind,source_key LIMIT ?", (BATCH,)).fetchall()
-        if not rows:
-            rows = connection.execute("SELECT kind,source_key FROM v1_read_dirty ORDER BY kind,source_key LIMIT ?", (BATCH,)).fetchall()
-        if not rows:
-            return True
-        for kind, key in rows:
-            connection.execute("DELETE FROM v1_read_dirty WHERE kind=? AND source_key=?", (kind, key))
-            _metric("dirty_keys")
-            if kind == "jobs":
-                _refresh_job(connection, store, key)
-            elif kind == "sessions":
-                connection.execute("INSERT OR IGNORE INTO v1_read_dirty SELECT 'jobs',record_key FROM v1_records WHERE namespace='jobs' AND session_id=?", (key,))
-                connection.execute("INSERT OR IGNORE INTO v1_read_dirty SELECT 'jobs',job_id FROM v1_read_sources WHERE kind='job' AND session_id=?", (key,))
-            elif kind == "history":
-                _refresh_manifest(connection, store, key)
-            elif kind == "file":
-                _refresh_file(connection, store, Path(key))
-            elif kind in {"outputs", "output_delete_claims"}:
-                _queue_output(connection, key)
-            elif kind == "resolve":
-                _resolve(connection, key)
-            else:
-                raise HistoryIndexUnavailable("Unknown history change requires an explicit rebuild.")
-        if deadline is not None and time.monotonic() >= deadline:
-            return False
+    token = _REFRESH_DEADLINE.set(deadline)
+    completed_keys = 0
+    try:
+        while True:
+            rows = connection.execute("SELECT kind,source_key FROM v1_read_dirty WHERE kind!='resolve' ORDER BY kind,source_key LIMIT ?", (BATCH,)).fetchall()
+            if not rows:
+                rows = connection.execute("SELECT kind,source_key FROM v1_read_dirty ORDER BY kind,source_key LIMIT ?", (BATCH,)).fetchall()
+            if not rows:
+                return True
+            for kind, key in rows:
+                if deadline is None:
+                    # Explicit maintenance already has an atomic outer
+                    # transaction and cannot exhaust a cooperative budget.
+                    # Per-key savepoints would repeatedly subjournal dirty
+                    # pages and amplify cold-build disk writes dramatically.
+                    connection.execute("DELETE FROM v1_read_dirty WHERE kind=? AND source_key=?", (kind, key))
+                    _metric("dirty_keys")
+                    _refresh_key(connection, store, kind, key)
+                    continue
+                # Preserve completed keys but roll back an interrupted key and
+                # all its count/source changes. Large units require maintenance.
+                connection.execute("SAVEPOINT history_change")
+                try:
+                    _budget_checkpoint()
+                    connection.execute("DELETE FROM v1_read_dirty WHERE kind=? AND source_key=?", (kind, key))
+                    _metric("dirty_keys")
+                    _refresh_key(connection, store, kind, key)
+                    _budget_checkpoint()
+                except _RefreshBudgetExpired:
+                    connection.execute("ROLLBACK TO history_change")
+                    connection.execute("RELEASE history_change")
+                    if completed_keys == 0:
+                        # Repeated requests must not spend the full budget on
+                        # the same indivisible key forever. Maintenance can
+                        # drain it without the request budget, without rebuild.
+                        connection.execute("INSERT OR REPLACE INTO v1_read_state VALUES('maintenance_required','incremental_key_exceeded_budget')")
+                    return False
+                connection.execute("RELEASE history_change")
+                completed_keys += 1
+    finally:
+        _REFRESH_DEADLINE.reset(token)
+
+
+def _inventory_paths(store):
+    """Stream two directory levels; pathlib.glob buffers a whole directory."""
+    try:
+        directories = os.scandir(store.generated_root)
+    except FileNotFoundError:
+        return
+    with directories:
+        for directory in directories:
+            # Reject external symlink targets before following them for stat
+            # or enumeration, including directory-entry type checks.
+            path = _checked_path(store, Path(directory.path))
+            if not directory.is_dir():
+                continue
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    yield Path(entry.path)
 
 
 def _build(connection, store) -> None:
-    for table in ("v1_read_winners", "v1_read_counts", "v1_read_sources", "v1_read_dirty"):
+    for table in ("v1_read_winners", "v1_read_counts", "v1_read_sources", "v1_read_jobs", "v1_read_dirty"):
         connection.execute(f"DELETE FROM {table}")
     for row in connection.execute("SELECT rowid,payload,record_key FROM v1_records WHERE namespace='jobs' ORDER BY rowid"):
         _refresh_job(connection, store, row[2], row)
     for row in connection.execute("SELECT sequence,payload,output_id FROM v1_history_records ORDER BY sequence"):
         _refresh_manifest(connection, store, row[2], row)
-    for path in store.generated_root.glob("*/*"):
+    for path in _inventory_paths(store):
         _metric("filesystem_entries")
         _refresh_file(connection, store, path)
     _drain(connection, store, deadline=None)
     connection.execute("INSERT OR REPLACE INTO v1_read_state VALUES('storage_root',?)", (str(store.root.resolve()),))
     connection.execute("INSERT OR REPLACE INTO v1_read_state VALUES('version',?)", (str(VERSION),))
     connection.execute("DELETE FROM v1_read_state WHERE state_key='blocked'")
+    connection.execute("DELETE FROM v1_read_state WHERE state_key='maintenance_required'")
 
 
 def prepare_history_index(store, *, rebuild: bool = False) -> None:
-    """Explicit maintenance preparation; first-use invokes the same atomic build."""
+    """Explicit maintenance only: build/rebuild or completely drain changes."""
     from app.repositories.sqlite_json import connect
     store._ensure_history_index()
     connection = connect(store.root / "repository.sqlite3")
@@ -467,10 +605,17 @@ def prepare_history_index(store, *, rebuild: bool = False) -> None:
             raise HistoryIndexUnavailable("History index requires an explicit rebuild.")
         if version is not None and version[0] != str(VERSION) and not rebuild:
             raise HistoryIndexUnavailable("History index version requires an explicit rebuild.")
+        # A new index can scan the entire old derived table. Only explicit
+        # maintenance may create it; repository connection bootstrap must not.
+        connection.execute("CREATE INDEX IF NOT EXISTS v1_read_sources_output_session_idx ON v1_read_sources(output_id,session_id)")
+        # The version-2 ordered prefix covers every output-only lookup. Remove
+        # only the redundant derived index during this explicit maintenance.
+        connection.execute("DROP INDEX IF EXISTS v1_read_sources_output_idx")
         if rebuild or version is None:
             _build(connection, store)
         else:
-            _drain(connection, store, deadline=time.monotonic() + REFRESH_SECONDS)
+            _drain(connection, store, deadline=None)
+            connection.execute("DELETE FROM v1_read_state WHERE state_key='maintenance_required'")
         connection.commit()
     except Exception:
         connection.rollback()
@@ -487,7 +632,7 @@ def reconcile_history_files(store) -> None:
     try:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("CREATE TEMP TABLE observed_files(path TEXT PRIMARY KEY)")
-        for path in store.generated_root.glob("*/*"):
+        for path in _inventory_paths(store):
             _metric("filesystem_entries")
             key = str(path.resolve())
             connection.execute("INSERT OR IGNORE INTO observed_files VALUES(?)", (key,))
@@ -504,7 +649,54 @@ def reconcile_history_files(store) -> None:
         connection.close()
 
 
-def _page_rows(connection, *, surface, scope, owner_id, all_owners, include_mock, limit, offset, output_id=None):
+def _favorite_page_rows(connection, *, store, surface, scope, owner_id, all_owners,
+                        include_mock, limit, offset, output_id=None):
+    """SQL-only favorite intersection; O(F) scalar work, page-bounded payloads."""
+    from app.services.favorites import favorite_reads_ready
+
+    if not favorite_reads_ready(connection, storage_root=store.root):
+        return [], 0
+    favorite_params: list[Any] = []
+    if owner_id is None:
+        favorites_sql = "SELECT DISTINCT output_id FROM v1_favorites"
+    else:
+        favorites_sql = ("SELECT output_id FROM v1_favorites WHERE owner_id=? UNION "
+                         "SELECT output_id FROM v1_favorites WHERE owner_id IS NULL")
+        favorite_params.append(owner_id)
+    conditions = ["w.surface=?", "w.scope=?"]
+    args: list[Any] = [surface, scope]
+    if not all_owners:
+        if surface == "v1" and owner_id:
+            conditions.append("w.owner_id IN (?,0)")
+            args.append(owner_id)
+        else:
+            conditions.append("w.owner_id=?")
+            args.append(owner_id or 0)
+    if surface == "lab" and not include_mock:
+        conditions.append("w.is_mock=0")
+    if output_id is not None:
+        conditions.append("w.output_id=?")
+        args.append(output_id)
+    # CROSS JOIN fixes the candidate-first loop order: SQLite must not invert
+    # a tiny favorite set into a scan of the entire visible history.
+    joined = (" FROM (" + favorites_sql + ") f CROSS JOIN v1_read_winners w "
+              "ON w.output_id=f.output_id WHERE " + " AND ".join(conditions))
+    params = [*favorite_params, *args]
+    total = int(connection.execute("SELECT COUNT(*)" + joined, params).fetchone()[0])
+    order = ("w.sort_epoch DESC,w.job_id DESC,w.output_id DESC" if surface == "v1" else
+             "w.sort_text DESC,w.sort_epoch DESC,w.sequence ASC")
+    rows = list(connection.execute("SELECT w.*" + joined + " ORDER BY " + order + " LIMIT ? OFFSET ?",
+                                   [*params, limit, offset]))
+    _metric("winner_rows", len(rows))
+    return rows, total
+
+
+def _page_rows(connection, *, surface, scope, owner_id, all_owners, include_mock, limit, offset, output_id=None,
+               favorite=False, store=None):
+    if favorite:
+        return _favorite_page_rows(connection, store=store, surface=surface, scope=scope,
+                                   owner_id=owner_id, all_owners=all_owners, include_mock=include_mock,
+                                   limit=limit, offset=offset, output_id=output_id)
     clauses = "surface=? AND scope=?"
     args: list[Any] = [surface, scope]
     if output_id is not None:
@@ -561,9 +753,9 @@ def _page_rows(connection, *, surface, scope, owner_id, all_owners, include_mock
 def _check_schema(connection, *, store=None, check_marker=True) -> None:
     names = {row[0] for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
-        "('v1_read_sources','v1_read_winners','v1_read_counts','v1_read_dirty','v1_read_state')"
+        "('v1_read_sources','v1_read_jobs','v1_read_winners','v1_read_counts','v1_read_dirty','v1_read_state')"
     )}
-    if len(names) != 5:
+    if len(names) != 6:
         raise HistoryIndexUnavailable("History index schema requires an explicit rebuild.")
     version = connection.execute("SELECT 1 FROM v1_read_state WHERE state_key='version'").fetchone()
     if check_marker and version is not None and store is not None:
@@ -573,8 +765,53 @@ def _check_schema(connection, *, store=None, check_marker=True) -> None:
     if check_marker and version is None:
         if (connection.execute("SELECT 1 FROM v1_read_sources LIMIT 1").fetchone()
                 or connection.execute("SELECT 1 FROM v1_read_winners LIMIT 1").fetchone()
-                or connection.execute("SELECT 1 FROM v1_read_counts LIMIT 1").fetchone()):
+                or connection.execute("SELECT 1 FROM v1_read_counts LIMIT 1").fetchone()
+                or connection.execute("SELECT 1 FROM v1_read_jobs LIMIT 1").fetchone()):
             raise HistoryIndexUnavailable("History index marker requires an explicit rebuild.")
+
+
+def _check_read_ready(connection, store) -> None:
+    """Constant-size state checks only; never imports or builds on a read."""
+    _check_schema(connection, store=store)
+    state = dict(connection.execute("SELECT state_key,value FROM v1_read_state"))
+    if "blocked" in state:
+        raise HistoryIndexUnavailable("History index requires an explicit rebuild.")
+    if "maintenance_required" in state:
+        raise HistoryIndexUnavailable("History changes exceed the read budget; explicit preparation is required.")
+    if state.get("version") is None:
+        raise HistoryIndexUnavailable("History index requires explicit preparation before reads.")
+    if state["version"] != str(VERSION):
+        raise HistoryIndexUnavailable("History index version requires an explicit rebuild.")
+    if not connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='v1_read_sources_output_session_idx'"
+    ).fetchone():
+        raise HistoryIndexUnavailable("History source ordering requires explicit preparation before reads.")
+    markers = {row[0] for row in connection.execute(
+        "SELECT state_key FROM v1_history_state WHERE state_key IN ('jsonl_imported','owner_evidence_backfilled')"
+    )}
+    complete = {"jsonl_imported", "owner_evidence_backfilled"}
+    # An absent source is not an import receipt. A source restored later must
+    # pass the existing explicit strict importer, never a request-time scan.
+    if markers != complete and (markers or store.history_file.exists() or connection.execute(
+        "SELECT 1 FROM v1_import_receipts WHERE namespace='history'"
+    ).fetchone()):
+        raise HistoryIndexUnavailable("History authority import requires explicit preparation before reads.")
+
+
+def _catch_up_history_index(store) -> None:
+    """Refresh a prepared projection only. This path cannot call _build/import."""
+    from app.repositories.sqlite_json import connect
+    connection = connect(store.root / "repository.sqlite3")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _check_read_ready(connection, store)
+        _drain(connection, store, deadline=time.monotonic() + REFRESH_SECONDS)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 @contextmanager
@@ -582,33 +819,27 @@ def _clean_snapshot(store):
     """A bounded keyed-reader entry point sharing the history readiness rules."""
     from app.repositories.sqlite_json import connect
 
-    store._ensure_history_index()
     for _round in range(READ_ROUNDS):
         connection = connect(store.root / "repository.sqlite3")
         try:
             connection.execute("BEGIN")
-            _check_schema(connection, store=store)
-            version = connection.execute("SELECT value FROM v1_read_state WHERE state_key='version'").fetchone()
-            if connection.execute("SELECT 1 FROM v1_read_state WHERE state_key='blocked'").fetchone():
-                raise HistoryIndexUnavailable("History index requires an explicit rebuild.")
-            if version is not None and version[0] != str(VERSION):
-                raise HistoryIndexUnavailable("History index version requires an explicit rebuild.")
-            if version is not None and not connection.execute("SELECT 1 FROM v1_read_dirty LIMIT 1").fetchone():
+            _check_read_ready(connection, store)
+            if not connection.execute("SELECT 1 FROM v1_read_dirty LIMIT 1").fetchone():
                 yield connection
                 return
         finally:
             connection.close()
-        prepare_history_index(store)
+        _catch_up_history_index(store)
     raise HistoryIndexUnavailable("History is changing; retry or prepare the index.")
 
 
 def lookup_output_owner(store, output_id: str) -> tuple[int | None, bool]:
     """Global owner evidence for legacy thumbnails, without an all-Job scan."""
+    from app.repositories.output_publication import publication_blocked_on
     with _clean_snapshot(store) as connection:
-        sources = connection.execute(
-            "SELECT kind,owner_id,owner_conflict FROM v1_read_sources WHERE output_id=?", (output_id,),
-        ).fetchall()
-        return _owner(connection, output_id, sources)
+        if publication_blocked_on(connection, output_id):
+            return None, True
+        return _owner(connection, output_id)
 
 
 def lookup_output_file(store, output_id: str) -> tuple[tuple[Path, str, str] | None, bool]:
@@ -618,11 +849,14 @@ def lookup_output_file(store, output_id: str) -> tuple[tuple[Path, str, str] | N
     Presence repair is coalesced, and per-ID duplicate fanout is capped here.
     """
     from app.storage.local import _format_from_suffix
+    from app.repositories.output_publication import publication_blocked_on
 
     missing = []
     checked: set[Path] = set()
     result = None
     with _clean_snapshot(store) as connection:
+        if publication_blocked_on(connection, output_id):
+            return None, True
         rows = connection.execute(
             "SELECT kind,file_path,sequence FROM v1_read_sources WHERE output_id=? AND file_path!='' "
             "ORDER BY CASE WHEN kind='file' THEN 0 ELSE 1 END,sequence LIMIT ?", (output_id, BATCH + 1),
@@ -655,37 +889,35 @@ def read_history_page(store, *, surface: str, session_id: str | None = None,
                       owner_id: int | None = None, all_owners: bool = False,
                       include_mock: bool = False, limit: int = 50, offset: int = 0,
                       metrics: HistoryReadMetrics | None = None,
-                      output_id: str | None = None) -> tuple[list[dict], int]:
+                      output_id: str | None = None, favorite: bool = False) -> tuple[list[dict], int]:
     """Read a complete inventory snapshot, with bounded catch-up/page repair."""
     from app.repositories.sqlite_json import connect
     token = _METRICS.set(metrics)
     try:
-        # Import state is independent of derived-ready: a formerly missing
-        # legacy source must still be validated if it later appears.
-        store._ensure_history_index()
         for _round in range(READ_ROUNDS):
             connection = connect(store.root / "repository.sqlite3")
+            if favorite:
+                # Favorite intersection sorting is scalar and file-backed;
+                # neither all favorite IDs nor their payloads enter Python.
+                connection.execute("PRAGMA temp_store=FILE")
+                connection.execute("PRAGMA cache_size=-2048")
             repair_paths: list[str] = []
             try:
                 if metrics is not None:
                     connection.set_progress_handler(lambda: (_metric("sqlite_vm_steps", 100), 0)[1], 100)
                 connection.execute("BEGIN")
-                _check_schema(connection, store=store)
-                version = connection.execute("SELECT value FROM v1_read_state WHERE state_key='version'").fetchone()
-                if connection.execute("SELECT 1 FROM v1_read_state WHERE state_key='blocked'").fetchone():
-                    raise HistoryIndexUnavailable("History index requires an explicit rebuild.")
-                if version is not None and version[0] != str(VERSION):
-                    raise HistoryIndexUnavailable("History index version requires an explicit rebuild.")
-                if version is None or connection.execute("SELECT 1 FROM v1_read_dirty LIMIT 1").fetchone():
+                _check_read_ready(connection, store)
+                if connection.execute("SELECT 1 FROM v1_read_dirty LIMIT 1").fetchone():
                     connection.rollback()
                     connection.close()
                     connection = None
-                    prepare_history_index(store)
+                    _catch_up_history_index(store)
                     continue
                 scope = "session:" + session_id if surface == "v1" and session_id else GLOBAL_SCOPE
                 rows, total = _page_rows(connection, surface=surface, scope=scope,
                                          owner_id=owner_id, all_owners=all_owners,
-                                         include_mock=include_mock, limit=min(200, max(0, limit)), offset=max(0, offset), output_id=output_id)
+                                         include_mock=include_mock, limit=min(200, max(0, limit)), offset=max(0, offset), output_id=output_id,
+                                         favorite=favorite, store=store)
                 records = []
                 for row in rows:
                     source = connection.execute("SELECT * FROM v1_read_sources WHERE kind=? AND source_key=?", (row["kind"], row["source_key"])).fetchone()
@@ -707,6 +939,14 @@ def read_history_page(store, *, surface: str, session_id: str | None = None,
                         if source["payload"] is None:
                             raise HistoryIndexUnavailable("History projection requires an explicit rebuild.")
                         record = json.loads(source["payload"])
+                        if source["kind"] == "job":
+                            common = connection.execute(
+                                "SELECT payload FROM v1_read_jobs WHERE job_id=?", (source["job_id"],),
+                            ).fetchone()
+                            if common is None:
+                                raise HistoryIndexUnavailable("History Job projection requires an explicit rebuild.")
+                            record = {**json.loads(common[0]), **record}
+                            _metric("job_common_decodes")
                     _metric("page_decodes")
                     record["veyra_user_id"] = positive_owner(row["owner_id"])
                     records.append(record)

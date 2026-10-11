@@ -7,7 +7,10 @@ Example (use separately resolved V1/V2 dependency environments):
     --concurrency 2,4,8 --rounds 50 --diagnostic --output /tmp/history-read.json
 
 Run this script against an immutable baseline using --repo /path/to/baseline.
-This measures direct async GET handlers, not HTTP/browser/auth-network latency.
+This measures direct async GET handlers and a separate maintenance prepare phase,
+not HTTP/browser/auth-network latency. Cold GETs must fail closed with 503;
+use --skip-cold-probe for an older index that implicitly builds on first read.
+Use --index-lifecycle legacy-request only to reproduce historical legacy matrices.
 No application lifespan, Provider, generation, or production data is involved.
 """
 from __future__ import annotations
@@ -117,8 +120,21 @@ def output_id(index: int) -> str:
     return f"out_benchmark{index:012d}"
 
 
+def job_index(index: int, args) -> int:
+    return index // getattr(args, "outputs_per_job", 1)
+
+
+def job_id(index: int, args) -> str:
+    return f"job_benchmark{job_index(index, args):012d}"
+
+
+def session_id(index: int, args) -> str:
+    return f"ses_benchmark_{job_index(index, args) % 10}"
+
+
 def seed(args) -> dict:
     root = Path(args.fixture)
+    authority_digest = hashlib.sha256()
     if args.surface == "v2":
         from app.config import settings
         from app.schemas import ImageHistoryItem
@@ -129,7 +145,7 @@ def seed(args) -> dict:
                 stamp = BASE_TIME + timedelta(seconds=index)
                 owner = owner_for(index, args.owner_mode)
                 item = ImageHistoryItem(
-                    output_id=output_id(index), job_id=f"job_benchmark{index:012d}",
+                    output_id=output_id(index), job_id=job_id(index, args),
                     provider_id="offline_fixture", model="fixture", prompt="Synthetic read fixture. " * 8,
                     url=f"/api/v2/outputs/{output_id(index)}", created_at=stamp, updated_at=stamp,
                     metadata={"veyra_user_id": owner} if owner else {},
@@ -144,19 +160,20 @@ def seed(args) -> dict:
         path.parent.mkdir(parents=True, exist_ok=True)
         connection = connect(repository.database_path)
         try:
+            pending_outputs = []
             with path.open("w", encoding="utf-8") as target, connection:
                 for index in range(args.rows):
                     stamp = (BASE_TIME + timedelta(seconds=index)).isoformat()
                     owner = owner_for(index, args.owner_mode)
                     oid = output_id(index)
-                    jid = f"job_benchmark{index:012d}"
+                    jid = job_id(index, args)
                     image_path = media_store.output_path(job_id=jid, output_id=oid, output_format="png")
                     image_path.parent.mkdir(parents=True, exist_ok=True)
                     image_path.write_bytes(PNG_SHAPED_STUB)
                     epoch = (BASE_TIME + timedelta(seconds=index)).timestamp()
                     os.utime(image_path, (epoch, epoch))
                     mock = args.surface == "lab" and is_mock(index, args.owner_mode)
-                    record = dict(id=oid, job_id=jid, session_id=f"ses_benchmark_{index % 10}",
+                    record = dict(id=oid, job_id=jid, session_id=session_id(index, args),
                         format="png", provider="mock_image" if mock else "offline_fixture",
                         model="mock-fixture" if mock else "fixture", prompt="Synthetic read fixture. " * 8,
                         created_at=stamp, updated_at=stamp, url=f"/v1/outputs/{oid}/download")
@@ -169,39 +186,52 @@ def seed(args) -> dict:
                     if args.surface == "v1":
                         output = GenerationOutput(id=oid, job_id=jid, url=record["url"],
                             metadata={"veyra_user_id": owner} if owner else {})
-                        job = GenerationJob(id=jid, session_id=record["session_id"], job_type="image",
-                            status=JobStatus.ready, provider="offline_fixture", model="fixture", outputs=[output],
-                            trace_id=f"trace_{index}", created_at=stamp, updated_at=stamp)
-                        # Bulk insertion only constructs synthetic source records. No API mutation,
-                        # generation, events, or writes to existing storage occur.
-                        repository.jobs.put_on(connection, jid, job)
+                        authority_digest.update(output.model_dump_json().encode("utf-8") + b"\n")
+                        pending_outputs.append(output)
                         repository.outputs.put_on(connection, oid, output)
+                        if len(pending_outputs) == args.outputs_per_job or index == args.rows - 1:
+                            first = index - len(pending_outputs) + 1
+                            job_stamp = (BASE_TIME + timedelta(seconds=first)).isoformat()
+                            job = GenerationJob(id=jid, session_id=record["session_id"], job_type="image",
+                                status=JobStatus.ready, provider="offline_fixture", model="fixture",
+                                outputs=pending_outputs, trace_id=f"trace_{first}",
+                                created_at=job_stamp, updated_at=job_stamp,
+                                provenance={"original_prompt": "S" * args.job_shared_bytes} if args.job_shared_bytes else {})
+                            # Only synthetic source writes; no API mutation or generation.
+                            authority_digest.update(job.model_dump_json().encode("utf-8") + b"\n")
+                            repository.jobs.put_on(connection, jid, job)
+                            pending_outputs = []
         finally:
             connection.close()
     with path.open("rb") as source:
         source_hash = hashlib.file_digest(source, "sha256").hexdigest()
     return {"rows": args.rows, "surface": args.surface, "owner_mode": args.owner_mode,
-        "source_jsonl_sha256": source_hash, "source_jsonl_bytes": path.stat().st_size, "seed": "deterministic-sequential-v1",
+        "source_jsonl_sha256": source_hash,
+        "source_authority_sha256": authority_digest.hexdigest() if args.surface == "v1" else None, "source_jsonl_bytes": path.stat().st_size, "seed": "deterministic-fanout-v2",
         "image_bytes_each": len(PNG_SHAPED_STUB) if args.surface != "v2" else 0,
         "image_stub_sha256": hashlib.sha256(PNG_SHAPED_STUB).hexdigest() if args.surface != "v2" else None,
         "image_stub_note": "PNG-shaped fixed bytes with invalid IDAT checksum; image contents/codecs are excluded",
-        "v1_repository_jobs": args.rows if args.surface == "v1" else 0}
+        "v1_repository_jobs": math.ceil(args.rows / args.outputs_per_job) if args.surface == "v1" else 0,
+        "outputs_per_job": args.outputs_per_job, "job_shared_bytes": args.job_shared_bytes,
+        "storage": fixture_storage(root)}
 
 
 def expected(args, owner: int) -> dict:
-    indices = []
+    total = 0; identifiers = []
+    offset = 0 if args.surface == "lab" else args.offset
     for index in range(args.rows - 1, -1, -1):
         record_owner = owner_for(index, args.owner_mode)
         if args.surface == "lab":
             visible = record_owner == owner and (args.include_mock or not is_mock(index, args.owner_mode))
         else:
             visible = record_owner in (None, owner)
-        if args.session_id and f"ses_benchmark_{index % 10}" != args.session_id:
+        if args.session_id and session_id(index, args) != args.session_id:
             visible = False
         if visible:
-            indices.append(index)
-    offset = 0 if args.surface == "lab" else args.offset
-    return {"total": len(indices), "ids": [output_id(i) for i in indices[offset:offset + args.limit]]}
+            if offset <= total < offset + args.limit:
+                identifiers.append(output_id(index))
+            total += 1
+    return {"total": total, "ids": identifiers}
 
 
 def proc_io() -> dict:
@@ -384,12 +414,148 @@ def reject_generated_content_reads(root):
     return attempts
 
 
+def reject_request_source_scans(root: Path):
+    """Reads may inspect metadata; source imports/inventory belong to prepare."""
+    root = str(Path(root).resolve()) + os.sep
+    attempts = {"legacy_source_content_opens": 0, "directory_scan_attempts": 0}
+    active = [True]
+    def audit(event, arguments):
+        if not active[0] or event not in {"open", "os.scandir"} or not arguments:
+            return
+        try:
+            path = os.path.abspath(os.fsdecode(arguments[0]))
+        except TypeError:
+            return
+        if path != root[:-1] and not path.startswith(root):
+            return
+        if event == "os.scandir":
+            attempts["directory_scan_attempts"] += 1
+            raise AssertionError("History request attempted a fixture directory scan")
+        if path.endswith(".jsonl") or path.endswith("favorites.json"):
+            attempts["legacy_source_content_opens"] += 1
+            raise AssertionError("History request attempted a legacy source content open")
+    sys.addaudithook(audit)
+    return attempts, active
+
+
+def fixture_files(root: Path):
+    """Stream a fixture census without materializing directory fanout."""
+    with os.scandir(root) as entries:
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                yield from fixture_files(Path(entry.path))
+            elif entry.is_file(follow_symlinks=False):
+                yield Path(entry.path)
+
+
+def fixture_storage(root: Path) -> dict:
+    """Metadata-only storage census outside the measured operation.
+
+    dbstat reports allocated SQLite object pages, not filesystem block overhead.
+    Payload sums are SQL LENGTHs, so no serialized history is decoded in Python.
+    """
+    files = Counter(); databases = []; total = 0
+    for path in fixture_files(Path(root)):
+        size = path.stat().st_size
+        total += size
+        files[path.suffix or "<none>"] += size
+        if path.suffix not in {".sqlite", ".sqlite3", ".db"}:
+            continue
+        info = {"path": str(path.relative_to(root)), "file_bytes": size}
+        connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+        try:
+            info["page_size"] = connection.execute("PRAGMA page_size").fetchone()[0]
+            info["page_count"] = connection.execute("PRAGMA page_count").fetchone()[0]
+            info["freelist_count"] = connection.execute("PRAGMA freelist_count").fetchone()[0]
+            tables = {}
+            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+                if name.startswith("sqlite_"):
+                    continue
+                quoted = '"' + name.replace('"', '""') + '"'
+                table = {"rows": connection.execute("SELECT COUNT(*) FROM " + quoted).fetchone()[0]}
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(" + quoted + ")")}
+                if "payload" in columns:
+                    table["payload_bytes"] = connection.execute(
+                        "SELECT COALESCE(SUM(LENGTH(CAST(payload AS BLOB))),0) FROM " + quoted).fetchone()[0]
+                tables[name] = table
+            info["tables"] = tables
+            try:
+                info["object_page_bytes"] = dict(connection.execute(
+                    "SELECT name,SUM(pgsize) FROM dbstat GROUP BY name"))
+            except sqlite3.OperationalError:
+                info["object_page_bytes"] = None
+        finally:
+            connection.close()
+        databases.append(info)
+    return {"total_bytes": total, "bytes_by_suffix": dict(files), "databases": databases,
+        "note": "Post-operation file lengths and dbstat allocated pages; not transient peak or physical disk writes."}
+
+
+async def prepare_worker(args) -> dict:
+    """Measure maintenance independently; never trigger a GET to build the index."""
+    import_started = time.perf_counter()
+    import app.main as main
+    from app.repositories.sqlite_calls import sqlite_calls
+    if args.surface == "v2":
+        from app.config import settings
+        from app.services.image_history import prepare_history_reads
+        assert Path(settings.image_history_path).is_relative_to(args.fixture)
+        history_index = None
+        metrics = None
+    else:
+        from app.repositories import history_index
+        assert Path(main.media_store.root).is_relative_to(args.fixture)
+        metrics = history_index.HistoryReadMetrics()
+    import_seconds = time.perf_counter() - import_started
+    content_read_attempts = reject_generated_content_reads(args.fixture)
+    before_storage = fixture_storage(args.fixture)
+    diagnostics = Diagnostic(args.fixture, vm_step_interval=args.vm_step_interval) if args.diagnostic else None
+    gc.collect()
+    io_before = proc_io(); rss_before = rss()
+    monitor = Monitor(); monitor.start()
+    def prepare():
+        if args.surface == "v2":
+            prepare_history_reads()
+            return
+        token = history_index._METRICS.set(metrics)
+        try:
+            history_index.prepare_history_index(main.media_store)
+        finally:
+            history_index._METRICS.reset(token)
+    if diagnostics: diagnostics.__enter__()
+    started = time.perf_counter(); cpu_started = time.process_time()
+    try:
+        await asyncio.to_thread(prepare)
+    finally:
+        wall = time.perf_counter() - started; cpu = time.process_time() - cpu_started
+        if diagnostics: diagnostics.__exit__()
+        peak = monitor.finish()
+    io_after = proc_io(); rss_after = rss(); gc.collect(); rss_gc = rss()
+    result = dict(surface=args.surface, rows=args.rows, phase="explicit_index_preparation",
+        diagnostic=bool(diagnostics), wall_seconds=wall, cpu_seconds=cpu,
+        rss_before_bytes=rss_before, rss_peak_bytes=peak, rss_after_bytes=rss_after, rss_post_gc_bytes=rss_gc,
+        io_delta={key: io_after[key]-io_before.get(key, 0) for key in io_after},
+        work_counts=dict(diagnostics.counts) if diagnostics else {}, application_work_counts=asdict(metrics) if metrics else {},
+        storage_before=before_storage, storage=fixture_storage(args.fixture),
+        outputs_per_job=args.outputs_per_job, job_shared_bytes=args.job_shared_bytes,
+        content_read_attempts=content_read_attempts, startup_import_seconds=import_seconds,
+        packages=packages(), python=sys.version, sqlite=sqlite3.sqlite_version,
+        affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None)
+    if hasattr(sqlite_calls, "shutdown"):
+        await asyncio.to_thread(sqlite_calls.shutdown)
+    else:
+        await asyncio.to_thread(sqlite_calls._executor.shutdown, True)
+    return result
+
+
 async def endpoint_worker(args) -> dict:
     import_started = time.perf_counter()
     import app.main as main
     from app.repositories.sqlite_calls import sqlite_calls
     import_seconds = time.perf_counter() - import_started
     content_read_attempts = reject_generated_content_reads(args.fixture)
+    source_read_attempts, source_scan_guard = reject_request_source_scans(args.fixture) \
+        if args.index_lifecycle == "explicit" else ({}, [False])
     # Calls are actual async GET handlers. Only external auth lookup is replaced
     # with an explicit synthetic owner, as in existing API tests; no lifespan.
     async def context(request, *_args, **_kwargs):
@@ -429,7 +595,21 @@ async def endpoint_worker(args) -> dict:
         if args.surface == "lab": kwargs["include_mock"] = args.include_mock
         else: kwargs["offset"] = args.offset
         if args.surface == "v1": kwargs["session_id"] = args.session_id
-        value = await endpoint(**kwargs)
+        try:
+            value = await endpoint(**kwargs)
+        except Exception as exc:
+            if hasattr(exc, "status_code"):
+                raise
+            # Direct calls bypass ASGI exception dispatch. Use the application's
+            # registered mapping so the cold probe verifies its real 503 contract.
+            handler = next((main.app.exception_handlers[cls] for cls in type(exc).__mro__
+                if cls in main.app.exception_handlers), None)
+            if handler is None:
+                raise
+            response = await handler(kwargs["request"], exc)
+            from fastapi import HTTPException
+            raise HTTPException(status_code=response.status_code,
+                detail=json.loads(response.body)["detail"]) from exc
         return value.model_dump(mode="json") if hasattr(value, "model_dump") else value
     def check(payload, owner):
         identifiers = [item.get("id", item.get("output_id")) for item in payload["items"]]
@@ -464,7 +644,9 @@ async def endpoint_worker(args) -> dict:
         except Exception as exc:
             failures.append({"seconds": time.perf_counter() - started,
                 "type": type(exc).__name__, "status": getattr(exc, "status_code", None),
-                "detail": str(getattr(exc, "detail", exc))})
+                "detail": str(getattr(exc, "detail", exc)),
+                "error_code": exc.detail.get("code", exc.detail.get("error_code"))
+                if isinstance(getattr(exc, "detail", None), dict) else None})
             return
         samples.append(time.perf_counter() - started)
         valid, actual = check(payload, owner)
@@ -489,13 +671,20 @@ async def endpoint_worker(args) -> dict:
     peak = monitor.finish(); rss_after = rss(); usage_after = resource.getrusage(resource.RUSAGE_SELF)
     gate_after = sqlite_calls.snapshot() if hasattr(sqlite_calls, "snapshot") else {}
     io_after = proc_io(); gc.collect(); await asyncio.sleep(.05); rss_gc = rss()
+    source_scan_guard[0] = False  # The post-operation census is outside request measurements.
     result = dict(surface=args.surface, rows=args.rows, concurrency=concurrency, rounds=rounds,
-        phase="logical_cold_index_first_read" if args.worker == "cold" else "hot_pages",
+        phase=("cold_unprepared_read" if args.index_lifecycle == "explicit"
+            else "legacy_logical_cold_index_first_read") if args.worker == "cold" else "hot_pages",
         admission=args.admission, diagnostic=bool(diagnostics), page_size=args.limit, offset=args.offset,
         diagnostic_vm_step_interval=args.vm_step_interval if diagnostics else None,
         owner_mode=args.owner_mode, offered=rounds * concurrency, succeeded=len(samples), failed=len(failures),
         status_503=sum(f["status"] == 503 for f in failures), failures=failures[:20],
-        correctness=not mismatches and bool(samples) and (process_cold is None or process_cold["correct"]), mismatches=mismatches,
+        correctness=(len(failures) == 1 and failures[0]["status"] == 503
+            and failures[0]["error_code"] == "history_index_unavailable" and not samples)
+            if args.worker == "cold" and args.index_lifecycle == "explicit"
+            else not mismatches and bool(samples) and (process_cold is None or process_cold["correct"]),
+        expected_status=503 if args.worker == "cold" and args.index_lifecycle == "explicit" else 200,
+        mismatches=mismatches,
         response_hashes=[{"owner": owner, "sha256": value} for owner, value in sorted(hashes)],
         wall_seconds=wall, cpu_seconds=cpu,
         user_cpu_seconds=usage_after.ru_utime-usage_before.ru_utime,
@@ -507,18 +696,20 @@ async def endpoint_worker(args) -> dict:
         error_p95_seconds=percentile([f["seconds"] for f in failures], .95),
         heartbeat_p95_seconds=percentile(heartbeat, .95), heartbeat_max_seconds=max(heartbeat, default=None),
         rss_before_bytes=rss_before, rss_peak_bytes=peak, rss_after_bytes=rss_after, rss_post_gc_bytes=rss_gc,
-        rss_batch_end_bytes=batch_rss, process_cold_built_index=process_cold,
+        rss_batch_end_bytes=batch_rss, process_cold_prepared_index=process_cold,
         io_delta={key: io_after[key]-io_before.get(key, 0) for key in io_after},
         gate_before=gate_before, gate_after=gate_after,
         gate_counter_delta={key: gate_after[key]-gate_before.get(key, 0) for key in gate_after
             if key not in {"pending", "running", "inflight"} and not key.startswith(("peak_", "max_"))},
         work_counts=dict(diagnostics.counts) if diagnostics else {},
         application_work_counts=dict(application_counts), content_read_attempts=content_read_attempts,
+        source_read_attempts=source_read_attempts,
         startup_import_seconds=import_seconds,
         packages=packages(), python=sys.version, sqlite=sqlite3.sqlite_version,
         affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
         fewer_than_100_success_samples=len(samples) < 100,
-        storage_bytes=sum(p.stat().st_size for p in Path(args.fixture).rglob("*") if p.is_file()),
+        storage=fixture_storage(args.fixture), outputs_per_job=args.outputs_per_job,
+        job_shared_bytes=args.job_shared_bytes,
     )
     # Do not retain a sampled peak as evidence of post-quiescence allocation leaks.
     if hasattr(sqlite_calls, "shutdown"):
@@ -562,18 +753,28 @@ def cli():
     parser.add_argument("--diagnostic", action="store_true",
         help="Add separate instrumented hot passes; keep cold-build timing uninstrumented")
     parser.add_argument("--diagnostic-cold", action="store_true",
-        help="Instrument the cold build instead of measuring comparable cold-build latency")
+        help="Instrument cold reads and explicit preparation instead of comparable preparation latency")
     parser.add_argument("--vm-step-interval", type=int, default=1000,
         help="Diagnostic SQLite progress-callback interval; smaller values increase measurement overhead")
+    parser.add_argument("--outputs-per-job", type=int, default=1,
+        help="Synthetic source/file fanout; does not change the total output count")
+    parser.add_argument("--job-shared-bytes", type=int, default=0,
+        help="Deterministic original_prompt bytes shared by every output of a V1 job")
+    parser.add_argument("--index-lifecycle", choices=["explicit", "legacy-request"], default="explicit",
+        help="Maintenance prepare versus historical first-GET index construction")
+    parser.add_argument("--skip-cold-probe", action="store_true",
+        help="Skip unprepared GET when comparing an older revision; prepare remains separately measured")
     parser.add_argument("--cpus")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--worker", choices=["seed", "cold", "hot"])
+    parser.add_argument("--worker", choices=["seed", "cold", "prepare", "hot"])
     parser.add_argument("--fixture", type=Path); parser.add_argument("--result", type=Path)
     parser.add_argument("--surface", choices=["v1", "lab", "v2"]); parser.add_argument("--rows", type=int)
     parser.add_argument("--parallel", type=int, default=2)
     args = parser.parse_args(); args.repo = args.repo.resolve()
     if args.rounds < 1 or not 1 <= args.limit <= 200 or args.offset < 0 or not 1 <= args.vm_step_interval <= 10000:
         parser.error("rounds >= 1, 1 <= limit <= 200, offset >= 0 and 1 <= vm-step-interval <= 10000 are required")
+    if not 1 <= args.outputs_per_job <= 50000 or not 0 <= args.job_shared_bytes <= 65536:
+        parser.error("1 <= outputs-per-job <= 50000 and 0 <= job-shared-bytes <= 65536 are required")
     if args.cpus: os.sched_setaffinity(0, {int(value) for value in args.cpus.split(",")})
     if args.worker:
         if args.fixture is None or args.result is None or args.surface is None or args.rows is None or not 1 <= args.rows <= 50000:
@@ -582,7 +783,8 @@ def cli():
         if not args.fixture.is_relative_to(Path(tempfile.gettempdir()).resolve()) or args.fixture.is_relative_to(args.repo):
             parser.error("Fixture workers require a new directory under the system temporary directory, outside the checkout")
         marker = args.fixture / ".history-read-fixture.json"
-        identity = {"schema": 1, "surface": args.surface, "rows": args.rows, "owner_mode": args.owner_mode}
+        identity = {"schema": 2, "surface": args.surface, "rows": args.rows, "owner_mode": args.owner_mode,
+            "outputs_per_job": args.outputs_per_job, "job_shared_bytes": args.job_shared_bytes}
         if args.worker == "seed":
             # Never truncate an existing history file, even for a manually invoked
             # private worker. The controller always allocates a fresh child path.
@@ -594,7 +796,8 @@ def cli():
         sys.dont_write_bytecode = True
         source = "custom_media_agent_2_0" if args.surface == "v2" else "src_skeleton"
         sys.path[:0] = [str(args.repo/source), str(args.repo)]
-        result = seed(args) if args.worker == "seed" else asyncio.run(endpoint_worker(args))
+        result = seed(args) if args.worker == "seed" else asyncio.run(
+            prepare_worker(args) if args.worker == "prepare" else endpoint_worker(args))
         args.result.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
         return
     sizes = [int(value) for value in args.sizes.split(",")]
@@ -616,10 +819,18 @@ def cli():
                 common = [executable, str(Path(__file__).resolve()), "--repo", str(args.repo), "--surface", surface,
                     "--rows", str(size), "--fixture", str(fixture), "--rounds", str(args.rounds),
                     "--limit", str(args.limit), "--offset", str(args.offset), "--owner-mode", args.owner_mode,
-                    "--admission", args.admission, "--vm-step-interval", str(args.vm_step_interval)]
+                    "--admission", args.admission, "--vm-step-interval", str(args.vm_step_interval),
+                    "--outputs-per-job", str(args.outputs_per_job), "--job-shared-bytes", str(args.job_shared_bytes),
+                    "--index-lifecycle", args.index_lifecycle]
                 if args.include_mock: common.append("--include-mock")
                 if args.session_id: common += ["--session-id", args.session_id]
-                cases = [("seed", 1, False), ("cold", 1, args.diagnostic_cold)]
+                cases = [("seed", 1, False)]
+                if args.index_lifecycle == "legacy-request":
+                    cases.append(("cold", 1, args.diagnostic_cold))
+                else:
+                    if not args.skip_cold_probe:
+                        cases.append(("cold", 1, args.diagnostic_cold))
+                    cases.append(("prepare", 1, args.diagnostic_cold))
                 cases += [("hot", c, False) for c in concurrent]
                 if args.diagnostic: cases += [("hot", c, True) for c in concurrent]
                 for index, (mode, parallel, diagnostic) in enumerate(cases):
@@ -634,7 +845,7 @@ def cli():
         if not unchanged: raise AssertionError("Benchmark changed checkout default storage")
     report = {"fixture_id_contract": "out_/job_ followed by alphanumeric characters only; accepted by real filesystem recovery", "scope": "Temporary synthetic data; direct async GET handlers; no HTTP transport, real auth, lifespan, Provider or production operations.",
         "image_scope": "Identical 68-byte PNG-shaped stubs, invalid IDAT checksum; lists assert no image-content opens or decoding. Thumbnail/preview codecs and browser rendering are excluded.",
-        "cache_note": "Fixture creation warms OS cache. Logical cold is index/import absence, not disk-cold. Hot phases use fresh subprocesses and explicit owner warmup.",
+        "cache_note": "Fixture creation warms OS cache. The explicit lifecycle separates the cold-503 probe from maintenance prepare. Only legacy-request retains first-read import. Hot phases use fresh subprocesses and explicit owner warmup.",
         "measurement_note": "Diagnostic counts are separate from uninstrumented timing. SQL rows fetched and VM-step lower bounds are not exact engine rows scanned; native SQLite I/O uses process counters.",
         "rss_note": "RSS plateau after GC may be allocator reuse. This benchmark alone cannot prove a leak or VPS suitability.",
         "platform": platform.platform(), "source_fingerprint": fingerprint,
@@ -645,7 +856,9 @@ def cli():
             "session_id": args.session_id, "include_mock": args.include_mock,
             "owner_mode": args.owner_mode, "admission": args.admission,
             "diagnostic_hot": args.diagnostic, "diagnostic_cold": args.diagnostic_cold,
-            "vm_step_interval": args.vm_step_interval},
+            "vm_step_interval": args.vm_step_interval, "outputs_per_job": args.outputs_per_job,
+            "job_shared_bytes": args.job_shared_bytes, "index_lifecycle": args.index_lifecycle,
+            "skip_cold_probe": args.skip_cold_probe},
         "source_unchanged_during_run": fingerprint == source_fingerprint(args.repo),
         "checkout_default_storage_unchanged": unchanged, "fixtures": fixtures, "runs": runs}
     encoded = json.dumps(report, indent=2, ensure_ascii=False)

@@ -30,8 +30,8 @@ def history_path(tmp_path, monkeypatch, request):
     if request.param:
         original_connect = image_history._history_connect
 
-        def connect():
-            connection = original_connect()
+        def connect(**kwargs):
+            connection = original_connect(**kwargs)
             connection.isolation_level = None
             return connection
 
@@ -85,11 +85,12 @@ def test_invalid_history_record_rolls_back_and_can_be_repaired(history_path, inv
     history_path.write_text("\n" + first.model_dump_json() + "\n" + invalid_line + "\n", encoding="utf-8")
 
     with pytest.raises(image_history.LegacyHistoryImportError, match=r"line 3") as raised:
-        image_history.list_image_history(include_all=True)
+        image_history._ensure_history_index()
 
     assert "do-not-expose-this-record" not in "".join(traceback.format_exception(raised.value))
     assert _state() == ([], [])
     _write(history_path, first, second)
+    image_history._ensure_history_index()
     response = image_history.list_image_history(include_all=True)
     assert response.total == 2
     assert {item.output_id for item in response.items} == {first.output_id, second.output_id}
@@ -264,6 +265,7 @@ def test_malformed_explicit_owner_never_becomes_public_and_can_be_repaired(histo
     assert "bad-owner" not in "".join(traceback.format_exception(raised.value))
     assert _state() == ([], [])
     _write(history_path, *prefix, _item("out-invalid"))
+    image_history._ensure_history_index()
     response = image_history.list_image_history(veyra_user_id=41, include_legacy_public=False)
     assert {item.output_id for item in response.items} == {item.output_id for item in [*prefix, invalid]}
 
@@ -429,6 +431,7 @@ def test_database_write_failure_rolls_back_partial_history_import(history_path, 
             image_history._ensure_history_index()
 
     assert _state() == ([], [])
+    image_history._ensure_history_index()
     assert image_history.list_image_history(include_all=True).total == 2
 
 

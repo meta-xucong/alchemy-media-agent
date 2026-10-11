@@ -31,9 +31,11 @@ work. Store scalar source references, not another full copy of every Job.
 2. A derived winner table is keyed by surface, scope and output ID. V1 has a
    global scope plus each source session; Lab has its existing global scope.
    The row holds the winning source reference, resolved owner, sort fields and
-   mock flag. Job source refs additionally store the existing per-output display
-   projection, built once when that Job changes. This avoids decoding a whole
-   large Job for a one-item page. Winners do not duplicate that payload per scope.
+   mock flag. Schema version 2 stores Job-wide display fields once in
+   `v1_read_jobs` and only output-specific display fields on each Job source.
+   A returned item decodes one of each, without decoding the whole authority Job.
+   This removes repeated prompts/plans across the outputs of the same Job.
+   Winners do not duplicate either payload per scope.
    Manifest payloads and Lab transformations are decoded only for the page.
 3. Fixed count buckets are updated with changed winners in the same transaction:
    all owners, each explicit owner/public bucket, and Lab all/non-mock variants.
@@ -87,28 +89,55 @@ Existing output-delete claims continue to fence stale writes and preserve retry
 authorization through partial cleanup; the read model cannot invent new owner
 anchors or clear those claims.
 
-Each reader first catches up committed dirty keys, then obtains total and page
+Each reader first checks explicit preparation/import readiness using scalar
+state lookups. An unprepared read cannot call the importer, create the new
+population-sized ordering index, enumerate files, or build the projection.
+A prepared reader catches up committed dirty keys, then obtains total and page
 from one SQLite snapshot that contains no unprocessed dirty keys. Recheck this
 condition inside the read transaction to close a concurrent-write gap. An
 unchanged request performs no projection writes or global scan. Refresh work is
 O(changed records plus their duplicate/session fanout), not O(total history).
-Catch-up uses coalesced database keys, 128-key batches and a two-second work
-budget per transaction. A request has at most three catch-up/read-repair rounds;
+Catch-up uses coalesced database keys, 128-key batches and a cooperative two-second
+work budget per transaction. Per-key savepoints roll back an interrupted source
+or winner update, keeping its dirty key and preserving completed prior keys.
+Checkpoints run between Job outputs, old winners, and streamed duplicate sources.
+One authority-record decode or SQLite statement remains indivisible; this is
+not a hard CPU/wall timeout for an arbitrarily large individual Job. A key that
+cannot finish within normal catch-up needs explicit maintenance.
+A request has at most three catch-up/read-repair rounds;
 sustained writes or extensive missing media produce a sanitized 503, never an
-unbounded retry loop. Full cold build is deliberately outside the warm catch-up
-budget and can take substantially longer; operators should prepare large stores
-before admitting reads. SQLite's writer fence does not freeze filesystem writes.
+unbounded retry loop. Full cold build runs only through explicit maintenance and
+can take substantially longer. SQLite's writer fence does not freeze filesystem writes.
+
+Duplicate resolution aggregates complete owner/conflict evidence with scalar
+SQL, then streams scalar candidate rows in indexed `(output_id, session_id)`
+order. It retains one global winner and one current-session winner, omits source
+payloads, and never builds a Python list/set proportional to duplicate/session
+fanout. Source-kind priority, matching-owner preference, Job traversal order,
+file ties and global non-V1 exclusion remain unchanged. SQL has no temporary
+scope sort, and each eligible source is compared once instead of re-filtering
+all sources for every session. Exact refresh work remains proportional to all
+duplicate sources and affected scope/count rows.
 
 ## First build, versioning and recovery
 
-Fresh empty installations build immediately. An existing store's first build is
-one explicit cold operation in the already bounded worker, never on the event
-loop: hold a SQLite writer fence, stream current SQLite authorities and file
+Fresh empty installations and existing stores both require explicit preparation
+before history reads. An unprepared or incompatible index returns typed
+`history_index_unavailable` HTTP 503; ordinary reads never build it automatically.
+The maintenance operation holds a SQLite writer fence, streams SQLite authorities and file
 inventory into derived tables, reconcile owners/winners/counts, and commit the
 ready version only after completion. Until commit, other readers cannot observe
-partial state. SQLite busy/admission limits remain explicit errors. This cold
-cost can be prepared before serving via the same explicit rebuild operation;
-it is not repeated on ordinary reads or after each write.
+partial state. SQLite busy/admission limits remain explicit errors. Run
+`python scripts/prepare_v1_history_index.py --storage-root /explicit/existing/root --prepare --minimum-free-bytes 1073741824`
+before admitting reads, then run the same command with `--verify`. No app,
+Provider or generation worker is started. A fresh directory succeeds empty;
+subsequent managed changes remain incrementally readable. A schema-version-1
+installation instead needs `--rebuild`, followed by `--verify`.
+Every mutating CLI mode requires an operator-chosen positive minimum-free-byte
+floor and checks it before application import or database writes. JSON status
+reports initial free space and existing DB/WAL/SHM bytes. The example's 1 GiB
+is illustrative, not a capacity forecast or a universal safe recommendation.
+Read-only verification needs no floor. No automatic cleanup or VACUUM is used.
 
 Crashes roll back incomplete builds/refreshes; authoritative records are intact.
 Version mismatch or corrupt/incomplete derived state requires controlled
@@ -116,7 +145,16 @@ rebuild, never a public/empty-history fallback. Rebuild streams SQLite's current
 state. It never clears legacy import markers, synthesizes import receipts, or
 replays completed JSONL sources. Existing strict import-state checks run before
 the new projection, including half-marker failures and unverified legacy-marker
-rules. Schema version is independent of first-import receipt version.
+rules. Schema version is independent of first-import receipt version. Version 2
+adds the common Job projection and source/session ordering index. Upgrading
+creates these only as derived state and requires a controlled rebuild; old code
+sees an incompatible ready version and fails closed. Do not downgrade/delete
+authority, receipts, or publication reservations to make an old reader accept
+the database.
+The output/session prefix replaces the old output-only source index; only
+explicit maintenance drops that redundant derived index. On an existing SQLite
+file, freed pages are reusable and need not reduce the physical file length.
+Fresh-fixture size reductions are not a claim of in-place disk reclamation.
 The committed build also binds the resolved storage root. A copied or moved
 database is rejected before any indexed file access until explicit rebuild in
 the new root. Page/locator paths must stay inside that root's generated-media
@@ -144,13 +182,20 @@ required `--storage-root` (an existing directory) and exactly one of `--prepare`
 prints aggregate status/counts only, and refuses pending legacy-file imports.
 Legacy authority import/backfill needs its separately authorized existing flow;
 the operator command never quietly turns projection maintenance into that import.
-Normal application reads retain the existing strict lazy-import behavior.
+Normal application reads check legacy-import readiness without reading source
+contents. A restored unimported JSONL or partial marker state returns preparation
+required. Strict import/backfill remains an explicitly invoked authority operation;
+the CLI refuses pending history imports instead of silently broadening its scope.
+The CLI explicitly prepares the existing strict favorites index as well, and
+favorite-page/badge reads never lazily import an entire JSON file.
 `--verify` instead opens SQLite with `mode=ro`, without application imports or
 legacy import: it checks ready/dirty state, tracking triggers, dangling winner
 references and every count bucket against grouped winner rows. It detects both
 under-counts and over-counts. This is derived internal-coherence verification,
 not proof of complete authority/payload parity or resistance to arbitrary
 database tampering; use a consistent offline backup for operator verification.
+Verification also checks common-Job references, source ordering, and bounded
+history/favorite import readiness without application imports or file decoding.
 
 Repository-sourced entries can remain visible while their file is missing.
 Filesystem-only recovery is withheld while an output deletion claim exists;
@@ -165,6 +210,41 @@ ID/video compatibility requests retain the legacy discovery fallback; they are
 not a claim of bounded lookup for every arbitrary URL.
 
 ## Verification
+
+### Duplicate fanout and shared Job payload closure
+
+`test_duplicate_fanout_streams_scalar_rows_with_linear_work_and_bounded_memory`
+uses one output with 100 / 1,000 / 10,000 duplicate sources and 50 / 500 / 5,000
+distinct sessions. Each source carries a 2 KiB payload that the resolver must
+not fetch. On the retained isolated Python 3.12 run, tracemalloc peaks were 21,356 /
+21,073 / 21,073 bytes and SQLite VM work rounded at 1,000 instructions was
+10,000 / 116,000 / 1,165,000. Every session and global winner was preserved;
+a conflicting owner at the final source removed all winners, and canonical
+owner precedence restored all 5,001 winners. These are Python temporary-allocation
+and VM-work measurements, not native SQLite/RSS limits or production throughput.
+
+The normalized projection regression reconstructs full page JSON exactly and
+stores the shared large prompt only once for 25 outputs, reducing derived JSON
+by more than tenfold in that deliberately duplication-heavy fixture. Authority
+Job JSON and business records remain unchanged. Warm `page_decodes` counts
+output/manifest JSON items; `job_common_decodes` separately records the additional
+common-Job JSON decode for each returned Job item. Preparation still validates
+one complete authoritative Job at a time; giant single-record payloads remain
+an explicit resource boundary.
+
+Explicit inventory observation uses nested streaming `os.scandir` iterators,
+so one large Job directory does not become a buffered `Path.glob` list. Cold
+maintenance uses its single outer transaction without per-key savepoints;
+bounded request catch-up alone needs those savepoints. A measured intermediate
+implementation mistakenly used them during maintenance and amplified subjournal
+writes; the controlled benchmark must use the corrected maintenance path.
+
+If the first dirty key cannot finish within the normal cooperative budget,
+its rolled-back state is marked maintenance-required. Following reads return a
+cheap typed 503 instead of repeatedly retrying the same oversized key. Explicit
+`--prepare` drains that key without the request budget and clears this derived
+marker; no full rebuild or business-record deletion is needed. Expiry after
+completed keys preserves their progress and can resume normal catch-up.
 
 ### Cold inventory lookup correction
 

@@ -12,7 +12,8 @@ from app.repositories.sqlite_calls import SQLiteStorageBusy
 
 @pytest.mark.parametrize("endpoint", ["image_history", "veyra_history"])
 @pytest.mark.parametrize("auth_enabled", [False, True])
-def test_history_routes_only_use_read_admission(monkeypatch, endpoint, auth_enabled):
+@pytest.mark.parametrize("favorite", [False, True])
+def test_history_routes_only_use_read_admission(monkeypatch, endpoint, auth_enabled, favorite):
     calls = []
     expected = object()
 
@@ -31,7 +32,7 @@ def test_history_routes_only_use_read_admission(monkeypatch, endpoint, auth_enab
     monkeypatch.setattr(main.sqlite_calls, "run_read", read)
     monkeypatch.setattr(main.sqlite_calls, "run", forbid_write)
     result = asyncio.run(getattr(main, endpoint)(
-        SimpleNamespace(), limit=24, offset=48, authorization=""
+        SimpleNamespace(), limit=24, offset=48, favorite=favorite, authorization=""
     ))
     assert result is expected
     assert len(calls) == 1
@@ -40,6 +41,7 @@ def test_history_routes_only_use_read_admission(monkeypatch, endpoint, auth_enab
     assert args == ()
     assert kwargs["limit"] == 24
     assert kwargs["offset"] == 48
+    assert kwargs["favorite"] is favorite
     if auth_enabled:
         assert kwargs["veyra_user_id"] == 77
         assert kwargs["include_legacy_public"] is True

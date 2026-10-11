@@ -851,6 +851,7 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request:
             output_id=output_id,
             b64_json=item["b64_json"],
             output_format=output_format,
+            owner_id=request.veyra_user_id,
         )
         width = item.get("width")
         height = item.get("height")

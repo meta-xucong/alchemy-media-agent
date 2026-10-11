@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -110,6 +111,7 @@ def test_cross_session_global_owner_and_distinct_scope_winners(stores):
     store, repo = stores
     output_id = "out_cross_session"
     put_jobs(repo, [job(1, session="a", output_id=output_id), job(2, session="b", output_id=output_id, owner=41)])
+    index.prepare_history_index(store)
     assert page(store, owner_id=77, session_id="a") == ([], 0)
     rows, total = page(store, owner_id=41, session_id="a")
     assert total == 1 and rows[0]["job_id"] == job(1).id and rows[0]["veyra_user_id"] == 41
@@ -126,6 +128,7 @@ def test_job_replacement_refreshes_old_new_ids_and_session_deletion_classificati
     store, repo = stores
     repo.save_session(Session(id="a", project_id="project", created_at="2026-01-01T00:00:00Z"))
     put_jobs(repo, [job(1, session="a", output_id="old")])
+    index.prepare_history_index(store)
     assert page(store, all_owners=True, session_id="a")[1] == 1
     repo.jobs[job(1).id] = job(1, session="b", output_id="new")
     assert page(store, all_owners=True, session_id="a") == ([], 0)
@@ -143,6 +146,7 @@ def test_same_job_duplicate_conflict_and_canonical_precedence(stores):
     store, repo = stores
     outputs = [GenerationOutput(id="same", job_id=job(1).id, url=f"/{owner}", metadata={"veyra_user_id": owner}) for owner in (41, 77)]
     put_jobs(repo, [job(1, outputs=outputs)])
+    index.prepare_history_index(store)
     assert page(store, all_owners=True) == ([], 0)
     repo.outputs["same"] = outputs[1]
     assert page(store, owner_id=77)[0][0]["url"] == "/77"
@@ -155,6 +159,7 @@ def test_same_job_duplicate_conflict_and_canonical_precedence(stores):
 def test_lab_conflict_fails_closed_and_mock_counts_follow_changes(stores):
     store, repo = stores
     record, _ = manifest(store, owner=41, lab=True)
+    index.prepare_history_index(store)
     assert page(store, surface="lab", owner_id=41)[1] == 1
     assert page(store, all_owners=True) == ([], 0)
     store.save_history_record({**record, "provider": "mock_image"})
@@ -171,6 +176,7 @@ def test_lab_conflict_fails_closed_and_mock_counts_follow_changes(stores):
 def test_missing_file_repairs_manifest_but_not_job_candidate(stores, monkeypatch):
     store, repo = stores
     record, path = manifest(store, owner=41)
+    index.prepare_history_index(store)
     assert page(store, owner_id=41)[1] == 1
     path.unlink()
     monkeypatch.setattr(Path, "glob", lambda *a, **k: (_ for _ in ()).throw(AssertionError("No scan")))
@@ -182,6 +188,7 @@ def test_missing_file_repairs_manifest_but_not_job_candidate(stores, monkeypatch
 
 def test_unmanaged_new_files_require_explicit_reconciliation_and_claim_blocks_recovery(stores):
     store, repo = stores
+    index.prepare_history_index(store)
     assert page(store, all_owners=True) == ([], 0)
     path = store.output_path(job_id=job(1).id, output_id="out_000000000001", output_format="png")
     path.parent.mkdir(parents=True)
@@ -208,8 +215,9 @@ def test_missing_directory_has_capped_repair_without_scan(stores, monkeypatch):
     assert metrics.file_stats <= 10
 
 
-def test_empty_ready_index_does_not_suppress_later_legacy_import(stores):
+def test_empty_ready_index_requires_explicit_later_legacy_import(stores):
     store, _ = stores
+    index.prepare_history_index(store)
     assert page(store, all_owners=True) == ([], 0)
     record = {"id": "out_later000001", "job_id": "job_later000001", "format": "png"}
     path = store.output_path(job_id=record["job_id"], output_id=record["id"], output_format="png")
@@ -217,12 +225,16 @@ def test_empty_ready_index_does_not_suppress_later_legacy_import(stores):
     path.write_bytes(b"x")
     store.history_file.parent.mkdir(parents=True)
     store.history_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(index.HistoryIndexUnavailable, match="authority import"):
+        page(store, all_owners=True)
+    index.prepare_history_index(store)
     assert page(store, all_owners=True)[1] == 1
 
 
 def test_atomic_dirty_trigger_with_upserts_and_rollback(stores):
     store, repo = stores
     put_jobs(repo, [job(1)])
+    index.prepare_history_index(store)
     assert page(store, all_owners=True)[1] == 1
     connection = connect(repo.database_path)
     try:
@@ -280,6 +292,7 @@ def test_index_plans_cover_output_refresh_and_global_order(stores):
     connection = connect(repo.database_path)
     try:
         cases = [
+            ("SELECT kind,owner_id FROM v1_read_sources WHERE output_id=?", ("x",), "v1_read_sources_output_session_idx"),
             ("SELECT * FROM v1_read_winners WHERE output_id=?", ("x",), "v1_read_winners_output_idx"),
             ("SELECT MAX(sequence) FROM v1_read_sources WHERE kind='file'", (), "v1_read_sources_sequence_idx"),
             ("SELECT source_key FROM v1_read_sources WHERE kind='history' AND file_path=?", ("/synthetic/missing",), "v1_read_sources_kind_path_idx"),
@@ -289,6 +302,7 @@ def test_index_plans_cover_output_refresh_and_global_order(stores):
         for sql, parameters, expected in cases:
             plan = " ".join(row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + sql, parameters))
             assert expected in plan and "TEMP B-TREE" not in plan
+        assert connection.execute("SELECT 1 FROM sqlite_master WHERE name='v1_read_sources_output_idx'").fetchone() is None
     finally:
         connection.close()
 
@@ -333,6 +347,7 @@ def test_file_only_public_becomes_private_atomically_after_job_publication(store
     path = store.output_path(job_id=value.id, output_id=value.outputs[0].id, output_format="png")
     path.parent.mkdir(parents=True)
     path.write_bytes(b"synthetic")
+    index.prepare_history_index(store)
     assert page(store, owner_id=77)[1] == 1
     repo.save_job(value)
     assert page(store, owner_id=77) == ([], 0)
@@ -346,6 +361,7 @@ def test_missing_derived_table_blocks_cached_and_reopened_connections_until_rebu
     from app.repositories import sqlite_json
     store, repo = stores
     put_jobs(repo, [job(1)])
+    index.prepare_history_index(store)
     assert page(store, all_owners=True)[1] == 1
     connection = connect(repo.database_path)
     connection.execute("DROP TABLE v1_read_counts")
@@ -369,6 +385,7 @@ def test_missing_derived_table_blocks_cached_and_reopened_connections_until_rebu
 def test_missing_marker_or_observed_corrupt_count_requires_explicit_rebuild(stores):
     store, repo = stores
     put_jobs(repo, [job(1)])
+    index.prepare_history_index(store)
     assert page(store, all_owners=True)[1] == 1
     connection = connect(repo.database_path)
     with connection:
@@ -421,7 +438,7 @@ def test_cli_pins_explicit_root_and_refuses_implicit_legacy_import(tmp_path):
     explicit.mkdir()
     other = tmp_path / "poison-default"
     env = {**os.environ, "MEDIA_STORAGE_ROOT": str(other)}
-    result = subprocess.run([sys.executable, str(script), "--storage-root", str(explicit), "--prepare"],
+    result = subprocess.run([sys.executable, str(script), "--storage-root", str(explicit), "--prepare", "--minimum-free-bytes", "1"],
                             env=env, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["status"] == "ready"
@@ -431,7 +448,7 @@ def test_cli_pins_explicit_root_and_refuses_implicit_legacy_import(tmp_path):
     (legacy / "history").mkdir(parents=True)
     source = legacy / "history" / "outputs.jsonl"
     source.write_text(json.dumps({"id": "private-do-not-print"}) + "\n", encoding="utf-8")
-    result = subprocess.run([sys.executable, str(script), "--storage-root", str(legacy), "--prepare"],
+    result = subprocess.run([sys.executable, str(script), "--storage-root", str(legacy), "--prepare", "--minimum-free-bytes", "1"],
                             env=env, capture_output=True, text=True, timeout=15)
     assert result.returncode == 2 and "legacy_import_pending" in result.stdout
     assert "private-do-not-print" not in result.stdout + result.stderr
@@ -471,6 +488,7 @@ def test_keyed_legacy_owner_and_irregular_file_locator_do_not_scan(stores, monke
 def test_incremental_refresh_failure_rolls_back_counts_and_keeps_dirty_key(stores, monkeypatch):
     store, repo = stores
     put_jobs(repo, [job(1, owner=41)])
+    index.prepare_history_index(store)
     assert page(store, owner_id=41)[1] == 1
     repo.jobs[job(1).id] = job(1, owner=77)
     original = index._winner
@@ -486,6 +504,58 @@ def test_incremental_refresh_failure_rolls_back_counts_and_keeps_dirty_key(store
     assert page(store, owner_id=41) == ([], 0)
     assert page(store, owner_id=77)[1] == 1
     assert_counts(store)
+
+
+def test_cli_disk_budget_blocks_before_creating_database(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "scripts" / "prepare_v1_history_index.py"
+    base = [sys.executable, str(script), "--storage-root", str(tmp_path), "--prepare"]
+    missing = subprocess.run(base, capture_output=True, text=True, timeout=15)
+    assert missing.returncode == 2 and "minimum-free-bytes" in missing.stderr
+    assert not (tmp_path / "repository.sqlite3").exists()
+    denied = subprocess.run([*base, "--minimum-free-bytes", str(2**63 - 1)],
+                            capture_output=True, text=True, timeout=15)
+    result = json.loads(denied.stdout)
+    assert denied.returncode == 2 and result["error_type"] == "insufficient_free_space"
+    assert result["storage_preflight"]["free_bytes"] < 2**63 - 1
+    assert result["storage_preflight"]["existing_sqlite_bytes"]["repository.sqlite3"] == 0
+    assert not (tmp_path / "repository.sqlite3").exists()
+
+
+def test_cli_verify_rejects_orphaned_favorites_receipt_without_import(stores):
+    store, repo = stores
+    index.prepare_history_index(store)
+    connection = connect(repo.database_path)
+    with connection:
+        connection.execute("INSERT INTO v1_import_receipts VALUES('favorites','synthetic',1,0,'2026-01-01')")
+    connection.close()
+    before = repo.database_path.read_bytes()
+    script = Path(__file__).resolve().parents[1] / "scripts" / "prepare_v1_history_index.py"
+    result = subprocess.run([sys.executable, str(script), "--storage-root", str(store.root), "--verify"],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["favorites_read_ready"] is False
+    assert repo.database_path.read_bytes() == before
+
+
+def test_interrupted_rebuild_preserves_previous_committed_projection_then_retries(stores, monkeypatch):
+    store, repo = stores
+    put_jobs(repo, [job(1, owner=41)])
+    index.prepare_history_index(store)
+    connection = connect(repo.database_path)
+    before = {table: [tuple(row) for row in connection.execute("SELECT * FROM " + table)]
+              for table in ("v1_records", "v1_read_sources", "v1_read_jobs", "v1_read_winners", "v1_read_counts", "v1_read_state")}
+    connection.close()
+    with monkeypatch.context() as guard:
+        guard.setattr(index, "_resolve", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("synthetic interruption")))
+        with pytest.raises(RuntimeError):
+            index.prepare_history_index(store, rebuild=True)
+    connection = connect(repo.database_path)
+    after = {table: [tuple(row) for row in connection.execute("SELECT * FROM " + table)] for table in before}
+    connection.close()
+    assert after == before
+    assert page(store, owner_id=41)[1] == 1
+    index.prepare_history_index(store, rebuild=True)
+    assert page(store, owner_id=41)[1] == 1
 
 
 def test_history_index_errors_are_sanitized_on_both_api_lanes(monkeypatch):
@@ -530,6 +600,7 @@ def test_cli_verify_detects_excess_counts_without_writing_or_importing(stores, t
 def test_count_bucket_churn_does_not_retain_inactive_owner_session_keys(stores):
     store, repo = stores
     put_jobs(repo, [job(1, owner=1, session="first")])
+    index.prepare_history_index(store)
     assert page(store, all_owners=True)[1] == 1
     for owner in range(2, 30):
         repo.jobs[job(1).id] = job(1, owner=owner, session=f"session-{owner}")
@@ -602,3 +673,185 @@ def test_storage_binding_path_comparison_is_case_aware_on_windows():
     stored = PureWindowsPath(r"D:\AI\Media Store")
     assert stored == PureWindowsPath(r"d:\ai\media store")
     assert stored != PureWindowsPath(r"D:\AI\Different Store")
+
+
+def test_unprepared_reads_never_build_import_or_enumerate_even_empty(stores, monkeypatch):
+    store, repo = stores
+    put_jobs(repo, [job(1)])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("An ordinary read must not import, prepare, or enumerate")
+
+    with monkeypatch.context() as guard:
+        guard.setattr(index, "prepare_history_index", forbidden)
+        guard.setattr(index, "_build", forbidden)
+        guard.setattr(store, "_ensure_history_index", forbidden)
+        guard.setattr(Path, "glob", forbidden)
+        for call in (lambda: page(store, all_owners=True),
+                     lambda: index.lookup_output_owner(store, "missing"),
+                     lambda: index.lookup_output_file(store, "missing")):
+            with pytest.raises(index.HistoryIndexUnavailable, match="explicit preparation"):
+                call()
+    index.prepare_history_index(store)
+    with monkeypatch.context() as guard:
+        guard.setattr(index, "prepare_history_index", forbidden)
+        guard.setattr(store, "_ensure_history_index", forbidden)
+        guard.setattr(Path, "glob", forbidden)
+        assert page(LocalMediaStore(store.root), all_owners=True)[1] == 1
+        repo.jobs[job(1).id] = job(1, owner=41)
+        assert page(store, owner_id=41)[1] == 1
+
+
+def test_schema_v1_requires_explicit_rebuild_and_missing_common_fails_closed(stores):
+    from app.repositories import sqlite_json
+    store, repo = stores
+    put_jobs(repo, [job(1)])
+    index.prepare_history_index(store)
+    connection = connect(repo.database_path)
+    with connection:
+        connection.execute("UPDATE v1_read_state SET value='1' WHERE state_key='version'")
+        connection.execute("DROP INDEX v1_read_sources_output_session_idx")
+        connection.execute("CREATE INDEX v1_read_sources_output_idx ON v1_read_sources(output_id)")
+    connection.close()
+    sqlite_json._INITIALIZED_DATABASES.pop(str(repo.database_path.resolve()), None)
+    with pytest.raises(index.HistoryIndexUnavailable, match="version"):
+        page(store, all_owners=True)
+    with pytest.raises(index.HistoryIndexUnavailable, match="version"):
+        index.prepare_history_index(store)
+    connection = connect(repo.database_path)
+    assert connection.execute("SELECT 1 FROM sqlite_master WHERE name='v1_read_sources_output_session_idx'").fetchone() is None
+    assert connection.execute("SELECT 1 FROM sqlite_master WHERE name='v1_read_sources_output_idx'").fetchone()
+    connection.close()
+    index.prepare_history_index(store, rebuild=True)
+    assert page(store, all_owners=True)[1] == 1
+    connection = connect(repo.database_path)
+    with connection:
+        connection.execute("DELETE FROM v1_read_jobs")
+    connection.close()
+    with pytest.raises(index.HistoryIndexUnavailable, match="Job projection"):
+        page(store, all_owners=True)
+
+
+def test_normalized_job_projection_is_exact_and_common_payload_stored_once(stores):
+    store, repo = stores
+    outputs = [GenerationOutput(id=f"out_normalized_{i}", job_id=job(1).id,
+                                url=f"/output/{i}", width=100 + i, height=200,
+                                version_parent_id="parent" if i else None)
+               for i in range(25)]
+    value = job(1, outputs=outputs).model_copy(update={
+        "provenance": {"original_prompt": "large-shared-plan" * 1000},
+        "asset_plan": {"assets": [{"asset_id": "reference", "role": "identity"}]},
+    })
+    put_jobs(repo, [value])
+    index.prepare_history_index(store)
+    rows, total = page(store, all_owners=True, limit=50)
+    assert total == 25
+    expected = {output.id: index.job_history_item(value, output, store).model_dump(mode="json") for output in outputs}
+    assert all(row == expected[row["id"]] for row in rows)
+    connection = connect(repo.database_path)
+    assert connection.execute("SELECT COUNT(*) FROM v1_read_jobs").fetchone()[0] == 1
+    common_bytes = connection.execute("SELECT SUM(LENGTH(payload)) FROM v1_read_jobs").fetchone()[0]
+    output_bytes = connection.execute("SELECT SUM(LENGTH(payload)) FROM v1_read_sources WHERE kind='job'").fetchone()[0]
+    assert common_bytes + output_bytes < sum(len(json.dumps(row)) for row in rows) / 10
+    assert GenerationJob.model_validate_json(connection.execute(
+        "SELECT payload FROM v1_records WHERE namespace='jobs' AND record_key=?", (value.id,),
+    ).fetchone()[0]) == value
+    connection.close()
+    del repo.jobs[value.id]
+    assert page(store, all_owners=True) == ([], 0)
+    connection = connect(repo.database_path)
+    assert connection.execute("SELECT COUNT(*) FROM v1_read_jobs").fetchone()[0] == 0
+    connection.close()
+
+
+def test_duplicate_fanout_streams_scalar_rows_with_linear_work_and_bounded_memory(stores):
+    store, repo = stores
+    index.prepare_history_index(store)
+    connection = connect(repo.database_path)
+    evidence = []
+    try:
+        plan = " ".join(row[3] for row in connection.execute(
+            "EXPLAIN QUERY PLAN SELECT " + index._RESOLVE_COLUMNS +
+            " FROM v1_read_sources WHERE output_id=? ORDER BY session_id", ("duplicate",),
+        ))
+        assert "v1_read_sources_output_session_idx" in plan and "TEMP B-TREE" not in plan
+        for size in (100, 1000, 10000):
+            with connection:
+                for table in ("v1_read_sources", "v1_read_winners", "v1_read_counts"):
+                    connection.execute("DELETE FROM " + table)
+                connection.executemany(
+                    "INSERT INTO v1_read_sources(kind,source_key,output_id,job_id,session_id,owner_id,"
+                    "eligible,job_sort,sequence,position,payload) VALUES('job',?,'duplicate',?,?,?,1,?,?,0,?)",
+                    ((f"source-{i:06d}", f"job-{i:06d}", f"session-{i // 2:06d}",
+                      41 if i % 2 else None, f"{i:06d}", i, "x" * 2048) for i in range(size)),
+                )
+            steps = [0]
+
+            def progress():
+                steps[0] += 1000
+                return 0
+
+            connection.set_progress_handler(progress, 1000)
+            metrics = index.HistoryReadMetrics()
+            token = index._METRICS.set(metrics)
+            tracemalloc.start()
+            try:
+                with connection:
+                    index._resolve(connection, "duplicate")
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+                index._METRICS.reset(token)
+                connection.set_progress_handler(None, 0)
+            assert metrics.source_rows == size
+            assert connection.execute("SELECT COUNT(*) FROM v1_read_winners").fetchone()[0] == size // 2 + 1
+            assert connection.execute("SELECT source_key FROM v1_read_winners WHERE scope='global'").fetchone()[0] == f"source-{size - 1:06d}"
+            assert connection.execute("SELECT source_key FROM v1_read_winners WHERE scope='session:session-000000'").fetchone()[0] == "source-000001"
+            assert peak < 512_000  # independent of duplicated 2 KiB display JSON
+            assert steps[0] < size * 1000
+            evidence.append({"sources": size, "sessions": size // 2, "python_peak_bytes": peak,
+                             "sqlite_vm_steps_rounded": steps[0], "source_rows": metrics.source_rows})
+        assert evidence[-1]["python_peak_bytes"] < evidence[0]["python_peak_bytes"] + 100_000
+        # Complete owner evidence, including a conflict at the tail, survives
+        # streaming. Canonical precedence restores every affected session.
+        with connection:
+            connection.execute("UPDATE v1_read_sources SET owner_id=77 WHERE source_key='source-009999'")
+            index._resolve(connection, "duplicate")
+        assert connection.execute("SELECT COUNT(*) FROM v1_read_winners").fetchone()[0] == 0
+        repo.outputs["duplicate"] = GenerationOutput(id="duplicate", job_id="canonical", url="/x", metadata={"veyra_user_id": 41})
+        with connection:
+            index._resolve(connection, "duplicate")
+        assert connection.execute("SELECT COUNT(*) FROM v1_read_winners").fetchone()[0] == 5001
+    finally:
+        connection.close()
+    print("duplicate_fanout_evidence=" + json.dumps(evidence))
+
+
+def test_incremental_budget_rolls_back_one_partial_key_and_preserves_dirty_work(stores, monkeypatch):
+    store, repo = stores
+    put_jobs(repo, [job(1)])
+    index.prepare_history_index(store)
+    repo.jobs[job(1).id] = job(1, owner=41)
+    original = index._refresh_key
+    calls = []
+
+    def expired(connection, current_store, kind, key):
+        calls.append((kind, key))
+        original(connection, current_store, kind, key)
+        raise index._RefreshBudgetExpired
+
+    with monkeypatch.context() as guard:
+        guard.setattr(index, "_refresh_key", expired)
+        with pytest.raises(index.HistoryIndexUnavailable):
+            page(store, owner_id=41)
+        with pytest.raises(index.HistoryIndexUnavailable, match="explicit preparation"):
+            page(store, owner_id=41)
+        assert len(calls) == 1
+    connection = connect(repo.database_path)
+    assert connection.execute("SELECT 1 FROM v1_read_dirty WHERE kind='jobs'").fetchone()
+    assert connection.execute("SELECT DISTINCT owner_id FROM v1_read_winners").fetchone()[0] == 0
+    assert connection.execute("SELECT 1 FROM v1_read_state WHERE state_key='maintenance_required'").fetchone()
+    connection.close()
+    index.prepare_history_index(store)
+    assert page(store, owner_id=41)[1] == 1
+    assert_counts(store)

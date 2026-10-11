@@ -16,6 +16,10 @@ class LegacyFavoritesImportError(ValueError):
     """A repairable legacy-source failure with no source payload in its message."""
 
 
+class FavoritesIndexNotReadyError(RuntimeError):
+    """An operator must complete the legacy import before paged favorite reads."""
+
+
 _STRICT_IMPORTER_ID = "v2.favorites.json"
 _STRICT_IMPORTER_VERSION = 1
 
@@ -32,6 +36,76 @@ def favorites_path() -> Path:
 
 def _database_path() -> Path:
     return settings.data_dir / "image_favorites.sqlite3"
+
+
+def prepare_favorites_index() -> None:
+    """Explicit maintenance entry point; reuse the strict, atomic JSON importer."""
+    connection = _connect()
+    try:
+        _ensure_imported(connection)
+    finally:
+        connection.close()
+
+
+def _ready_connection() -> sqlite3.Connection:
+    """Only bounded metadata checks; preparation never hides inside a read."""
+    path = _database_path()
+    if not path.exists():
+        if favorites_path().exists():
+            raise FavoritesIndexNotReadyError("V2 favorites require a completed legacy import.")
+        # No durable authority exists: bounded empty-store schema bootstrap.
+        connection = _connect()
+        connection.close()
+    favorites = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.75)
+    try:
+        objects = {row[0] for row in favorites.execute(
+            "SELECT name FROM sqlite_master WHERE name IN "
+            "('favorites', 'favorites_owner_idx', 'favorite_migrations', 'favorite_import_receipts')"
+        )}
+        if len(objects) != 4:
+            raise FavoritesIndexNotReadyError("V2 favorites require explicit preparation.")
+        if not favorites.execute(
+            "SELECT 1 FROM favorite_migrations WHERE migration_key='legacy_json'"
+        ).fetchone():
+            if favorites.execute(
+                "SELECT 1 FROM favorite_import_receipts WHERE migration_key='legacy_json'"
+            ).fetchone():
+                raise LegacyFavoritesImportError("Legacy V2 favorites import state is inconsistent.")
+            try:
+                favorites_path().stat()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                raise FavoritesIndexNotReadyError("V2 favorites require operator verification.") from None
+            else:
+                raise FavoritesIndexNotReadyError("V2 favorites require a completed legacy import.")
+        return favorites
+    except Exception:
+        favorites.close()
+        raise
+
+
+def attach_ready_favorites(connection: sqlite3.Connection) -> None:
+    """Attach the fixed V2 authority read-only, without importing JSON on a read."""
+    favorites = _ready_connection()
+    favorites.close()
+    connection.execute(
+        "ATTACH DATABASE ? AS history_favorites",
+        (_database_path().resolve().as_uri() + "?mode=ro",),
+    )
+
+
+def favorite_scope_predicate(
+    *, veyra_user_id: int | None, include_legacy_public: bool, include_all: bool,
+) -> tuple[str, list[Any]]:
+    """The existing favorite visibility authority, shared by badges and pages."""
+    if not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
+        return "0", []
+    if not include_all and veyra_user_id is not None:
+        if include_legacy_public:
+            return "(owner_id=? OR owner_id IS NULL)", [veyra_user_id]
+        return "owner_id=?", [veyra_user_id]
+    return "1", []
 
 
 def _connect() -> sqlite3.Connection:
@@ -337,21 +411,19 @@ def list_favorite_ids(
     include_legacy_public: bool = True,
     include_all: bool = False,
     output_ids: Iterable[str] | None = None,
+    require_ready: bool = False,
 ) -> set[str]:
     if not include_all and veyra_user_id is None and settings.veyra_auth_enabled:
         return set()
-    connection = _connect()
+    connection = _ready_connection() if require_ready else _connect()
     try:
-        _ensure_imported(connection)
-        clauses: list[str] = []
-        params: list[Any] = []
-        if not include_all and veyra_user_id is not None:
-            if include_legacy_public:
-                clauses.append("(owner_id=? OR owner_id IS NULL)")
-                params.append(veyra_user_id)
-            else:
-                clauses.append("owner_id=?")
-                params.append(veyra_user_id)
+        if not require_ready:
+            _ensure_imported(connection)
+        predicate, params = favorite_scope_predicate(
+            veyra_user_id=veyra_user_id, include_legacy_public=include_legacy_public,
+            include_all=include_all,
+        )
+        clauses: list[str] = [predicate]
         if output_ids is not None:
             ids = [str(item) for item in output_ids if str(item)]
             if not ids:

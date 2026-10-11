@@ -19,6 +19,7 @@ from app.main import app
 from app.providers.base import ProviderRuntimeError
 from app.providers.mock_image import MockImageProvider
 from app.repositories import repository
+from app.repositories.history_index import prepare_history_index, reconcile_history_files
 from app.services.alchemy_lab import lab_store
 from app.storage import media_store
 
@@ -84,6 +85,9 @@ def isolate_repository_and_media_store(tmp_path, monkeypatch):
     settings.media_acceleration_verify_timeout_seconds = 1.2
     repository.reset()
     lab_store.reset()
+    # Deployment prepares derived history before admitting requests. Tests do
+    # the same explicitly; ordinary GETs must never cold-build an empty root.
+    prepare_history_index(media_store)
     yield
     repository.reset()
     lab_store.reset()
@@ -2250,8 +2254,11 @@ def test_frontend_static_app_is_served():
     assert "function refreshV1GenerationSideEffects" in script.text
     assert "await refreshV1GenerationSideEffects();" in script.text
     assert "function v2HistoryEndpoint" in script.text
-    # Module reads are 24 rows; account summary windows remain 48/72.
-    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset }" in script.text
+    # A 72-row revisitable window uses 24-row transport and server-paged favorites.
+    # Account summary samples retain their independent 48/72 contract.
+    assert "loadV2HistoryResponse({ limit, offset, favorite: favoritesDemand }" in script.text
+    assert "const historyWindowSize = 72" in script.text
+    assert "function loadPreviousHistoryWindow" in script.text
     assert "const historyFetchPageSize = 24" in script.text
     assert "const v2HistoryFetchPageSize = 24" in script.text
     assert "const accountV1HistoryWindow = 48" in script.text
@@ -2528,8 +2535,11 @@ def test_mobile_h5_app_is_served_independently():
     assert "scrollV2HomeResultsIntoView(run);" in mobile_script.text
     assert "loadV2HistoryResponse" in mobile_script.text
     assert "function v2HistoryEndpoint" in mobile_script.text
-    # Module reads are 24 rows; account summary windows remain 48/72.
-    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset }" in mobile_script.text
+    # A 72-row revisitable window uses 24-row transport and server-paged favorites.
+    # Account summary samples retain their independent 48/72 contract.
+    assert "loadV2HistoryResponse({ limit, offset, favorite: favoritesDemand }" in mobile_script.text
+    assert "const historyWindowSize = 72" in mobile_script.text
+    assert "function loadPreviousHistoryWindow" in mobile_script.text
     assert "const historyFetchPageSize = 24" in mobile_script.text
     assert "const v2HistoryFetchPageSize = 24" in mobile_script.text
     assert "const accountV1HistoryWindow = 48" in mobile_script.text
@@ -2679,8 +2689,13 @@ def test_image_share_poster_returns_downloadable_png():
     assert len(response.content) > 10_000
 
 
-def test_image_share_poster_reads_v2_local_output(tmp_path, monkeypatch):
+def test_image_share_poster_uses_v2_public_media_route(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    import httpx
     from PIL import Image
+
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
 
     storage_root = tmp_path / "v2_storage"
     output_id = "out_v2_share"
@@ -2693,6 +2708,18 @@ def test_image_share_poster_reads_v2_local_output(tmp_path, monkeypatch):
     Image.new("RGB", (320, 320), (20, 120, 220)).save(thumbnail_dir / f"{output_id}.webp")
     monkeypatch.setenv("V2_STORAGE_DIR", str(storage_root))
     captured = {}
+    # Local V2 files alone are no longer publication authority. Simulate V2's
+    # anonymous endpoint granting these bytes, without making a network call.
+    public_bytes = source_path.read_bytes()
+    @contextmanager
+    def public_v2_stream(client, method, url, **kwargs):
+        captured["route"] = str(url)
+        assert method == "GET" and "/api/v2/" in str(url)
+        assert "headers" not in kwargs and "cookies" not in kwargs
+        assert not client.follow_redirects
+        yield httpx.Response(200, content=public_bytes, request=httpx.Request("GET", str(url)))
+
+    monkeypatch.setattr(httpx.Client, "stream", public_v2_stream)
 
     def fake_render_share_poster(**kwargs):
         image = main_module._load_share_preview_image(kwargs["request"], kwargs["image_value"])
@@ -2711,6 +2738,7 @@ def test_image_share_poster_reads_v2_local_output(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 200
+    assert captured["route"].endswith(f"/api/v2/image/history/{output_id}/thumbnail")
     assert all(abs(actual - expected) <= 4 for actual, expected in zip(captured["pixel"], (20, 120, 220)))
 
 
@@ -2737,7 +2765,7 @@ def test_image_share_poster_qr_defaults_to_share_landing_page(monkeypatch):
     assert "image=http%3A%2F%2Ftestserver%2Fv1%2Foutputs%2Fout_share%2Fdownload" in captured["share_url"]
 
 
-def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_path, monkeypatch):
+def test_managed_image_history_fails_closed_after_authority_reset(tmp_path, monkeypatch):
     monkeypatch.setattr(media_store, "root", tmp_path)
     client = TestClient(app)
     session_id = client.post("/v1/sessions", json={"project_id": "proj_history"}).json()["id"]
@@ -2762,24 +2790,12 @@ def test_image_history_manifest_after_repository_reset_ignores_stray_files(tmp_p
 
     assert history.status_code == 200
     body = history.json()
-    assert body["total"] == 1
-    assert body["items"][0]["source"] == "manifest"
-    assert body["items"][0]["url"] == output_url
-    assert body["items"][0]["thumbnail_url"].endswith("/thumbnail")
-    assert body["items"][0]["preview_url"].endswith("/preview")
-    assert "创作目标：" in body["items"][0]["prompt"]
-    assert client.get(output_url).status_code == 200
-    assert client.get(body["items"][0]["thumbnail_url"]).status_code == 200
-    assert client.get(body["items"][0]["preview_url"]).status_code == 200
-
-    delete = client.delete(f"/v1/image/history/{body['items'][0]['id']}")
-    assert delete.status_code == 200
-    assert delete.json()["ok"] is True
-
-    after_delete = client.get("/v1/image/history")
-    assert after_delete.status_code == 200
-    assert after_delete.json()["total"] == 0
+    # reset() destroys authority; it is not a process restart. A manifest must
+    # never publish a managed reservation whose canonical Output was removed.
+    assert body["total"] == 0 and body["items"] == []
     assert client.get(output_url).status_code == 404
+    assert client.get(image_body["outputs"][0]["thumbnail_url"]).status_code == 404
+    assert client.get(image_body["outputs"][0]["preview_url"]).status_code == 404
 
 
 def test_image_history_recovers_generated_files_missing_manifest(tmp_path, monkeypatch):
@@ -2811,6 +2827,7 @@ def test_image_history_recovers_generated_files_missing_manifest(tmp_path, monke
     recovered_path.parent.mkdir(parents=True, exist_ok=True)
     recovered_path.write_bytes(b"\x89PNG\r\n\x1a\n")
     os.utime(recovered_path, (2000000000, 2000000000))
+    reconcile_history_files(media_store)
 
     response = client.get("/v1/image/history?limit=10")
 
@@ -3072,7 +3089,8 @@ def test_v1_image_history_supports_offset_pagination(tmp_path, monkeypatch):
 
     favorite_lookups: list[set[str]] = []
 
-    def page_scoped_favorites(*, veyra_user_id=None, include_legacy_public=True, output_ids=None):
+    def page_scoped_favorites(*, veyra_user_id=None, include_legacy_public=True, output_ids=None, prepared_only=False):
+        assert prepared_only is True
         favorite_lookups.append(set(output_ids or []))
         return {"out_page_1"}
 
@@ -3315,6 +3333,7 @@ def test_v1_missing_private_manifest_keeps_owner_on_filesystem_recovery(tmp_path
             "created_at": "2026-02-01T00:00:00+00:00",
         }
     )
+    reconcile_history_files(media_store)
 
     try:
         client = TestClient(app)

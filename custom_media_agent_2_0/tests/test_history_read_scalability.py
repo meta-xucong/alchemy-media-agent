@@ -49,8 +49,8 @@ def test_page_query_uses_ordered_index_without_global_sort(tmp_path, monkeypatch
     statements = []
     connect = history._history_connect
 
-    def traced_connect():
-        connection = connect()
+    def traced_connect(**kwargs):
+        connection = connect(**kwargs)
         connection.set_trace_callback(statements.append)
         return connection
 
@@ -171,8 +171,8 @@ def test_exact_total_and_page_do_not_step_through_all_visible_history(tmp_path, 
         steps += 1
         return 0
 
-    def instrumented():
-        connection = connect()
+    def instrumented(**kwargs):
+        connection = connect(**kwargs)
         connection.set_progress_handler(step, 1)
         return connection
 

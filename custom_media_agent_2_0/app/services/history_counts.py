@@ -70,12 +70,14 @@ def _build(connection: sqlite3.Connection) -> None:
     connection.execute(f"INSERT INTO {_STATE} VALUES(1, ?)", (_VERSION,))
 
 
-def ensure_history_counts(connection: sqlite3.Connection) -> None:
+def ensure_history_counts(connection: sqlite3.Connection, *, allow_initialize: bool = True) -> None:
     """Validate bounded metadata each connect; backfill only a fresh schema."""
     objects = _objects(connection)
     if objects:
         _validate(connection, objects)
         return
+    if not allow_initialize:
+        raise HistoryCountIndexError("V2 history counts require explicit preparation.")
     connection.execute("BEGIN IMMEDIATE")
     try:
         # Another process may have published the complete schema while waiting.

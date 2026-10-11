@@ -271,7 +271,7 @@ _V3_BACKGROUND_SERVER_MARKERS = frozenset(
 )
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
-IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "private, no-store"}
 APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
 SHELL_ASSET_VERSION_LENGTH = 16
 _shell_asset_version_cache: dict[Path, tuple[int, int, str]] = {}
@@ -545,13 +545,21 @@ def image_share_save_image(
     image: str = Query(default=""),
 ):
     image_url = _safe_public_share_url(request, image, fallback="/static/showcase/city-poster.jpg")
+    # Check before a cache hit as well as before opening source bytes. There is
+    # no persisted public share grant for private V1/Lab outputs.
+    _require_public_v1_share_image(image_url)
+    headers = {
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": 'inline; filename="alchemy-share-image.jpg"',
+    }
+    if _share_source_requires_revalidation(image_url):
+        # V2 visibility is decided remotely for this request. A shared mutable
+        # cache file must not replace those checked bytes before FileResponse
+        # eventually opens it, so return this rendition directly.
+        return Response(_share_save_image_bytes(request, image_url), media_type="image/jpeg", headers=headers)
     cache_path = _share_save_image_cache_path(image_url)
     if not cache_path.exists():
         _write_share_save_image(request, image_url, cache_path)
-    headers = {
-        "Cache-Control": "public, max-age=31536000, immutable",
-        "Content-Disposition": 'inline; filename="alchemy-share-image.jpg"',
-    }
     return FileResponse(cache_path, media_type="image/jpeg", headers=headers)
 
 
@@ -586,7 +594,7 @@ def image_share_poster(
         share_url=share_url,
     )
     headers = {
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": "private, no-store",
         "Content-Disposition": 'inline; filename="alchemy-share-poster.png"',
     }
     return StreamingResponse(BytesIO(poster), media_type="image/png", headers=headers)
@@ -2766,6 +2774,7 @@ def _veyra_asset_context(request: Request, authorization: str = "") -> dict:
 
 
 def _v1_output_owner_state(output_id: str) -> tuple[int | None, bool]:
+    _require_literal_output_id(output_id)
     output = repository.get_output(output_id)
     output_owner = _history_output_veyra_user_id(output.metadata) if output else None
     if output_owner is not None:
@@ -2958,7 +2967,23 @@ def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = N
         raise
 
 
-async def _require_output_visible(request: Request, output_id: str, authorization: str = "", *, allow_legacy_public: bool = True) -> dict:
+async def _require_output_visible(
+    request: Request, output_id: str, authorization: str = "", *,
+    allow_legacy_public: bool = True, allow_delete_retry: bool = False,
+) -> dict:
+    _require_literal_output_id(output_id)
+    blocked = await _run_sqlite_api_call(media_store.output_publication_blocked, output_id)
+    if blocked:
+        # A interrupted deletion may have removed canonical output authority
+        # already. Its durable claim permits only cleanup retry, never reads.
+        claim = await _run_sqlite_api_call(repository.get_output_delete_claim, output_id) if allow_delete_retry else None
+        if claim:
+            context = await _veyra_history_context(request, authorization)
+            owner_id = _positive_int_or_none(claim.get("owner_id"))
+            if (not settings.veyra_auth_enabled or context.get("is_admin")
+                    or (owner_id is not None and owner_id == context.get("user_id"))):
+                return {**context, "owner_id": owner_id}
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     if not settings.veyra_auth_enabled:
         owner_id, owner_conflict = await _run_sqlite_api_call(_v1_output_owner_state, output_id)
         return {
@@ -3322,6 +3347,7 @@ def _list_image_history_sync(
     offset: int = 0,
     *,
     metrics=None,
+    favorite: bool = False,
 ) -> ImageHistoryResponse:
     from app.repositories.history_index import read_history_page
 
@@ -3331,14 +3357,18 @@ def _list_image_history_sync(
         media_store, surface="v1", session_id=session_id,
         owner_id=_positive_int_or_none(veyra_context.get("user_id")),
         all_owners=bool(veyra_context.get("is_admin") or not veyra_context.get("authenticated")),
-        limit=min(limit, 200), offset=offset, metrics=metrics,
+        limit=min(limit, 200), offset=offset, metrics=metrics, favorite=favorite,
     )
     page = [_with_veyra_history_access(ImageHistoryItem(**record), veyra_context) for record in records]
-    if page:
+    if page and favorite:
+        # Membership and total were selected in one history/favorites snapshot.
+        page = [item.model_copy(update={"favorite": True}) for item in page]
+    elif page:
         favorite_ids = list_favorite_ids(
             veyra_user_id=_positive_int_or_none(veyra_context.get("user_id")),
             include_legacy_public=True,
             output_ids=(item.id for item in page),
+            prepared_only=True,
         )
         page = [item.model_copy(update={"favorite": item.id in favorite_ids}) for item in page]
     return ImageHistoryResponse(items=page, total=total)
@@ -3350,6 +3380,7 @@ async def list_image_history(
     session_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    favorite: bool = Query(default=False),
     authorization: str = Header(default=""),
 ):
     veyra_context = await _veyra_history_context(request, authorization)
@@ -3359,6 +3390,7 @@ async def list_image_history(
         session_id,
         min(limit, 200),
         offset,
+        favorite=favorite is True,
     )
 
 
@@ -3372,7 +3404,9 @@ def list_v1_veyra_usage(request: Request, limit: int = Query(default=50, ge=1, l
 
 @app.delete("/v1/image/history/{output_id}")
 async def delete_image_history_item(output_id: str, request: Request, authorization: str = Header(default="")):
-    visibility = await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
+    visibility = await _require_output_visible(
+        request, output_id, authorization, allow_legacy_public=False, allow_delete_retry=True,
+    )
     owner_id = _positive_int_or_none(visibility.get("owner_id")) if isinstance(visibility, dict) else None
     return await _run_sqlite_api_call(_delete_v1_history_output_bundle, output_id, owner_id=owner_id)
 
@@ -3519,10 +3553,16 @@ async def preview_output(output_id: str, request: Request, authorization: str = 
 def _resolve_output_file(output_id: str) -> tuple[Path, str]:
     from app.repositories.history_index import lookup_output_file
 
+    _require_literal_output_id(output_id)
+    if media_store.output_publication_blocked(output_id):
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
     output = repository.get_output(output_id)
     if output:
-        path = media_store.output_path(job_id=output.job_id, output_id=output.id, output_format=output.format)
-        if path.exists():
+        path = _safe_file_under(
+            media_store.output_path(job_id=output.job_id, output_id=output.id, output_format=output.format),
+            media_store.generated_root,
+        )
+        if path and output.id == output_id:
             return path, output.format
     fallback, known = lookup_output_file(media_store, output_id)
     if not fallback and not known and (output is None or output.format not in {"png", "jpeg", "webp"}):
@@ -3531,7 +3571,13 @@ def _resolve_output_file(output_id: str) -> tuple[Path, str]:
         fallback = media_store.find_output_file(output_id)
     if fallback:
         path, output_format, _ = fallback
-        return path, output_format
+        safe_path = _safe_file_under(path, media_store.generated_root)
+        if safe_path and path.stem == output_id:
+            if output_format in {"png", "jpeg", "webp"} and media_store.output_publication_blocked(
+                output_id, candidate_job_id=path.parent.name,
+            ):
+                raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
+            return safe_path, output_format
     code = "output_file_not_found" if output else "output_not_found"
     raise HTTPException(status_code=404, detail={"code": code, "message": "Output file not found." if output else "Output not found."})
 
@@ -3563,52 +3609,12 @@ def _safe_public_share_url(request: Request, value: str | None, *, fallback: str
     return str(request.base_url).rstrip("/") + quote(fallback, safe="/:?&=%#.-_~")
 
 
-def _share_output_id_from_path(path: str, prefix: str, suffix: str) -> str | None:
-    normalized = str(path or "")
-    if not normalized.startswith(prefix) or not normalized.endswith(suffix):
-        return None
-    output_id = normalized[len(prefix) : len(normalized) - len(suffix)]
-    decoded = unquote(output_id.strip("/"))
-    if not decoded or "/" in decoded or "\\" in decoded:
-        return None
-    if any(char in decoded for char in "*?[]"):
-        return None
-    return decoded
-
-
-def _v2_storage_root() -> Path:
-    configured = str(os.getenv("V2_STORAGE_DIR") or "").strip()
-    if configured:
-        return Path(configured)
-    return Path(__file__).resolve().parents[2] / "custom_media_agent_2_0" / ".v2_storage"
-
-
-def _safe_file_under(path: Path, root: Path) -> Path | None:
-    try:
-        resolved = path.resolve()
-        resolved_root = root.resolve()
-    except OSError:
-        return None
-    if resolved_root != resolved and resolved_root not in resolved.parents:
-        return None
-    return resolved if resolved.exists() and resolved.is_file() else None
-
-
-def _v2_output_file_from_share_path(path: str) -> Path | None:
-    output_id = _share_output_id_from_path(path, "/api/v2/outputs/", "/download")
-    storage_root = _v2_storage_root()
-    if output_id:
-        outputs_root = storage_root / "outputs"
-        for candidate in outputs_root.glob(f"*/{output_id}.*"):
-            resolved = _safe_file_under(candidate, storage_root)
-            if resolved:
-                return resolved
-    thumbnail_id = _share_output_id_from_path(path, "/api/v2/image/history/", "/thumbnail")
-    if thumbnail_id:
-        resolved = _safe_file_under(storage_root / "thumbnails" / f"{thumbnail_id}.webp", storage_root)
-        if resolved:
-            return resolved
-    return None
+def _require_literal_output_id(output_id: str) -> None:
+    # Direct legacy lookup accepts irregular historical IDs, but never path or
+    # glob syntax. Otherwise an unknown '*' can select somebody else's file.
+    if (not output_id or output_id in {".", ".."}
+            or any(char in output_id for char in "/\\\x00*?[]")):
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
 
 
 def _share_text(value: str | None, fallback: str, limit: int) -> str:
@@ -3645,18 +3651,73 @@ def _share_save_image_url(request: Request, *, image_url: str) -> str:
 
 def _share_save_image_cache_path(image_url: str) -> Path:
     cache_key = hashlib.sha256(image_url.encode("utf-8")).hexdigest()[:32]
-    return media_store.root / "share_cache" / f"{cache_key}.jpg"
+    # Old cache entries may predate publication/ownership validation. Keep those
+    # bytes, but never reuse them as evidence that the current source is public.
+    return media_store.root / "share_cache" / "publication_v2" / f"{cache_key}.jpg"
 
 
-def _write_share_save_image(request: Request, image_url: str, cache_path: Path) -> None:
+def _share_source_requires_revalidation(value: str) -> bool:
+    # V1 has no authority over V2 storage. Its anonymous media endpoint decides
+    # visibility each time, including when a share rendition already exists.
+    return urlsplit(unquote(value)).path.startswith("/api/v2/")
+
+
+def _safe_file_under(path: Path, root: Path) -> Path | None:
+    try:
+        resolved = path.resolve()
+        resolved_root = root.resolve()
+    except OSError:
+        return None
+    if resolved_root not in resolved.parents:
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _require_public_v1_share_image(value: str | None) -> None:
+    """Anonymous share renderers can use only published legacy-public media."""
+    path = urlsplit(unquote(str(value or "").strip())).path
+    # Share documents are not image-source grants. The shipped frontend passes
+    # direct media URLs; rejecting wrappers avoids nested cache authorization
+    # bypasses and unbounded recursive self-fetches.
+    if path.startswith("/share/"):
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
+    for prefix, root in (("/static/", STATIC_DIR), ("/mobile-static/", MOBILE_STATIC_DIR)):
+        if path.startswith(prefix) and _safe_file_under(root / path.removeprefix(prefix), root) is None:
+            raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
+    if not path.startswith("/v1/outputs/"):
+        return
+    parts = path.strip("/").split("/")
+    if len(parts) < 3:
+        return
+    output_id = parts[2]
+    _require_literal_output_id(output_id)
+    if media_store.output_publication_blocked(output_id):
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
+    owner_id, conflict = _v1_output_owner_state(output_id)
+    if owner_id is not None or conflict:
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
+    # A newly observed unmanaged file may not be in the prepared inventory.
+    # Revalidate its actual parent Job before trusting an existing rendition.
+    _resolve_output_file(output_id)
+
+
+def _share_save_image_bytes(request: Request, image_url: str) -> bytes:
     from PIL import ImageOps
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    _require_public_v1_share_image(image_url)
     image = _load_share_preview_image(request, image_url)
     image = ImageOps.exif_transpose(image)
     image = _flatten_share_image_for_jpeg(image)
+    content = BytesIO()
+    image.save(content, "JPEG", quality=90, optimize=True, progressive=True)
+    return content.getvalue()
+
+
+def _write_share_save_image(request: Request, image_url: str, cache_path: Path) -> None:
+    content = _share_save_image_bytes(request, image_url)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = cache_path.with_suffix(".tmp.jpg")
-    image.save(temporary_path, "JPEG", quality=90, optimize=True, progressive=True)
+    temporary_path.write_bytes(content)
     temporary_path.replace(cache_path)
 
 
@@ -3668,6 +3729,9 @@ def _ensure_share_save_image_cached(request: Request, share_url: str) -> None:
         if not image_value:
             return
         image_url = _safe_public_share_url(request, image_value, fallback="/static/showcase/city-poster.jpg")
+        _require_public_v1_share_image(image_url)
+        if _share_source_requires_revalidation(image_url):
+            return
         cache_path = _share_save_image_cache_path(image_url)
         if not cache_path.exists():
             _write_share_save_image(request, image_url, cache_path)
@@ -3881,15 +3945,23 @@ def _load_share_preview_image(request: Request, value: str | None):
     try:
         decoded = unquote(str(value or "").strip())
         split = urlsplit(decoded)
-        v2_output_file = _v2_output_file_from_share_path(split.path or decoded)
-        if v2_output_file:
-            return Image.open(v2_output_file)
+        _require_public_v1_share_image(decoded)
         if split.path.startswith("/api/v2/"):
+            # Never infer V2 visibility from a local filename. Let V2's own
+            # anonymous endpoint authorize bytes; do not forward credentials.
             target = _v2_proxy_target_url(split.path, split.query)
-            with httpx.Client(timeout=8, follow_redirects=True) as client:
-                response = client.get(target)
-                response.raise_for_status()
-                return Image.open(BytesIO(response.content))
+            # Bound both transport and bytes, and never follow a redirect out
+            # of the configured V2 authority to an unvalidated image origin.
+            deadline = time.monotonic() + 8
+            content = bytearray()
+            with httpx.Client(timeout=8, follow_redirects=False) as client:
+                with client.stream("GET", target) as response:
+                    response.raise_for_status()
+                    for chunk in response.iter_bytes(chunk_size=65536):
+                        if time.monotonic() > deadline or len(content) + len(chunk) > 32 * 1024 * 1024:
+                            raise ValueError("Share source exceeds its bounded retrieval budget.")
+                        content.extend(chunk)
+            return Image.open(BytesIO(content))
         if split.path.startswith("/v1/outputs/"):
             parts = split.path.strip("/").split("/")
             if len(parts) >= 3:
@@ -3897,12 +3969,12 @@ def _load_share_preview_image(request: Request, value: str | None):
                 path, _ = _resolve_output_file(output_id)
                 return Image.open(path)
         if split.path.startswith("/static/"):
-            candidate = STATIC_DIR / split.path.removeprefix("/static/")
-            if candidate.exists() and candidate.is_file():
+            candidate = _safe_file_under(STATIC_DIR / split.path.removeprefix("/static/"), STATIC_DIR)
+            if candidate:
                 return Image.open(candidate)
         if split.path.startswith("/mobile-static/"):
-            candidate = MOBILE_STATIC_DIR / split.path.removeprefix("/mobile-static/")
-            if candidate.exists() and candidate.is_file():
+            candidate = _safe_file_under(MOBILE_STATIC_DIR / split.path.removeprefix("/mobile-static/"), MOBILE_STATIC_DIR)
+            if candidate:
                 return Image.open(candidate)
         if split.scheme in {"http", "https"}:
             host = request.url.hostname

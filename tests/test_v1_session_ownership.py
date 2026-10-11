@@ -203,6 +203,8 @@ def test_v1_revise_requires_write_access_to_private_source_session(tmp_path, mon
         runner_calls.append(job_id)
 
     monkeypatch.setattr(main, "run_submitted_image_job", skip_provider_run)
+    from app.repositories.history_index import prepare_history_index
+    prepare_history_index(media_store)
     client = TestClient(main.app)
     foreign_headers = {"Authorization": f"Bearer {_token(77)}"}
     owner_headers = {"Authorization": f"Bearer {_token(41)}"}
@@ -302,6 +304,8 @@ def test_v1_ownerless_public_image_history_remains_visible_when_legacy_session_i
     })
     client = TestClient(main.app)
 
+    from app.repositories.history_index import prepare_history_index
+    prepare_history_index(media_store)
     public_history = client.get(
         f"/v1/image/history?session_id={legacy.id}&limit=10",
         headers={"Authorization": f"Bearer {_token(77)}"},

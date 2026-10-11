@@ -75,12 +75,13 @@ def test_native_upsert_owner_move_stale_write_delete_and_replace(configured):
 def test_strict_import_rolls_back_counts_and_retries_atomically(configured):
     configured.write_text(_item().model_dump_json() + '\n{"broken":', encoding="utf-8")
     with pytest.raises(history.LegacyHistoryImportError):
-        history.list_image_history(include_all=True)
+        history._ensure_history_index()
     connection = history._history_connect()
     _assert_counts(connection, 0, 0, 0)
     assert connection.execute("SELECT COUNT(*) FROM v2_image_history_migration").fetchone()[0] == 0
     connection.close()
     configured.write_text(_item().model_dump_json() + "\n" + _item("public", None).model_dump_json(), encoding="utf-8")
+    history._ensure_history_index()
     result = history.list_image_history(include_all=True)
     assert result.total == len(result.items) == 2
     connection = history._history_connect()
@@ -143,6 +144,7 @@ def test_concurrent_first_connections_and_writes_are_counted_once(configured):
 ])
 def test_incomplete_derived_state_fails_closed_and_rebuild_preserves_authority(configured, damage):
     configured.write_text(_item().model_dump_json(), encoding="utf-8")
+    history._ensure_history_index()
     history.list_image_history(include_all=True)
     connection = history._history_connect()
     source = tuple(connection.execute("SELECT * FROM v2_image_history").fetchone())

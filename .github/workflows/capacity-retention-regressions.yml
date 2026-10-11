@@ -9,6 +9,9 @@ on:
       - "docs/migrations/**"
       - "docs/history-read-scalability/**"
       - "scripts/benchmark_history_reads.py"
+      - "scripts/probe_browser_history_windows.mjs"
+      - "scripts/prepare_v1_history_index.py"
+      - "scripts/prepare_v2_history_reads.py"
       - ".github/workflows/capacity-retention-regressions.yml"
   push:
     branches: ["codex/durable-bounded-retention"]
@@ -29,7 +32,7 @@ concurrency:
 jobs:
   history-browser-contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,7 +45,27 @@ jobs:
           node --check src_skeleton/app/static/app.js
           node --check src_skeleton/app/mobile_static/mobile.js
           node --check src_skeleton/app/static/account-access.js
+          node scripts/probe_browser_history_windows.mjs --check
           node --test tests/*.test.mjs
+      - name: Install pinned isolated Chromium probe dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/history-browser-probe" --no-audit --no-fund playwright@1.62.1
+          node "$RUNNER_TEMP/history-browser-probe/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Measure real Chromium history windows with synthetic intercepted data
+        timeout-minutes: 7
+        env:
+          PLAYWRIGHT_MODULE_PATH: ${{ runner.temp }}/history-browser-probe/node_modules/playwright
+        run: |
+          set -o pipefail
+          node scripts/probe_browser_history_windows.mjs "$RUNNER_TEMP/history-browser-probe.json" 2>&1 | tee "$RUNNER_TEMP/history-browser-probe.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: history-browser-probe-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/history-browser-probe.json
+            ${{ runner.temp }}/history-browser-probe.log
+          if-no-files-found: warn
 
   windows-source-fidelity:
     runs-on: windows-latest
@@ -98,6 +121,8 @@ jobs:
           tests/test_v1_persistent_retention.py
           tests/test_v1_history_retention_bounds.py
           tests/test_v1_lab_history_index.py
+          tests/test_v1_favorite_history_pages.py
+          tests/test_v1_image_publication_security.py
           tests/test_v1_favorites_retention.py
           tests/test_v1_favorites_migration_atomicity.py
           tests/test_v1_history_delete_atomicity.py

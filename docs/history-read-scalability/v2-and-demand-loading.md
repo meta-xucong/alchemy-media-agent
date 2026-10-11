@@ -86,6 +86,14 @@ deleted to build this additional index.
 
 ## Browser compatibility constraints (fixed before implementation)
 
+This section records the original PR #29 demand-loading contract. Its growing
+retained arrays and eager complete-favorites scan are superseded by the approved
+follow-up in [browser-memory-windows.md](browser-memory-windows.md): bounded,
+revisitable 72-row windows and server-paged `favorite=true`, with a separate
+bounded ordinary Hero. Account sample windows and V3 isolation below remain
+authoritative. The follow-up verification receipt also supersedes the earlier
+frontend test counts at the end of this document.
+
 The browser correction must use demand at the resource-owning module/section,
 single-flight loading, stale-response guards, and dirty invalidation rather
 than a new global data/cache framework or UI redesign.

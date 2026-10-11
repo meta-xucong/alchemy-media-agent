@@ -27,6 +27,7 @@ const coffeeSampleCount = "1";
 const heroCarouselIntervalMs = 5000;
 const historyPageSize = 24;
 const historyFetchPageSize = 24;
+const historyWindowSize = 72;
 const accountV1HistoryWindow = 48;
 const accountV2HistoryWindow = 72;
 const heroHistoryPageSize = 8;
@@ -635,7 +636,8 @@ function scheduleInitialBackgroundLoads({ hadVeyraTicket = false } = {}) {
 function historyDemandState(moduleName) {
   const model = moduleName === "v2" ? v2State : state;
   if (!model.historyDemand) {
-    model.historyDemand = { epoch: 0, loaded: false, dirty: false, offset: 0, exhausted: false, promise: null };
+    model.historyDemand = { epoch: 0, loaded: false, dirty: false, start: 0, offset: 0, mode: "all",
+      positions: { all: 0, favorites: 0 }, exhausted: false, promise: null };
   }
   return model.historyDemand;
 }
@@ -657,10 +659,12 @@ function historyFavoritesDemanded(moduleName) {
     || (model.historyFavoritesOnly && document.body.dataset.mobileActiveSurface === `${moduleName}-history`));
 }
 
-function invalidateHistoryDemand(moduleName) {
+function invalidateHistoryDemand(moduleName, { refreshHero = true } = {}) {
   const demand = historyDemandState(moduleName);
   demand.epoch += 1;
   demand.dirty = true;
+  demand.positions = { all: 0, favorites: 0 };
+  if (refreshHero) (moduleName === "v2" ? v2State : state).historyHeroDirty = true;
 }
 
 function clearHistoryDemandCaches() {
@@ -670,7 +674,13 @@ function clearHistoryDemandCaches() {
     const model = moduleName === "v2" ? v2State : state;
     const demand = historyDemandState(moduleName);
     demand.loaded = false;
+    demand.start = 0;
     demand.offset = 0;
+    demand.mode = "all";
+    demand.positions = { all: 0, favorites: 0 };
+    model.historyHeroItems = [];
+    model.historyHeroReady = false;
+    model.historyHeroDirty = true;
     demand.exhausted = false;
     model[moduleName === "v2" ? "history" : "historyItems"] = [];
     model.historyTotal = 0;
@@ -693,7 +703,7 @@ function clearHistoryDemandCaches() {
   for (const node of [els.historyGallery, els.v2HistoryGrid, els.heroHistoryCarousel,
     els.favoritePickerGrid, els.v2FavoriteReferenceGrid, els.veyraAccountHistoryGrid,
     els.veyraTemplateHistoryList, els.veyraUsageList]) {
-    if (node) node.innerHTML = "";
+    clearHistoryMedia(node);
   }
 }
 
@@ -742,16 +752,23 @@ async function ensureV1Module() {
 async function ensureHistoryDemand(moduleName) {
   if (!historyDemandVisible(moduleName)) return;
   const demand = historyDemandState(moduleName);
+  const mode = historyFavoritesDemanded(moduleName) ? "favorites" : "all";
   let loaded = true;
   if (!demand.loaded || demand.dirty) {
     if (moduleName === "v2") loaded = await loadV2History({ silent: true });
     else loaded = await refreshHistory({ silent: true });
+  } else if (demand.mode !== mode) {
+    try {
+      await readHistoryDemand(moduleName);
+    } catch (error) {
+      loaded = false;
+      if (historyDemandVisible(moduleName)) showGlobalToast(`历史加载失败：${friendlyError(error)}`, "error");
+    }
   } else {
     renderHistoryDemand(moduleName);
   }
-  if (loaded && demand.loaded && !demand.dirty && historyFavoritesDemanded(moduleName)) {
-    await readHistoryDemand(moduleName, { allFavorites: true });
-  }
+  if (loaded && demand.loaded && !demand.dirty && demand.mode === mode
+    && mode === (historyFavoritesDemanded(moduleName) ? "favorites" : "all")) await ensureHistoryHero(moduleName);
 }
 
 function renderHistoryDemand(moduleName) {
@@ -763,6 +780,131 @@ function renderHistoryDemand(moduleName) {
   if (historyPickerVisible(moduleName)) {
     if (moduleName === "v2") renderV2FavoriteReferencePicker();
     else renderFavoritePicker();
+  }
+}
+
+function clearHistoryMedia(root) {
+  if (!root) return;
+  for (const image of root.querySelectorAll("img")) {
+    // Invalidate a detached image's pending resolver as well as its current Blob.
+    image.dataset.mediaLoadToken = "";
+    releaseImageObjectUrl(image);
+    image.onload = null;
+    image.onerror = null;
+  }
+  root.innerHTML = "";
+}
+
+function historyWindowLabel(moduleName, renderedCount) {
+  const model = moduleName === "v2" ? v2State : state;
+  const demand = historyDemandState(moduleName);
+  if (!demand.loaded || demand.mode !== (historyFavoritesDemanded(moduleName) ? "favorites" : "all")) return model.historyLoadingMore ? "正在加载历史" : "历史尚未加载，请重试";
+  const range = demand.offset > demand.start ? `${demand.start + 1}–${demand.offset}` : "0";
+  return `${demand.mode === "favorites" ? "星标" : "历史"}记录 ${range} / ${model.historyTotal} · 本窗口显示 ${renderedCount} 张`;
+}
+
+function renderHistoryWindowNavigation(moduleName, root, visibleCount, renderedCount) {
+  const model = moduleName === "v2" ? v2State : state;
+  const demand = historyDemandState(moduleName);
+  const navigation = document.createElement("article");
+  navigation.className = "history-load-more v2-template-load-more v2-history-load-more";
+  const text = document.createElement("span");
+  text.textContent = historyWindowLabel(moduleName, renderedCount);
+  navigation.append(text);
+  const addButton = (label, action) => {
+    const button = document.createElement("button");
+    button.className = "button secondary";
+    button.type = "button";
+    button.disabled = model.historyLoadingMore;
+    button.textContent = model.historyLoadingMore ? "加载中" : label;
+    button.addEventListener("click", action);
+    navigation.append(button);
+  };
+  const ready = demand.loaded && !demand.dirty
+    && demand.mode === (historyFavoritesDemanded(moduleName) ? "favorites" : "all");
+  if (!ready) {
+    addButton("重试加载历史", () => ensureHistoryDemand(moduleName));
+    root.appendChild(navigation);
+    return;
+  }
+  if (demand.start > 0) addButton("上一组历史", () => loadPreviousHistoryWindow(moduleName));
+  const hasMore = !demand.exhausted && demand.offset < model.historyTotal;
+  if (renderedCount < visibleCount || hasMore) {
+    const label = demand.offset - demand.start >= historyWindowSize && renderedCount >= visibleCount
+      ? "下一组历史（可返回）" : "加载更多历史";
+    addButton(label, () => moduleName === "v2" ? loadMoreV2History() : loadMoreV1History());
+  }
+  root.appendChild(navigation);
+}
+
+async function loadPreviousHistoryWindow(moduleName) {
+  const model = moduleName === "v2" ? v2State : state;
+  const demand = historyDemandState(moduleName);
+  if (!historyDemandVisible(moduleName) || model.historyLoadingMore || demand.start <= 0) return;
+  try {
+    await readHistoryDemand(moduleName, { startOffset: Math.max(0, demand.start - historyWindowSize) });
+  } catch (error) {
+    if (historyDemandVisible(moduleName)) showGlobalToast(`历史加载失败：${friendlyError(error)}`, "error");
+  }
+}
+
+function changeHistoryBrowseMode(moduleName) {
+  const demand = historyDemandState(moduleName);
+  demand.epoch += 1;
+  renderHistoryDemand(moduleName);
+  return ensureHistoryDemand(moduleName);
+}
+
+function historyHeroVisible(moduleName) {
+  return historyDemandVisible(moduleName) && !document.body.dataset.mobileActiveSurface
+    && !historyPickerVisible(moduleName);
+}
+
+async function ensureHistoryHero(moduleName) {
+  const model = moduleName === "v2" ? v2State : state;
+  if (!historyHeroVisible(moduleName) || (model.historyHeroReady && !model.historyHeroDirty)) return;
+  if (model.historyHeroPromise) {
+    try { await model.historyHeroPromise; } catch { return; }
+    if (historyHeroVisible(moduleName) && (!model.historyHeroReady || model.historyHeroDirty)) return ensureHistoryHero(moduleName);
+    return;
+  }
+  const token = getVeyraToken();
+  const epoch = historyDemandState(moduleName).epoch;
+  const current = () => token === getVeyraToken() && epoch === historyDemandState(moduleName).epoch;
+  model.historyHeroPromise = (async () => {
+    let items = [];
+    let offset = 0;
+    for (let page = 0; page < 3 && historyHeroVisible(moduleName); page += 1) {
+      const response = moduleName === "v2"
+        ? await loadV2HistoryResponse({ limit: historyFetchPageSize, offset })
+        : await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`);
+      if (!current()) return;
+      const incoming = Array.isArray(response.items) ? response.items : [];
+      if (incoming.length > historyFetchPageSize) throw new Error("History page exceeds the requested limit");
+      const idKey = moduleName === "v2" ? "output_id" : "id";
+      const ids = new Set(items.map((item) => item[idKey]));
+      for (const item of incoming) {
+        if (items.length < historyPageSize && item[idKey] && !ids.has(item[idKey])
+          && (moduleName !== "v2" || isRenderableV2HistoryImage(item))) {
+          items.push(item);
+          ids.add(item[idKey]);
+        }
+      }
+      offset += incoming.length;
+      if (!incoming.length || offset >= response.total || items.length >= heroHistoryPageSize) break;
+    }
+    if (!current()) return;
+    model.historyHeroItems = items;
+    model.historyHeroReady = true;
+    model.historyHeroDirty = false;
+    if (historyHeroVisible(moduleName)) renderHeroHistory(items, { source: moduleName });
+  })();
+  try {
+    await model.historyHeroPromise;
+  } catch (error) {
+    if (current() && historyHeroVisible(moduleName)) showGlobalToast(`最新历史预览加载失败：${friendlyError(error)}`, "error");
+  } finally {
+    model.historyHeroPromise = null;
   }
 }
 
@@ -779,37 +921,53 @@ function accountMediaDemand(node) {
   return () => token === getVeyraToken() && authEpoch === (state.historyAuthEpoch || 0) && accountSectionVisible(node);
 }
 
-async function readHistoryDemand(moduleName, { reset = false, allFavorites = false } = {}) {
+async function readHistoryDemand(moduleName, { reset = false, allFavorites = false, startOffset = null } = {}) {
   const model = moduleName === "v2" ? v2State : state;
   const demand = historyDemandState(moduleName);
-  const favoritesDemand = allFavorites || (model.historyFavoritesOnly && historyFavoritesDemanded(moduleName));
-  const demanded = () => favoritesDemand ? historyFavoritesDemanded(moduleName) : historyDemandVisible(moduleName);
-  if (!demanded()) return;
+  const favoritesDemand = historyFavoritesDemanded(moduleName);
+  const mode = favoritesDemand ? "favorites" : "all";
+  const demanded = () => historyDemandVisible(moduleName)
+    && historyFavoritesDemanded(moduleName) === favoritesDemand;
+  if (!demanded() || (allFavorites && !favoritesDemand)) return;
   if (demand.promise) {
     await demand.promise;
-    if (demanded() && (demand.dirty || allFavorites)) return readHistoryDemand(moduleName, { reset: demand.dirty, allFavorites });
+    if (demanded() && (demand.dirty || demand.mode !== mode)) {
+      return readHistoryDemand(moduleName, { reset: demand.dirty, allFavorites, startOffset });
+    }
     return;
   }
-  reset = reset || demand.dirty || !demand.loaded;
-  if (!reset && demand.exhausted) return;
+  const changingMode = demand.mode !== mode;
+  if (allFavorites && !reset && !demand.dirty && demand.loaded && !changingMode) return;
+  if (changingMode && demand.loaded) demand.positions[demand.mode] = demand.start;
+  const fresh = reset || demand.dirty || !demand.loaded;
+  const replacing = fresh || changingMode || startOffset !== null
+    || demand.offset - demand.start >= historyWindowSize;
+  if (!replacing && demand.exhausted) return;
+  const start = startOffset !== null ? Math.max(0, startOffset)
+    : fresh ? 0 : changingMode ? demand.positions[mode] : replacing ? demand.offset : demand.start;
   const key = moduleName === "v2" ? "history" : "historyItems";
   const epoch = demand.epoch;
   const token = getVeyraToken();
-  const visibleCountBefore = model[key].filter((item) => (moduleName !== "v2" || isRenderableV2HistoryImage(item))
-    && (!favoritesDemand || item.favorite)).length;
-  const renderLimit = reset ? 24 : Math.min(model.historyRenderLimit, visibleCountBefore) + 24;
-  const current = () => epoch === demand.epoch && token === getVeyraToken();
+  const visible = (item) => (moduleName !== "v2" || isRenderableV2HistoryImage(item))
+    && (!favoritesDemand || item.favorite);
+  const visibleCountBefore = model[key].filter(visible).length;
+  const renderLimit = replacing ? historyPageSize
+    : Math.min(historyWindowSize, Math.min(model.historyRenderLimit, visibleCountBefore) + historyPageSize);
+  const current = () => epoch === demand.epoch && token === getVeyraToken()
+    && (!historyDemandVisible(moduleName) || historyFavoritesDemanded(moduleName) === favoritesDemand);
   model.historyLoadingMore = true;
   demand.promise = (async () => {
-    let items = reset ? [] : model[key].slice();
-    let offset = reset ? 0 : demand.offset;
+    let items = replacing ? [] : model[key].slice();
+    let offset = replacing ? start : demand.offset;
     let pages = 0;
-    while (current() && demanded() && (allFavorites || pages < 3)) {
+    while (current() && demanded() && pages < 3 && offset < start + historyWindowSize) {
+      const limit = Math.min(historyFetchPageSize, start + historyWindowSize - offset);
       const response = moduleName === "v2"
-        ? await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset })
-        : await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`);
+        ? await loadV2HistoryResponse({ limit, offset, favorite: favoritesDemand })
+        : await request(`/v1/image/history?limit=${limit}&offset=${offset}${favoritesDemand ? "&favorite=true" : ""}`);
       if (!current()) return;
       const incoming = Array.isArray(response.items) ? response.items : [];
+      if (incoming.length > limit) throw new Error("History page exceeds the requested limit");
       const idKey = moduleName === "v2" ? "output_id" : "id";
       const ids = new Set(items.map((item) => item[idKey]));
       for (const item of incoming) {
@@ -822,14 +980,21 @@ async function readHistoryDemand(moduleName, { reset = false, allFavorites = fal
       pages += 1;
       model[key] = items;
       model.historyTotal = Number.isFinite(response.total) ? response.total : offset;
-      model.historyRenderLimit = allFavorites ? model.historyRenderLimit : renderLimit;
+      model.historyRenderLimit = renderLimit;
+      demand.start = start;
+      demand.mode = mode;
+      demand.positions[mode] = start;
       demand.offset = offset;
       demand.exhausted = !incoming.length || offset >= model.historyTotal;
       demand.loaded = true;
       demand.dirty = false;
-      const visibleCount = items.filter((item) => (moduleName !== "v2" || isRenderableV2HistoryImage(item))
-        && (!favoritesDemand || item.favorite)).length;
-      if (demand.exhausted || (!allFavorites && visibleCount >= renderLimit)) break;
+      // Keep the latest Hero independent of whichever old/favorite window is open.
+      if (mode === "all" && start === 0) {
+        model.historyHeroItems = items.filter(visible).slice(0, historyPageSize);
+        model.historyHeroReady = true;
+        model.historyHeroDirty = false;
+      }
+      if (demand.exhausted || items.filter(visible).length >= renderLimit) break;
     }
   })();
   try {
@@ -941,9 +1106,7 @@ function bindControls() {
   if (els.historyFavoritesOnly) {
     els.historyFavoritesOnly.addEventListener("change", () => {
       state.historyFavoritesOnly = els.historyFavoritesOnly.checked;
-      state.historyRenderLimit = historyPageSize;
-      renderHistory(state.historyItems);
-      if (state.historyFavoritesOnly) loadRemainingV1HistoryForFavorites();
+      changeHistoryBrowseMode("v1");
       scheduleMobileSummaryUpdate();
     });
   }
@@ -995,9 +1158,7 @@ function bindControls() {
   if (els.v2HistoryFavoritesOnly) {
     els.v2HistoryFavoritesOnly.addEventListener("change", () => {
       v2State.historyFavoritesOnly = els.v2HistoryFavoritesOnly.checked;
-      v2State.historyRenderLimit = v2HistoryPageSize;
-      renderV2History(v2State.history);
-      if (v2State.historyFavoritesOnly) loadRemainingV2HistoryForFavorites();
+      changeHistoryBrowseMode("v2");
       scheduleMobileSummaryUpdate();
     });
   }
@@ -10291,9 +10452,11 @@ async function loadV2History({ silent = true, invalidate = false } = {}) {
     return;
   }
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.disabled = true;
+  if (!silent) v2State.historyHeroDirty = true;
   try {
     await readHistoryDemand("v2", { reset: true });
-    if (!silent && historyDemandVisible("v2")) updateV2Notice(`已加载 ${v2State.history.length} / ${v2State.historyTotal} 条 2.0 历史。`, "success");
+    if (!silent) await ensureHistoryHero("v2");
+    if (!silent && historyDemandVisible("v2")) updateV2Notice(historyWindowLabel("v2", Math.min(v2State.historyRenderLimit, v2State.history.length)), "success");
     return historyDemandState("v2").loaded && !historyDemandState("v2").dirty;
   } catch (error) {
     if (historyDemandVisible("v2")) updateV2Notice(`2.0 历史加载失败：${friendlyError(error)}`, "error");
@@ -10312,7 +10475,8 @@ async function loadMoreV2History() {
   if (!historyDemandVisible("v2") || v2State.historyLoadingMore) return;
   const visibleItems = v2State.history.filter((item) => isRenderableV2HistoryImage(item) && (!v2State.historyFavoritesOnly || item.favorite));
   if (v2State.historyRenderLimit < visibleItems.length
-    && (visibleItems.length >= v2State.historyRenderLimit + v2HistoryPageSize || !hasMoreV2History())) {
+    && (visibleItems.length >= v2State.historyRenderLimit + v2HistoryPageSize || !hasMoreV2History()
+      || historyDemandState("v2").offset - historyDemandState("v2").start >= historyWindowSize)) {
     v2State.historyRenderLimit = Math.min(v2State.historyRenderLimit + v2HistoryPageSize, visibleItems.length);
     renderHistoryDemand("v2");
     return;
@@ -10326,11 +10490,8 @@ async function loadMoreV2History() {
 }
 
 async function loadRemainingV2HistoryForFavorites() {
-  try {
-    await readHistoryDemand("v2", { allFavorites: true });
-  } catch (error) {
-    if (historyFavoritesDemanded("v2")) updateV2Notice(`星标历史补全失败：${friendlyError(error)}`, "warning");
-  }
+  // Favorites are a paged server query, never an eager whole-history scan.
+  if (historyFavoritesDemanded("v2")) await ensureHistoryDemand("v2");
 }
 
 async function searchV2Templates() {
@@ -11587,15 +11748,14 @@ function renderV2Outputs(outputs, job) {
 function renderV2History(items) {
   if (!historyDemandVisible("v2") || els.v2HistoryGrid?.closest("[hidden]")) return;
   if (!els.v2HistoryGrid) return;
-  els.v2HistoryGrid.innerHTML = "";
+  clearHistoryMedia(els.v2HistoryGrid);
+  if (historyDemandState("v2").mode !== (historyFavoritesDemanded("v2") ? "favorites" : "all")) items = [];
   const renderableItems = items.filter(isRenderableV2HistoryImage);
   const visibleItems = renderableItems.filter((item) => !v2State.historyFavoritesOnly || item.favorite);
   const hiddenMockCount = items.length - renderableItems.length;
-  const renderLimit = Math.min(v2State.historyRenderLimit, visibleItems.length);
+  const renderLimit = Math.min(historyWindowSize, v2State.historyRenderLimit, visibleItems.length);
   const renderedItems = visibleItems.slice(0, renderLimit);
-  const totalCount = Math.max(v2State.historyTotal || 0, items.length);
-  els.v2HistoryCount.textContent =
-    renderLimit < visibleItems.length || hasMoreV2History() ? `${renderLimit}/${totalCount}` : String(visibleItems.length);
+  els.v2HistoryCount.textContent = historyWindowLabel("v2", renderLimit);
   els.v2HistoryGrid.classList.toggle("empty-v2-list", visibleItems.length === 0);
   renderedItems.forEach((item, index) => {
     const card = document.createElement("article");
@@ -11646,23 +11806,7 @@ function renderV2History(items) {
     note.textContent = `已隐藏 ${hiddenMockCount} 条测试占位记录，只显示真实图片。`;
     els.v2HistoryGrid.appendChild(note);
   }
-  if (renderLimit < visibleItems.length || hasMoreV2History()) {
-    const loadMore = document.createElement("article");
-    loadMore.className = "v2-template-load-more v2-history-load-more";
-    const text = document.createElement("span");
-    text.textContent = v2State.historyLoadingMore
-      ? "正在加载更多历史"
-      : `已显示 ${renderLimit} / ${Math.max(totalCount, visibleItems.length)}`;
-    const button = document.createElement("button");
-    button.className = "button secondary";
-    button.type = "button";
-    button.disabled = v2State.historyLoadingMore;
-    button.textContent = v2State.historyLoadingMore ? "加载中" : "加载更多历史";
-    button.addEventListener("click", () => loadMoreV2History());
-    loadMore.append(text, button);
-    els.v2HistoryGrid.appendChild(loadMore);
-  }
-  scheduleMobileSummaryUpdate();
+  renderHistoryWindowNavigation("v2", els.v2HistoryGrid, visibleItems.length, renderLimit);
 }
 
 function isRenderableV2HistoryImage(item) {
@@ -11709,8 +11853,12 @@ async function deleteV2HistoryItem(item, card) {
     deleteButton.disabled = true;
     deleteButton.textContent = "删除中";
   }
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
   try {
     await v2Request(`/image/history/${encodeURIComponent(item.output_id)}`, { method: "DELETE" });
+    if (authEpoch !== (state.historyAuthEpoch || 0) || token !== getVeyraToken()) return;
+    v2State.historyHeroItems = (v2State.historyHeroItems || []).filter((entry) => entry.output_id !== item.output_id);
     invalidateHistoryDemand("v2");
     v2State.history = v2State.history.filter((entry) => entry.output_id !== item.output_id);
     if (v2State.favoriteReferenceItem?.output_id === item.output_id) {
@@ -12191,12 +12339,13 @@ const v2AccountHistoryTimeoutMs = 8000;
 const v2OptionalResourceTimeoutMs = 3500;
 const v2TemplateBootstrapTimeoutMs = 20000;
 
-function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false } = {}) {
+function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false, favorite = false } = {}) {
   if (full) return `${basePath}?limit=160`;
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(Math.max(0, offset || 0)),
   });
+  if (favorite) params.set("favorite", "true");
   return `${basePath}?${params.toString()}`;
 }
 
@@ -13814,10 +13963,12 @@ async function refreshHistory({ silent = false, append = false, invalidate = fal
   if (invalidate) invalidateHistoryDemand("v1");
   if (!historyDemandVisible("v1")) return;
   if (els.refreshHistoryBtn) els.refreshHistoryBtn.disabled = true;
+  if (!silent) state.historyHeroDirty = true;
   try {
     await readHistoryDemand("v1", { reset: !append });
+    if (!silent) await ensureHistoryHero("v1");
     if (!silent && historyDemandVisible("v1")) {
-      showNotice(`已加载 ${state.historyItems.length} / ${state.historyTotal} 张历史图片。`, "success");
+      showNotice(historyWindowLabel("v1", Math.min(state.historyRenderLimit, state.historyItems.length)), "success");
       showGlobalToast("历史图片已刷新。");
     }
     return historyDemandState("v1").loaded && !historyDemandState("v1").dirty;
@@ -13838,7 +13989,8 @@ async function loadMoreV1History() {
   if (!historyDemandVisible("v1") || state.historyLoadingMore) return;
   const visibleItems = state.historyItems.filter((item) => !state.historyFavoritesOnly || item.favorite);
   if (state.historyRenderLimit < visibleItems.length
-    && (visibleItems.length >= state.historyRenderLimit + historyPageSize || !hasMoreV1History())) {
+    && (visibleItems.length >= state.historyRenderLimit + historyPageSize || !hasMoreV1History()
+      || historyDemandState("v1").offset - historyDemandState("v1").start >= historyWindowSize)) {
     state.historyRenderLimit = Math.min(state.historyRenderLimit + historyPageSize, visibleItems.length);
     renderHistoryDemand("v1");
     return;
@@ -13852,21 +14004,18 @@ async function loadMoreV1History() {
 }
 
 async function loadRemainingV1HistoryForFavorites() {
-  try {
-    await readHistoryDemand("v1", { allFavorites: true });
-  } catch (error) {
-    if (historyFavoritesDemanded("v1")) showNotice(`星标历史补全失败：${friendlyError(error)}`, "warning");
-  }
+  // Favorites are a paged server query, never an eager whole-history scan.
+  if (historyFavoritesDemanded("v1")) await ensureHistoryDemand("v1");
 }
 
 function renderHistory(items) {
   if (!historyDemandVisible("v1") || els.historyGallery?.closest("[hidden]")) return;
-  els.historyGallery.innerHTML = "";
+  clearHistoryMedia(els.historyGallery);
+  if (historyDemandState("v1").mode !== (historyFavoritesDemanded("v1") ? "favorites" : "all")) items = [];
   const sortedItems = [...items].filter((item) => !state.historyFavoritesOnly || item.favorite).sort(compareHistoryItems);
-  const renderLimit = Math.min(state.historyRenderLimit, sortedItems.length);
+  const renderLimit = Math.min(historyWindowSize, state.historyRenderLimit, sortedItems.length);
   const renderedItems = sortedItems.slice(0, renderLimit);
-  const totalCount = Math.max(state.historyTotal || 0, items.length);
-  els.historyCount.textContent = renderLimit < sortedItems.length || hasMoreV1History() ? `${renderLimit}/${totalCount}` : String(sortedItems.length);
+  els.historyCount.textContent = historyWindowLabel("v1", renderLimit);
   els.historyGallery.classList.toggle("empty-history", sortedItems.length === 0);
   renderedItems.forEach((item, index) => {
     const card = document.createElement("article");
@@ -13914,28 +14063,17 @@ function renderHistory(items) {
     card.append(preview, favoriteButton, meta, footer);
     els.historyGallery.appendChild(card);
   });
-  if (renderLimit < sortedItems.length || hasMoreV1History()) {
-    const loadMore = document.createElement("article");
-    loadMore.className = "history-load-more";
-    const text = document.createElement("span");
-    text.textContent = state.historyLoadingMore ? "正在加载更多历史" : `已显示 ${renderLimit} / ${Math.max(totalCount, sortedItems.length)}`;
-    const button = document.createElement("button");
-    button.className = "button secondary";
-    button.type = "button";
-    button.disabled = state.historyLoadingMore;
-    button.textContent = state.historyLoadingMore ? "加载中" : "加载更多历史";
-    button.addEventListener("click", () => loadMoreV1History());
-    loadMore.append(text, button);
-    els.historyGallery.appendChild(loadMore);
-  }
-  scheduleMobileSummaryUpdate();
+  renderHistoryWindowNavigation("v1", els.historyGallery, sortedItems.length, renderLimit);
 }
 
 async function toggleV2Favorite(item, favorite) {
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
   await v2Request(`/image/history/${encodeURIComponent(item.output_id)}/favorite`, {
     method: "PUT",
     body: { favorite },
   });
+  if (authEpoch !== (state.historyAuthEpoch || 0) || token !== getVeyraToken()) return;
   v2State.history = v2State.history.map((entry) => (entry.output_id === item.output_id ? { ...entry, favorite } : entry));
   if (!favorite && v2State.favoriteReferenceItem?.output_id === item.output_id) {
     clearV2FavoriteReference({ keepNotice: true });
@@ -13943,6 +14081,9 @@ async function toggleV2Favorite(item, favorite) {
   renderV2History(v2State.history);
   if (els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) renderV2FavoriteReferencePicker();
   if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+  v2State.historyHeroItems = (v2State.historyHeroItems || []).map((entry) => entry.output_id === item.output_id ? { ...entry, favorite } : entry);
+  invalidateHistoryDemand("v2", { refreshHero: false });
+  await ensureHistoryDemand("v2");
   showGlobalToast(favorite ? "2.0 图片已加入星标。" : "2.0 图片已取消星标。");
 }
 
@@ -13963,21 +14104,30 @@ function closeV2FavoriteReferencePicker() {
   if (!els.v2FavoriteReferenceModal) return;
   els.v2FavoriteReferenceModal.hidden = true;
   document.body.classList.remove("modal-open");
+  clearHistoryMedia(els.v2FavoriteReferenceGrid);
+  changeHistoryBrowseMode("v2");
 }
 
 function renderV2FavoriteReferencePicker() {
   if (!historyDemandVisible("v2") || !historyPickerVisible("v2")) return;
   if (!els.v2FavoriteReferenceGrid) return;
-  const items = v2FavoriteReferenceItems();
-  els.v2FavoriteReferenceGrid.innerHTML = "";
+  const visibleItems = historyDemandState("v2").mode === "favorites" ? v2FavoriteReferenceItems() : [];
+  const items = visibleItems.slice(0, Math.min(historyWindowSize, v2State.historyRenderLimit));
+  clearHistoryMedia(els.v2FavoriteReferenceGrid);
   els.v2FavoriteReferenceGrid.classList.toggle("empty-v2-list", items.length === 0);
   els.v2FavoriteReferenceGrid.classList.toggle("has-empty-message", items.length === 0);
-  if (els.v2FavoriteReferenceCount) els.v2FavoriteReferenceCount.textContent = String(items.length);
+  if (els.v2FavoriteReferenceCount) els.v2FavoriteReferenceCount.textContent = historyWindowLabel("v2", items.length);
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "empty-v2-message";
-    empty.textContent = "还没有可选参考图。需要沿用历史图时，先到 2.0 历史点亮星标；不选也能生成。";
+    const demand = historyDemandState("v2");
+    empty.textContent = !demand.loaded || demand.mode !== "favorites" || demand.dirty
+      ? "星标历史尚未加载，请稍候或重试。"
+      : demand.offset > 0 && (v2State.historyTotal > 0)
+        ? "本组没有可显示的星标图片，可使用下方按钮继续浏览。"
+        : "还没有星标图片。先在历史图片上点亮星标，再回来选择。";
     els.v2FavoriteReferenceGrid.appendChild(empty);
+    renderHistoryWindowNavigation("v2", els.v2FavoriteReferenceGrid, visibleItems.length, items.length);
     return;
   }
   items.forEach((item, index) => {
@@ -14006,6 +14156,7 @@ function renderV2FavoriteReferencePicker() {
     card.addEventListener("click", () => selectV2FavoriteReference(item));
     els.v2FavoriteReferenceGrid.appendChild(card);
   });
+  renderHistoryWindowNavigation("v2", els.v2FavoriteReferenceGrid, visibleItems.length, items.length);
 }
 
 function selectV2FavoriteReference(item) {
@@ -14109,10 +14260,13 @@ function createFavoriteButton({ favorite = false, label = "星标收藏", onTogg
 }
 
 async function toggleV1Favorite(item, favorite) {
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
   await request(`/v1/image/history/${encodeURIComponent(item.id)}/favorite`, {
     method: "PUT",
     body: { favorite },
   });
+  if (authEpoch !== (state.historyAuthEpoch || 0) || token !== getVeyraToken()) return;
   state.historyItems = state.historyItems.map((entry) => (entry.id === item.id ? { ...entry, favorite } : entry));
   if (!favorite && state.selectedRevisionSource?.sourceType === "favorite" && state.selectedRevisionSource.outputId === item.id) {
     clearRevisionSelection({ keepNotice: true });
@@ -14120,6 +14274,9 @@ async function toggleV1Favorite(item, favorite) {
   renderHistory(state.historyItems);
   if (els.favoritePickerModal && !els.favoritePickerModal.hidden) renderFavoritePicker();
   if (activePanelName() === "image") renderHeroHistory(state.historyItems, { source: "v1" });
+  state.historyHeroItems = (state.historyHeroItems || []).map((entry) => entry.id === item.id ? { ...entry, favorite } : entry);
+  invalidateHistoryDemand("v1", { refreshHero: false });
+  await ensureHistoryDemand("v1");
   showGlobalToast(favorite ? "已加入星标。" : "已取消星标。");
 }
 
@@ -14140,21 +14297,30 @@ function closeFavoritePicker() {
   if (!els.favoritePickerModal) return;
   els.favoritePickerModal.hidden = true;
   document.body.classList.remove("modal-open");
+  clearHistoryMedia(els.favoritePickerGrid);
+  changeHistoryBrowseMode("v1");
 }
 
 function renderFavoritePicker() {
   if (!historyDemandVisible("v1") || !historyPickerVisible("v1")) return;
   if (!els.favoritePickerGrid) return;
-  const items = editableFavoriteHistoryItems();
-  els.favoritePickerGrid.innerHTML = "";
+  const visibleItems = historyDemandState("v1").mode === "favorites" ? editableFavoriteHistoryItems() : [];
+  const items = visibleItems.slice(0, Math.min(historyWindowSize, state.historyRenderLimit));
+  clearHistoryMedia(els.favoritePickerGrid);
   els.favoritePickerGrid.classList.toggle("empty-v2-list", items.length === 0);
   els.favoritePickerGrid.classList.toggle("has-empty-message", items.length === 0);
-  if (els.favoritePickerCount) els.favoritePickerCount.textContent = String(items.length);
+  if (els.favoritePickerCount) els.favoritePickerCount.textContent = historyWindowLabel("v1", items.length);
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "empty-v2-message";
-    empty.textContent = "还没有星标图片。先在历史图片上点亮星标，再回来选择。";
+    const demand = historyDemandState("v1");
+    empty.textContent = !demand.loaded || demand.mode !== "favorites" || demand.dirty
+      ? "星标历史尚未加载，请稍候或重试。"
+      : demand.offset > 0 && (state.historyTotal > 0)
+        ? "本组没有可显示的星标图片，可使用下方按钮继续浏览。"
+        : "还没有星标图片。先在历史图片上点亮星标，再回来选择。";
     els.favoritePickerGrid.appendChild(empty);
+    renderHistoryWindowNavigation("v1", els.favoritePickerGrid, visibleItems.length, items.length);
     return;
   }
   items.forEach((item, index) => {
@@ -14183,6 +14349,7 @@ function renderFavoritePicker() {
     card.append(preview, meta);
     els.favoritePickerGrid.appendChild(card);
   });
+  renderHistoryWindowNavigation("v1", els.favoritePickerGrid, visibleItems.length, items.length);
 }
 
 function chooseFavoriteForRevision(item) {
@@ -14282,6 +14449,11 @@ function renderHeroHistory(items, { source = "v1" } = {}) {
   if ((source === "v1" || source === "v2") && !historyDemandVisible(source)) return;
   if (!els.heroHistoryCarousel) return;
   clearHeroCarouselTimer();
+  if (source === "v1" || source === "v2") {
+    const model = source === "v2" ? v2State : state;
+    items = model.historyHeroItems || [];
+    clearHistoryMedia(els.heroHistoryCarousel);
+  }
   const heroItems = [...items]
     .filter((item) => (source === "v2" ? isRenderableV2HistoryImage(item) : item.url || item.thumbnail_url))
     .sort(compareHistoryItems)
@@ -14443,8 +14615,13 @@ async function deleteHistoryItem(item, card) {
     deleteButton.disabled = true;
     deleteButton.textContent = "删除中";
   }
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
   try {
     await request(`/v1/image/history/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    if (authEpoch !== (state.historyAuthEpoch || 0) || token !== getVeyraToken()) return;
+    state.historyHeroItems = (state.historyHeroItems || []).filter((entry) => entry.id !== item.id);
+    clearHistoryMedia(card);
     card.remove();
     const remaining = els.historyGallery.querySelectorAll(".history-card").length;
     els.historyCount.textContent = String(remaining);
@@ -14456,6 +14633,7 @@ async function deleteHistoryItem(item, card) {
       closeImageLightbox();
     }
     await refreshHistory({ silent: true, invalidate: true });
+    await ensureHistoryHero("v1");
     await refreshVeyraAccountPanelAfterHistoryChange();
     showNotice("历史图片已删除。", "success");
     showGlobalToast("历史图片已删除。");

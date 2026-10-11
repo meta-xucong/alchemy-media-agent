@@ -1,6 +1,38 @@
 # Remaining risks and compatibility boundaries
 
-## Existing managed-file ownership publication window
+## Follow-up status (supersedes the original publication finding below)
+
+The text under “Existing managed-file ownership publication window” records the
+`fd259486` baseline finding. The follow-up now introduces durable single-use
+publication reservations before image writes, explicit preparation/readiness,
+streamed per-output resolution, and bounded browser history windows. See
+`../publication-security.md` and `followup-closure-plan.md` for the new contracts.
+Do not treat the original unclosed-window wording as the new implementation's
+status, or treat implemented code as proof of completed production acceptance.
+
+Important remaining capacity boundaries are intentional:
+
+- Retaining all business history and failed-output publication reservations
+  requires growing durable storage. No automatic deletion/expiration is added.
+- Exact filtered-favorite counts/sorts grow with candidate count; deep offsets,
+  explicit preparation/reconciliation and verification also remain size-dependent.
+- One oversized authoritative Job/manifest or a single SQL operation can exceed
+  a cooperative time budget; streaming bounds source-count accumulation, not
+  arbitrary individual payload size or every native allocation.
+- Browser windows bound retained record/card/Blob counts, not an arbitrary
+  image's pixel dimensions or one record's encoded size. Full production-browser
+  workloads still require validation beyond the focused synthetic probes.
+- External file changes require reconciliation. Derived schema upgrades may
+  release reusable SQLite pages without shrinking an existing database file;
+  no automatic VACUUM is performed.
+- Previously downloaded or browser/CDN-cached public bytes cannot be revoked
+  retroactively. Unknown legacy file recovery has an explicit compatibility
+  classification, never inferred ownership from a Session.
+
+Final security-review and test status must be read from the new receipt; the
+previous final fingerprint and CI results cover only the previous commit.
+
+## Existing managed-file ownership publication window — historical baseline
 
 This read-scalability change does **not** close every pre-existing privacy gap.
 Source inspection at baseline `5a33c05e3f54dbef786eb179973ec1407511b4e4`

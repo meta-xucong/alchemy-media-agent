@@ -42,7 +42,13 @@ function extractBootstrap(source) {
 function node(dataset = {}, hidden = false) {
   const classes = new Set();
   return {
-    dataset, hidden, disabled: false, textContent: "", innerHTML: "", children: [],
+    dataset, hidden, disabled: false, textContent: "", children: [], events: new Map(),
+    get innerHTML() { return this.html || ""; },
+    set innerHTML(value) {
+      this.html = value;
+      this.children.forEach((child) => { child.parentElement = null; });
+      this.children = [];
+    },
     parentElement: null,
     style: { setProperty() {} },
     classList: {
@@ -56,10 +62,14 @@ function node(dataset = {}, hidden = false) {
       },
     },
     setAttribute() {}, getAttribute() { return "tab"; }, removeAttribute() {}, remove() {},
-    addEventListener() {}, scrollIntoView() {}, focus() {},
+    addEventListener(name, listener) { this.events.set(name, listener); }, scrollIntoView() {}, focus() {},
     appendChild(child) { child.parentElement = this; this.children.push(child); return child; },
     append(...children) { children.forEach((child) => this.appendChild(child)); },
-    querySelector() { return null; }, querySelectorAll() { return []; },
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      const descendants = this.children.flatMap((child) => [child, ...child.querySelectorAll("*")]);
+      return selector === "*" ? descendants : descendants.filter((child) => child.tagName === selector.toUpperCase());
+    },
     getBoundingClientRect() { return this.rect || { top: 10, bottom: 100, left: 0, right: 100, width: 100, height: 90 }; },
     closest(selector) {
       for (let current = this; current; current = current.parentElement) {
@@ -77,6 +87,9 @@ const historyFunctions = [
   "sharedProviderSettingsDemanded", "ensureSharedProviderSettings",
   "historyDemandState", "historyDemandVisible", "historyFavoritesDemanded",
   "historyPickerVisible", "renderHistoryDemand",
+  "historyHeroVisible", "ensureHistoryHero",
+  "clearHistoryMedia", "historyWindowLabel", "renderHistoryWindowNavigation",
+  "loadPreviousHistoryWindow", "changeHistoryBrowseMode",
   "ensureHistoryDemand", "invalidateHistoryDemand", "readHistoryDemand",
   "clearHistoryDemandCaches", "refreshHistory", "loadV2History",
   "hasMoreV1History", "hasMoreV2History", "loadMoreV1History", "loadMoreV2History",
@@ -84,6 +97,33 @@ const historyFunctions = [
   "v2HistoryEndpoint", "v2HistoryPath", "loadV2RequestWithTimeout",
   "loadV2HistoryWithTimeout", "loadV2HistoryResponse", "v2HistoryLoadErrorMessage",
 ];
+
+function installHistoryRenderers(h, module) {
+  h.install(["historyMediaDemand"]);
+  const liveBlobs = new Set();
+  let imageId = 0;
+  h.context.bindImageWithFallback = (image) => {
+    const url = `blob:test-${++imageId}`;
+    image.dataset.authenticatedObjectUrl = url;
+    image.dataset.mediaLoadToken = url;
+    liveBlobs.add(url);
+  };
+  h.context.releaseImageObjectUrl = (image) => {
+    liveBlobs.delete(image.dataset.authenticatedObjectUrl);
+    delete image.dataset.authenticatedObjectUrl;
+  };
+  for (const name of ["bindDownloadLink", "createFavoriteButton"]) h.context[name] = () => node();
+  h.context.historyItemCanDelete = () => false;
+  for (const name of ["historyMetaText", "v2HistoryCardPrompt", "v2HistoryProviderResultText", "historyDetailText", "historyRecordLabel", "formatDate", "favoriteRevisionDetail"]) h.context[name] = () => "test";
+  h.context.v2HistoryImageCandidates = () => [];
+  h.context.uniqueNonEmpty = (values) => [...new Set(values.filter(Boolean))];
+  h.context.v1ExplicitDownloadUrl = h.context.v2ExplicitDownloadUrl = () => "/test.png";
+  h.context.v2HistoryFormat = () => "png";
+  h.install(module === "v1"
+    ? ["renderHistory", "renderFavoritePicker", "editableFavoriteHistoryItems"]
+    : ["renderV2History", "renderV2FavoriteReferencePicker", "v2FavoriteReferenceItems"]);
+  return liveBlobs;
+}
 
 function createHarness(shell, { active = "image", ticket = false, respond } = {}) {
   const calls = [];
@@ -116,7 +156,7 @@ function createHarness(shell, { active = "image", ticket = false, respond } = {}
     body, title: "test", documentElement: { clientHeight: 800 },
     addEventListener(name, callback) { listeners.set(name, callback); },
     removeEventListener(name, callback) { if (listeners.get(name) === callback) listeners.delete(name); },
-    createElement: () => node(),
+    createElement: (tag) => Object.assign(node(), { tagName: tag.toUpperCase() }),
     querySelector(selector) {
       if (selector === "[data-panel].active") return panels.find((panel) => panel.classList.contains("active"));
       if (/data-account-view.*overview/.test(selector)) return overview;
@@ -411,6 +451,190 @@ for (const shell of shells) {
       assert.equal(h.model.historyRenderLimit, 48);
     });
 
+    test(`${prefix}: hundreds of history pages retain one revisitable 72-row window and one Hero sample`, async () => {
+      const h = historyHarness(shell, module, {
+        respond: ({ path }) => {
+          const offset = Number(new URL(path, "https://example.test").searchParams.get("offset"));
+          return { items: items(module, offset, 24), total: 50000 };
+        },
+      });
+      await h.refresh();
+      for (let index = 0; index < 160; index += 1) {
+        await h.more();
+        assert.ok(h.model[h.key].length <= 72);
+        assert.ok(h.model.historyRenderLimit <= 72);
+        assert.ok(h.model.historyHeroItems.length <= 24);
+        assert.deepEqual(Object.keys(h.model.historyDemand.positions).sort(), ["all", "favorites"]);
+      }
+      const start = h.model.historyDemand.start;
+      assert.ok(start > 3000);
+      assert.equal(h.model[h.key].some((item) => item.id === "v1-0" || item.output_id === "v2-0"), false);
+      assert.equal(h.model.historyHeroItems[0][module === "v1" ? "id" : "output_id"], `${module}-0`);
+      await h.context.loadPreviousHistoryWindow(module);
+      assert.equal(h.model.historyDemand.start, start - 72);
+      assert.equal(h.model[h.key][0][module === "v1" ? "id" : "output_id"], `${module}-${start - 72}`);
+      assert.equal(pageRequests(h, module).at(-1).offset, start - 72);
+      assert.ok(h.context.historyWindowLabel(module, 24).includes(`${start - 71}–${start - 48}`));
+    });
+
+    test(`${prefix}: actual history and picker DOM and authenticated Blob URLs stay bounded across windows`, async () => {
+      const h = historyHarness(shell, module, {
+        respond: ({ path }) => {
+          const offset = Number(new URL(path, "https://example.test").searchParams.get("offset"));
+          return { items: items(module, offset, 24, { favorite: true }), total: 50000 };
+        },
+      });
+      const blobs = installHistoryRenderers(h, module);
+      const grid = h.els[module === "v1" ? "historyGallery" : "v2HistoryGrid"];
+      const picker = h.els[module === "v1" ? "favoritePickerGrid" : "v2FavoriteReferenceGrid"];
+      await h.refresh();
+      assert.equal(h.notices.length, 0, JSON.stringify(h.notices));
+      const oldImage = grid.querySelectorAll("img")[0];
+      for (let index = 0; index < 12; index += 1) await h.more();
+      assert.equal(oldImage.dataset.mediaLoadToken, "");
+      assert.equal(oldImage.dataset.authenticatedObjectUrl, undefined);
+      assert.ok(grid.querySelectorAll("img").length <= 72);
+      assert.ok(blobs.size <= 72);
+      h.els[module === "v1" ? "favoritePickerModal" : "v2FavoriteReferenceModal"].hidden = false;
+      await h.favorites();
+      for (let index = 0; index < 13; index += 1) {
+        await h.more();
+        assert.ok(h.model[h.key].length <= 72);
+        assert.ok(grid.querySelectorAll("img").length <= 72);
+        assert.ok(picker.querySelectorAll("img").length <= 72);
+        assert.ok(blobs.size <= 144);
+      }
+      assert.ok(picker.children.some((child) => child.children?.some((button) => button.textContent === "上一组历史")));
+      h.install([module === "v1" ? "closeFavoritePicker" : "closeV2FavoriteReferencePicker"]);
+      h.context[module === "v1" ? "closeFavoritePicker" : "closeV2FavoriteReferencePicker"]();
+      await h.settle();
+      assert.equal(picker.querySelectorAll("img").length, 0);
+      assert.ok(blobs.size <= 72);
+      assert.equal(h.model.historyDemand.mode, "all");
+      // The all-history position survives only as a scalar, with a fresh read.
+      assert.equal(h.model.historyDemand.start, 288);
+    });
+
+    test(`${prefix}: mode changes during a pending page discard that page and restore the previous ordinary window`, async () => {
+      let pending = null;
+      const h = historyHarness(shell, module, {
+        respond: ({ path }) => {
+          if (pending) return pending.promise;
+          const params = new URL(path, "https://example.test").searchParams;
+          return { items: items(module, Number(params.get("offset")), 24, { favorite: params.get("favorite") === "true" }), total: 240 };
+        },
+      });
+      await h.refresh();
+      for (let index = 0; index < 3; index += 1) await h.more();
+      pending = deferred();
+      h.model.historyFavoritesOnly = true;
+      if (shell.name === "mobile") h.activate(active, `${module}-history`);
+      const favoriteRead = h.context.changeHistoryBrowseMode(module);
+      assert.equal(historyCalls(h, module).at(-1).path.includes("favorite=true"), true);
+      h.model.historyFavoritesOnly = false;
+      const ordinaryRead = h.context.changeHistoryBrowseMode(module);
+      pending.resolve({ items: items(module, 999, 24, { favorite: true }), total: 240 });
+      pending = null;
+      await Promise.all([favoriteRead, ordinaryRead]);
+      assert.equal(h.model.historyDemand.mode, "all");
+      assert.equal(h.model.historyDemand.start, 72);
+      assert.equal(h.model[h.key].some((item) => item.id === "v1-999" || item.output_id === "v2-999"), false);
+    });
+
+    test(`${prefix}: a favorite mutation invalidates filtered totals/windows and cannot cross an account boundary`, async () => {
+      let pending = null;
+      const h = historyHarness(shell, module, {
+        respond: ({ path, options }) => {
+          if (options.method === "PUT") return pending ? pending.promise : {};
+          const offset = Number(new URL(path, "https://example.test").searchParams.get("offset"));
+          return { items: items(module, offset, 24, { favorite: true }), total: 240 };
+        },
+      });
+      h.install([`toggle${module.toUpperCase()}Favorite`]);
+      h.install(["applyV1FavoriteState"], { optional: true });
+      await h.refresh();
+      await h.context[`toggle${module.toUpperCase()}Favorite`](h.model[h.key][0], true);
+      assert.deepEqual(pageRequests(h, module).map((page) => page.offset), [0, 0]);
+      assert.equal(h.model.historyDemand.dirty, false);
+      pending = deferred();
+      const mutation = h.context[`toggle${module.toUpperCase()}Favorite`](h.model[h.key][0], false);
+      h.context.clearHistoryDemandCaches();
+      h.context.setVeyraToken("next-owner");
+      pending.resolve({});
+      await mutation;
+      assert.equal(h.model[h.key].length, 0);
+      assert.equal(h.model.historyHeroItems.length, 0);
+      assert.equal(historyCalls(h, module).length, 2);
+    });
+
+    test(`${prefix}: first favorites demand loads an independent ordinary Hero only while visible`, async () => {
+      const h = historyHarness(shell, module, {
+        respond: ({ path }) => {
+          const params = new URL(path, "https://example.test").searchParams;
+          return { items: items(module, params.get("favorite") === "true" ? 1000 : 0, 24, { favorite: true, url: "/image.png" }), total: 240 };
+        },
+      });
+      installHistoryRenderers(h, module);
+      h.context.clearHeroCarouselTimer = () => {};
+      h.context.normalizeHeroHistoryItem = (item) => ({ id: item.id || item.output_id, url: item.url });
+      h.install(["renderHeroHistory"]);
+      h.model.historyFavoritesOnly = true;
+      if (shell.name === "mobile") h.activate(active, `${module}-history`);
+      await h.favorites();
+      assert.equal(h.model[h.key][0][module === "v1" ? "id" : "output_id"], `${module}-1000`);
+      assert.equal(historyCalls(h, module).length, shell.name === "desktop" ? 2 : 1);
+      if (shell.name === "mobile") {
+        assert.equal(h.model.historyHeroItems, undefined);
+        h.activate(active);
+        await h.context.ensureHistoryDemand(module);
+      }
+      assert.equal(h.model.historyHeroItems[0][module === "v1" ? "id" : "output_id"], `${module}-0`);
+      assert.ok(h.context.state.heroHistoryItems.every((item) => Number(item.id.split("-").at(-1)) < 24));
+      assert.equal(h.els.heroHistoryCarousel.querySelectorAll("img").length, 8);
+      assert.ok(h.model.historyHeroItems.length <= 24);
+    });
+
+    test(`${prefix}: favorite-only mutations preserve the latest ordinary Hero without an extra ordinary read`, async () => {
+      const h = historyHarness(shell, module, {
+        respond: ({ path, options }) => {
+          if (options.method === "PUT") return {};
+          const params = new URL(path, "https://example.test").searchParams;
+          return { items: items(module, params.get("favorite") === "true" ? 1000 : 0, 24, { favorite: true }), total: 240 };
+        },
+      });
+      h.install([`toggle${module.toUpperCase()}Favorite`]);
+      h.install(["applyV1FavoriteState"], { optional: true });
+      await h.refresh();
+      const heroItem = h.model.historyHeroItems[0];
+      h.model.historyFavoritesOnly = true;
+      if (shell.name === "mobile") h.activate(active, `${module}-history`);
+      await h.favorites();
+      const ordinaryReads = () => historyCalls(h, module).filter(({ path }) => !path.includes("favorite=true")).length;
+      assert.equal(ordinaryReads(), 1);
+      await h.context[`toggle${module.toUpperCase()}Favorite`](heroItem, false);
+      assert.equal(ordinaryReads(), 1);
+      assert.equal(h.model.historyHeroItems.length, 24);
+      assert.equal(h.model.historyHeroItems[0][module === "v1" ? "id" : "output_id"], `${module}-0`);
+      assert.equal(h.model.historyHeroItems[0].favorite, false);
+      assert.equal(h.model.historyHeroDirty, false);
+    });
+
+    test(`${prefix}: a pending ordinary Hero read is single-flight and cannot restore a prior account`, async () => {
+      const page = deferred();
+      const h = historyHarness(shell, module, { respond: () => page.promise });
+      const first = h.context.ensureHistoryHero(module);
+      const second = h.context.ensureHistoryHero(module);
+      assert.equal(historyCalls(h, module).length, 1);
+      h.context.clearHistoryDemandCaches();
+      h.context.setVeyraToken("next-owner");
+      h.activate("lab");
+      page.resolve({ items: items(module, 0, 24), total: 24 });
+      await Promise.all([first, second]);
+      assert.equal(historyCalls(h, module).length, 1);
+      assert.equal(h.model.historyHeroItems.length, 0);
+      assert.equal(h.model.historyHeroReady, false);
+    });
+
     test(`${prefix}: valid empty history and request errors never call a second endpoint`, async () => {
       for (const error of [false, true]) {
         const h = historyHarness(shell, module, {
@@ -524,7 +748,7 @@ for (const shell of shells) {
       assert.deepEqual(h.renders, []);
     });
 
-    test(`${prefix}: favorites continue beyond three pages only while demanded`, async () => {
+    test(`${prefix}: favorites use an exact filtered page and continue only on explicit gestures`, async () => {
       const h = historyHarness(shell, module, {
         respond: ({ path }) => {
           const offset = Number(new URL(path, "https://example.test").searchParams.get("offset"));
@@ -534,10 +758,18 @@ for (const shell of shells) {
       h.model.historyFavoritesOnly = true;
       if (shell.name === "mobile") h.activate(active, `${module}-history`);
       await h.favorites();
-      assert.deepEqual(pageRequests(h, module).map((page) => page.offset), [0, 24, 48, 72, 96]);
-      assert.equal(h.model[h.key].length, 120);
+      const favoriteReads = () => historyCalls(h, module).filter(({ path }) => new URL(path, "https://example.test").searchParams.get("favorite") === "true");
+      assert.equal(favoriteReads().length, 1);
+      // Reopening an already loaded picker/filter is not another page gesture.
+      await h.favorites();
+      assert.equal(favoriteReads().length, 1);
+      for (let page = 0; page < 4; page += 1) await h.more();
+      assert.deepEqual(favoriteReads().map(({ path }) => Number(new URL(path, "https://example.test").searchParams.get("offset"))), [0, 24, 48, 72, 96]);
+      assert.equal(h.model[h.key].length, 48);
+      assert.equal(h.model.historyDemand.start, 72);
       assert.equal(h.model.historyDemand.exhausted, true);
       assert.ok(pageRequests(h, module).every((page) => page.limit === 24));
+      assert.equal(historyCalls(h, module).length - favoriteReads().length, shell.name === "desktop" ? 1 : 0);
     });
 
     test(`${prefix}: closing favorites or navigating away stops the next page`, async () => {
@@ -579,7 +811,15 @@ for (const shell of shells) {
       h.context.window.confirm = () => true;
       await h.refresh();
       const entry = { ...h.model[h.key][0], can_delete: true };
-      const deleting = h.context[module === "v1" ? "deleteHistoryItem" : "deleteV2HistoryItem"](entry, node());
+      const card = node();
+      const image = Object.assign(node({ mediaLoadToken: "pending", authenticatedObjectUrl: "blob:deleted" }), { tagName: "IMG" });
+      card.appendChild(image);
+      const released = [];
+      h.context.releaseImageObjectUrl = (target) => {
+        released.push(target.dataset.authenticatedObjectUrl);
+        delete target.dataset.authenticatedObjectUrl;
+      };
+      const deleting = h.context[module === "v1" ? "deleteHistoryItem" : "deleteV2HistoryItem"](entry, card);
       h.activate("lab");
       h.renders.length = 0;
       deletion.resolve({ deleted: true });
@@ -589,6 +829,12 @@ for (const shell of shells) {
       assert.equal(historyCalls(h, module).length, 1);
       assert.equal(h.calls.some((call) => /usage|prompt-cases|\/veyra\/me/.test(call.path)), false);
       assert.equal(h.model.historyDemand.dirty, true);
+      assert.equal(h.model.historyHeroItems.some((item) => module === "v1" ? item.id === entry.id : item.output_id === entry.output_id), false);
+      if (module === "v1") {
+        assert.deepEqual(released, ["blob:deleted"]);
+        assert.equal(image.dataset.mediaLoadToken, "");
+        assert.equal(card.querySelectorAll("img").length, 0);
+      }
       assert.equal(h.context.veyraState.overviewDirty, true);
       assert.deepEqual(h.renders, []);
       h.activate(active);
@@ -616,6 +862,35 @@ for (const shell of shells) {
     assert.equal(h.model.historyDemand.offset, 144);
   });
 
+  test(`${shell.name} v2: empty sparse windows expose working previous and next controls`, async () => {
+    const h = historyHarness(shell, "v2", {
+      respond: ({ path }) => {
+        const offset = Number(new URL(path, "https://example.test").searchParams.get("offset"));
+        return { items: items("v2", offset, 24, { renderable: offset >= 72 }), total: 144 };
+      },
+    });
+    installHistoryRenderers(h, "v2");
+    const grid = h.els.v2HistoryGrid;
+    const findButton = (label) => grid.children.flatMap((child) => child.children || []).find((button) => button.textContent === label);
+    await h.refresh();
+    assert.equal(grid.querySelectorAll("img").length, 0);
+    assert.equal(h.model.historyDemand.offset, 72);
+    await findButton("下一组历史（可返回）").events.get("click")();
+    assert.equal(h.model.historyDemand.start, 72);
+    assert.equal(grid.querySelectorAll("img").length, 24);
+    await findButton("上一组历史").events.get("click")();
+    assert.equal(h.model.historyDemand.start, 0);
+    assert.equal(grid.querySelectorAll("img").length, 0);
+    assert.ok(findButton("下一组历史（可返回）"));
+    await findButton("下一组历史（可返回）").events.get("click")();
+    await h.more();
+    await h.more();
+    assert.equal(h.model.historyDemand.exhausted, true);
+    assert.equal(grid.querySelectorAll("img").length, 72);
+    assert.ok(findButton("上一组历史"));
+    assert.equal(findButton("下一组历史（可返回）"), undefined);
+  });
+
   for (const exhausted of [false, true]) {
     test(`${shell.name} v2: a 23-card remainder ${exhausted ? "is revealed without GET when exhausted" : "fetches to fill the next 24-card gesture"}`, async () => {
       const h = historyHarness(shell, "v2", {
@@ -639,7 +914,7 @@ for (const shell of shells) {
   }
 
   for (const initiallyVisible of [0, 22]) {
-    test(`${shell.name} v2: after the three-page cap shows ${initiallyVisible} cards, the next gesture adds only 24`, async () => {
+    test(`${shell.name} v2: after the 72-row window shows ${initiallyVisible} cards, the next window starts with 24`, async () => {
       const h = historyHarness(shell, "v2", {
         respond: ({ path }) => {
           const offset = Number(new URL(path, "https://example.test").searchParams.get("offset"));
@@ -660,8 +935,9 @@ for (const shell of shells) {
       assert.equal(h.model.historyDemand.offset, 72);
       await h.more();
       assert.deepEqual(pageRequests(h, "v2").map((page) => page.offset), [0, 24, 48, 72]);
-      assert.equal(h.model.historyRenderLimit, initiallyVisible + 24);
-      assert.equal(visibleCount(), initiallyVisible + 24);
+      assert.equal(h.model.historyRenderLimit, 24);
+      assert.equal(visibleCount(), 24);
+      assert.equal(h.model.historyDemand.start, 72);
       assert.equal(h.model.historyDemand.offset, 96);
       assert.ok(pageRequests(h, "v2").every((page) => page.limit === 24));
     });
