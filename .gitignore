@@ -52,6 +52,9 @@ node_modules/
 dist/
 build/
 
+# Python package build metadata
+/src_skeleton/custom_media_agent.egg-info/
+
 # Editor and OS noise
 .DS_Store
 Thumbs.db
