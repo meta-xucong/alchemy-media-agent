@@ -155,9 +155,11 @@ def test_offline_v2_history_maintenance_does_not_read_provider_auth_files() -> N
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
     prepare = workflow[workflow.index("          prepare_and_verify_target_indexes() {"):workflow.index("          restart_v2() {")]
 
-    assert prepare.count("CODEX_AUTH_FILE=/dev/null") == 2
-    assert 'scripts/prepare_v2_history_reads.py' in prepare
-    assert 'scripts/verify_v2_history_reads.py' in prepare
+    for script_name in ("scripts/prepare_v2_history_reads.py", "scripts/verify_v2_history_reads.py"):
+        command_position = prepare.index(script_name)
+        command_start = prepare.rfind("runuser -u alchemy -- env", 0, command_position)
+        assert command_start >= 0
+        assert "CODEX_AUTH_FILE=/dev/null" in prepare[command_start:command_position]
     post_switch = workflow[workflow.index("          runuser -u alchemy -- env CODEX_AUTH_FILE=/dev/null", workflow.index("active_v2_runtime_guard_failed")):workflow.index("          for unit in alchemy-v2-worker.service", workflow.index("active_v2_runtime_guard_failed"))]
     assert "verify_v2_history_reads.py" in post_switch
     assert "CODEX_AUTH_FILE=/dev/null" in post_switch
