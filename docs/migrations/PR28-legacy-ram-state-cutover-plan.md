@@ -82,9 +82,9 @@
 
 2026-10-11 候选补充：在 `5a33c05e` 的已合并历史基线上治理 V1/V2/Lab 历史读取。原始 38 文件矩阵与旧版/原始目标列不变；本表的候选列绑定本轮实际源码。新增派生索引、只读调度和受控维护来源显式列入；其设计、回归、权限与文件库存边界见 `docs/history-read-scalability/`。此更新不是生产迁移完成证明。
 
-- Candidate overlay: 38 files; SHA-256 `79a5cd17b4e78fc8006585c331077091f7e240f73c9bad07fe71be217c48f420`.
+- Candidate overlay: 38 files; SHA-256 `f3dcbdadfa2560c42e02c34366a5dd5b62aaa2963ea26333809a71f1a27072cf`.
 - Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.
-- Expanded old-to-candidate manifest: 61 files; SHA-256 `e75d222e7b493a218db96db93060d43f2e5aace49fafabac8b7713215cdbe754`.
+- Expanded old-to-candidate manifest: 61 files; SHA-256 `a8a336a3a31e4a1f2e93c2b3c6153eccf532b31c7f614435def4b8e9d39f8185`.
 - Expanded digest uses section 2 encoding; merge the original matrix with this overlay by path, replacing target blobs and adding new paths.
 
 | Source file | Old release blob | Original target blob | Candidate blob | Scope / authority |
@@ -117,7 +117,7 @@
 | `scripts/prepare_v1_history_index.py` | `ABSENT` | `ABSENT` | `4a43c0bce3296e9057a996868f5b44fae5acf63a` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `scripts/prepare_v2_history_reads.py` | `ABSENT` | `ABSENT` | `b0556fca014be86db4f579b0acf3ae0307afd316` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/main.py` | `c190ff437f53e31863333848eb7c2bf767ac3032` | `f0b2e9562fca4250046e2f1c05bbd11381dfbc3d` | `905bcb90e15e01a471b88628fc468651f07b62fd` | HISTORY_READ_20261011; PLATFORM_SHELL; sanitized fail-closed legacy import API responses |
-| `src_skeleton/app/repositories/history_index.py` | `ABSENT` | `ABSENT` | `4de6eee61d4c1e4bedb5ae92b5dd77c555668f48` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
+| `src_skeleton/app/repositories/history_index.py` | `ABSENT` | `ABSENT` | `745d27b5e5a4b441ac2daa229224bb349be86b1b` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/repositories/output_publication.py` | `ABSENT` | `ABSENT` | `4662c12a33f2f444b2d8d685fb417ebfd6c090c0` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/repositories/sqlite_calls.py` | `ABSENT` | `26b90d8d1d0208775df230f05f21f31ded6b16bb` | `c96f73f62000994c4101d7ebd9a76ad038b17ba6` | HISTORY_READ_20261011; derived read/index and bounded admission; original business authority retained |
 | `src_skeleton/app/repositories/sqlite_json.py` | `ABSENT` | `4c719e7603cc3723d75ac392f8782810220bbe73` | `350466ee1ccf3f85d3a28c2fdd657cd5df5d1a5d` | HISTORY_READ_20261011; TARGET_STORAGE; V1 indexed columns, filtered reads and WAL schema |

@@ -395,11 +395,13 @@ def _owner(connection, output_id: str) -> tuple[int | None, bool]:
             "SELECT MIN(owner_id),MAX(owner_id) FROM v1_read_sources WHERE output_id=? AND kind='job'",
             (output_id,),
         ).fetchone()
-        if len(history_owners) > 1 or job_owners[0] != job_owners[1]:
+        if len(history_owners) > 1:
+            return None, True
+        if nested_lab_owner is not None and job_owners[0] != job_owners[1]:
             return None, True
         if history_owners:
             history_owner = next(iter(history_owners))
-            if job_owners[0] is not None and job_owners[0] != history_owner:
+            if nested_lab_owner is not None and job_owners[0] is not None and job_owners[0] != nested_lab_owner:
                 return None, True
             return history_owner, False
     # Aggregate the complete owner evidence without retaining duplicate rows or
