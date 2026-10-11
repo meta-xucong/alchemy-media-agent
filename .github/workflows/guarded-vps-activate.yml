@@ -129,6 +129,21 @@ jobs:
             exit 1
           }
 
+          verify_release_source_tree() {
+            local release="$1" path untracked_file invalid=0
+            git -C "$release" diff --quiet HEAD -- || return 1
+            untracked_file="$(mktemp)" || return 1
+            if ! git -C "$release" ls-files --others --exclude-standard -z > "$untracked_file"; then
+              rm -f -- "$untracked_file"
+              return 1
+            fi
+            while IFS= read -r -d '' path; do
+              if [ "$path" != "src_skeleton/.env" ]; then invalid=1; break; fi
+            done < "$untracked_file"
+            rm -f -- "$untracked_file"
+            [ "$invalid" = 0 ]
+          }
+
           choose_compose() {
             if docker compose version >/dev/null 2>&1; then
               compose_cmd=(docker compose)
@@ -278,19 +293,33 @@ jobs:
               --entrypoint python "${candidate_image}" \
               /app/scripts/prepare_v1_history_index.py --storage-root "$v1_root_in_container" \
               --prepare --minimum-free-bytes "$minimum_free_bytes" || return 1
-            python3 "$candidate_release/scripts/prepare_v1_history_index.py" \
-              --storage-root "$v1_media" --verify || return 1
-            (cd "$candidate_release/custom_media_agent_2_0" && \
-              V2_DATA_DIR="$v2_data" V2_IMAGE_HISTORY_PATH="$v2_history_path" \
-              "$candidate_release/custom_media_agent_2_0/.venv/bin/python" \
-              "$candidate_release/scripts/prepare_v2_history_reads.py" \
+            docker run --rm --network none \
+              --mount "type=bind,src=$v1_media,dst=$v1_root_in_container" \
+              --mount "type=bind,src=$candidate_release/scripts/prepare_v1_history_index.py,dst=/app/scripts/prepare_v1_history_index.py,readonly" \
+              -e MEDIA_STORAGE_ROOT="$v1_root_in_container" \
+              -e PYTHONPATH=/app \
+              -e MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS=false \
+              --entrypoint python "${candidate_image}" \
+              /app/scripts/prepare_v1_history_index.py --storage-root "$v1_root_in_container" --verify || return 1
+            local v2_python="$candidate_release/custom_media_agent_2_0/.venv/bin/python"
+            runuser -u alchemy -- env V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
+              V2_IMAGE_HISTORY_PATH="$v2_history_path" V2_TASK_QUEUE_DB_PATH="$v2_queue_db" \
+              "$v2_python" "$candidate_release/scripts/prepare_v2_history_reads.py" \
               --data-root "$v2_data" --history-path "$v2_history_path" \
-              --minimum-free-bytes "$minimum_free_bytes") || return 1
-            (cd "$candidate_release/custom_media_agent_2_0" && \
-              V2_DATA_DIR="$v2_data" V2_IMAGE_HISTORY_PATH="$v2_history_path" \
-              "$candidate_release/custom_media_agent_2_0/.venv/bin/python" \
-              "$candidate_release/scripts/verify_v2_history_reads.py" \
-              --data-root "$v2_data" --history-path "$v2_history_path")
+              --minimum-free-bytes "$minimum_free_bytes" || return 1
+            runuser -u alchemy -- env V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
+              V2_IMAGE_HISTORY_PATH="$v2_history_path" V2_TASK_QUEUE_DB_PATH="$v2_queue_db" \
+              "$v2_python" "$candidate_release/scripts/verify_v2_history_reads.py" \
+              --data-root "$v2_data" --history-path "$v2_history_path" || return 1
+            runuser -u alchemy -- env V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
+              V2_IMAGE_HISTORY_PATH="$v2_history_path" V2_TASK_QUEUE_DB_PATH="$v2_queue_db" \
+              python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-write-access \
+              --directory "$v2_data" --directory "$v2_storage" --directory "$v2_history_dir" \
+              --directory "$(dirname "$v2_queue_db")" \
+              --sqlite-db "$v2_queue_db" \
+              --sqlite-db "${v2_history_path%/*}/image_history_index.sqlite3" \
+              --sqlite-db "$v2_data/image_favorites.sqlite3" \
+              --append-file "$v2_history_path" --append-file "$v2_data/image_favorites.json"
           }
 
           restart_v2() {
@@ -585,6 +614,11 @@ jobs:
             if [ "$maintenance_timer_was_active" = 1 ]; then
               systemctl start alchemy-v3-storage-maintenance.timer || { keep_closed old_maintenance_timer_start_failed; exit 1; }
               systemctl is-active --quiet alchemy-v3-storage-maintenance.timer || { keep_closed old_maintenance_timer_inactive; exit 1; }
+            else
+              systemctl stop alchemy-v3-storage-maintenance.timer || { keep_closed maintenance_timer_restore_inactive_failed; exit 1; }
+              systemctl stop alchemy-v3-storage-maintenance.service || { keep_closed maintenance_service_restore_inactive_failed; exit 1; }
+              systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && { keep_closed maintenance_timer_restore_inactive_unverified; exit 1; }
+              systemctl is-active --quiet alchemy-v3-storage-maintenance.service && { keep_closed maintenance_service_restore_inactive_unverified; exit 1; }
             fi
             [ -n "$nginx_config_backup" ] && [ -f "$nginx_config_backup" ] || { keep_closed old_nginx_backup_missing; exit 1; }
             install -m 644 "$nginx_config_backup" "$nginx_config" || { keep_closed old_nginx_restore_failed; exit 1; }
@@ -619,8 +653,8 @@ jobs:
           [ -d "$candidate_release" ] || stop_pre candidate_release_missing
           [ "$(realpath "$candidate_release")" != "$old_release" ] || stop_pre candidate_matches_active_release
           [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop_pre candidate_head_mismatch
-          git -C "$old_release" diff --quiet || stop_pre active_release_tracked_changes
-          git -C "$candidate_release" diff --quiet || stop_pre candidate_tracked_changes
+          verify_release_source_tree "$old_release" || stop_pre active_release_source_tree_changed
+          verify_release_source_tree "$candidate_release" || stop_pre candidate_release_source_tree_changed
           choose_compose || stop_pre docker_compose_unavailable
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop_pre v1_not_running
           old_image="$(docker inspect "$v1_container" --format '{{.Image}}')" || stop_pre old_v1_image_identity_unavailable
@@ -736,12 +770,18 @@ jobs:
           [ "$(read_mount /app/.env)" = "$candidate_release/src_skeleton/.env" ] || fail_post candidate_env_not_bound
           python3 "$candidate_release/ops/vps-release/v2_runtime_guard.py" --release "$candidate_release" --verify || fail_post active_v2_runtime_guard_failed
           verify_v2_unit_contract || fail_post active_v2_unit_contract_invalid
-          python3 "$candidate_release/scripts/prepare_v1_history_index.py" --storage-root "$v1_media" --verify || fail_post active_v1_history_index_unready
-          (cd "$candidate_release/custom_media_agent_2_0" && \
-            V2_DATA_DIR="$v2_data" V2_IMAGE_HISTORY_PATH="$v2_history_path" \
+          docker run --rm --network none \
+            --mount "type=bind,src=$v1_media,dst=/app/.media_storage,readonly" \
+            --mount "type=bind,src=$candidate_release/scripts/prepare_v1_history_index.py,dst=/app/scripts/prepare_v1_history_index.py,readonly" \
+            -e MEDIA_STORAGE_ROOT=/app/.media_storage -e PYTHONPATH=/app \
+            -e MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS=false \
+            --entrypoint python "$candidate_image" \
+            /app/scripts/prepare_v1_history_index.py --storage-root /app/.media_storage --verify || fail_post active_v1_history_index_unready
+          runuser -u alchemy -- env V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
+            V2_IMAGE_HISTORY_PATH="$v2_history_path" V2_TASK_QUEUE_DB_PATH="$v2_queue_db" \
             "$candidate_release/custom_media_agent_2_0/.venv/bin/python" \
             "$candidate_release/scripts/verify_v2_history_reads.py" \
-            --data-root "$v2_data" --history-path "$v2_history_path") || fail_post active_v2_history_index_unready
+            --data-root "$v2_data" --history-path "$v2_history_path" || fail_post active_v2_history_index_unready
           for unit in alchemy-v2-worker.service alchemy-v2-sync-worker.service; do
             systemctl is-active --quiet "$unit" && fail_post "${unit}_started_before_admission"
           done

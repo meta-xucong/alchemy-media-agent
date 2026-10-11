@@ -367,3 +367,75 @@ def test_prestart_storage_unit_verification_needs_no_running_processes(tmp_path,
     )
 
     assert _MODULE.verify_live_v2_storage_unit_roots(environment_file, roots)["status"] == "verified"
+
+
+def test_backup_restore_preserves_original_file_metadata_and_keeps_backup_private(tmp_path):
+    v1, _v2, _projects = _databases(tmp_path)
+    source = tmp_path / "v1" / "history.jsonl"
+    source.write_text('{"id":"before"}\n', encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(v1, 0o660)
+        os.chmod(source, 0o640)
+    roots = [tmp_path / "v1"]
+    backup_dir = tmp_path / "backup"
+    _MODULE.create_backup(backup_dir, roots, [v1], [source])
+    manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 2
+    assert all({"uid", "gid", "mode"} <= set(item["metadata"]) for item in manifest["records"] if item["existed"])
+    if os.name != "nt":
+        assert all((backup_dir / item["backup"]).stat().st_mode & 0o777 == 0o600 for item in manifest["records"] if item["existed"])
+        os.chmod(v1, 0o600)
+        os.chmod(source, 0o600)
+    _MODULE.restore_backup(backup_dir / "manifest.json", roots)
+    if os.name != "nt":
+        assert v1.stat().st_mode & 0o777 == 0o660
+        assert source.stat().st_mode & 0o777 == 0o640
+        assert v1.stat().st_uid == manifest["records"][0]["metadata"]["uid"]
+        assert source.stat().st_gid == manifest["records"][1]["metadata"]["gid"]
+
+
+def test_restore_rejects_legacy_manifest_without_original_metadata(tmp_path):
+    v1, _v2, _projects = _databases(tmp_path)
+    roots = [tmp_path / "v1"]
+    backup_dir = tmp_path / "backup"
+    _MODULE.create_backup(backup_dir, roots, [v1], [])
+    manifest_path = backup_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = 1
+    manifest["records"][0].pop("metadata", None)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(_MODULE.CutoverBlocked, match="manifest_invalid"):
+        _MODULE.restore_backup(manifest_path, roots)
+
+
+def test_v2_write_access_probe_checks_directory_sqlite_and_append_paths(tmp_path):
+    root = tmp_path / "v2"
+    root.mkdir()
+    database = root / "queue.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE tasks(value TEXT)")
+    append_file = root / "history.jsonl"
+    append_file.write_text("{}\n", encoding="utf-8")
+
+    result = _MODULE.verify_v2_write_access([root], [database], [append_file])
+
+    assert result["status"] == "verified"
+    assert database.exists() and append_file.read_text(encoding="utf-8") == "{}\n"
+
+
+def test_v2_write_access_probe_rejects_missing_sqlite_file(tmp_path):
+    with pytest.raises(_MODULE.CutoverBlocked, match="write_probe_database_missing"):
+        _MODULE.verify_v2_write_access([tmp_path], [tmp_path / "missing.sqlite3"], [])
+
+
+def test_v2_write_access_probe_cli_returns_verified_json(tmp_path, capsys):
+    root = tmp_path / "v2"
+    root.mkdir()
+    database = root / "queue.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE tasks(value TEXT)")
+
+    exit_code = _MODULE.main(["verify-v2-write-access", "--directory", str(root), "--sqlite-db", str(database)])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "verified"

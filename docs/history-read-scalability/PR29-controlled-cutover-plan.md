@@ -289,3 +289,70 @@ Focused local evidence on the implementation worktree, 2026-10-11:
   `git diff --check` passed.
 - These are local tests, not GitHub CI, real browser heap measurement, or
   production rehearsal. Independent read-only review of the exact timer/closure follow-up passed with no new code blocker. No VPS service, live database, candidate release, or public traffic was changed.
+
+
+## Incremental correction: d7ca deployment-gate findings
+
+A read-only review of `d7ca089a8715376aab2df4a97167ef84133b5e49` found two
+deployment blockers and two conditional procedure gaps. The correction keeps
+the existing authorities intact:
+
+1. **V1 path binding remains strict.** `storage_root` stored by the prepared
+   index is authoritative. Preparation and both pre-start and post-start
+   verification now run from the candidate image with the same bind mount at
+   `/app/.media_storage`; post-start verification mounts the data read-only.
+   No host-path exception was added.
+2. **V2 writes use the systemd service identity.** The V2 history/favorites
+   prepare, read-only verify, and explicit directory/SQLite/JSONL write probes
+   run as `alchemy`. The SQLite probe opens existing databases read-write and
+   obtains/rolls back an immediate transaction; the file probe opens existing
+   source files append-only without writing. Backup snapshots remain private
+   (`0600` files, `0700` directory), while schema 2 manifests preserve each
+   original regular file's uid, gid, and mode for restore. Restore applies and
+   verifies those attributes on a temporary file before atomic replacement;
+   metadata-less schema 1 manifests fail closed.
+3. **The declared revision must match the build-context source.** Candidate and
+   activation workflows compare `HEAD` against the index/worktree using
+   `git diff HEAD --`, and reject non-ignored untracked files except the
+   runtime `src_skeleton/.env`. This check runs before candidate build and
+   before activation. Ignored runtime and virtual-environment paths remain
+   governed by repository ignore and Docker build-context rules.
+4. **Rollback restores inactive timer policy too.** If the timer was inactive
+   before cutover, rollback stops and verifies both timer and oneshot service
+   inactive before restoring the public Nginx configuration. Any command or
+   verification failure keeps the public gate closed.
+
+### Regression and evidence
+
+The correction adds tests for the previously failing container-path, service
+identity, permission-probe, original file metadata, staged/untracked source,
+and prior-inactive timer cases. The Git test uses a disposable repository and
+proves `git diff --quiet HEAD --` detects both staged and unstaged edits.
+The backup tests keep private backup permissions separate from restored business
+file permissions.
+
+This correction is limited to deployment preparation and recovery. It does not
+run the workflow against VPS paths, activate a release, or establish production
+readiness. The deployment workflow still requires an isolated cutover drill and
+operator authorization before any production switch.
+
+
+### Local validation receipt (2026-10-11)
+
+- Deployment guard, activation contract, and runtime guard: 55 passed.
+- V1/Lab history index and deployment/maintenance regressions: 100 passed,
+  6 existing FastAPI deprecation warnings.
+- V2 history prepare, scalability, and migration atomicity: 205 passed, run
+  from the V2 project directory to avoid the shared `app` package-name
+  collection collision.
+- Both guarded workflows parsed as YAML; each embedded remote Bash script
+  passed `bash -n`; `vps_cutover_guard.py` compiled; `git diff --check` passed.
+- An independent read-only audit reviewed the corrected fixed diff and passed
+  all four finding scopes, including the post-start V2 verifier identity.
+
+The local host is Windows, so the V2 `alchemy` UID/GID and POSIX filesystem
+permission effects were not exercised here as an actual Linux service account.
+The implementation performs those checks at cutover time and fails closed; a
+Linux isolated permission fixture and production cutover drill remain separate
+acceptance evidence. No VPS operation, commit, push, merge, or provider call was
+performed in this correction phase.

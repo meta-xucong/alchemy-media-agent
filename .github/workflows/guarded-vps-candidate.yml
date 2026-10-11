@@ -72,6 +72,21 @@ jobs:
             exit 1
           }
 
+          verify_release_source_tree() {
+            local release="$1" path untracked_file invalid=0
+            git -C "$release" diff --quiet HEAD -- || return 1
+            untracked_file="$(mktemp)" || return 1
+            if ! git -C "$release" ls-files --others --exclude-standard -z > "$untracked_file"; then
+              rm -f -- "$untracked_file"
+              return 1
+            fi
+            while IFS= read -r -d '' path; do
+              if [ "$path" != "src_skeleton/.env" ]; then invalid=1; break; fi
+            done < "$untracked_file"
+            rm -f -- "$untracked_file"
+            [ "$invalid" = 0 ]
+          }
+
           choose_compose() {
             if docker compose version >/dev/null 2>&1; then
               compose_cmd=(docker compose)
@@ -248,7 +263,7 @@ jobs:
           active_release="$(realpath "$deploy_link")"
           [ -e "$active_release/.git" ] || stop active_release_not_git_worktree
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
-          git -C "$active_release" diff --quiet || stop active_release_tracked_changes
+          verify_release_source_tree "$active_release" || stop active_release_source_tree_changed
           choose_compose || stop docker_compose_unavailable
           live_env="$(read_mount /app/.env)" || stop v1_env_mount_ambiguous
           v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
@@ -265,12 +280,12 @@ jobs:
           git -C "$active_release" fetch --prune origin >/dev/null
           [ "$(git -C "$active_release" rev-parse origin/main)" = "$expected_sha" ] || stop origin_main_target_mismatch
           [ "$(git -C "$active_release" cat-file -t "${expected_sha}^{commit}")" = commit ] || stop target_commit_unavailable
-          git -C "$active_release" diff --quiet || stop active_release_changed_after_fetch
+          verify_release_source_tree "$active_release" || stop active_release_source_tree_changed_after_fetch
 
           if [ -e "$candidate_release" ] || [ -L "$candidate_release" ]; then
             [ "$(realpath "$candidate_release")" != "$active_release" ] || stop candidate_matches_active_release
             [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop candidate_head_mismatch
-            git -C "$candidate_release" diff --quiet || stop candidate_tracked_changes
+            verify_release_source_tree "$candidate_release" || stop candidate_release_source_tree_changed
             candidate_mode=resumed
           else
             git -C "$active_release" worktree add --detach "$candidate_release" "$expected_sha" >/dev/null
@@ -278,7 +293,7 @@ jobs:
           fi
 
           [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop candidate_head_after_create_mismatch
-          git -C "$candidate_release" diff --quiet || stop candidate_tracked_changes_after_create
+          verify_release_source_tree "$candidate_release" || stop candidate_release_source_tree_changed_after_create
           if [ ! -e "$candidate_release/src_skeleton/.env" ]; then
             cp -p -- "$live_env" "$candidate_release/src_skeleton/.env"
           fi
@@ -297,6 +312,7 @@ jobs:
           done
           prepare_v2_runtime
 
+          verify_release_source_tree "$candidate_release" || stop candidate_release_source_tree_changed_before_build
           ALCHEMY_REVISION="$expected_sha" compose_candidate build alchemy-media-agent >/dev/null
           docker tag alchemy-media-agent:latest "alchemy-media-agent:candidate-${expected_sha}"
           image_revision="$(docker image inspect "alchemy-media-agent:candidate-${expected_sha}" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"

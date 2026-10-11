@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
+import tempfile
 import subprocess
 import sys
 import time
@@ -489,6 +491,82 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _original_file_metadata(path: Path) -> dict:
+    try:
+        details = path.stat(follow_symlinks=False)
+    except OSError:
+        raise CutoverBlocked("backup_source_metadata_unavailable") from None
+    if not stat.S_ISREG(details.st_mode):
+        raise CutoverBlocked("backup_source_not_regular_file")
+    return {"uid": int(details.st_uid), "gid": int(details.st_gid), "mode": stat.S_IMODE(details.st_mode)}
+
+
+def _apply_file_metadata(path: Path, metadata: dict) -> None:
+    uid, gid, mode = metadata.get("uid"), metadata.get("gid"), metadata.get("mode")
+    if (not isinstance(uid, int) or isinstance(uid, bool) or uid < 0 or
+            not isinstance(gid, int) or isinstance(gid, bool) or gid < 0 or
+            not isinstance(mode, int) or isinstance(mode, bool) or mode < 0 or mode > 0o7777):
+        raise CutoverBlocked("backup_manifest_metadata_invalid")
+    try:
+        if hasattr(os, "chown"):
+            os.chown(path, uid, gid, follow_symlinks=False)
+        elif os.name != "nt":
+            raise CutoverBlocked("restore_owner_metadata_unsupported")
+        if os.name == "nt":
+            os.chmod(path, mode)
+        else:
+            os.chmod(path, mode, follow_symlinks=False)
+        observed = path.stat(follow_symlinks=False)
+    except (OSError, NotImplementedError):
+        raise CutoverBlocked("restore_file_metadata_failed") from None
+    if stat.S_IMODE(observed.st_mode) != mode:
+        raise CutoverBlocked("restore_file_mode_mismatch")
+    if os.name != "nt" and (int(observed.st_uid) != uid or int(observed.st_gid) != gid):
+        raise CutoverBlocked("restore_file_owner_mismatch")
+
+
+def verify_v2_write_access(directories: list[Path], databases: list[Path], append_files: list[Path]) -> dict:
+    checked_directories = 0
+    checked_databases = 0
+    checked_append_files = 0
+    for directory in directories:
+        if not directory.is_dir():
+            raise CutoverBlocked("write_probe_directory_missing")
+        descriptor, probe_name = tempfile.mkstemp(prefix=".alchemy-write-check-", dir=directory)
+        os.close(descriptor)
+        Path(probe_name).unlink()
+        checked_directories += 1
+    for database in databases:
+        if not database.is_file():
+            raise CutoverBlocked("write_probe_database_missing")
+        connection = None
+        try:
+            uri = database.resolve().as_uri() + "?mode=rw"
+            connection = sqlite3.connect(uri, uri=True, timeout=1.0, isolation_level=None)
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("ROLLBACK")
+        except (sqlite3.Error, OSError):
+            raise CutoverBlocked("write_probe_database_unwritable") from None
+        finally:
+            if connection is not None:
+                connection.close()
+        checked_databases += 1
+    for source in append_files:
+        if not source.exists():
+            continue
+        try:
+            details = source.stat(follow_symlinks=False)
+            if not stat.S_ISREG(details.st_mode):
+                raise CutoverBlocked("write_probe_append_file_not_regular")
+            descriptor = os.open(source, os.O_WRONLY | os.O_APPEND)
+            os.close(descriptor)
+        except OSError:
+            raise CutoverBlocked("write_probe_append_file_unwritable") from None
+        checked_append_files += 1
+    return {"status": "verified", "directories": checked_directories,
+            "databases": checked_databases, "append_files": checked_append_files}
+
+
 def create_backup(backup_dir: Path, roots: list[Path], databases: list[Path], sources: list[Path]) -> dict:
     backup_dir = backup_dir.resolve()
     if backup_dir.exists():
@@ -510,6 +588,7 @@ def create_backup(backup_dir: Path, roots: list[Path], databases: list[Path], so
             existed = path.is_file()
             item = {"kind": "sqlite", "path": str(path), "existed": existed}
             if existed:
+                item["metadata"] = _original_file_metadata(path)
                 target = backup_dir / f"sqlite-{index:04d}.db"
                 source = _readonly(path)
                 try:
@@ -534,13 +613,14 @@ def create_backup(backup_dir: Path, roots: list[Path], databases: list[Path], so
             existed = path.is_file()
             item = {"kind": "source", "path": str(path), "existed": existed}
             if existed:
+                item["metadata"] = _original_file_metadata(path)
                 target = backup_dir / f"source-{index:04d}-{path.name}"
                 shutil.copy2(path, target)
                 _private_mode(target, 0o600)
                 item.update({"backup": target.name, "sha256": _sha256(target)})
             records.append(item)
 
-        manifest = {"schema_version": 1, "restore_scope": "pre_candidate_writer_start_only",
+        manifest = {"schema_version": 2, "restore_scope": "pre_candidate_writer_start_only",
                     "allowed_roots": [str(root.resolve()) for root in roots], "records": records}
         manifest_path = backup_dir / "manifest.json"
         temporary = backup_dir / "manifest.json.tmp"
@@ -561,7 +641,7 @@ def restore_backup(manifest_path: Path, roots: list[Path]) -> dict:
     if not _within(manifest_path, [backup_dir]) or not manifest_path.is_file():
         raise CutoverBlocked("backup_manifest_missing")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema_version") != 1 or manifest.get("restore_scope") != "pre_candidate_writer_start_only":
+    if manifest.get("schema_version") != 2 or manifest.get("restore_scope") != "pre_candidate_writer_start_only":
         raise CutoverBlocked("backup_manifest_invalid")
     declared_roots = [Path(value).resolve() for value in manifest.get("allowed_roots", [])]
     if {str(root) for root in declared_roots} != {str(root.resolve()) for root in roots}:
@@ -587,6 +667,7 @@ def restore_backup(manifest_path: Path, roots: list[Path]) -> dict:
             target.parent.mkdir(parents=True, exist_ok=True)
             temporary = target.with_name(target.name + ".cutover-restore-tmp")
             shutil.copy2(backup, temporary)
+            _apply_file_metadata(temporary, item.get("metadata", {}))
             os.replace(temporary, target)
             if item["kind"] == "sqlite":
                 for suffix in ("-wal", "-shm", "-journal"):
@@ -644,6 +725,10 @@ def main(argv: list[str] | None = None) -> int:
     restore = subparsers.add_parser("restore")
     restore.add_argument("--manifest", required=True, type=Path)
     restore.add_argument("--allowed-root", action="append", required=True, type=Path)
+    write_probe = subparsers.add_parser("verify-v2-write-access")
+    write_probe.add_argument("--directory", action="append", default=[], type=Path)
+    write_probe.add_argument("--sqlite-db", action="append", default=[], type=Path)
+    write_probe.add_argument("--append-file", action="append", default=[], type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect-active-work":
@@ -689,6 +774,8 @@ def main(argv: list[str] | None = None) -> int:
             result = {"status": "estimated", **estimate_cutover_space_from_files(databases, args.source, args.reserve_bytes)}
         elif args.command == "backup":
             result = create_backup(args.backup_dir, args.allowed_root, args.database, args.source)
+        elif args.command == "verify-v2-write-access":
+            result = verify_v2_write_access(args.directory, args.sqlite_db, args.append_file)
         else:
             result = restore_backup(args.manifest, args.allowed_root)
         print(json.dumps(result, separators=(",", ":")))

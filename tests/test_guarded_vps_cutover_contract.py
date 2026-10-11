@@ -199,3 +199,92 @@ def test_legacy_vps_entrypoints_stop_before_remote_side_effects() -> None:
     assert "exit 2" in migration
     assert "VPS_HOST" not in workflow
     assert "exit 2" in workflow
+
+
+def test_v1_index_prepare_and_verify_share_the_container_storage_path() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    prepare = workflow[workflow.index("          prepare_and_verify_target_indexes() {"):workflow.index("          restart_v2() {")]
+    assert prepare.count("--storage-root \"$v1_root_in_container\" --verify") == 1
+    assert "--storage-root \"$v1_media\" --verify" not in prepare
+    assert prepare.count("--mount \"type=bind,src=$v1_media,dst=$v1_root_in_container") >= 2
+    assert "--storage-root \"$v1_media\" --verify" not in workflow
+    assert "--storage-root /app/.media_storage --verify || fail_post active_v1_history_index_unready" in workflow
+
+
+def test_v2_index_prepare_verify_and_write_probe_run_as_service_user() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    block = workflow[workflow.index("          prepare_and_verify_target_indexes() {"):workflow.index("          restart_v2() {")]
+    assert block.count("runuser -u alchemy -- env") >= 3
+    assert "prepare_v2_history_reads.py" in block
+    assert "verify_v2_history_reads.py" in block
+    assert "verify-v2-write-access" in block
+    assert "V2_STORAGE_DIR=\"$v2_storage\"" in block
+    verifier_positions = []
+    cursor = 0
+    while True:
+        cursor = workflow.find("verify_v2_history_reads.py", cursor)
+        if cursor < 0:
+            break
+        verifier_positions.append(cursor)
+        cursor += 1
+    assert len(verifier_positions) == 2
+    for position in verifier_positions:
+        assert "runuser -u alchemy -- env" in workflow[max(0, position - 350):position]
+        env_prefix = workflow[max(0, position - 350):position]
+        assert "V2_STORAGE_DIR=\"$v2_storage\"" in env_prefix
+        assert "V2_TASK_QUEUE_DB_PATH=\"$v2_queue_db\"" in env_prefix
+
+
+def test_candidate_and_activation_reject_staged_and_untracked_source_changes() -> None:
+    candidate = (ROOT / ".github" / "workflows" / "guarded-vps-candidate.yml").read_text(encoding="utf-8")
+    activate = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    for workflow in (candidate, activate):
+        assert "git -C \"$release\" diff --quiet HEAD --" in workflow
+        assert "git -C \"$release\" ls-files --others --exclude-standard -z" in workflow
+        assert "src_skeleton/.env" in workflow
+        assert "verify_release_source_tree \"$candidate_release\"" in workflow
+    assert "git -C \"$active_release\" diff --quiet ||" not in candidate
+    assert "git -C \"$old_release\" diff --quiet ||" not in activate
+    assert candidate.index("verify_release_source_tree \"$candidate_release\"") < candidate.index("compose_candidate build")
+    assert activate.index("verify_release_source_tree \"$candidate_release\"") < activate.index("maintenance_active=1")
+
+
+def test_rollback_restores_inactive_timer_and_service_before_reopening_public_gate() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    rollback = workflow[workflow.index("          rollback() {"):workflow.index("          fail_post() {")]
+    inactive = rollback[rollback.index("else", rollback.index('if [ "$maintenance_timer_was_active" = 1 ]; then')):]
+    assert "systemctl stop alchemy-v3-storage-maintenance.timer" in inactive
+    assert "systemctl stop alchemy-v3-storage-maintenance.service" in inactive
+    assert "systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && { keep_closed" in inactive
+    assert "systemctl is-active --quiet alchemy-v3-storage-maintenance.service && { keep_closed" in inactive
+    assert rollback.index("maintenance_timer_restore_inactive") < rollback.index('install -m 644 "$nginx_config_backup" "$nginx_config"')
+
+
+def test_git_head_comparison_detects_staged_and_untracked_source_changes(tmp_path) -> None:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=False)
+
+    assert git("init", "-q").returncode == 0
+    assert git("config", "user.email", "test@example.invalid").returncode == 0
+    assert git("config", "user.name", "Cutover Test").returncode == 0
+    source = repo / "src.py"
+    source.write_text("stable\n", encoding="utf-8")
+    assert git("add", "src.py").returncode == 0
+    assert git("commit", "-qm", "baseline").returncode == 0
+    source.write_text("staged edit\n", encoding="utf-8")
+    assert git("add", "src.py").returncode == 0
+    assert git("diff", "--quiet", "HEAD", "--").returncode != 0
+    assert git("reset", "-q", "HEAD", "--", "src.py").returncode == 0
+    assert git("diff", "--quiet", "HEAD", "--").returncode != 0
+    assert git("checkout", "--", "src.py").returncode == 0
+    (repo / "unexpected.py").write_text("untracked\n", encoding="utf-8")
+    untracked = git("ls-files", "--others", "--exclude-standard", "-z")
+    assert untracked.returncode == 0 and "unexpected.py" in untracked.stdout
+    (repo / ".gitignore").write_text("src_skeleton/.env\n", encoding="utf-8")
+    (repo / "src_skeleton").mkdir()
+    (repo / "src_skeleton" / ".env").write_text("runtime=true\n", encoding="utf-8")
+    assert "src_skeleton/.env" not in git("ls-files", "--others", "--exclude-standard", "-z").stdout
