@@ -224,18 +224,34 @@ def test_v3_storage_root_verifier_accepts_canonical_bootstrap_env_path(tmp_path)
     assert result["status"] == "verified"
 
 
-def test_v3_storage_root_verifier_fails_closed_on_runtime_env_file_pointer(tmp_path):
+@pytest.mark.parametrize(
+    "pointer",
+    [
+        "MEDIA_AGENT_RUNTIME_ENV_FILE",
+        "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    ],
+)
+def test_v3_storage_root_verifier_fails_closed_on_runtime_env_file_pointer(tmp_path, pointer):
     inspect, media_root = _v3_container_inspect(tmp_path)
     env_file = tmp_path / "bootstrap.env"
-    env_file.write_text("MEDIA_AGENT_RUNTIME_ENV_FILE=/etc/alchemy/runtime.env\n", encoding="utf-8")
+    env_file.write_text(f"{pointer}=/etc/alchemy/runtime.env\n", encoding="utf-8")
 
     with pytest.raises(_MODULE.CutoverBlocked, match="v3_runtime_env_file_unsupported"):
         _MODULE.verify_v3_storage_roots(inspect, media_root, env_file)
 
 
-def test_v3_storage_root_verifier_fails_closed_on_container_runtime_env_file_pointer(tmp_path):
+@pytest.mark.parametrize(
+    "pointer",
+    [
+        "MEDIA_AGENT_RUNTIME_ENV_FILE",
+        "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    ],
+)
+def test_v3_storage_root_verifier_fails_closed_on_container_runtime_env_file_pointer(tmp_path, pointer):
     inspect, media_root = _v3_container_inspect(
-        tmp_path, env={"MEDIA_AGENT_RUNTIME_ENV_FILE": "/etc/alchemy/runtime.env"}
+        tmp_path, env={pointer: "/etc/alchemy/runtime.env"}
     )
 
     with pytest.raises(_MODULE.CutoverBlocked, match="v3_runtime_env_file_unsupported"):
