@@ -145,9 +145,71 @@ jobs:
           python scripts/benchmark_history_reads.py --surfaces v1,lab --sizes 100,1000 --concurrency 2,4,8 --rounds 1 --output /tmp/v1-lab-history-read.json
           python - <<'PY'
           import json
+          import math
+
+
+          def validate_report(report):
+              assert report['source_unchanged_during_run'] is True
+              assert report['checkout_default_storage_unchanged'] is True
+              config = report['configuration']
+              assert config['index_lifecycle'] == 'explicit' and config['skip_cold_probe'] is False
+              assert config['surfaces'] and set(config['surfaces']) <= {'v1', 'lab', 'v2'}
+              assert config['sizes'] and all(type(size) is int and size > 0 for size in config['sizes'])
+              assert config['concurrency'] and all(type(size) is int and size > 0 for size in config['concurrency'])
+              assert type(config['rounds']) is int and config['rounds'] > 0
+              expected = []
+              for surface in config['surfaces']:
+                  for size in config['sizes']:
+                      expected.extend([
+                          (surface, size, 'cold_unprepared_read', config['diagnostic_cold'], 1),
+                          (surface, size, 'explicit_index_preparation', config['diagnostic_cold'], None),
+                      ])
+                      for diagnostic in ([False, True] if config['diagnostic_hot'] else [False]):
+                          expected.extend((surface, size, 'hot_pages', diagnostic, count) for count in config['concurrency'])
+              actual = [(row['surface'], row['rows'], row['phase'], row['diagnostic'], row.get('concurrency'))
+                        for row in report['runs']]
+              assert actual == expected, 'Missing, repeated, unknown, or misordered benchmark phase'
+              for row in report['runs']:
+                  assert row['content_read_attempts'] == {'generated_file_content_opens': 0, 'image_codec_calls': 0}
+                  assert all(type(row[key]) in (int, float) and math.isfinite(row[key]) and row[key] >= 0
+                             for key in ('wall_seconds', 'cpu_seconds'))
+                  if row['phase'] == 'explicit_index_preparation':
+                      # This phase is emitted only after the maintenance callable returns.
+                      # Require its real measurement/storage schema and populated index;
+                      # it deliberately has no HTTP 'correctness' or response-status field.
+                      assert row['wall_seconds'] > 0 and row['storage_before']['total_bytes'] >= 0
+                      assert row['storage']['total_bytes'] > 0
+                      index = 'v2_image_history' if row['surface'] == 'v2' else 'v1_read_sources'
+                      tables = [database['tables'][index] for database in row['storage']['databases']
+                                if index in database['tables']]
+                      assert len(tables) == 1 and tables[0]['rows'] >= row['rows'], 'Preparation index is incomplete'
+                      assert row['rss_peak_bytes'] >= row['rss_before_bytes'] > 0
+                      assert row['io_delta']['wchar'] >= 0
+                      continue
+                  assert row['correctness'] is True and row['mismatches'] == []
+                  assert row['source_read_attempts'] == {'legacy_source_content_opens': 0, 'directory_scan_attempts': 0}
+                  if row['phase'] == 'cold_unprepared_read':
+                      assert row['expected_status'] == 503 and row['rounds'] == row['offered'] == 1
+                      assert row['succeeded'] == 0 and row['failed'] == row['status_503'] == 1
+                      assert len(row['failures']) == 1
+                      assert row['failures'][0]['status'] == 503
+                      assert row['failures'][0]['error_code'] == 'history_index_unavailable'
+                      assert row['response_hashes'] == [] and row['process_cold_prepared_index'] is None
+                      assert all(row['work_counts'].get(key, 0) == 0 for key in
+                                 ('logical_file_bytes_read', 'directory_entries', 'filesystem_scandir_calls'))
+                      assert all(row['application_work_counts'].get(key, 0) == 0 for key in
+                                 ('authority_decodes', 'job_projection_outputs', 'source_rows',
+                                  'page_decodes', 'filesystem_entries', 'dirty_keys', 'refreshed_outputs'))
+                  else:
+                      assert row['phase'] == 'hot_pages' and row['expected_status'] == 200
+                      assert row['rounds'] == config['rounds']
+                      assert row['offered'] == row['succeeded'] == config['rounds'] * row['concurrency']
+                      assert row['failed'] == row['status_503'] == 0 and row['failures'] == []
+                      assert row['response_hashes'] and row['process_cold_prepared_index']['correct'] is True
+
           report = json.load(open('/tmp/v1-lab-history-read.json'))
-          assert report['source_unchanged_during_run'] and report['checkout_default_storage_unchanged']
-          assert all(row['correctness'] for row in report['runs']), 'Read matrix correctness failed'
+          assert report['configuration']['surfaces'] == ['v1', 'lab']
+          validate_report(report)
           PY
       - uses: actions/upload-artifact@v4
         if: always()
@@ -199,9 +261,71 @@ jobs:
           python ../scripts/benchmark_history_reads.py --surfaces v2 --sizes 100,1000 --concurrency 2,4,8 --rounds 1 --output /tmp/v2-history-read.json
           python - <<'PY'
           import json
+          import math
+
+
+          def validate_report(report):
+              assert report['source_unchanged_during_run'] is True
+              assert report['checkout_default_storage_unchanged'] is True
+              config = report['configuration']
+              assert config['index_lifecycle'] == 'explicit' and config['skip_cold_probe'] is False
+              assert config['surfaces'] and set(config['surfaces']) <= {'v1', 'lab', 'v2'}
+              assert config['sizes'] and all(type(size) is int and size > 0 for size in config['sizes'])
+              assert config['concurrency'] and all(type(size) is int and size > 0 for size in config['concurrency'])
+              assert type(config['rounds']) is int and config['rounds'] > 0
+              expected = []
+              for surface in config['surfaces']:
+                  for size in config['sizes']:
+                      expected.extend([
+                          (surface, size, 'cold_unprepared_read', config['diagnostic_cold'], 1),
+                          (surface, size, 'explicit_index_preparation', config['diagnostic_cold'], None),
+                      ])
+                      for diagnostic in ([False, True] if config['diagnostic_hot'] else [False]):
+                          expected.extend((surface, size, 'hot_pages', diagnostic, count) for count in config['concurrency'])
+              actual = [(row['surface'], row['rows'], row['phase'], row['diagnostic'], row.get('concurrency'))
+                        for row in report['runs']]
+              assert actual == expected, 'Missing, repeated, unknown, or misordered benchmark phase'
+              for row in report['runs']:
+                  assert row['content_read_attempts'] == {'generated_file_content_opens': 0, 'image_codec_calls': 0}
+                  assert all(type(row[key]) in (int, float) and math.isfinite(row[key]) and row[key] >= 0
+                             for key in ('wall_seconds', 'cpu_seconds'))
+                  if row['phase'] == 'explicit_index_preparation':
+                      # This phase is emitted only after the maintenance callable returns.
+                      # Require its real measurement/storage schema and populated index;
+                      # it deliberately has no HTTP 'correctness' or response-status field.
+                      assert row['wall_seconds'] > 0 and row['storage_before']['total_bytes'] >= 0
+                      assert row['storage']['total_bytes'] > 0
+                      index = 'v2_image_history' if row['surface'] == 'v2' else 'v1_read_sources'
+                      tables = [database['tables'][index] for database in row['storage']['databases']
+                                if index in database['tables']]
+                      assert len(tables) == 1 and tables[0]['rows'] >= row['rows'], 'Preparation index is incomplete'
+                      assert row['rss_peak_bytes'] >= row['rss_before_bytes'] > 0
+                      assert row['io_delta']['wchar'] >= 0
+                      continue
+                  assert row['correctness'] is True and row['mismatches'] == []
+                  assert row['source_read_attempts'] == {'legacy_source_content_opens': 0, 'directory_scan_attempts': 0}
+                  if row['phase'] == 'cold_unprepared_read':
+                      assert row['expected_status'] == 503 and row['rounds'] == row['offered'] == 1
+                      assert row['succeeded'] == 0 and row['failed'] == row['status_503'] == 1
+                      assert len(row['failures']) == 1
+                      assert row['failures'][0]['status'] == 503
+                      assert row['failures'][0]['error_code'] == 'history_index_unavailable'
+                      assert row['response_hashes'] == [] and row['process_cold_prepared_index'] is None
+                      assert all(row['work_counts'].get(key, 0) == 0 for key in
+                                 ('logical_file_bytes_read', 'directory_entries', 'filesystem_scandir_calls'))
+                      assert all(row['application_work_counts'].get(key, 0) == 0 for key in
+                                 ('authority_decodes', 'job_projection_outputs', 'source_rows',
+                                  'page_decodes', 'filesystem_entries', 'dirty_keys', 'refreshed_outputs'))
+                  else:
+                      assert row['phase'] == 'hot_pages' and row['expected_status'] == 200
+                      assert row['rounds'] == config['rounds']
+                      assert row['offered'] == row['succeeded'] == config['rounds'] * row['concurrency']
+                      assert row['failed'] == row['status_503'] == 0 and row['failures'] == []
+                      assert row['response_hashes'] and row['process_cold_prepared_index']['correct'] is True
+
           report = json.load(open('/tmp/v2-history-read.json'))
-          assert report['source_unchanged_during_run'] and report['checkout_default_storage_unchanged']
-          assert all(row['correctness'] for row in report['runs']), 'Read matrix correctness failed'
+          assert report['configuration']['surfaces'] == ['v2']
+          validate_report(report)
           PY
       - uses: actions/upload-artifact@v4
         if: always()

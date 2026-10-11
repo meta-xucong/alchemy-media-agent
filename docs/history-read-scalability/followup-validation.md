@@ -16,7 +16,7 @@
 - 完整 V1 API smoke 加异步边界：99 passed（97 + 2）。与上一组有重叠，不相加。
 - V2 完整套件：774 passed。
 - Node 桌面/移动合同：169 passed，零失败/跳过。
-- Chromium 探针程序提取检查通过：每个外壳 41 个实际函数；本云端 Chromium 因 socket 权限无法启动，未产生真实浏览器测量。CI 已加入固定 Playwright 版本的实际 Chromium 执行与 JSON/log artifact。新提交 CI 结果须另行核实，不能借用 fd259486 的绿色检查。
+- Chromium 探针程序提取及离线夹具运行检查通过：桌面 43、移动 41 个实际函数；本云端 Chromium 因 socket 权限无法启动，未产生真实浏览器测量。CI 已加入固定 Playwright 版本的实际 Chromium 执行与 JSON/log artifact。新提交 CI 结果须另行核实，不能借用 fd259486 的绿色检查。
 - 基准安全测试：V1/V2 环境各 18 passed；七次未准备读取均按预期 503，且未扫描来源；616 次已准备热读结果正确，无 503 或图片内容读取。
 - 同 output ID 100/1k/10k 来源的 Python 临时峰值约 21 KiB，扫描工作仍线性增长。
 - 10k 输出共享 Job 对照：存储 107.96→75.68 MiB，逻辑准备写入 617.36→552.74 MiB，准备峰值 RSS 144.54→122.29 MiB。普通 10k Job 对照存储 93.47→94.38 MiB、写入 534.14→536.83 MiB，存在小幅代价。
@@ -24,6 +24,10 @@
 完整数据、哈希一致性与测量限制见 `followup-resource-bounds.md`。原始五份压缩 JSON 保存在 evidence 下；旧基准仍仅代表旧提交。
 
 ## 复审状态与仍然存在的边界
+
+首次 follow-up 提交 `797feb01` 的 CI 暴露两项测试配套错误：新增 preparation 报告没有 HTTP correctness 字段，旧工作流断言未区分阶段；实际 Chromium 夹具遗漏 desktop deferred-image 和 mobile summary 辅助依赖。后续仅修正测试/工作流与记录：按阶段严格校验完整矩阵，新增损坏报告反例；浏览器夹具增加共享离线运行检查，保留全部原有资源断言。首次失败记录保留，不记作通过，后续新 head 须重新检查 CI。
+
+修正后基准安全套件在 V1/V2 环境各 41 passed；两份工作流内嵌校验器对新生成的 CI 同形状矩阵验证通过，并覆盖 20 种损坏报告反例。Node 169 项及四个离线浏览器夹具组合再次通过。产品源代码未因这轮 CI 配套修正而变化。
 
 独立审查发现的问题已实施防御性修正并运行普通回归，但审查服务中断，最终冻结代码未取得独立安全 PASS。详见 `followup-independent-review.md`；不可将实现者自检冒充独立终审。
 

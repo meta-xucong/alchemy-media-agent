@@ -31,6 +31,151 @@ function extract(source, name) {
   }
   throw new Error(`Cannot extract ${name}`);
 }
+function initializeFixture({ moduleName }) {
+      window.moduleName = moduleName;
+      const names = ["historyGallery", "historyCount", "v2HistoryGrid", "v2HistoryCount", "heroHistoryCarousel",
+        "favoritePickerModal", "favoritePickerGrid", "favoritePickerCount", "v2FavoriteReferenceModal",
+        "v2FavoriteReferenceGrid", "v2FavoriteReferenceCount", "refreshHistoryBtn", "v2RefreshHistoryBtn"];
+      window.els = Object.fromEntries(names.map((name) => {
+        const element = document.createElement("div"); element.id = name; document.body.append(element); return [name, element];
+      }));
+      els.favoritePickerModal.hidden = els.v2FavoriteReferenceModal.hidden = true;
+      els.favoritePickerModal.append(els.favoritePickerGrid, els.favoritePickerCount);
+      els.v2FavoriteReferenceModal.append(els.v2FavoriteReferenceGrid, els.v2FavoriteReferenceCount);
+      window.state = { historyItems: [], historyTotal: 0, historyRenderLimit: 24, historyFavoritesOnly: false };
+      window.v2State = { history: [], historyTotal: 0, historyRenderLimit: 24, historyFavoritesOnly: false };
+      window.veyraState = {};
+      // The desktop media binder owns deferred V3 bindings even on V1/V2 calls.
+      // Include its actual helper state rather than replacing cleanup with a no-op.
+      window.v3DeferredImageLoads = new Map();
+      window.v3ImageBindingStates = new WeakMap();
+      window.v3DeferredImageObserver = null;
+      window.activePanelName = () => moduleName === "v1" ? "image" : "v2";
+      window.getVeyraToken = () => "synthetic-account";
+      window.request = window.v2Request = async (url, options = {}) => (await fetch(url, { signal: options.signal })).json();
+      window.isRenderableV2HistoryImage = (item) => item.renderable !== false;
+      window.compareHistoryItems = (a, b) => b.created_at - a.created_at;
+      window.uniqueNonEmpty = (values) => [...new Set(values.filter(Boolean))];
+      window.friendlyError = (error) => error.message;
+      window.showNotice = window.updateV2Notice = window.showGlobalToast = (message, kind) => { if (kind === "error") throw new Error(message); };
+      window.clearHeroCarouselTimer = window.restartHeroCarousels = window.scheduleMobileSummaryUpdate = () => {};
+      window.normalizeHeroHistoryItem = (item) => ({ id: item.id, url: item.url, thumbnailUrl: item.url });
+      window.historyItemCanDelete = () => false;
+      window.createFavoriteButton = () => document.createElement("button");
+      window.bindDownloadLink = () => {};
+      for (const name of ["historyMetaText", "v2HistoryProviderResultText", "historyDetailText", "historyRecordLabel", "formatDate", "favoriteRevisionDetail"]) window[name] = () => "synthetic";
+      window.v2HistoryCardPrompt = (item) => item.prompt;
+      window.v2HistoryImageCandidates = (item) => [item.url];
+      window.v1ExplicitDownloadUrl = window.v2ExplicitDownloadUrl = (item) => item.url;
+      window.v2HistoryFormat = () => "png";
+      window.mediaUrlNeedsAuthenticatedFetch = () => true;
+      const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), (char) => char.charCodeAt(0));
+      window.liveObjectUrls = new Set();
+      const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+      URL.createObjectURL = (blob) => { const url = create(blob); liveObjectUrls.add(url); return url; };
+      URL.revokeObjectURL = (url) => { liveObjectUrls.delete(url); revoke(url); };
+      window.resolveAuthenticatedMediaSource = async () => ({ url: URL.createObjectURL(new Blob([png], { type: "image/png" })), objectUrl: true });
+      window.sample = () => {
+        const model = moduleName === "v1" ? state : v2State;
+        const rows = model[moduleName === "v1" ? "historyItems" : "history"];
+        const grid = moduleName === "v1" ? els.historyGallery : els.v2HistoryGrid;
+        const picker = moduleName === "v1" ? els.favoritePickerGrid : els.v2FavoriteReferenceGrid;
+        return { rows: rows.length, heroRows: model.historyHeroItems?.length || 0,
+          historyImages: grid.querySelectorAll("img").length, pickerImages: picker.querySelectorAll("img").length,
+          heroImages: els.heroHistoryCarousel.querySelectorAll("img").length, objectUrls: liveObjectUrls.size,
+          start: model.historyDemand?.start || 0, offset: model.historyDemand?.offset || 0 };
+      };
+}
+
+// This lightweight DOM checks the exact browser fixture and dynamic programs
+// for missing runtime dependencies. It is not browser/heap evidence.
+function fixtureNode(tagName = "div") {
+  const classes = new Set();
+  return {
+    tagName: tagName.toUpperCase(), dataset: {}, hidden: false, children: [], parentElement: null,
+    get innerHTML() { return ""; },
+    set innerHTML(value) { this.children.forEach((child) => { child.parentElement = null; }); this.children = []; },
+    classList: {
+      add: (...names) => names.forEach((name) => classes.add(name)),
+      remove: (...names) => names.forEach((name) => classes.delete(name)),
+      contains: (name) => classes.has(name),
+      toggle(name, force = !classes.has(name)) { if (force) classes.add(name); else classes.delete(name); },
+    },
+    append(...children) { children.forEach((child) => this.appendChild(child)); },
+    appendChild(child) {
+      if (child.parentElement) child.parentElement.children = child.parentElement.children.filter((entry) => entry !== child);
+      child.parentElement = this; this.children.push(child); return child;
+    },
+    querySelectorAll(selector) {
+      const children = this.children.flatMap((child) => [child, ...child.querySelectorAll("*")]);
+      return selector === "*" ? children : children.filter((child) => child.tagName === selector.toUpperCase());
+    },
+    closest(selector) {
+      for (let current = this; current; current = current.parentElement) if (selector === "[hidden]" && current.hidden) return current;
+      return null;
+    },
+    addEventListener() {}, removeEventListener() {}, removeAttribute(name) { delete this[name]; },
+    setAttribute(name, value) { this[name] = value; }, focus() {},
+  };
+}
+
+async function validateFixtureRuntime(sources) {
+  for (const [shell, { program }] of sources) for (const moduleName of ["v1", "v2"]) {
+    let blobId = 0;
+    class FixtureURL extends URL {
+      static createObjectURL() { return `blob:offline-${++blobId}`; }
+      static revokeObjectURL() {}
+    }
+    const context = vm.createContext({
+      console, URL: FixtureURL, URLSearchParams, Blob, atob, AbortController, setTimeout, clearTimeout,
+      document: { body: fixtureNode("body"), createElement: fixtureNode, removeEventListener() {} },
+      fetch: async (path) => {
+        const url = new URL(path, "http://history-probe.test");
+        assert.ok(url.pathname.endsWith("/history"));
+        const offset = Number(url.searchParams.get("offset"));
+        const limit = Number(url.searchParams.get("limit"));
+        assert.ok(limit > 0 && limit <= 24);
+        return { json: async () => ({ total: 50000, items: Array.from({ length: limit }, (_, index) => ({
+          id: `row-${offset + index}`, output_id: `row-${offset + index}`, favorite: true,
+          created_at: 50000 - offset - index, format: "png", source: "repository", prompt: "offline", url: "/media.png",
+        })) }) };
+      },
+    });
+    vm.runInContext('globalThis.window = globalThis;', context);
+    vm.runInContext(`(${initializeFixture.toString()})(${JSON.stringify({ moduleName })});`, context);
+    vm.runInContext(program, context);
+    await context.ensureHistoryDemand(moduleName);
+    for (const favorites of [false, true]) {
+      if (favorites) {
+        context.els[moduleName === "v1" ? "favoritePickerModal" : "v2FavoriteReferenceModal"].hidden = false;
+        await context.ensureHistoryDemand(moduleName);
+      }
+      for (let page = 0; page < 12; page += 1) {
+        await context[moduleName === "v1" ? "loadMoreV1History" : "loadMoreV2History"]();
+        const sample = context.sample();
+        assert.ok(sample.rows <= 72 && sample.heroRows <= 24);
+        assert.ok(sample.historyImages <= 72 && sample.pickerImages <= 72 && sample.heroImages <= 8);
+        assert.ok(sample.objectUrls <= 152);
+      }
+      const start = context.sample().start;
+      await context.loadPreviousHistoryWindow(moduleName);
+      assert.equal(context.sample().start, start - 72);
+    }
+    // Execute the desktop deferred branch too; it shares cleanup state.
+    if (shell === "desktop") {
+      const image = fixtureNode("img");
+      context.bindImageWithFallback(image, ["/media.png"], { deferAuthenticated: true });
+      await new Promise((resolve) => setImmediate(resolve));
+      context.releaseImageObjectUrl(image);
+    }
+    context.clearHistoryDemandCaches();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.sample().rows, 0);
+    assert.equal(context.sample().objectUrls, 0);
+    console.log(`${shell}/${moduleName}: shared probe fixture executed paging, favorites, Previous and auth cleanup`);
+  }
+}
+
 // Validate every dynamically constructed pattern and function before launching
 // a browser. This can run even where the executor cannot start Chromium.
 const sources = new Map();
@@ -39,13 +184,19 @@ for (const shell of ["desktop", "mobile"]) {
   const source = readFileSync(new URL(path, import.meta.url), "utf8");
   const constants = [...source.matchAll(/^const (\w+) = (\d+);$/gm)];
   assert.ok(constants.some((match) => match[1] === "historyWindowSize" && match[2] === "72"));
+  const helpers = ["cancelV3DeferredImageLoad", "deferV3ImageUntilVisible"]
+    .filter((name) => source.includes(`function ${name}(`));
+  const selectedFunctions = [...functions, ...helpers];
   const program = constants.map((match) => `window.${match[1]} = ${match[2]};`).join("\n")
-    + "\n" + functions.map((name) => extract(source, name)).join("\n");
+    + "\n" + selectedFunctions.map((name) => extract(source, name)).join("\n");
   new vm.Script(program);
   sources.set(shell, { source, program });
-  if (checkOnly) console.log(`${shell}: extracted and parsed ${functions.length} shipped functions and ${constants.length} constants`);
+  if (checkOnly) console.log(`${shell}: extracted and parsed ${selectedFunctions.length} shipped functions and ${constants.length} constants`);
 }
-if (checkOnly) process.exit(0);
+if (checkOnly) {
+  await validateFixtureRuntime(sources);
+  process.exit(0);
+}
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || "playwright");
 const browser = await chromium.launch({
   headless: true,
@@ -83,56 +234,7 @@ try {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ items, total: 50000 }) });
     });
     await page.goto("http://history-probe.test/");
-    await page.evaluate(({ moduleName }) => {
-      window.moduleName = moduleName;
-      const names = ["historyGallery", "historyCount", "v2HistoryGrid", "v2HistoryCount", "heroHistoryCarousel",
-        "favoritePickerModal", "favoritePickerGrid", "favoritePickerCount", "v2FavoriteReferenceModal",
-        "v2FavoriteReferenceGrid", "v2FavoriteReferenceCount", "refreshHistoryBtn", "v2RefreshHistoryBtn"];
-      window.els = Object.fromEntries(names.map((name) => {
-        const element = document.createElement("div"); element.id = name; document.body.append(element); return [name, element];
-      }));
-      els.favoritePickerModal.hidden = els.v2FavoriteReferenceModal.hidden = true;
-      els.favoritePickerModal.append(els.favoritePickerGrid, els.favoritePickerCount);
-      els.v2FavoriteReferenceModal.append(els.v2FavoriteReferenceGrid, els.v2FavoriteReferenceCount);
-      window.state = { historyItems: [], historyTotal: 0, historyRenderLimit: 24, historyFavoritesOnly: false };
-      window.v2State = { history: [], historyTotal: 0, historyRenderLimit: 24, historyFavoritesOnly: false };
-      window.veyraState = {};
-      window.activePanelName = () => moduleName === "v1" ? "image" : "v2";
-      window.getVeyraToken = () => "synthetic-account";
-      window.request = window.v2Request = async (url, options = {}) => (await fetch(url, { signal: options.signal })).json();
-      window.isRenderableV2HistoryImage = (item) => item.renderable !== false;
-      window.compareHistoryItems = (a, b) => b.created_at - a.created_at;
-      window.uniqueNonEmpty = (values) => [...new Set(values.filter(Boolean))];
-      window.friendlyError = (error) => error.message;
-      window.showNotice = window.updateV2Notice = window.showGlobalToast = (message, kind) => { if (kind === "error") throw new Error(message); };
-      window.clearHeroCarouselTimer = window.restartHeroCarousels = () => {};
-      window.normalizeHeroHistoryItem = (item) => ({ id: item.id, url: item.url, thumbnailUrl: item.url });
-      window.historyItemCanDelete = () => false;
-      window.createFavoriteButton = () => document.createElement("button");
-      window.bindDownloadLink = () => {};
-      for (const name of ["historyMetaText", "v2HistoryProviderResultText", "historyDetailText", "historyRecordLabel", "formatDate", "favoriteRevisionDetail"]) window[name] = () => "synthetic";
-      window.v2HistoryCardPrompt = (item) => item.prompt;
-      window.v2HistoryImageCandidates = (item) => [item.url];
-      window.v1ExplicitDownloadUrl = window.v2ExplicitDownloadUrl = (item) => item.url;
-      window.v2HistoryFormat = () => "png";
-      window.mediaUrlNeedsAuthenticatedFetch = () => true;
-      const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), (char) => char.charCodeAt(0));
-      window.liveObjectUrls = new Set();
-      const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
-      URL.createObjectURL = (blob) => { const url = create(blob); liveObjectUrls.add(url); return url; };
-      URL.revokeObjectURL = (url) => { liveObjectUrls.delete(url); revoke(url); };
-      window.resolveAuthenticatedMediaSource = async () => ({ url: URL.createObjectURL(new Blob([png], { type: "image/png" })), objectUrl: true });
-      window.sample = () => {
-        const model = moduleName === "v1" ? state : v2State;
-        const rows = model[moduleName === "v1" ? "historyItems" : "history"];
-        const grid = moduleName === "v1" ? els.historyGallery : els.v2HistoryGrid;
-        const picker = moduleName === "v1" ? els.favoritePickerGrid : els.v2FavoriteReferenceGrid;
-        return { rows: rows.length, heroRows: model.historyHeroItems?.length || 0,
-          historyImages: grid.querySelectorAll("img").length, pickerImages: picker.querySelectorAll("img").length,
-          heroImages: els.heroHistoryCarousel.querySelectorAll("img").length, objectUrls: liveObjectUrls.size,
-          start: model.historyDemand?.start || 0, offset: model.historyDemand?.offset || 0 };
-      };
-    }, { moduleName });
+    await page.evaluate(initializeFixture, { moduleName });
     await page.addScriptTag({ content: program });
     const cdp = await page.context().newCDPSession(page);
     const samples = [];

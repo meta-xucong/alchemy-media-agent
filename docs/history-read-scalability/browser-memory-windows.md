@@ -106,9 +106,14 @@ exercises 360 ordinary and 360 favorite gestures per shell/product, and records
 CDP post-GC heap/DOM counters plus active object URL counts. Its media resolver
 uses small synthetic PNG Blobs, not production image transfer/authentication.
 It is a renderer probe, not the full product's browser navigation or UX test.
-Its browser-independent `--check` mode also passed: 41 shipped functions from
-each shell, plus 26 desktop and 22 mobile numeric constants, were extracted and
-parser-validated as complete combined programs before browser launch.
+Its browser-independent `--check` mode also passed: 43 desktop and 41 mobile
+shipped functions, plus 26 desktop and 22 mobile numeric constants, were extracted
+and parser-validated. The same shared fixture initializer executes paging,
+favorites, Previous, deferred-image binding and auth cleanup in an offline DOM VM
+before browser launch. This catches missing fixture helpers without substituting
+for real Chromium measurements. The first CI attempt found missing desktop
+deferred-image and mobile summary dependencies; the corrected harness keeps the
+original resource assertions.
 
 Invocation in an environment that permits Chromium:
 

@@ -200,3 +200,104 @@ assert len(bench.fixture_storage(root)["databases"]) == 0
 '''
     result = subprocess.run([sys.executable, "-c", code, str(SCRIPT), str(tmp_path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+WORKFLOW = SCRIPT.parents[1] / ".github/workflows/capacity-retention-regressions.yml"
+EVIDENCE = SCRIPT.parents[1] / "docs/history-read-scalability/evidence"
+
+
+def _workflow_report_validators():
+    """Execute the actual embedded CI validators, not a parallel test implementation."""
+    import ast
+    import re
+    import textwrap
+
+    validators = []
+    for block in re.findall(r"          python - <<'PY'\n(.*?)          PY", WORKFLOW.read_text(encoding="utf-8"), re.S):
+        module = ast.parse(textwrap.dedent(block))
+        functions = [node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "validate_report"]
+        if not functions:
+            continue
+        namespace = {}
+        selected = [node for node in module.body if isinstance(node, (ast.Import, ast.ImportFrom))] + functions
+        exec(compile(ast.Module(body=selected, type_ignores=[]), str(WORKFLOW), "exec"), namespace)
+        validators.append(namespace["validate_report"])
+    assert len(validators) == 2, "Both history matrix workflow steps must have an explicit validator"
+    return validators
+
+
+def _retained_report(name):
+    import gzip
+    import json
+
+    with gzip.open(EVIDENCE / (name + ".json.gz"), "rt", encoding="utf-8") as source:
+        return json.load(source)
+
+
+@pytest.mark.parametrize("name", ["followup-after-fanout", "followup-after-standard", "followup-readiness"])
+def test_workflow_validators_accept_actual_multiphase_reports(name):
+    report = _retained_report(name)
+    assert any(row["phase"] == "explicit_index_preparation" and "correctness" not in row for row in report["runs"])
+    for validate in _workflow_report_validators():
+        validate(report)
+
+
+@pytest.mark.parametrize("fault", [
+    "missing_phase", "duplicate_phase", "unknown_phase", "cold_source_scan", "cold_source_open",
+    "cold_wrong_503", "cold_not_rejected", "cold_authority_decode", "cold_guard_missing",
+    "prepare_index_missing", "prepare_index_empty",
+    "prepare_schema_missing", "prepare_invalid_measurement", "prepare_image_read", "hot_incorrect",
+    "hot_rejected", "hot_missing_success", "hot_source_scan", "changed_source", "changed_storage",
+])
+def test_workflow_validators_reject_broken_phase_evidence(fault):
+    report = _retained_report("followup-readiness")
+    cold, prepared, hot = report["runs"][:3]
+    assert [row["phase"] for row in (cold, prepared, hot)] == [
+        "cold_unprepared_read", "explicit_index_preparation", "hot_pages"]
+    if fault == "missing_phase":
+        report["runs"].pop(1)
+    elif fault == "duplicate_phase":
+        report["runs"].insert(1, cold)
+    elif fault == "unknown_phase":
+        prepared["phase"] = "maintenance_error"
+    elif fault == "cold_source_scan":
+        cold["source_read_attempts"]["directory_scan_attempts"] = 1
+    elif fault == "cold_source_open":
+        cold["work_counts"]["logical_file_bytes_read"] = 1
+    elif fault == "cold_wrong_503":
+        cold["failures"][0]["error_code"] = "storage_busy"
+    elif fault == "cold_not_rejected":
+        cold["succeeded"] = 1
+    elif fault == "cold_authority_decode":
+        cold["application_work_counts"]["authority_decodes"] = 1
+    elif fault == "cold_guard_missing":
+        del cold["source_read_attempts"]
+    elif fault == "prepare_index_missing":
+        prepared["storage"]["databases"] = []
+    elif fault == "prepare_index_empty":
+        for database in prepared["storage"]["databases"]:
+            if "v1_read_sources" in database["tables"]:
+                database["tables"]["v1_read_sources"]["rows"] = 0
+    elif fault == "prepare_schema_missing":
+        del prepared["storage_before"]
+    elif fault == "prepare_invalid_measurement":
+        prepared["wall_seconds"] = float("nan")
+    elif fault == "prepare_image_read":
+        prepared["content_read_attempts"]["generated_file_content_opens"] = 1
+    elif fault == "hot_incorrect":
+        hot["correctness"] = False
+    elif fault == "hot_rejected":
+        hot["status_503"] = hot["failed"] = 1
+    elif fault == "hot_missing_success":
+        hot["succeeded"] -= 1
+    elif fault == "hot_source_scan":
+        hot["source_read_attempts"]["directory_scan_attempts"] = 1
+    elif fault == "changed_source":
+        report["source_unchanged_during_run"] = False
+    elif fault == "changed_storage":
+        report["checkout_default_storage_unchanged"] = False
+    else:
+        raise AssertionError(fault)
+    for validate in _workflow_report_validators():
+        with pytest.raises((AssertionError, KeyError)):
+            validate(report)
