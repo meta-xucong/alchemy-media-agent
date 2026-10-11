@@ -151,6 +151,15 @@ def test_activation_uses_one_v3_container_lifetime_for_both_work_inventories() -
     assert "v3_container_start_time_unreadable" in guard
 
 
+def test_offline_v2_history_maintenance_does_not_read_provider_auth_files() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+    prepare = workflow[workflow.index("          prepare_and_verify_target_indexes() {"):workflow.index("          restart_v2() {")]
+
+    assert prepare.count("CODEX_AUTH_FILE=/dev/null") == 2
+    assert 'scripts/prepare_v2_history_reads.py' in prepare
+    assert 'scripts/verify_v2_history_reads.py' in prepare
+
+
 def test_emergency_closure_verifies_maintenance_or_stops_public_nginx() -> None:
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
     keep_closed = workflow[workflow.index("          keep_closed() {"):workflow.index("          rollback() {")]

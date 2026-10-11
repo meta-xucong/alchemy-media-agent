@@ -312,12 +312,14 @@ jobs:
               --entrypoint python "${candidate_image}" \
               /app/scripts/prepare_v1_history_index.py --storage-root "$v1_root_in_container" --verify || return 1
             local v2_python="$candidate_release/custom_media_agent_2_0/.venv/bin/python"
-            runuser -u alchemy -- env V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
+            runuser -u alchemy -- env CODEX_AUTH_FILE=/dev/null \
+              V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
               V2_IMAGE_HISTORY_PATH="$v2_history_path" V2_TASK_QUEUE_DB_PATH="$v2_queue_db" \
               "$v2_python" "$candidate_release/scripts/prepare_v2_history_reads.py" \
               --data-root "$v2_data" --history-path "$v2_history_path" \
               --minimum-free-bytes "$minimum_free_bytes" || return 1
-            runuser -u alchemy -- env V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
+            runuser -u alchemy -- env CODEX_AUTH_FILE=/dev/null \
+              V2_DATA_DIR="$v2_data" V2_STORAGE_DIR="$v2_storage" \
               V2_IMAGE_HISTORY_PATH="$v2_history_path" V2_TASK_QUEUE_DB_PATH="$v2_queue_db" \
               "$v2_python" "$candidate_release/scripts/verify_v2_history_reads.py" \
               --data-root "$v2_data" --history-path "$v2_history_path" || return 1
