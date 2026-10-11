@@ -2250,8 +2250,12 @@ def test_frontend_static_app_is_served():
     assert "function refreshV1GenerationSideEffects" in script.text
     assert "await refreshV1GenerationSideEffects();" in script.text
     assert "function v2HistoryEndpoint" in script.text
-    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0" in script.text
-    assert "const v2HistoryFetchPageSize = 72" in script.text
+    # Module reads are 24 rows; account summary windows remain 48/72.
+    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset }" in script.text
+    assert "const historyFetchPageSize = 24" in script.text
+    assert "const v2HistoryFetchPageSize = 24" in script.text
+    assert "const accountV1HistoryWindow = 48" in script.text
+    assert "const accountV2HistoryWindow = 72" in script.text
     assert "管理员可见全部账户" in script.text
     assert "当前账户与旧版生图记录" in script.text
     assert "生成修改版本" in script.text
@@ -2524,8 +2528,12 @@ def test_mobile_h5_app_is_served_independently():
     assert "scrollV2HomeResultsIntoView(run);" in mobile_script.text
     assert "loadV2HistoryResponse" in mobile_script.text
     assert "function v2HistoryEndpoint" in mobile_script.text
-    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0" in mobile_script.text
-    assert "const v2HistoryFetchPageSize = 72" in mobile_script.text
+    # Module reads are 24 rows; account summary windows remain 48/72.
+    assert "loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset }" in mobile_script.text
+    assert "const historyFetchPageSize = 24" in mobile_script.text
+    assert "const v2HistoryFetchPageSize = 24" in mobile_script.text
+    assert "const accountV1HistoryWindow = 48" in mobile_script.text
+    assert "const accountV2HistoryWindow = 72" in mobile_script.text
     assert "/v1/veyra/usage?limit=100" in mobile_script.text
     assert "await refreshVeyraAccountPanelAfterHistoryChange();" in mobile_script.text
     assert "deleteV2HistoryItem" in mobile_script.text
@@ -2544,7 +2552,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "分享链接" in mobile_script.text
 
 
-def test_v2_template_catalog_is_not_blocked_by_slow_history_fallback():
+def test_v2_template_catalog_is_not_blocked_by_slow_history_demand():
     scripts = [
         main_module.STATIC_DIR / "app.js",
         main_module.MOBILE_STATIC_DIR / "mobile.js",
@@ -2553,14 +2561,15 @@ def test_v2_template_catalog_is_not_blocked_by_slow_history_fallback():
     for script_path in scripts:
         script = script_path.read_text(encoding="utf-8")
         init_body = script.split("async function initV2", 1)[1].split("function renderV2ModelSettings", 1)[0]
-        assert "const historyLoadEpoch = (v2State.historyLoadEpoch || 0) + 1;" in init_body
-        assert "const historyResponsePromise = loadV2HistoryResponse({" in init_body
-        assert "historyResponsePromise.then((historyResponse) =>" in init_body
+        # Behavioral request ordering is covered by frontend_demand_history.test.mjs.
+        assert 'ensureHistoryDemand("v2").catch(' in init_body
+        assert 'await ensureHistoryDemand("v2")' not in init_body
         resource_phase = init_body.split("try {", 1)[1]
         assert "loadV2HistoryResponse" not in resource_phase
         assert "模板已加载，历史记录继续读取" in resource_phase
-        assert "loadV2RequestWithTimeout(v2HistoryEndpoint(\"/image/history\", options), v2HistoryFallbackTimeoutMs)" in script
-        assert "const v2HistoryFallbackTimeoutMs = 8000;" in script
+        assert "loadV2ImageHistoryFallback" not in script
+        assert 'return await loadV2HistoryWithTimeout(v2HistoryPath(options), timeoutMs);' in script
+        assert "const v2AccountHistoryTimeoutMs = 8000;" in script
         assert "const v2TemplateBootstrapTimeoutMs = 20000;" in script
         assert "async function loadV2TemplateBootstrap(path, fallbackValue = null)" in script
         assert 'loadV2TemplateBootstrap("/templates/index", null)' in init_body
@@ -3610,6 +3619,13 @@ def test_v1_history_owner_lookups_reuse_request_connections(tmp_path, monkeypatc
             }
         )
 
+    # Initial derived projection construction is a separate cold operation.
+    # The invariant here is that a warm page does not open one connection per
+    # output; it no longer needs the old main-level ownership scan connection.
+    initial = main_module._list_image_history_sync(
+        {"authenticated": False, "user_id": None, "is_admin": False}, limit=50
+    )
+    assert len(initial.items) == 24
     connection_counts = {"main": 0, "local": 0, "repository": 0}
     original_main_connect = main_module.connect
     original_local_connect = local_module.connect
@@ -3637,7 +3653,8 @@ def test_v1_history_owner_lookups_reuse_request_connections(tmp_path, monkeypatc
     )
 
     assert len(response.items) == 24
-    assert connection_counts["main"] == 1
+    assert response.model_dump() == initial.model_dump()
+    assert connection_counts["main"] == 0
     assert connection_counts["local"] <= 3
     assert connection_counts["repository"] <= 2
 

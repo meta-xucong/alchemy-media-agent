@@ -556,13 +556,13 @@ def _restore_revision_source_from_history(job_id: str, output_id: str) -> tuple[
 
 
 def _history_record_for_output(output_id: str) -> dict | None:
-    for record in media_store.list_history_records(limit=10000):
-        if record.get("id") == output_id:
-            return record
-    for record in media_store.list_generated_output_records(limit=10000):
-        if record.get("id") == output_id:
-            return record
-    return None
+    record = media_store.get_history_record(output_id)
+    if record is not None:
+        return record
+    from app.repositories.history_index import read_history_page
+
+    records, _ = read_history_page(media_store, surface="v1", all_owners=True, output_id=output_id, limit=1)
+    return records[0] if records else None
 
 
 def _prompt_plan_from_history_record(record: dict, prompt: str, output_format: str) -> ImagePromptPlan:

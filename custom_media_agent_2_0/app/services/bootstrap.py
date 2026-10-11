@@ -9,7 +9,7 @@ from app.services.resource_sync import sync_resource_provider
 def bootstrap_v2_repository(seed_cases: bool = True, use_persisted_index: bool = True) -> None:
     if not repository.get_provider(EVOLINKAI_PROVIDER_ID):
         repository.upsert_provider(build_evolinkai_provider())
-    if seed_cases and not repository.list_cases():
+    if seed_cases and not repository.has_active_cases():
         if use_persisted_index:
             persisted_cases = load_case_index()
             if persisted_cases:

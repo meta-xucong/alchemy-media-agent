@@ -58,6 +58,9 @@ class LocalMediaStore:
         output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / f"{output_id}.{ext}"
         path.write_bytes(base64.b64decode(b64_json))
+        from app.repositories.history_index import mark_file_changed
+
+        mark_file_changed(self, path)
         self.ensure_thumbnail(output_id=output_id, source_path=path)
         self.ensure_preview(output_id=output_id, source_path=path)
         return f"/v1/outputs/{output_id}/download"
@@ -323,6 +326,9 @@ class LocalMediaStore:
                 # check. Treat that as an idempotent no-op.
                 return
             deleted_any = True
+            from app.repositories.history_index import mark_file_changed
+
+            mark_file_changed(self, target)
 
         if job_id and output_format:
             delete_candidate(self.output_path(job_id=job_id, output_id=output_id, output_format=output_format))
@@ -439,6 +445,9 @@ class LocalMediaStore:
                     completed_at TEXT NOT NULL
                 )"""
             )
+            from app.repositories.history_index import install_manifest_tracking
+
+            install_manifest_tracking(connection)
             history_imported = connection.execute(
                 "SELECT 1 FROM v1_history_state WHERE state_key='jsonl_imported'"
             ).fetchone() is not None

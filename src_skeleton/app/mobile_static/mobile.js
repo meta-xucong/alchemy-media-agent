@@ -26,7 +26,9 @@ const defaultImageCount = "1";
 const coffeeSampleCount = "1";
 const heroCarouselIntervalMs = 5000;
 const historyPageSize = 24;
-const historyFetchPageSize = 48;
+const historyFetchPageSize = 24;
+const accountV1HistoryWindow = 48;
+const accountV2HistoryWindow = 72;
 const heroHistoryPageSize = 8;
 const mobileV3ProjectPageSize = 4;
 const mobileV3ProjectFetchLimit = mobileV3ProjectPageSize;
@@ -35,7 +37,7 @@ const mobileV3ProjectCacheLimit = 80;
 const v2TemplatePageSize = 10;
 const v2TemplateEagerImageCount = 4;
 const v2HistoryPageSize = 24;
-const v2HistoryFetchPageSize = 72;
+const v2HistoryFetchPageSize = 24;
 const labStylePageSize = 80;
 const labPollIntervalMs = 3000;
 const labPollMaxAttempts = 360;
@@ -597,7 +599,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await syncVeyraSessionCookie();
     restoreInitialModuleRoute();
     updateMobileAccountSummary();
-    await Promise.all([createSession({ announce: false }), loadProviders()]);
+    if (historyDemandVisible("v1")) await ensureV1Module();
     scheduleInitialBackgroundLoads({ hadVeyraTicket });
   } catch (error) {
     showNotice(`初始化失败：${friendlyError(error)}`, "error");
@@ -622,27 +624,248 @@ function scheduleIdleTask(task, { timeout = 1200 } = {}) {
 
 function scheduleInitialBackgroundLoads({ hadVeyraTicket = false } = {}) {
   scheduleIdleTask(() => {
-    refreshHistory({ silent: true }).catch((error) => {
-      console.warn("Initial V1 history refresh failed", error);
-    });
-  }, { timeout: 600 });
-  scheduleIdleTask(() => {
     if (getVeyraToken() && !hadVeyraTicket) {
       refreshVeyraAccount().catch(() => {
-        veyraState.account = null;
-        updateMobileAccountSummary();
-      });
-    }
-    if (document.body.dataset.activeModule === "v2") {
-      initV2({ silent: true }).catch((error) => {
-        updateV2Notice(`2.0 API 未连接：${friendlyError(error)}`, "warning");
-        if (els.v2HealthState) els.v2HealthState.textContent = "离线";
+        setVeyraAccount(null);
       });
     }
   }, { timeout: 1800 });
 }
 
+function historyDemandState(moduleName) {
+  const model = moduleName === "v2" ? v2State : state;
+  if (!model.historyDemand) {
+    model.historyDemand = { epoch: 0, loaded: false, dirty: false, offset: 0, exhausted: false, promise: null };
+  }
+  return model.historyDemand;
+}
+
+function historyDemandVisible(moduleName) {
+  if (activePanelName() !== (moduleName === "v2" ? "v2" : "image")) return false;
+  const surface = document.body.dataset.mobileActiveSurface;
+  return !surface || surface === `${moduleName}-history` || historyPickerVisible(moduleName);
+}
+
+function historyPickerVisible(moduleName) {
+  const picker = moduleName === "v2" ? els.v2FavoriteReferenceModal : els.favoritePickerModal;
+  return Boolean(picker && !picker.hidden);
+}
+
+function historyFavoritesDemanded(moduleName) {
+  const model = moduleName === "v2" ? v2State : state;
+  return historyDemandVisible(moduleName) && (historyPickerVisible(moduleName)
+    || (model.historyFavoritesOnly && document.body.dataset.mobileActiveSurface === `${moduleName}-history`));
+}
+
+function invalidateHistoryDemand(moduleName) {
+  const demand = historyDemandState(moduleName);
+  demand.epoch += 1;
+  demand.dirty = true;
+}
+
+function clearHistoryDemandCaches() {
+  state.historyAuthEpoch = (state.historyAuthEpoch || 0) + 1;
+  for (const moduleName of ["v1", "v2"]) {
+    invalidateHistoryDemand(moduleName);
+    const model = moduleName === "v2" ? v2State : state;
+    const demand = historyDemandState(moduleName);
+    demand.loaded = false;
+    demand.offset = 0;
+    demand.exhausted = false;
+    model[moduleName === "v2" ? "history" : "historyItems"] = [];
+    model.historyTotal = 0;
+  }
+  state.sessionId = null;
+  state.v1ModuleReady = false;
+  state.providerSettingsReady = false;
+  state.heroHistoryItems = [];
+  veyraState.overviewEpoch = (veyraState.overviewEpoch || 0) + 1;
+  veyraState.overviewLoaded = false;
+  veyraState.overviewDirty = true;
+  veyraState.history = [];
+  veyraState.usage = [];
+  veyraState.usedTemplates = [];
+  veyraState.templateHistoryItems = [];
+  veyraState.templateHistoryReady = false;
+  veyraState.sectionObserver?.disconnect();
+  if (veyraState.sectionScrollListener) document.removeEventListener("scroll", veyraState.sectionScrollListener, true);
+  veyraState.sectionScrollListener = null;
+  for (const node of [els.historyGallery, els.v2HistoryGrid, els.heroHistoryCarousel,
+    els.favoritePickerGrid, els.v2FavoriteReferenceGrid, els.veyraAccountHistoryGrid,
+    els.veyraTemplateHistoryList, els.veyraUsageList]) {
+    if (node) node.innerHTML = "";
+  }
+}
+
+function sharedProviderSettingsDemanded() {
+  const moduleName = activePanelName();
+  if (moduleName !== "image" && moduleName !== "lab") return false;
+  const surface = document.body.dataset.mobileActiveSurface;
+  return !surface || surface.startsWith(moduleName === "lab" ? "lab-" : "v1-");
+}
+
+async function ensureSharedProviderSettings({ explicit = false } = {}) {
+  if (!explicit && !sharedProviderSettingsDemanded()) return false;
+  if (state.providerSettingsReady) return true;
+  const requestEpoch = state.historyAuthEpoch || 0;
+  const requestToken = getVeyraToken();
+  if (!state.providerSettingsPromise) {
+    const authEpoch = state.historyAuthEpoch || 0;
+    const token = getVeyraToken();
+    state.providerSettingsPromise = loadProviders().then(() => {
+      if (authEpoch === (state.historyAuthEpoch || 0) && token === getVeyraToken()) state.providerSettingsReady = true;
+    }).finally(() => { state.providerSettingsPromise = null; });
+  }
+  await state.providerSettingsPromise;
+  if (explicit && (requestEpoch !== (state.historyAuthEpoch || 0) || requestToken !== getVeyraToken())) return false;
+  if (!state.providerSettingsReady && (explicit || sharedProviderSettingsDemanded())) return ensureSharedProviderSettings({ explicit });
+  return Boolean(state.providerSettingsReady);
+}
+
+async function ensureV1Module() {
+  if (!historyDemandVisible("v1")) return;
+  if (!state.v1ModulePromise && !state.v1ModuleReady) {
+    const epoch = state.historyAuthEpoch || 0;
+    const token = getVeyraToken();
+    state.v1ModulePromise = Promise.all([
+      state.sessionId ? Promise.resolve() : createSession({ announce: false }),
+      ensureSharedProviderSettings(),
+    ]).then(() => {
+      if (epoch === (state.historyAuthEpoch || 0) && token === getVeyraToken()) state.v1ModuleReady = true;
+    }).finally(() => { state.v1ModulePromise = null; });
+  }
+  await state.v1ModulePromise;
+  if (!state.v1ModuleReady && historyDemandVisible("v1")) return ensureV1Module();
+  if (historyDemandVisible("v1")) await ensureHistoryDemand("v1");
+}
+
+async function ensureHistoryDemand(moduleName) {
+  if (!historyDemandVisible(moduleName)) return;
+  const demand = historyDemandState(moduleName);
+  let loaded = true;
+  if (!demand.loaded || demand.dirty) {
+    if (moduleName === "v2") loaded = await loadV2History({ silent: true });
+    else loaded = await refreshHistory({ silent: true });
+  } else {
+    renderHistoryDemand(moduleName);
+  }
+  if (loaded && demand.loaded && !demand.dirty && historyFavoritesDemanded(moduleName)) {
+    await readHistoryDemand(moduleName, { allFavorites: true });
+  }
+}
+
+function renderHistoryDemand(moduleName) {
+  if (!historyDemandVisible(moduleName)) return;
+  const items = moduleName === "v2" ? v2State.history : state.historyItems;
+  if (moduleName === "v2") renderV2History(items);
+  else renderHistory(items);
+  if (!document.body.dataset.mobileActiveSurface) renderHeroHistory(items, { source: moduleName });
+  if (historyPickerVisible(moduleName)) {
+    if (moduleName === "v2") renderV2FavoriteReferencePicker();
+    else renderFavoritePicker();
+  }
+}
+
+function historyMediaDemand(moduleName, node = null, picker = false) {
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
+  return () => token === getVeyraToken() && authEpoch === (state.historyAuthEpoch || 0) && historyDemandVisible(moduleName)
+    && (!node || !node.closest("[hidden]")) && (!picker || historyPickerVisible(moduleName));
+}
+
+function accountMediaDemand(node) {
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
+  return () => token === getVeyraToken() && authEpoch === (state.historyAuthEpoch || 0) && accountSectionVisible(node);
+}
+
+async function readHistoryDemand(moduleName, { reset = false, allFavorites = false } = {}) {
+  const model = moduleName === "v2" ? v2State : state;
+  const demand = historyDemandState(moduleName);
+  const favoritesDemand = allFavorites || (model.historyFavoritesOnly && historyFavoritesDemanded(moduleName));
+  const demanded = () => favoritesDemand ? historyFavoritesDemanded(moduleName) : historyDemandVisible(moduleName);
+  if (!demanded()) return;
+  if (demand.promise) {
+    await demand.promise;
+    if (demanded() && (demand.dirty || allFavorites)) return readHistoryDemand(moduleName, { reset: demand.dirty, allFavorites });
+    return;
+  }
+  reset = reset || demand.dirty || !demand.loaded;
+  if (!reset && demand.exhausted) return;
+  const key = moduleName === "v2" ? "history" : "historyItems";
+  const epoch = demand.epoch;
+  const token = getVeyraToken();
+  const visibleCountBefore = model[key].filter((item) => (moduleName !== "v2" || isRenderableV2HistoryImage(item))
+    && (!favoritesDemand || item.favorite)).length;
+  const renderLimit = reset ? 24 : Math.min(model.historyRenderLimit, visibleCountBefore) + 24;
+  const current = () => epoch === demand.epoch && token === getVeyraToken();
+  model.historyLoadingMore = true;
+  demand.promise = (async () => {
+    let items = reset ? [] : model[key].slice();
+    let offset = reset ? 0 : demand.offset;
+    let pages = 0;
+    while (current() && demanded() && (allFavorites || pages < 3)) {
+      const response = moduleName === "v2"
+        ? await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset })
+        : await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`);
+      if (!current()) return;
+      const incoming = Array.isArray(response.items) ? response.items : [];
+      const idKey = moduleName === "v2" ? "output_id" : "id";
+      const ids = new Set(items.map((item) => item[idKey]));
+      for (const item of incoming) {
+        if (item[idKey] && !ids.has(item[idKey])) {
+          ids.add(item[idKey]);
+          items.push(item);
+        }
+      }
+      offset += incoming.length;
+      pages += 1;
+      model[key] = items;
+      model.historyTotal = Number.isFinite(response.total) ? response.total : offset;
+      model.historyRenderLimit = allFavorites ? model.historyRenderLimit : renderLimit;
+      demand.offset = offset;
+      demand.exhausted = !incoming.length || offset >= model.historyTotal;
+      demand.loaded = true;
+      demand.dirty = false;
+      const visibleCount = items.filter((item) => (moduleName !== "v2" || isRenderableV2HistoryImage(item))
+        && (!favoritesDemand || item.favorite)).length;
+      if (demand.exhausted || (!allFavorites && visibleCount >= renderLimit)) break;
+    }
+  })();
+  try {
+    await demand.promise;
+  } finally {
+    demand.promise = null;
+    model.historyLoadingMore = false;
+    if (current()) renderHistoryDemand(moduleName);
+  }
+}
+
+function handleHistoryStorageChange(event) {
+  if (event.key !== null && event.key !== veyraTokenStorageKey) return;
+  if (event.key !== null && event.newValue === event.oldValue) return;
+  clearHistoryDemandCaches();
+  veyraState.account = null;
+  if (!getVeyraToken()) {
+    renderVeyraSignedOut();
+    return;
+  }
+  refreshVeyraAccount().then(() => {
+    if (historyDemandVisible("v1")) return ensureV1Module();
+    if (historyDemandVisible("v2")) return ensureHistoryDemand("v2");
+    if (accountOverviewDemanded()) return loadVeyraAccountPanel({ silent: true });
+  }).catch((error) => console.warn("Account changed; refresh unavailable", error));
+}
+
 function bindControls() {
+  document.addEventListener("alchemy:account-view", () => {
+    if (accountOverviewDemanded()) loadVeyraAccountPanel({ silent: true }).catch((error) => console.warn("Account overview unavailable", error));
+    else {
+      veyraState.sectionObserver?.disconnect();
+      if (veyraState.sectionScrollListener) document.removeEventListener("scroll", veyraState.sectionScrollListener, true);
+    }
+  });
+  window.addEventListener("storage", handleHistoryStorageChange);
   els.tabs.forEach((button) => {
     button.addEventListener("click", () => {
       if (button.dataset.tab === "lab") {
@@ -991,13 +1214,17 @@ function switchTab(tabName) {
     panel.hidden = !active;
   });
   updateH5QuickGuide(tabName);
+  if (tabName === "image") ensureV1Module().catch((error) => showNotice(`初始化失败：${friendlyError(error)}`, "error"));
+  if (tabName === "v2" && v2State.loaded) ensureHistoryDemand("v2").catch((error) => updateV2Notice(friendlyError(error), "error"));
   if (tabName === "v2" && !v2State.loaded && !v2State.loading) {
     initV2({ silent: false }).catch((error) => {
       updateV2Notice(`2.0 API 未连接：${friendlyError(error)}`, "warning");
     });
   } else if (tabName === "v2") {
+    renderV2Templates(v2State.visibleTemplates);
     renderHeroHistory(v2State.history, { source: "v2" });
   } else if (tabName === "lab") {
+    ensureSharedProviderSettings().catch((error) => updateLabNotice(`Provider settings unavailable: ${friendlyError(error)}`, "error"));
     renderLabModuleState();
     renderHeroHistory(labState.history, { source: "lab" });
     loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
@@ -1650,6 +1877,8 @@ function updateLabCountLabel() {
 
 async function runLabExploration() {
   if (labState.loading) return;
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
   if (!labState.loaded) await loadLabStyles();
   const idea = (els.labIdeaInput?.value || "").trim();
   if (!idea) {
@@ -1680,6 +1909,13 @@ async function runLabExploration() {
   updateLabSessionState("排队中");
   if (els.labProgress) els.labProgress.textContent = "已提交任务，将逐张生成并刷新结果。";
   try {
+    if (authEpoch !== (state.historyAuthEpoch || 0) || token !== getVeyraToken()) {
+      throw new Error("Account changed; please submit again.");
+    }
+    const providersReady = await ensureSharedProviderSettings({ explicit: true });
+    if (!providersReady || authEpoch !== (state.historyAuthEpoch || 0) || token !== getVeyraToken()) {
+      throw new Error("Account changed; please submit again.");
+    }
     const payload = await request("/api/lab/rare-style-explorer/sessions", {
       method: "POST",
       body: {
@@ -7964,11 +8200,6 @@ function openMobileSurface(id, opener = null) {
   if (els.sampleGuideModal && !els.sampleGuideModal.hidden) closeSampleGuide();
   closeMobileSurface({ silent: true, fromHistory: true });
   updateMobileSummaries();
-  if (id === "account") {
-    loadVeyraAccountPanel({ silent: true, force: false }).catch((error) => {
-      console.warn("Mobile Veyra account panel load failed", error);
-    });
-  }
   if (view) {
     els.mobileViewLayer.hidden = false;
     view.hidden = false;
@@ -7978,6 +8209,13 @@ function openMobileSurface(id, opener = null) {
   }
   document.body.classList.add("mobile-surface-open");
   document.body.dataset.mobileActiveSurface = id;
+  if (id === "account") {
+    window.AlchemyAccountAccess?.setView(opener?.dataset.accountOpen || "overview");
+    loadVeyraAccountPanel({ silent: true }).catch((error) => console.warn("Mobile account unavailable", error));
+  }
+  if (id === "v1-history") ensureHistoryDemand("v1").catch((error) => showNotice(friendlyError(error), "error"));
+  if (id === "v2-history") ensureHistoryDemand("v2").catch((error) => updateV2Notice(friendlyError(error), "error"));
+  if (id === "v2-cases") renderV2Templates(v2State.visibleTemplates);
   if (opener) document.body.dataset.mobileSurfaceOpener = opener.id || "";
   surface.scrollTop = 0;
   surface.scrollLeft = 0;
@@ -8008,6 +8246,12 @@ function closeMobileSurface(options = {}) {
   const openerId = document.body.dataset.mobileSurfaceOpener;
   document.body.dataset.mobileActiveSurface = "";
   document.body.dataset.mobileSurfaceOpener = "";
+  const historyModule = activePanelName() === "v2" ? "v2" : "v1";
+  window.requestAnimationFrame(() => {
+    if (!document.body.dataset.mobileActiveSurface && historyDemandVisible(historyModule)) {
+      renderHeroHistory(historyModule === "v2" ? v2State.history : state.historyItems, { source: historyModule });
+    }
+  });
   updateMobileSummaries();
   if (!silent && openerId) document.getElementById(openerId)?.focus({ preventScroll: true });
   if (!silent && !fromHistory && activeId && window.history.state?.mobileSurface === activeId) {
@@ -9122,6 +9366,8 @@ async function applyCoffeeSample({ generate }) {
 }
 
 async function createSession({ announce = true } = {}) {
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
   const session = await request("/v1/sessions", {
     method: "POST",
     body: {
@@ -9130,6 +9376,7 @@ async function createSession({ announce = true } = {}) {
       orchestration_mode: "runtime_first",
     },
   });
+  if (token !== getVeyraToken() || authEpoch !== (state.historyAuthEpoch || 0)) return null;
   state.sessionId = session.id;
   state.assetIds = [];
   state.assets = [];
@@ -9195,10 +9442,13 @@ async function startNewSession() {
 }
 
 async function loadProviders() {
+  const authEpoch = state.historyAuthEpoch || 0;
+  const token = getVeyraToken();
   const [providers, runtime] = await Promise.all([
     request("/v1/providers"),
     request("/v1/runtime/provider-settings"),
   ]);
+  if (token !== getVeyraToken() || authEpoch !== (state.historyAuthEpoch || 0)) return;
   state.providerSettings = runtime;
   state.imageProviderCapabilities = Object.fromEntries((providers.image || []).map((provider) => [provider.provider, provider]));
   state.selectedProvider = safeImageProviderPreference(runtime.default_image_provider || "openai_gpt_image");
@@ -9537,6 +9787,7 @@ function applyV2HistoryResponse(historyResponse = {}) {
 }
 
 async function initV2({ silent = true, force = false } = {}) {
+  if (v2State.loading) return;
   if (!force && v2State.loaded) {
     renderV2ProviderInheritance();
     renderV2AssetPanel();
@@ -9547,18 +9798,8 @@ async function initV2({ silent = true, force = false } = {}) {
   const showPageOverlay = activePanelName() === "v2" || !silent;
   if (showPageOverlay) setMobilePageLoading(true, "正在加载 V2", "正在读取历史、模板和中枢状态。");
   updateV2Notice("正在检查 V2.0 Agent 中枢。", "info");
-  const historyLoadEpoch = (v2State.historyLoadEpoch || 0) + 1;
-  v2State.historyLoadEpoch = historyLoadEpoch;
-  const historyResponsePromise = loadV2HistoryResponse({
-    limit: v2HistoryFetchPageSize,
-    offset: 0,
-    timeoutMs: v2AccountHistoryTimeoutMs,
-    optional: true,
-  }).catch(() => ({ items: [], total: 0, unavailable: true }));
-  historyResponsePromise.then((historyResponse) => {
-    if (v2State.historyLoadEpoch !== historyLoadEpoch) return;
-    applyV2HistoryResponse(historyResponse);
-  });
+  if (force) invalidateHistoryDemand("v2");
+  ensureHistoryDemand("v2").catch((error) => updateV2Notice(`2.0 历史加载失败：${friendlyError(error)}`, "error"));
   try {
     const [
       health,
@@ -10004,6 +10245,7 @@ function clearV2TemplatePrefetch() {
 }
 
 function scheduleV2TemplatePrefetch() {
+  if (!historyDemandVisible("v2")) return;
   if (v2State.caseSearchQuery || !v2State.templateHasMore || !v2State.templateNextCursor) {
     clearV2TemplatePrefetch();
     return;
@@ -10013,7 +10255,7 @@ function scheduleV2TemplatePrefetch() {
   if (v2State.templatePrefetchKey === key && (v2State.templatePrefetchPage || v2State.templatePrefetchPromise)) return;
   clearV2TemplatePrefetch();
   v2State.templatePrefetchKey = key;
-  v2State.templatePrefetchPromise = v2IdleCallback(() => v2Request(key))
+  v2State.templatePrefetchPromise = v2IdleCallback(() => historyDemandVisible("v2") ? v2Request(key) : null)
     .then((page) => {
       if (v2State.templatePrefetchKey === key) v2State.templatePrefetchPage = page;
       return page;
@@ -10042,87 +10284,52 @@ function v2IdleCallback(callback) {
   });
 }
 
-async function loadV2History({ silent = true } = {}) {
-  if (!els.v2HistoryGrid) return;
-  if (!silent) updateV2Notice("正在刷新 2.0 历史。", "info");
+async function loadV2History({ silent = true, invalidate = false } = {}) {
+  if (invalidate) invalidateHistoryDemand("v2");
+  if (!historyDemandVisible("v2")) {
+    if (invalidate) historyDemandState("v2").dirty = true;
+    return;
+  }
   if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.disabled = true;
   try {
-    const response = await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0 });
-    v2State.history = response.items || [];
-    v2State.historyTotal = Number.isFinite(response.total) ? response.total : v2State.history.length;
-    if (
-      v2State.favoriteReferenceItem &&
-      !v2State.history.some(
-        (item) => item.output_id === v2State.favoriteReferenceItem.output_id && item.favorite && isRenderableV2HistoryImage(item)
-      )
-    ) {
-      clearV2FavoriteReference({ keepNotice: true });
-    }
-    v2State.historyRenderLimit = v2HistoryPageSize;
-    renderV2History(v2State.history);
-    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
-    if (!silent) updateV2Notice(`已加载 ${v2State.history.length} / ${v2State.historyTotal} 条 2.0 历史。`, "success");
+    await readHistoryDemand("v2", { reset: true });
+    if (!silent && historyDemandVisible("v2")) updateV2Notice(`已加载 ${v2State.history.length} / ${v2State.historyTotal} 条 2.0 历史。`, "success");
+    return historyDemandState("v2").loaded && !historyDemandState("v2").dirty;
   } catch (error) {
-    if (!silent) updateV2Notice(`2.0 历史加载失败：${friendlyError(error)}`, "error");
+    if (historyDemandVisible("v2")) updateV2Notice(`2.0 历史加载失败：${friendlyError(error)}`, "error");
+    return false;
   } finally {
     if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.disabled = false;
   }
 }
 
 function hasMoreV2History() {
-  return v2State.history.length < (v2State.historyTotal || v2State.history.length);
+  const demand = historyDemandState("v2");
+  return !demand.exhausted && demand.offset < (v2State.historyTotal || 0);
 }
 
 async function loadMoreV2History() {
-  if (v2State.historyLoadingMore) return;
-  const renderableItems = v2State.history.filter(isRenderableV2HistoryImage);
-  const visibleItems = renderableItems.filter((item) => !v2State.historyFavoritesOnly || item.favorite);
-  if (v2State.historyRenderLimit < visibleItems.length) {
+  if (!historyDemandVisible("v2") || v2State.historyLoadingMore) return;
+  const visibleItems = v2State.history.filter((item) => isRenderableV2HistoryImage(item) && (!v2State.historyFavoritesOnly || item.favorite));
+  if (v2State.historyRenderLimit < visibleItems.length
+    && (visibleItems.length >= v2State.historyRenderLimit + v2HistoryPageSize || !hasMoreV2History())) {
     v2State.historyRenderLimit = Math.min(v2State.historyRenderLimit + v2HistoryPageSize, visibleItems.length);
-    renderV2History(v2State.history);
+    renderHistoryDemand("v2");
     return;
   }
   if (!hasMoreV2History()) return;
-  v2State.historyLoadingMore = true;
-  renderV2History(v2State.history);
   try {
-    const response = await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: v2State.history.length });
-    const existing = new Set(v2State.history.map((item) => item.output_id));
-    const nextItems = (response.items || []).filter((item) => item.output_id && !existing.has(item.output_id));
-    v2State.history = [...v2State.history, ...nextItems];
-    v2State.historyTotal = Number.isFinite(response.total) ? response.total : v2State.history.length;
-    v2State.historyRenderLimit += v2HistoryPageSize;
-    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+    await readHistoryDemand("v2");
   } catch (error) {
-    updateV2Notice(`更多 2.0 历史加载失败：${friendlyError(error)}`, "error");
-  } finally {
-    v2State.historyLoadingMore = false;
-    renderV2History(v2State.history);
-    scheduleMobileSummaryUpdate();
+    if (historyDemandVisible("v2")) updateV2Notice(`更多 2.0 历史加载失败：${friendlyError(error)}`, "error");
   }
 }
 
 async function loadRemainingV2HistoryForFavorites() {
-  if (v2State.historyLoadingMore || !hasMoreV2History()) return;
-  v2State.historyLoadingMore = true;
-  renderV2History(v2State.history);
   try {
-    while (hasMoreV2History()) {
-      const response = await loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: v2State.history.length });
-      const existing = new Set(v2State.history.map((item) => item.output_id));
-      const nextItems = (response.items || []).filter((item) => item.output_id && !existing.has(item.output_id));
-      v2State.historyTotal = Number.isFinite(response.total) ? response.total : v2State.history.length + nextItems.length;
-      if (!nextItems.length) break;
-      v2State.history = [...v2State.history, ...nextItems];
-    }
-    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
-    if (els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) renderV2FavoriteReferencePicker();
+    await readHistoryDemand("v2", { allFavorites: true });
   } catch (error) {
-    updateV2Notice(`星标历史补全失败：${friendlyError(error)}`, "warning");
-  } finally {
-    v2State.historyLoadingMore = false;
-    renderV2History(v2State.history);
-    scheduleMobileSummaryUpdate();
+    if (historyFavoritesDemanded("v2")) updateV2Notice(`星标历史补全失败：${friendlyError(error)}`, "warning");
   }
 }
 
@@ -10248,7 +10455,12 @@ async function applyV2CaseFacet() {
 }
 
 function renderV2Templates(templates) {
+  if (activePanelName() !== "v2" || els.v2TemplateGrid?.closest("[hidden]")) return;
   if (!els.v2TemplateGrid) return;
+  const mediaEpoch = state.historyAuthEpoch || 0;
+  const mediaToken = getVeyraToken();
+  const shouldContinue = () => mediaEpoch === (state.historyAuthEpoch || 0) && mediaToken === getVeyraToken()
+    && activePanelName() === "v2" && !els.v2TemplateGrid.closest("[hidden]");
   els.v2TemplateGrid.innerHTML = "";
   const isSearchMode = Boolean(v2State.caseSearchQuery);
   const renderLimit = isSearchMode ? Math.min(v2State.templateRenderLimit, templates.length) : templates.length;
@@ -10301,7 +10513,7 @@ function renderV2Templates(templates) {
       image.loading = index < v2TemplateEagerImageCount ? "eager" : "lazy";
       image.decoding = "async";
       image.fetchPriority = index < v2TemplateEagerImageCount ? "high" : "low";
-      bindImageWithFallback(image, [thumbnailImageUrl, fullImageUrl], { emptyAlt: "案例预览暂不可用" });
+      bindImageWithFallback(image, [thumbnailImageUrl, fullImageUrl], { shouldContinue, emptyAlt: "案例预览暂不可用" });
       preview.appendChild(image);
       preview.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -10841,7 +11053,7 @@ async function runV2Creative(options = {}) {
     }
     showGlobalToast("V2.0 Agent 已完成出图流程。");
     scrollV2HomeResultsIntoView(run);
-    await loadV2History({ silent: true });
+    await loadV2History({ silent: true, invalidate: true });
     await refreshVeyraAccountPanelAfterHistoryChange();
     return run;
   } catch (error) {
@@ -11373,6 +11585,7 @@ function renderV2Outputs(outputs, job) {
 }
 
 function renderV2History(items) {
+  if (!historyDemandVisible("v2") || els.v2HistoryGrid?.closest("[hidden]")) return;
   if (!els.v2HistoryGrid) return;
   els.v2HistoryGrid.innerHTML = "";
   const renderableItems = items.filter(isRenderableV2HistoryImage);
@@ -11399,7 +11612,7 @@ function renderV2History(items) {
       image.alt = cardPrompt || `2.0 历史 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
-      bindImageWithFallback(image, v2HistoryImageCandidates(item), { emptyAlt: image.alt });
+      bindImageWithFallback(image, v2HistoryImageCandidates(item), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v2", els.v2HistoryGrid, false) });
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2HistoryLightbox(item, index, card));
     }
@@ -11498,6 +11711,7 @@ async function deleteV2HistoryItem(item, card) {
   }
   try {
     await v2Request(`/image/history/${encodeURIComponent(item.output_id)}`, { method: "DELETE" });
+    invalidateHistoryDemand("v2");
     v2State.history = v2State.history.filter((entry) => entry.output_id !== item.output_id);
     if (v2State.favoriteReferenceItem?.output_id === item.output_id) {
       clearV2FavoriteReference({ keepNotice: true });
@@ -11505,8 +11719,7 @@ async function deleteV2HistoryItem(item, card) {
     if (!els.imageLightbox.hidden && els.lightboxDownload.href.includes(encodeURIComponent(item.output_id))) {
       closeImageLightbox();
     }
-    renderV2History(v2State.history);
-    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+    await ensureHistoryDemand("v2");
     await refreshVeyraAccountPanelAfterHistoryChange();
     updateV2Notice("2.0 历史图片已删除。", "success");
     showGlobalToast("2.0 历史图片已删除。");
@@ -11774,8 +11987,8 @@ function releaseImageObjectUrl(image) {
   if (image?.dataset) delete image.dataset.authenticatedObjectUrl;
 }
 
-function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用" } = {}) {
-  if (!image) return;
+function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用", shouldContinue = () => true } = {}) {
+  if (!image || !shouldContinue()) return;
   const urls = uniqueNonEmpty(candidates || []);
   const loadToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   image.dataset.mediaLoadToken = loadToken;
@@ -11791,13 +12004,13 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
   image.dataset.fallbackUrls = JSON.stringify(urls);
   image.onload = () => image.classList.remove("image-load-failed", "image-load-missing");
   const fail = () => {
-    if (image.dataset.mediaLoadToken !== loadToken) return;
+    if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) return;
     image.onerror = null;
     releaseImageObjectUrl(image);
     image.classList.add("image-load-failed");
   };
   const loadCandidate = async (index) => {
-    if (image.dataset.mediaLoadToken !== loadToken) return;
+    if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) return;
     const candidate = urls[index];
     if (!candidate) {
       fail();
@@ -11806,7 +12019,7 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
     image.dataset.fallbackIndex = String(index);
     try {
       const resolved = await resolveAuthenticatedMediaSource(candidate);
-      if (image.dataset.mediaLoadToken !== loadToken) {
+      if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) {
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
         return;
       }
@@ -11975,7 +12188,6 @@ function updateV2Notice(message, type = "info") {
 }
 
 const v2AccountHistoryTimeoutMs = 8000;
-const v2HistoryFallbackTimeoutMs = 8000;
 const v2OptionalResourceTimeoutMs = 3500;
 const v2TemplateBootstrapTimeoutMs = 20000;
 
@@ -12035,39 +12247,9 @@ async function loadV2TemplateBootstrap(path, fallbackValue = null) {
   }
 }
 
-async function loadV2ImageHistoryFallback(reason = "", options = {}) {
-  try {
-    const response = await loadV2RequestWithTimeout(v2HistoryEndpoint("/image/history", options), v2HistoryFallbackTimeoutMs);
-    if (v2HistoryItemCount(response) && reason) {
-      console.warn(`V2 account history unavailable, using image history fallback: ${reason}`);
-    }
-    return response;
-  } catch (error) {
-    console.warn("V2 image history fallback failed", error);
-    return null;
-  }
-}
-
 async function loadV2HistoryResponse(options = {}) {
   const timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs") ? options.timeoutMs : v2AccountHistoryTimeoutMs;
-  try {
-    const response = await loadV2HistoryWithTimeout(v2HistoryPath(options), timeoutMs);
-    if (v2HistoryItemCount(response)) return response;
-    const fallback = await loadV2ImageHistoryFallback("empty account history", options);
-    return fallback || response;
-  } catch (error) {
-    const fallback = await loadV2ImageHistoryFallback(v2HistoryLoadErrorMessage(error), options);
-    if (fallback) return fallback;
-    if (options.optional) {
-      return {
-        items: [],
-        total: 0,
-        unavailable: true,
-        error: v2HistoryLoadErrorMessage(error),
-      };
-    }
-    throw error;
-  }
+  return await loadV2HistoryWithTimeout(v2HistoryPath(options), timeoutMs);
 }
 
 async function loadVeyraAuthPolicy() {
@@ -12112,7 +12294,7 @@ async function handleVeyraTicketFromUrl() {
     setVeyraToken(session.access_token || "");
     await syncVeyraSessionCookie();
     cleanVeyraTicketFromUrl();
-    await loadVeyraAccountPanel({ silent: true, force: true });
+    await refreshVeyraAccount();
     updateV2Notice("Veyra 账户已接入。", "success");
     return true;
   } catch (error) {
@@ -12201,7 +12383,7 @@ async function v2Request(path, options = {}) {
   });
   if (!response.ok) {
     const detail = await response.text();
-    if (response.status === 401 && !options.skipVeyraAuth) {
+    if (response.status === 401 && !options.skipVeyraAuth && token === getVeyraToken()) {
       await handleVeyraUnauthorized();
     }
     const buildError = (message) => {
@@ -12248,6 +12430,7 @@ function hasVeyraClientSession() {
 function setVeyraToken(token) {
   const nextToken = String(token || "");
   const previousToken = getVeyraToken();
+  if (nextToken !== previousToken || !nextToken) clearHistoryDemandCaches();
   if (nextToken !== previousToken) clearMobileV3Caches();
   try {
     if (nextToken) {
@@ -12270,6 +12453,7 @@ function setVeyraAccount(account) {
   const previousOwnerId = mobileV3CacheOwnerId();
   veyraState.account = account;
   const nextOwnerId = mobileV3CacheOwnerId(account);
+  if (previousOwnerId && previousOwnerId !== nextOwnerId) clearHistoryDemandCaches();
   if (previousOwnerId && nextOwnerId && previousOwnerId !== nextOwnerId) clearMobileV3Caches();
 }
 
@@ -12288,8 +12472,11 @@ function hydrateCachedVeyraAccount() {
 }
 
 async function refreshVeyraAccount() {
+  const token = getVeyraToken();
+  const epoch = state.historyAuthEpoch || 0;
   try {
     const account = await v2Request("/veyra/me");
+    if (token !== getVeyraToken() || epoch !== (state.historyAuthEpoch || 0)) return null;
     setVeyraAccount(account);
     try {
       localStorage.setItem(veyraAccountStorageKey, JSON.stringify(account));
@@ -12299,6 +12486,7 @@ async function refreshVeyraAccount() {
     updateMobileAccountSummary();
     return account;
   } catch (error) {
+    if (token !== getVeyraToken() || epoch !== (state.historyAuthEpoch || 0)) return null;
     if (String(error?.message || error).includes("401")) setVeyraToken("");
     updateMobileAccountSummary();
     return null;
@@ -12413,6 +12601,7 @@ function renderAccountEmpty(container, message, actionLabel = "", onAction = nul
 }
 
 function renderVeyraAccountHistory(items = []) {
+  if (!accountSectionVisible(els.veyraAccountHistoryGrid)) return;
   if (!els.veyraAccountHistoryGrid) return;
   els.veyraAccountHistoryGrid.innerHTML = "";
   if (!hasVeyraClientSession()) {
@@ -12449,7 +12638,7 @@ function renderVeyraAccountHistory(items = []) {
       image.alt = cardPrompt || `账户生成记录 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
-      bindImageWithFallback(image, accountHistoryImageCandidates(item), { emptyAlt: image.alt });
+      bindImageWithFallback(image, accountHistoryImageCandidates(item), { emptyAlt: image.alt, shouldContinue: accountMediaDemand(els.veyraAccountHistoryGrid) });
       preview.appendChild(image);
       preview.addEventListener("click", () => openAccountHistoryLightbox(item, index));
     }
@@ -12483,7 +12672,7 @@ function v2HistoryTemplateCaseId(item) {
   ).trim();
 }
 
-async function buildVeyraTemplateHistory(v2Items = []) {
+async function buildVeyraTemplateHistory(v2Items = [], { enrich = true, shouldContinue = () => true } = {}) {
   const byCase = new Map();
   v2Items.forEach((item) => {
     const caseId = v2HistoryTemplateCaseId(item);
@@ -12505,8 +12694,10 @@ async function buildVeyraTemplateHistory(v2Items = []) {
   });
 
   const entries = [...byCase.values()].sort((a, b) => b.latest_time - a.latest_time);
-  await Promise.all(
-    entries.slice(0, 30).map(async (entry) => {
+  if (!enrich) return entries;
+  // Bound in-flight detail work and stop scheduling as soon as the section closes.
+  for (let index = 0; index < Math.min(30, entries.length) && shouldContinue(); index += 4) {
+    await Promise.all(entries.slice(index, Math.min(index + 4, 30)).map(async (entry) => {
       const detail = await loadV2TemplateDetailForHistory(entry.case_id);
       entry.template = detail || null;
       entry.title = detail?.title || entry.case_id;
@@ -12515,12 +12706,13 @@ async function buildVeyraTemplateHistory(v2Items = []) {
       entry.index_version = detail?.index_version || "";
       entry.category = detail?.category || "";
       entry.tags = [...(detail?.style_tags || []), ...(detail?.use_case_tags || [])].slice(0, 5);
-    })
-  );
+    }));
+  }
   return entries;
 }
 
 function renderVeyraTemplateHistory(items = []) {
+  if (!accountSectionVisible(els.veyraTemplateHistoryList)) return;
   if (!els.veyraTemplateHistoryList) return;
   els.veyraTemplateHistoryList.innerHTML = "";
   if (!hasVeyraClientSession()) {
@@ -12546,7 +12738,7 @@ function renderVeyraTemplateHistory(items = []) {
       image.alt = item.title || `历史使用模板 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
-      bindImageWithFallback(image, [previewUrl], { emptyAlt: image.alt });
+      bindImageWithFallback(image, [previewUrl], { emptyAlt: image.alt, shouldContinue: accountMediaDemand(els.veyraTemplateHistoryList) });
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2CasePreview(item.template || item, v2CasePreviewUrl(item.preview_url, item.index_version)));
     } else {
@@ -12644,6 +12836,7 @@ function openAccountHistoryLightbox(item, index = 0) {
 }
 
 function renderVeyraUsageList(items = []) {
+  if (!accountSectionVisible(els.veyraUsageList)) return;
   if (!els.veyraUsageList) return;
   els.veyraUsageList.innerHTML = "";
   if (!hasVeyraClientSession()) {
@@ -12675,88 +12868,173 @@ function renderVeyraUsageList(items = []) {
   });
 }
 
-async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
-  if (!getVeyraToken() && !veyraState.account && !(await hasValidVeyraSession())) {
-    veyraState.account = null;
-    veyraState.history = [];
-    veyraState.usage = [];
-    veyraState.usedTemplates = [];
-    renderVeyraSignedOut();
-    return null;
+function accountOverviewDemanded() {
+  const overview = document.querySelector('[data-account-view="overview"]');
+  return Boolean(overview && !overview.hidden
+    && (activePanelName() === "account" || document.body.dataset.mobileActiveSurface === "account"));
+}
+
+function accountSectionVisible(node) {
+  if (!node || !accountOverviewDemanded() || node.closest("[hidden]")) return false;
+  const section = node.closest("section") || node;
+  const rect = section.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < window.innerHeight;
+}
+
+function observeAccountOverviewSections() {
+  veyraState.sectionObserver?.disconnect();
+  if (veyraState.sectionScrollListener) document.removeEventListener("scroll", veyraState.sectionScrollListener, true);
+  veyraState.sectionScrollListener = null;
+  if (!accountOverviewDemanded()) return;
+  const rendered = new Set();
+  const render = () => {
+    if (!rendered.has("history") && accountSectionVisible(els.veyraAccountHistoryGrid)) {
+      rendered.add("history");
+      renderVeyraAccountHistory(veyraState.history);
+    }
+    if (!rendered.has("usage") && accountSectionVisible(els.veyraUsageList)) {
+      rendered.add("usage");
+      renderVeyraUsageList(veyraState.usage);
+    }
+    if (!rendered.has("templates") && accountSectionVisible(els.veyraTemplateHistoryList)) {
+      if (veyraState.templateHistoryReady) rendered.add("templates");
+      loadVeyraTemplateHistorySection().catch((error) => {
+        if (accountOverviewDemanded()) setVeyraAccountLoadNotice(`模板记录暂时无法完整读取：${friendlyError(error)}`);
+      });
+    }
+  };
+  if (typeof IntersectionObserver === "function") {
+    veyraState.sectionObserver = new IntersectionObserver(render);
+    for (const node of [els.veyraAccountHistoryGrid, els.veyraTemplateHistoryList, els.veyraUsageList]) {
+      if (node) veyraState.sectionObserver.observe(node.closest("section") || node);
+    }
+  } else {
+    veyraState.sectionScrollListener = render;
+    document.addEventListener("scroll", render, true);
   }
-  if (veyraState.loading && !force) return veyraState.account;
+  render();
+}
+
+async function loadVeyraTemplateHistorySection() {
+  if (!accountSectionVisible(els.veyraTemplateHistoryList)) return;
+  if (veyraState.templateHistoryReady) {
+    renderVeyraTemplateHistory(veyraState.usedTemplates);
+    return;
+  }
+  if (veyraState.templateHistoryPromise) {
+    await veyraState.templateHistoryPromise;
+    if (!veyraState.templateHistoryReady && accountSectionVisible(els.veyraTemplateHistoryList)) return loadVeyraTemplateHistorySection();
+    return;
+  }
+  const epoch = veyraState.overviewEpoch || 0;
+  const demanded = () => epoch === (veyraState.overviewEpoch || 0) && accountSectionVisible(els.veyraTemplateHistoryList);
+  veyraState.templateHistoryPromise = (async () => {
+    const entries = await buildVeyraTemplateHistory(veyraState.templateHistoryItems || [], { shouldContinue: demanded });
+    if (!demanded()) return;
+    veyraState.usedTemplates = entries;
+    veyraState.templateHistoryReady = true;
+    renderVeyraTemplateHistory(entries);
+  })();
+  try {
+    await veyraState.templateHistoryPromise;
+  } finally {
+    veyraState.templateHistoryPromise = null;
+  }
+}
+
+async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
+  if (!accountOverviewDemanded()) return veyraState.account;
+  if (veyraState.overviewPromise) {
+    const joinedEpoch = veyraState.overviewEpoch || 0;
+    await veyraState.overviewPromise;
+    if (joinedEpoch !== (veyraState.overviewEpoch || 0) && veyraState.overviewDirty && accountOverviewDemanded()) return loadVeyraAccountPanel({ silent });
+    return veyraState.account;
+  }
+  if (veyraState.overviewLoaded && !veyraState.overviewDirty && !force) {
+    renderVeyraAccountSummary();
+    observeAccountOverviewSections();
+    return veyraState.account;
+  }
+  veyraState.overviewEpoch = (veyraState.overviewEpoch || 0) + 1;
+  const epoch = veyraState.overviewEpoch || 0;
+  const token = getVeyraToken();
+  const current = () => epoch === (veyraState.overviewEpoch || 0) && token === getVeyraToken();
   setVeyraAccountLoading(true);
   setVeyraAccountLoadNotice("");
-  try {
+  veyraState.overviewPromise = (async () => {
+    if (!getVeyraToken() && !veyraState.account && !(await hasValidVeyraSession())) {
+      if (current() && accountOverviewDemanded()) renderVeyraSignedOut();
+      return null;
+    }
+    if (!current() || !accountOverviewDemanded()) return null;
     const results = await Promise.allSettled([
       refreshVeyraAccount(),
-      request(`/v1/image/history?limit=${historyFetchPageSize}&offset=0`),
-      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs, optional: true }),
+      request(`/v1/image/history?limit=${accountV1HistoryWindow}&offset=0`),
+      loadV2HistoryResponse({ limit: accountV2HistoryWindow, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs }),
       request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);
+    if (!current()) return null;
     const [accountResult, v1HistoryResult, v2HistoryResult, v1UsageResult, v2UsageResult] = results;
-    const account = accountResult.status === "fulfilled" ? accountResult.value : null;
+    const value = (result) => result.status === "fulfilled" ? result.value : null;
+    const account = value(accountResult);
     if (account) setVeyraAccount(account);
+    if (!current()) return null;
     if (!account && !veyraState.account) {
-      veyraState.account = null;
-      renderVeyraSignedOut();
+      if (accountOverviewDemanded()) renderVeyraSignedOut();
       return null;
     }
-    if (veyraState.account) renderVeyraAccountSummary();
-    const v1HistoryResponse = v1HistoryResult.status === "fulfilled" ? v1HistoryResult.value : null;
-    const v2HistoryResponse = v2HistoryResult.status === "fulfilled" ? v2HistoryResult.value : null;
-    const v1UsageResponse = v1UsageResult.status === "fulfilled" ? v1UsageResult.value : null;
-    const v2UsageResponse = v2UsageResult.status === "fulfilled" ? v2UsageResult.value : null;
+    const v1History = value(v1HistoryResult);
+    const v2History = value(v2HistoryResult);
+    const v1Usage = value(v1UsageResult);
+    const v2Usage = value(v2UsageResult);
     const failedSections = [];
-    if (v1HistoryResponse || v2HistoryResponse) {
-      veyraState.history = mergeAccountHistory(v1HistoryResponse?.items || [], v2HistoryResponse?.items || []);
-    } else {
-      failedSections.push("生成记录");
+    if (!v1History || !v2History) failedSections.push("生成记录");
+    if (!v1Usage || !v2Usage) failedSections.push("资金流水");
+    if (!v2History) failedSections.push("模板记录");
+    if (!account) failedSections.unshift("账户信息");
+    // These are deliberately sampled windows, not API totals or the module's loaded cards.
+    if (v1History || v2History) veyraState.history = mergeAccountHistory(v1History?.items || [], v2History?.items || []);
+    if (v1Usage || v2Usage) veyraState.usage = mergeVeyraUsage(v1Usage?.items || [], v2Usage?.items || []);
+    if (v2History) {
+      veyraState.templateHistoryItems = v2History.items || [];
+      veyraState.usedTemplates = await buildVeyraTemplateHistory(veyraState.templateHistoryItems, { enrich: false });
+      veyraState.templateHistoryReady = false;
     }
-    if (v1UsageResponse || v2UsageResponse) {
-      veyraState.usage = mergeVeyraUsage(v1UsageResponse?.items || [], v2UsageResponse?.items || []);
-    } else {
-      failedSections.push("资金流水");
+    if (!current()) return null;
+    veyraState.overviewLoaded = true;
+    veyraState.overviewDirty = failedSections.length > 0;
+    if (accountOverviewDemanded()) {
+      renderVeyraAccountSummary();
+      observeAccountOverviewSections();
+      if (failedSections.length) setVeyraAccountLoadNotice(`${failedSections.join("、")}暂时无法完整读取，已加载的内容仍可查看；请稍后刷新。`);
+      else if (!silent) showGlobalToast("账户信息已刷新。");
     }
-    if (v2HistoryResponse) {
-      try {
-        veyraState.usedTemplates = await buildVeyraTemplateHistory(v2HistoryResponse.items || []);
-      } catch (error) {
-        console.warn("Veyra template history unavailable", error);
-        failedSections.push("模板记录");
-      }
-    } else {
-      failedSections.push("模板记录");
-    }
-    renderVeyraAccountSummary();
-    renderVeyraAccountHistory(veyraState.history);
-    renderVeyraTemplateHistory(veyraState.usedTemplates);
-    renderVeyraUsageList(veyraState.usage);
-    if (!veyraState.account) failedSections.unshift("账户信息");
-    if (failedSections.length) setVeyraAccountLoadNotice(`${failedSections.join("、")}暂时无法完整读取，已加载的内容仍可查看；请稍后刷新。`);
-    if (!silent) showGlobalToast("账户信息已刷新。");
     return veyraState.account;
+  })();
+  try {
+    return await veyraState.overviewPromise;
   } catch (error) {
-    if (error?.status === 401) {
-      setVeyraToken("");
-      renderVeyraSignedOut();
-    }
-    if (!silent) showGlobalToast(`账户刷新失败：${friendlyError(error)}`, "error");
+    if (current() && accountOverviewDemanded()) setVeyraAccountLoadNotice(`账户刷新失败：${friendlyError(error)}`);
     throw error;
   } finally {
+    veyraState.overviewPromise = null;
     setVeyraAccountLoading(false);
   }
 }
 
 async function refreshVeyraAccountPanelAfterHistoryChange() {
-  if (!hasVeyraClientSession() || !els.veyraAccountHistoryGrid) return;
+  veyraState.overviewEpoch = (veyraState.overviewEpoch || 0) + 1;
+  veyraState.overviewDirty = true;
+  veyraState.templateHistoryReady = false;
+  if (!hasVeyraClientSession() || !accountOverviewDemanded()) return;
   try {
-    await loadVeyraAccountPanel({ silent: true, force: true });
+    await loadVeyraAccountPanel({ silent: true });
   } catch (error) {
     console.warn("Veyra account panel refresh failed", error);
   }
 }
+
 
 async function handleV2Asset() {
   const files = Array.from(els.v2AssetInput?.files || []);
@@ -13213,7 +13491,7 @@ function scrollV1GalleryIntoView() {
 
 async function refreshV1GenerationSideEffects() {
   const tasks = [
-    ["history", () => refreshHistory({ silent: true })],
+    ["history", () => refreshHistory({ silent: true, invalidate: true })],
     ["account", () => refreshVeyraAccountPanelAfterHistoryChange()],
     ["events", () => refreshEvents()],
   ];
@@ -13459,6 +13737,7 @@ async function reviseSelectedOutput() {
 }
 
 async function ensureSession() {
+  if (state.v1ModulePromise) await state.v1ModulePromise;
   if (!state.sessionId) {
     showNotice("正在准备会话，请稍候。", "info");
     await createSession();
@@ -13531,92 +13810,57 @@ function renderSkeleton(count) {
   }
 }
 
-async function refreshHistory({ silent = false, append = false } = {}) {
-  if (!els.historyGallery) return;
-  const offset = append ? state.historyItems.length : 0;
-  if (!append) els.refreshHistoryBtn.disabled = true;
-  else state.historyLoadingMore = true;
-  const showPageOverlay = !append && (activePanelName() === "image" || !silent);
-  if (showPageOverlay) setMobilePageLoading(true, "正在加载 V1", "正在读取最近生成记录和缩略图。");
+async function refreshHistory({ silent = false, append = false, invalidate = false } = {}) {
+  if (invalidate) invalidateHistoryDemand("v1");
+  if (!historyDemandVisible("v1")) return;
+  if (els.refreshHistoryBtn) els.refreshHistoryBtn.disabled = true;
   try {
-    const history = await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`);
-    const nextItems = history.items || [];
-    if (append) {
-      const existing = new Set(state.historyItems.map((item) => item.id));
-      state.historyItems = [...state.historyItems, ...nextItems.filter((item) => item.id && !existing.has(item.id))];
-    } else {
-      state.historyItems = nextItems;
-      state.historyRenderLimit = historyPageSize;
-    }
-    state.historyTotal = Number.isFinite(history.total) ? history.total : state.historyItems.length;
-    renderHistory(state.historyItems);
-    if (activePanelName() === "image") renderHeroHistory(state.historyItems, { source: "v1" });
-    if (!silent) {
+    await readHistoryDemand("v1", { reset: !append });
+    if (!silent && historyDemandVisible("v1")) {
       showNotice(`已加载 ${state.historyItems.length} / ${state.historyTotal} 张历史图片。`, "success");
       showGlobalToast("历史图片已刷新。");
     }
+    return historyDemandState("v1").loaded && !historyDemandState("v1").dirty;
   } catch (error) {
-    restartHeroCarousels();
-    if (!silent) showNotice(`历史图片加载失败：${friendlyError(error)}`, "error");
-    if (append) throw error;
+    if (historyDemandVisible("v1")) showNotice(`历史图片加载失败：${friendlyError(error)}`, "error");
+    return false;
   } finally {
-    if (append) state.historyLoadingMore = false;
-    if (!append) els.refreshHistoryBtn.disabled = false;
-    if (showPageOverlay) setMobilePageLoading(false);
-    renderHistory(state.historyItems);
+    if (els.refreshHistoryBtn) els.refreshHistoryBtn.disabled = false;
   }
 }
 
 function hasMoreV1History() {
-  return state.historyItems.length < (state.historyTotal || state.historyItems.length);
+  const demand = historyDemandState("v1");
+  return !demand.exhausted && demand.offset < (state.historyTotal || 0);
 }
 
 async function loadMoreV1History() {
-  if (state.historyLoadingMore) return;
-  const visibleItems = [...state.historyItems].filter((item) => !state.historyFavoritesOnly || item.favorite).sort(compareHistoryItems);
-  if (state.historyRenderLimit < visibleItems.length) {
+  if (!historyDemandVisible("v1") || state.historyLoadingMore) return;
+  const visibleItems = state.historyItems.filter((item) => !state.historyFavoritesOnly || item.favorite);
+  if (state.historyRenderLimit < visibleItems.length
+    && (visibleItems.length >= state.historyRenderLimit + historyPageSize || !hasMoreV1History())) {
     state.historyRenderLimit = Math.min(state.historyRenderLimit + historyPageSize, visibleItems.length);
-    renderHistory(state.historyItems);
+    renderHistoryDemand("v1");
     return;
   }
   if (!hasMoreV1History()) return;
-  state.historyLoadingMore = true;
-  renderHistory(state.historyItems);
   try {
-    await refreshHistory({ silent: true, append: true });
-    state.historyRenderLimit += historyPageSize;
+    await readHistoryDemand("v1");
   } catch (error) {
-    showNotice(`更多历史图片加载失败：${friendlyError(error)}`, "error");
-  } finally {
-    state.historyLoadingMore = false;
-    renderHistory(state.historyItems);
+    if (historyDemandVisible("v1")) showNotice(`更多历史图片加载失败：${friendlyError(error)}`, "error");
   }
 }
 
 async function loadRemainingV1HistoryForFavorites() {
-  if (state.historyLoadingMore || !hasMoreV1History()) return;
-  state.historyLoadingMore = true;
-  renderHistory(state.historyItems);
   try {
-    while (hasMoreV1History()) {
-      const response = await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${state.historyItems.length}`);
-      const existing = new Set(state.historyItems.map((item) => item.id));
-      const nextItems = (response.items || []).filter((item) => item.id && !existing.has(item.id));
-      state.historyTotal = Number.isFinite(response.total) ? response.total : state.historyItems.length + nextItems.length;
-      if (!nextItems.length) break;
-      state.historyItems = [...state.historyItems, ...nextItems];
-    }
-    if (activePanelName() === "image") renderHeroHistory(state.historyItems, { source: "v1" });
-    if (els.favoritePickerModal && !els.favoritePickerModal.hidden) renderFavoritePicker();
+    await readHistoryDemand("v1", { allFavorites: true });
   } catch (error) {
-    showNotice(`星标历史补全失败：${friendlyError(error)}`, "warning");
-  } finally {
-    state.historyLoadingMore = false;
-    renderHistory(state.historyItems);
+    if (historyFavoritesDemanded("v1")) showNotice(`星标历史补全失败：${friendlyError(error)}`, "warning");
   }
 }
 
 function renderHistory(items) {
+  if (!historyDemandVisible("v1") || els.historyGallery?.closest("[hidden]")) return;
   els.historyGallery.innerHTML = "";
   const sortedItems = [...items].filter((item) => !state.historyFavoritesOnly || item.favorite).sort(compareHistoryItems);
   const renderLimit = Math.min(state.historyRenderLimit, sortedItems.length);
@@ -13638,7 +13882,7 @@ function renderHistory(items) {
     image.alt = `历史图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
-    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt });
+    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.historyGallery, false) });
     preview.appendChild(image);
 
     const meta = document.createElement("div");
@@ -13708,8 +13952,8 @@ function v2FavoriteReferenceItems() {
 
 function openV2FavoriteReferencePicker() {
   if (!els.v2FavoriteReferenceModal) return;
-  renderV2FavoriteReferencePicker();
   els.v2FavoriteReferenceModal.hidden = false;
+  renderV2FavoriteReferencePicker();
   document.body.classList.add("modal-open");
   els.closeV2FavoriteReferenceBtn?.focus();
   loadRemainingV2HistoryForFavorites();
@@ -13722,6 +13966,7 @@ function closeV2FavoriteReferencePicker() {
 }
 
 function renderV2FavoriteReferencePicker() {
+  if (!historyDemandVisible("v2") || !historyPickerVisible("v2")) return;
   if (!els.v2FavoriteReferenceGrid) return;
   const items = v2FavoriteReferenceItems();
   els.v2FavoriteReferenceGrid.innerHTML = "";
@@ -13745,7 +13990,7 @@ function renderV2FavoriteReferencePicker() {
     image.alt = v2HistoryCardPrompt(item) || `2.0 星标图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
-    bindImageWithFallback(image, v2HistoryImageCandidates(item), { emptyAlt: image.alt });
+    bindImageWithFallback(image, v2HistoryImageCandidates(item), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v2", els.v2FavoriteReferenceGrid, true) });
     preview.appendChild(image);
     const meta = document.createElement("span");
     meta.className = "favorite-picker-meta";
@@ -13884,8 +14129,8 @@ function editableFavoriteHistoryItems() {
 
 function openFavoritePicker() {
   if (!els.favoritePickerModal) return;
-  renderFavoritePicker();
   els.favoritePickerModal.hidden = false;
+  renderFavoritePicker();
   document.body.classList.add("modal-open");
   els.closeFavoritePickerBtn?.focus();
   loadRemainingV1HistoryForFavorites();
@@ -13898,6 +14143,7 @@ function closeFavoritePicker() {
 }
 
 function renderFavoritePicker() {
+  if (!historyDemandVisible("v1") || !historyPickerVisible("v1")) return;
   if (!els.favoritePickerGrid) return;
   const items = editableFavoriteHistoryItems();
   els.favoritePickerGrid.innerHTML = "";
@@ -13919,7 +14165,7 @@ function renderFavoritePicker() {
     const preview = document.createElement("span");
     preview.className = "favorite-picker-preview";
     const image = document.createElement("img");
-    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt });
+    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.favoritePickerGrid, true) });
     image.alt = `星标图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
@@ -14033,6 +14279,7 @@ function renderRevisionSelection() {
 }
 
 function renderHeroHistory(items, { source = "v1" } = {}) {
+  if ((source === "v1" || source === "v2") && !historyDemandVisible(source)) return;
   if (!els.heroHistoryCarousel) return;
   clearHeroCarouselTimer();
   const heroItems = [...items]
@@ -14059,7 +14306,7 @@ function renderHeroHistory(items, { source = "v1" } = {}) {
     image.alt = item.title || `历史生成作品 ${index + 1}`;
     image.loading = index === 0 ? "eager" : "lazy";
     image.decoding = "async";
-    bindImageWithFallback(image, item.imageCandidates || [item.thumbnailUrl, item.url], { emptyAlt: image.alt });
+    bindImageWithFallback(image, item.imageCandidates || [item.thumbnailUrl, item.url], { emptyAlt: image.alt, shouldContinue: source === "v1" || source === "v2" ? historyMediaDemand(source, els.heroHistoryCarousel) : undefined });
 
     slide.append(image);
     els.heroHistoryCarousel.appendChild(slide);
@@ -14208,7 +14455,8 @@ async function deleteHistoryItem(item, card) {
     if (!els.imageLightbox.hidden && els.lightboxDownload.href.includes(encodeURIComponent(item.id))) {
       closeImageLightbox();
     }
-    await refreshHistory({ silent: true });
+    await refreshHistory({ silent: true, invalidate: true });
+    await refreshVeyraAccountPanelAfterHistoryChange();
     showNotice("历史图片已删除。", "success");
     showGlobalToast("历史图片已删除。");
   } catch (error) {
@@ -15015,7 +15263,7 @@ async function request(path, options = {}) {
   });
   if (!response.ok) {
     const detail = await response.text();
-    if (response.status === 401 && !options.skipVeyraAuth) {
+    if (response.status === 401 && !options.skipVeyraAuth && token === getVeyraToken()) {
       await handleVeyraUnauthorized();
     }
     const error = new Error(detail);

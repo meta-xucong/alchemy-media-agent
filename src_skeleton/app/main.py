@@ -73,6 +73,11 @@ from app.schemas import (
     RetentionSettingsRequest,
     RetentionSettingsResponse,
 )
+from app.services.history_projection import (
+    _job_prompt, _job_asset_intents, _job_asset_vision_profiles,
+    _job_provider_input_plan, _job_work_intensity, _job_work_intensity_label,
+    _job_requested_provider, _job_requested_model,
+)
 from app.services.asset_service import complete_asset_upload, create_asset_mask, create_asset_upload, get_asset, store_asset_content, store_asset_content_bytes
 from app.services.alchemy_lab import (
     LAB_PROJECT_ID,
@@ -149,6 +154,8 @@ async def _legacy_import_error_response(_request: Request, exc: Exception) -> JS
 
 async def _run_sqlite_api_call(function, *args, **kwargs):
     """Run one bounded SQLite operation away from the API event loop."""
+    from app.repositories.history_index import HistoryIndexUnavailable
+
     try:
         return await sqlite_calls.run(function, *args, **kwargs)
     except SQLiteStorageBusy as exc:
@@ -156,6 +163,29 @@ async def _run_sqlite_api_call(function, *args, **kwargs):
             status_code=503,
             detail={"code": "storage_busy", "message": "Storage is busy; retry shortly."},
             headers={"Retry-After": "1"},
+        ) from exc
+    except HistoryIndexUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "history_index_unavailable", "message": str(exc)},
+        ) from exc
+
+
+async def _run_sqlite_read_api_call(function, *args, **kwargs):
+    """Admit history reads independently of required checkpoint writes."""
+    from app.repositories.history_index import HistoryIndexUnavailable
+    try:
+        return await sqlite_calls.run_read(function, *args, **kwargs)
+    except SQLiteStorageBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "storage_busy", "message": "Storage is busy; retry shortly."},
+            headers={"Retry-After": "1"},
+        ) from exc
+    except HistoryIndexUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "history_index_unavailable", "message": str(exc)},
         ) from exc
 
 
@@ -2339,7 +2369,7 @@ async def list_alchemy_lab_history(
 ):
     context = await _veyra_history_context(request, authorization)
     limit = min(limit, 200)
-    return await _run_sqlite_api_call(
+    return await _run_sqlite_read_api_call(
         list_lab_history,
         limit=limit,
         include_mock=include_mock,
@@ -2752,35 +2782,12 @@ def _v1_output_owner_state(output_id: str) -> tuple[int | None, bool]:
     if history_owner is not None:
         return history_owner, False
 
-    owners: set[int] = set()
-    job_iterator = getattr(repository, "iter_jobs", None)
-    jobs = (
-        job_iterator(job_type="image")
-        if callable(job_iterator)
-        else iter(repository.list_jobs(job_type="image"))
-    )
-    for job in jobs:
-        for nested in job.outputs:
-            if nested.id != output_id:
-                continue
-            owner_id = _history_output_veyra_user_id(nested.metadata)
-            if owner_id is not None:
-                owners.add(owner_id)
-    # Ownership is evidence about the output ID, not evidence that its file
-    # currently exists. A failed delete or missing newer copy must not turn a
-    # private output into legacy-public content.
-    # Ownerless repository/history projections can still have a private owner
-    # in an old nested Job. The indexed manifest lookup above makes this
-    # compatibility scan unnecessary for ordinary canonical private outputs
-    # and prevents history age/page limits from affecting authorization.
-    if len(owners) > 1:
-        return None, True
-    if owners:
-        return next(iter(owners)), False
-    delete_claim = repository.get_output_delete_claim(output_id)
-    if delete_claim is not None:
-        return _positive_int_or_none(delete_claim.get("owner_id")), False
-    return None, False
+    # Owner evidence is global across sessions and includes Job-only legacy
+    # copies. The clean-snapshot index preserves that authority without decoding
+    # every Job again for each thumbnail request.
+    from app.repositories.history_index import lookup_output_owner
+
+    return lookup_output_owner(media_store, output_id)
 
 
 def _v1_output_owner_id(output_id: str) -> int | None:
@@ -2794,20 +2801,15 @@ def _v1_history_output_exists(output_id: str) -> bool:
         if job and not _is_non_v1_history_job(job):
             return True
         return False
-    for record in media_store.list_history_records(limit=10000):
-        if record.get("id") == output_id and not _is_non_v1_history_record(record):
-            return True
-    for record in media_store.list_generated_output_records(limit=10000):
-        if record.get("id") == output_id and not _is_non_v1_history_record(record):
-            return True
-    return False
+    from app.repositories.history_index import read_history_page
+
+    records, _ = read_history_page(media_store, surface="v1", all_owners=True, output_id=output_id, limit=1)
+    return bool(records)
 
 
 def _is_lab_output_id(output_id: str) -> bool:
-    for record in media_store.list_history_records(limit=10000):
-        if record.get("id") == output_id:
-            return is_lab_history_record(record)
-    return False
+    record = media_store.get_history_record(output_id)
+    return bool(record and is_lab_history_record(record))
 
 
 def _delete_v1_history_output_bundle(output_id: str, *, owner_id: int | None = None) -> dict[str, object]:
@@ -3318,372 +3320,20 @@ def _list_image_history_sync(
     session_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    *,
+    metrics=None,
 ) -> ImageHistoryResponse:
-    limit = min(limit, 200)
-    # Keep the request scratch DB beside durable media data. The platform's
-    # default temp directory may be a memory-backed filesystem on Linux.
-    media_store.root.mkdir(parents=True, exist_ok=True)
-    media_store._ensure_history_index()
-    owner_connection = connect(repository.database_path)
-    with tempfile.TemporaryDirectory(prefix="v1-image-history-", dir=media_store.root) as scratch:
-        connection = sqlite3.connect(Path(scratch) / "page.sqlite3")
-        connection.execute("PRAGMA journal_mode=OFF")
-        connection.execute("PRAGMA synchronous=OFF")
-        connection.executescript(
-            """
-            CREATE TABLE history_items (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                output_id TEXT NOT NULL UNIQUE,
-                sort_timestamp REAL NOT NULL,
-                job_id TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                owner_id INTEGER,
-                owner_conflict INTEGER NOT NULL DEFAULT 0,
-                source_priority INTEGER NOT NULL,
-                owner_match INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX history_page_order_idx
-                ON history_items(sort_timestamp DESC, job_id DESC, output_id DESC, sequence ASC);
-            CREATE TABLE blocked_output_ids (output_id TEXT PRIMARY KEY);
-            CREATE TABLE owner_evidence (
-                output_id TEXT PRIMARY KEY,
-                owner_id INTEGER,
-                owner_conflict INTEGER NOT NULL DEFAULT 0,
-                authority_rank INTEGER NOT NULL DEFAULT 99
-            );
-            CREATE TABLE resolved_authority (
-                output_id TEXT PRIMARY KEY,
-                owner_id INTEGER,
-                owner_conflict INTEGER NOT NULL DEFAULT 0,
-                authority_rank INTEGER NOT NULL DEFAULT 99
-            );
-            """
-        )
+    from app.repositories.history_index import read_history_page
 
-        def visible_history_item(item: ImageHistoryItem) -> ImageHistoryItem | None:
-            item = _with_veyra_history_access(item, veyra_context)
-            if not _history_visible_to_veyra(item, veyra_context):
-                return None
-            return item
-
-        def has_blocked_id(output_id: str) -> bool:
-            return connection.execute(
-                "SELECT 1 FROM blocked_output_ids WHERE output_id=?", (output_id,)
-            ).fetchone() is not None
-
-        def record_owner_evidence(
-            output_id: str,
-            owner_id: int | None,
-            *,
-            authority_rank: int = 2,
-        ) -> None:
-            if owner_id is None:
-                return
-            existing = connection.execute(
-                "SELECT owner_id, owner_conflict, authority_rank FROM owner_evidence WHERE output_id=?",
-                (output_id,),
-            ).fetchone()
-            if existing is None:
-                connection.execute(
-                    "INSERT INTO owner_evidence(output_id, owner_id, authority_rank) VALUES(?, ?, ?)",
-                    (output_id, owner_id, authority_rank),
-                )
-            elif authority_rank < int(existing[2]):
-                connection.execute(
-                    "UPDATE owner_evidence SET owner_id=?, owner_conflict=0, authority_rank=? "
-                    "WHERE output_id=?",
-                    (owner_id, authority_rank, output_id),
-                )
-                connection.execute(
-                    "UPDATE history_items SET owner_id=?, owner_conflict=0 WHERE output_id=?",
-                    (owner_id, output_id),
-                )
-                connection.execute(
-                    "UPDATE history_items SET owner_match=0 WHERE output_id=?", (output_id,)
-                )
-            elif authority_rank == int(existing[2]) and not existing[1] and int(existing[0]) != owner_id:
-                connection.execute(
-                    "UPDATE owner_evidence SET owner_conflict=1 WHERE output_id=?",
-                    (output_id,),
-                )
-                connection.execute(
-                    "UPDATE history_items SET owner_conflict=1 WHERE output_id=?",
-                    (output_id,),
-                )
-
-        def owner_evidence_for(output_id: str) -> tuple[int | None, bool, int]:
-            row = connection.execute(
-                "SELECT owner_id, owner_conflict, authority_rank FROM owner_evidence WHERE output_id=?",
-                (output_id,),
-            ).fetchone()
-            if row is None:
-                return None, False, 99
-            return _positive_int_or_none(row[0]), bool(row[1]), int(row[2])
-
-        def canonical_output_owner(output_id: str) -> tuple[int | None, int, bool]:
-            cached = connection.execute(
-                "SELECT owner_id, authority_rank, owner_conflict FROM resolved_authority WHERE output_id=?",
-                (output_id,),
-            ).fetchone()
-            if cached is not None:
-                return _positive_int_or_none(cached[0]), int(cached[1]), bool(cached[2])
-
-            output_getter = getattr(repository, "get_output_on", None)
-            output = (
-                output_getter(owner_connection, output_id)
-                if callable(output_getter)
-                else repository.get_output(output_id)
-            )
-            owner_id = _history_output_veyra_user_id(output.metadata) if output else None
-            authority_rank = 0
-            owner_conflict = False
-            if owner_id is None:
-                history_getter = getattr(media_store, "get_history_record_on", None)
-                history_record = (
-                    history_getter(owner_connection, output_id, include_missing=True)
-                    if callable(history_getter)
-                    else media_store.get_history_record(output_id, include_missing=True)
-                )
-                owner_id = (
-                    _positive_int_or_none(history_record.get("veyra_user_id"))
-                    if history_record
-                    else None
-                )
-                owner_conflict = bool(
-                    history_record and history_record.get("_veyra_owner_conflict")
-                )
-                authority_rank = 1
-            connection.execute(
-                "INSERT INTO resolved_authority(output_id, owner_id, owner_conflict, authority_rank) "
-                "VALUES(?, ?, ?, ?)",
-                (output_id, owner_id, int(owner_conflict), authority_rank),
-            )
-            return owner_id, authority_rank, owner_conflict
-
-        def stage_candidate(item: ImageHistoryItem, *, source_priority: int) -> None:
-            """Resolve duplicate IDs and owner evidence before applying account visibility."""
-            output_id = str(item.id)
-            canonical_owner_id, canonical_authority_rank, canonical_owner_conflict = canonical_output_owner(output_id)
-            if canonical_owner_conflict:
-                connection.execute(
-                    "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
-                )
-                connection.execute("DELETE FROM history_items WHERE output_id=?", (output_id,))
-                return
-            item_owner_id = _history_item_veyra_user_id(item)
-            evidence_rank = (
-                canonical_authority_rank
-                if canonical_owner_id is not None
-                else {0: 2, 1: 1, 2: 3}.get(source_priority, 3)
-            )
-            record_owner_evidence(
-                output_id,
-                canonical_owner_id if canonical_owner_id is not None else item_owner_id,
-                authority_rank=evidence_rank,
-            )
-            owner_id, owner_conflict, _owner_rank = owner_evidence_for(output_id)
-            if owner_id is not None and item_owner_id != owner_id:
-                item = item.model_copy(update={"veyra_user_id": owner_id})
-            owner_match = int(owner_id is not None and item_owner_id == owner_id)
-            payload = item.model_dump_json()
-            timestamp, job_id, output_id = _history_sort_key(item)
-            existing = connection.execute(
-                "SELECT sequence, owner_id, owner_conflict, source_priority, owner_match "
-                "FROM history_items WHERE output_id=?",
-                (item.id,),
-            ).fetchone()
-            if existing is None:
-                connection.execute(
-                    "INSERT INTO history_items(output_id, sort_timestamp, job_id, payload, owner_id, owner_conflict, source_priority, owner_match) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-                    (output_id, timestamp, job_id, payload, owner_id, int(owner_conflict), source_priority, owner_match),
-                )
-                return
-            if owner_conflict:
-                connection.execute(
-                    "UPDATE history_items SET owner_conflict=1 WHERE output_id=?", (item.id,)
-                )
-                return
-            if existing[2]:
-                return
-            existing_owner = _positive_int_or_none(existing[1])
-            if existing_owner is not None and owner_id is not None and existing_owner != owner_id:
-                connection.execute(
-                    "UPDATE owner_evidence SET owner_conflict=1 WHERE output_id=?", (item.id,)
-                )
-                connection.execute(
-                    "UPDATE history_items SET owner_conflict=1 WHERE output_id=?", (item.id,)
-                )
-                return
-            # The authority rank selects the owner; source priority only picks
-            # which display projection to retain within that ownership class.
-            replace = (existing_owner is None and owner_id is not None) or (
-                (existing_owner is None) == (owner_id is None)
-                and (
-                    source_priority < int(existing[3])
-                    or (
-                        source_priority == int(existing[3])
-                        and owner_match > int(existing[4])
-                    )
-                )
-            )
-            if replace:
-                connection.execute(
-                    "UPDATE history_items SET owner_id=?, owner_conflict=0, source_priority=?, payload=?, "
-                    "sort_timestamp=?, job_id=?, owner_match=? WHERE output_id=?",
-                    (owner_id, source_priority, payload, timestamp, job_id, owner_match, item.id),
-                )
-
-        try:
-            job_iterator = getattr(repository, "iter_jobs", None)
-            # Session narrows which candidates can be displayed, but ownership
-            # evidence for a globally unique output ID must include legacy Job
-            # copies from every session. Otherwise an ownerless copy in the
-            # requested session could be exposed as public history while the
-            # private copy that establishes its owner sits in another session.
-            jobs = (
-                job_iterator(job_type="image")
-                if callable(job_iterator)
-                else iter(repository.list_jobs(job_type="image"))
-            )
-            for job in jobs:
-                if _is_non_v1_history_job(job):
-                    connection.executemany(
-                        "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)",
-                        ((output.id,) for output in job.outputs),
-                    )
-                    continue
-                for output in job.outputs:
-                    record_owner_evidence(
-                        output.id,
-                        _history_output_veyra_user_id(output.metadata),
-                        authority_rank=2,
-                    )
-                    if session_id and job.session_id != session_id:
-                        continue
-                    if output.format not in {"png", "jpeg", "webp"}:
-                        continue
-                    stage_candidate(
-                        ImageHistoryItem(
-                            id=output.id,
-                            job_id=job.id,
-                            session_id=job.session_id,
-                            url=output.url,
-                            thumbnail_url=media_store.thumbnail_url(output.id),
-                            preview_url=media_store.preview_url(output.id),
-                            format=output.format,
-                            width=output.width,
-                            height=output.height,
-                            provider=job.provider,
-                            model=job.model,
-                            requested_provider=_job_requested_provider(job),
-                            requested_model=_job_requested_model(job),
-                            provider_fallback=job.raw_response_summary.get("image_provider_fallback") if job.raw_response_summary else None,
-                            asset_mode=job.asset_mode,
-                            asset_intents=_job_asset_intents(job),
-                            asset_plan=job.asset_plan,
-                            asset_vision_profiles=_job_asset_vision_profiles(job),
-                            provider_input_plan=_job_provider_input_plan(job),
-                            visual_review=output.visual_review.model_dump() if output.visual_review else None,
-                            prompt_plan=job.prompt_plan.variables.get("advanced_prompt_plan") if job.prompt_plan and job.prompt_plan.variables else None,
-                            original_prompt=job.provenance.get("original_prompt") if job.provenance else None,
-                            final_prompt=_job_prompt(job),
-                            work_intensity=_job_work_intensity(job),
-                            work_intensity_label=_job_work_intensity_label(job),
-                            prompt=_job_prompt(job),
-                            size=job.prompt_plan.size if job.prompt_plan else None,
-                            version_parent_id=output.version_parent_id,
-                            veyra_user_id=_history_output_veyra_user_id(output.metadata),
-                            favorite=False,
-                            created_at=job.created_at,
-                            updated_at=job.updated_at,
-                            source="repository",
-                        ),
-                        source_priority=0,
-                    )
-
-            for record in media_store.iter_history_records(
-                limit=10000, session_id=session_id, include_missing=True
-            ):
-                output_id = str(record.get("id") or "")
-                if _is_non_v1_history_record(record):
-                    connection.execute(
-                        "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
-                    )
-                    continue
-                record_owner_evidence(
-                    output_id,
-                    _positive_int_or_none(record.get("veyra_user_id")),
-                    authority_rank=1,
-                )
-                if has_blocked_id(output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
-                    continue
-                source_path = media_store.output_path(
-                    job_id=str(record.get("job_id") or ""),
-                    output_id=output_id,
-                    output_format=str(record.get("format") or "png"),
-                )
-                if not source_path.is_file():
-                    continue
-                stage_candidate(ImageHistoryItem(**{**record, "favorite": False}), source_priority=1)
-
-            if not session_id:
-                for record in media_store.list_generated_output_records(limit=10000):
-                    output_id = str(record.get("id") or "")
-                    if _is_non_v1_history_record(record):
-                        connection.execute(
-                            "INSERT OR IGNORE INTO blocked_output_ids(output_id) VALUES(?)", (output_id,)
-                        )
-                        continue
-                    if has_blocked_id(output_id) or record.get("format") not in {"png", "jpeg", "webp"}:
-                        continue
-                    stage_candidate(ImageHistoryItem(**{**record, "favorite": False}), source_priority=2)
-
-            last_sequence = 0
-            while True:
-                candidates = connection.execute(
-                    "SELECT sequence, output_id, owner_conflict, payload FROM history_items "
-                    "WHERE sequence>? ORDER BY sequence ASC LIMIT 128",
-                    (last_sequence,),
-                ).fetchall()
-                if not candidates:
-                    break
-                for sequence, output_id, owner_conflict, payload in candidates:
-                    last_sequence = sequence
-                    evidence_owner_id, evidence_conflict, _evidence_rank = owner_evidence_for(output_id)
-                    if owner_conflict or evidence_conflict or has_blocked_id(output_id):
-                        connection.execute("DELETE FROM history_items WHERE sequence=?", (sequence,))
-                        continue
-                    item = ImageHistoryItem.model_validate_json(payload)
-                    item_owner_id = _history_item_veyra_user_id(item)
-                    if evidence_owner_id is not None and item_owner_id != evidence_owner_id:
-                        item = item.model_copy(update={"veyra_user_id": evidence_owner_id})
-                    item = visible_history_item(item)
-                    if item is None:
-                        connection.execute("DELETE FROM history_items WHERE sequence=?", (sequence,))
-                        continue
-                    timestamp, job_id, _ = _history_sort_key(item)
-                    connection.execute(
-                        "UPDATE history_items SET sort_timestamp=?, job_id=?, payload=?, owner_id=? WHERE sequence=?",
-                        (
-                            timestamp,
-                            job_id,
-                            item.model_dump_json(),
-                            _history_item_veyra_user_id(item),
-                            sequence,
-                        ),
-                    )
-
-            total = int(connection.execute("SELECT COUNT(*) FROM history_items").fetchone()[0])
-            rows = connection.execute(
-                "SELECT payload FROM history_items ORDER BY sort_timestamp DESC, job_id DESC, output_id DESC, sequence ASC LIMIT ? OFFSET ?",
-                (limit, offset),
-            )
-            page = [ImageHistoryItem.model_validate_json(row[0]) for row in rows]
-        finally:
-            connection.close()
-            owner_connection.close()
-
+    if not veyra_context.get("authenticated") and settings.veyra_auth_enabled:
+        return ImageHistoryResponse(items=[], total=0)
+    records, total = read_history_page(
+        media_store, surface="v1", session_id=session_id,
+        owner_id=_positive_int_or_none(veyra_context.get("user_id")),
+        all_owners=bool(veyra_context.get("is_admin") or not veyra_context.get("authenticated")),
+        limit=min(limit, 200), offset=offset, metrics=metrics,
+    )
+    page = [_with_veyra_history_access(ImageHistoryItem(**record), veyra_context) for record in records]
     if page:
         favorite_ids = list_favorite_ids(
             veyra_user_id=_positive_int_or_none(veyra_context.get("user_id")),
@@ -3703,7 +3353,7 @@ async def list_image_history(
     authorization: str = Header(default=""),
 ):
     veyra_context = await _veyra_history_context(request, authorization)
-    return await _run_sqlite_api_call(
+    return await _run_sqlite_read_api_call(
         _list_image_history_sync,
         veyra_context,
         session_id,
@@ -3867,21 +3517,23 @@ async def preview_output(output_id: str, request: Request, authorization: str = 
 
 
 def _resolve_output_file(output_id: str) -> tuple[Path, str]:
+    from app.repositories.history_index import lookup_output_file
+
     output = repository.get_output(output_id)
-    if not output:
+    if output:
+        path = media_store.output_path(job_id=output.job_id, output_id=output.id, output_format=output.format)
+        if path.exists():
+            return path, output.format
+    fallback, known = lookup_output_file(media_store, output_id)
+    if not fallback and not known and (output is None or output.format not in {"png", "jpeg", "webp"}):
+        # Preserve direct-ID compatibility outside indexed image history (for
+        # example legacy video). Known missing images do not rescan the tree.
         fallback = media_store.find_output_file(output_id)
-        if not fallback:
-            raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Output not found."})
+    if fallback:
         path, output_format, _ = fallback
         return path, output_format
-    path = media_store.output_path(job_id=output.job_id, output_id=output.id, output_format=output.format)
-    if not path.exists():
-        fallback = media_store.find_output_file(output_id)
-        if not fallback:
-            raise HTTPException(status_code=404, detail={"code": "output_file_not_found", "message": "Output file not found."})
-        path, output_format, _ = fallback
-        return path, output_format
-    return path, output.format
+    code = "output_file_not_found" if output else "output_not_found"
+    raise HTTPException(status_code=404, detail={"code": code, "message": "Output file not found." if output else "Output not found."})
 
 
 def _ensure_output_thumbnail(output_id: str) -> Path:
@@ -4326,79 +3978,6 @@ def _wrap_text_for_poster(value: str, width: int, max_lines: int) -> list[str]:
         lines = lines[:max_lines]
         lines[-1] = lines[-1].rstrip(" .，。") + "..."
     return lines
-
-
-def _job_prompt(job) -> str | None:
-    if not job.prompt_plan:
-        return None
-    generation_prompt = job.prompt_plan.variables.get("generation_prompt") if job.prompt_plan.variables else None
-    if generation_prompt:
-        return str(generation_prompt)
-    parts = [
-        job.prompt_plan.main_subject,
-        job.prompt_plan.scene,
-        job.prompt_plan.style,
-        job.prompt_plan.composition,
-    ]
-    return "，".join(part for part in parts if part)
-
-
-def _job_asset_intents(job) -> list[dict]:
-    if not job.asset_plan:
-        return []
-    return [
-        {
-            "asset_id": item.get("asset_id"),
-            "role": item.get("role"),
-            "role_label": item.get("role_label"),
-            "priority": item.get("priority"),
-            "preservation": item.get("preservation"),
-            "strength": item.get("strength"),
-        }
-        for item in job.asset_plan.get("assets", [])
-    ]
-
-
-def _job_asset_vision_profiles(job) -> list[dict]:
-    if not job.asset_plan:
-        return []
-    profiles = []
-    for item in job.asset_plan.get("assets", []):
-        profile = item.get("vision_profile")
-        if profile:
-            profiles.append(profile)
-    return profiles
-
-
-def _job_provider_input_plan(job) -> dict | None:
-    if not job.asset_plan:
-        return None
-    value = job.asset_plan.get("provider_input_plan")
-    return dict(value) if isinstance(value, dict) else None
-
-
-def _job_work_intensity(job) -> str | None:
-    if not job.prompt_plan or not job.prompt_plan.variables:
-        return None
-    value = job.prompt_plan.variables.get("work_intensity")
-    return str(value) if value else None
-
-
-def _job_work_intensity_label(job) -> str | None:
-    if not job.prompt_plan or not job.prompt_plan.variables:
-        return None
-    value = job.prompt_plan.variables.get("work_intensity_label")
-    return str(value) if value else None
-
-
-def _job_requested_provider(job) -> str | None:
-    value = job.raw_response_summary.get("requested_image_provider") if job.raw_response_summary else None
-    return str(value) if value else None
-
-
-def _job_requested_model(job) -> str | None:
-    value = job.raw_response_summary.get("requested_image_model") if job.raw_response_summary else None
-    return str(value) if value else None
 
 
 def _history_sort_key(item: ImageHistoryItem) -> tuple[float, str, str]:

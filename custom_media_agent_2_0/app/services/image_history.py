@@ -15,6 +15,7 @@ from app.config import settings
 from app.repositories import repository
 from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageOutput
 from app.services.favorites import delete_favorite, list_favorite_ids
+from app.services.history_counts import HistoryCountIndexError, ensure_history_counts, read_history_count
 from app.services.output_storage import delete_output_storage
 
 _HISTORY_DATABASES: OrderedDict[str, None] = OrderedDict()
@@ -95,12 +96,31 @@ def list_image_history(
     where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
     connection = _history_connect()
     try:
-        total = int(connection.execute("SELECT COUNT(*) FROM v2_image_history" + where_sql, params).fetchone()[0])
+        # Keep total and page consistent while a concurrent WAL writer updates
+        # history. Neither this snapshot nor pagination decodes unreturned rows.
+        connection.execute("BEGIN")
+        total = read_history_count(
+            connection, owner_id=veyra_user_id, include_public=include_legacy_public, include_all=include_all,
+        )
+        page_sql = "SELECT payload FROM v2_image_history" + where_sql
+        if not include_all and veyra_user_id is not None and include_legacy_public:
+            # The predicates are disjoint. SQLite can merge their already
+            # ordered owner-index streams instead of sorting every visible row
+            # for an OR query. The owner stream remains first for equal keys.
+            page_sql = (
+                "SELECT payload, created_epoch, job_id FROM v2_image_history WHERE owner_id=? "
+                "UNION ALL SELECT payload, created_epoch, job_id FROM v2_image_history WHERE owner_id IS NULL"
+            )
         rows = list(connection.execute(
-            "SELECT payload FROM v2_image_history" + where_sql +
+            page_sql +
             " ORDER BY created_epoch DESC, job_id DESC LIMIT ? OFFSET ?",
             [*params, max(0, int(limit)), safe_offset],
         ))
+        if len(rows) != min(max(0, int(limit)), max(0, total - safe_offset)):
+            raise HistoryCountIndexError("V2 history page disagrees with derived total; verify and rebuild counts.")
+        # The consistent count/page is now captured. Do not pin the history WAL
+        # snapshot while decoding or querying the independent favorites store.
+        connection.commit()
         history_items = [ImageHistoryItem.model_validate_json(row[0]) for row in rows]
         favorite_ids = list_favorite_ids(
             veyra_user_id=veyra_user_id,
@@ -202,6 +222,9 @@ def _history_connect() -> sqlite3.Connection:
     connection = sqlite3.connect(db_path, timeout=3.0)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout=3000")
+    # REPLACE must fire its implicit DELETE trigger as well as INSERT so the
+    # disposable count buckets stay exact on all managed write paths.
+    connection.execute("PRAGMA recursive_triggers=ON")
     key = str(db_path.resolve())
     if key not in _HISTORY_DATABASES:
         with _HISTORY_SCHEMA_LOCK:
@@ -217,6 +240,10 @@ def _history_connect() -> sqlite3.Connection:
                     connection.execute(
                         "CREATE INDEX IF NOT EXISTS v2_image_history_page_idx "
                         "ON v2_image_history(owner_id, created_epoch DESC, job_id DESC)"
+                    )
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS v2_image_history_global_page_idx "
+                        "ON v2_image_history(created_epoch DESC, job_id DESC)"
                     )
                     connection.execute(
                         """CREATE TABLE IF NOT EXISTS v2_image_history_migration (
@@ -239,6 +266,11 @@ def _history_connect() -> sqlite3.Connection:
                 except Exception:
                     connection.close()
                     raise
+    try:
+        ensure_history_counts(connection)
+    except Exception:
+        connection.close()
+        raise
     return connection
 
 
