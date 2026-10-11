@@ -86,7 +86,8 @@ jobs:
           candidate_release="${releases_root}/doc276-277-${expected_sha:0:12}"
           candidate_image="alchemy-media-agent:candidate-${expected_sha}"
           maintenance_flag="/etc/alchemy/alchemy-media-agent-maintenance"
-          nginx_config="/etc/nginx/conf.d/alchemy-media-agent.conf"
+          nginx_config="/etc/nginx/sites-available/alchemy-media-agent"
+          nginx_enabled_config="/etc/nginx/sites-enabled/alchemy-media-agent"
           maintenance_backup_root="/var/backups/alchemy"
           maintenance_backup="${maintenance_backup_root}/pr29-${expected_sha:0:12}-$(date -u +%Y%m%dT%H%M%SZ)"
           compose_cmd=()
@@ -712,12 +713,14 @@ jobs:
           prepare_v2_runtime_for_release "$candidate_release" "$candidate_release/ops/vps-release/v2_runtime_guard.py" || stop_pre candidate_v2_runtime_prepare_failed
           python3 "$candidate_release/ops/vps-release/v2_runtime_guard.py" --release "$candidate_release" --verify || stop_pre candidate_v2_runtime_invalid
 
+          [ -f "$nginx_config" ] || stop_pre active_nginx_config_missing
+          [ -L "$nginx_enabled_config" ] || stop_pre active_nginx_config_link_missing
+          [ "$(realpath "$nginx_enabled_config")" = "$nginx_config" ] || stop_pre active_nginx_config_link_target_mismatch
+          grep -Fq 'upstream alchemy_media_agent_app' "$nginx_config" || stop_pre active_nginx_config_unrecognized
           mkdir -m 700 "$maintenance_backup" || stop_pre backup_directory_exists
           nginx_config_backup="$maintenance_backup/alchemy-media-agent.nginx.conf"
           runtime_contract_backup="$maintenance_backup/runtime-contract"
           mkdir -m 700 "$runtime_contract_backup"
-          [ -f "$nginx_config" ] || stop_pre active_nginx_config_missing
-          grep -Fq 'upstream alchemy_media_agent_app' "$nginx_config" || stop_pre active_nginx_config_unrecognized
           [ -f /usr/local/lib/alchemy/v2_runtime_guard.py ] || stop_pre active_v2_runtime_guard_missing
           cp -p "$nginx_config" "$nginx_config_backup"
           cp -p /usr/local/lib/alchemy/v2_runtime_guard.py "$runtime_contract_backup/v2_runtime_guard.py"

@@ -18,6 +18,16 @@ def test_activation_requires_explicit_maintenance_and_disk_budget() -> None:
     assert "VPS_HOST" in workflow
 
 
+def test_activation_targets_the_enabled_nginx_config_file() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+
+    assert 'nginx_config="/etc/nginx/sites-available/alchemy-media-agent"' in workflow
+    assert 'nginx_enabled_config="/etc/nginx/sites-enabled/alchemy-media-agent"' in workflow
+    assert '[ -L "$nginx_enabled_config" ] || stop_pre active_nginx_config_link_missing' in workflow
+    assert '[ "$(realpath "$nginx_enabled_config")" = "$nginx_config" ] || stop_pre active_nginx_config_link_target_mismatch' in workflow
+    assert workflow.index("active_nginx_config_link_target_mismatch") < workflow.index('maintenance_active=1')
+
+
 def test_activation_orders_fence_backup_prepare_verify_and_admission() -> None:
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
     markers = [
