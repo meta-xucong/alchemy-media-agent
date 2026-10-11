@@ -480,6 +480,15 @@ jobs:
             return 1
           }
 
+          probe_maintenance_gate() {
+            local nonce
+            nonce="$(date +%s%N)"
+            curl --noproxy '*' -ksS --resolve alchemy.aiself.vip:443:127.0.0.1 \
+              --connect-timeout 5 --max-time 10 -H 'Cache-Control: no-cache' \
+              -o /dev/null -w '%{http_code}' \
+              "https://alchemy.aiself.vip/api/v2/health?cutover_probe=${nonce}" 2>/dev/null || true
+          }
+
           route_ok() {
             case "$1" in
               200|302|303|307) return 0 ;;
@@ -520,7 +529,7 @@ jobs:
             local reason="$1"
             local gate_confirmed=0 writers_stopped=1 status unit nginx_state v1_running
             touch "$maintenance_flag" || gate_confirmed=0
-            chmod 600 "$maintenance_flag" || gate_confirmed=0
+            chmod 644 "$maintenance_flag" || gate_confirmed=0
             if [ -f "$candidate_release/alchemy-media-agent.nginx.conf" ]; then
               install -m 644 "$candidate_release/alchemy-media-agent.nginx.conf" "$nginx_config" || gate_confirmed=0
             elif [ -n "$nginx_config_backup" ] && [ -f "$nginx_config_backup" ]; then
@@ -530,7 +539,7 @@ jobs:
             fi
             if [ -f "$maintenance_flag" ] && grep -Fq 'if (-f /etc/alchemy/alchemy-media-agent-maintenance)' "$nginx_config" \
                 && nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1; then
-              status="$(curl -ksS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' "$public_base_url/api/v2/health" 2>/dev/null || true)"
+              status="$(probe_maintenance_gate)"
               [ "$status" = 503 ] && gate_confirmed=1
             else
               gate_confirmed=0
@@ -588,7 +597,7 @@ jobs:
               exit 1
             fi
             touch "$maintenance_flag" || { keep_closed maintenance_flag_restore_failed; exit 1; }
-            chmod 600 "$maintenance_flag" || { keep_closed maintenance_flag_permission_failed; exit 1; }
+            chmod 644 "$maintenance_flag" || { keep_closed maintenance_flag_permission_failed; exit 1; }
             nginx -t >/dev/null 2>&1 && systemctl reload nginx || { keep_closed maintenance_gate_restore_failed; exit 1; }
             if [ "$target_indexes_mutated" = 1 ]; then
               [ -f "$maintenance_backup/stores/manifest.json" ] || { keep_closed backup_manifest_missing; exit 1; }
@@ -734,10 +743,10 @@ jobs:
           maintenance_active=1
           install -m 644 "$candidate_release/alchemy-media-agent.nginx.conf" "$nginx_config" || stop_pre candidate_nginx_install_failed
           touch "$maintenance_flag"
-          chmod 600 "$maintenance_flag"
+          chmod 644 "$maintenance_flag"
           nginx -t || stop_pre maintenance_nginx_config_invalid
           systemctl reload nginx || stop_pre maintenance_nginx_reload_failed
-          maintenance_status="$(curl -ksS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' "$public_base_url/api/v2/health" 2>/dev/null || true)"
+          maintenance_status="$(probe_maintenance_gate)"
           [ "$maintenance_status" = 503 ] || stop_pre public_maintenance_gate_not_active
 
           if [ "$maintenance_timer_was_active" = 1 ]; then systemctl stop alchemy-v3-storage-maintenance.timer || stop_pre maintenance_timer_stop_failed; fi

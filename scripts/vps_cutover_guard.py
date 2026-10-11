@@ -460,14 +460,23 @@ def read_v2_unit_configuration(unit_names: tuple[str, ...] = _V2_UNITS) -> dict[
         )
         if result.returncode != 0:
             raise CutoverBlocked("v2_systemd_inspection_failed")
-        values = {}
+        values: dict[str, list[str]] = {}
         for line in result.stdout.splitlines():
             key, separator, value = line.partition("=")
             if separator:
-                values[key] = value.strip()
-        raw_env_files = values.get("EnvironmentFiles", "")
-        env_files = [part.split(" ", 1)[0] for part in raw_env_files.split() if part.startswith("/")]
-        drop_ins = [part for part in values.get("DropInPaths", "").split() if part.startswith("/")]
+                values.setdefault(key, []).append(value.strip())
+        env_files = [
+            part.split(" ", 1)[0]
+            for raw_env_files in values.get("EnvironmentFiles", [])
+            for part in raw_env_files.split()
+            if part.startswith("/")
+        ]
+        drop_ins = [
+            part
+            for raw_drop_ins in values.get("DropInPaths", [])
+            for part in raw_drop_ins.split()
+            if part.startswith("/")
+        ]
         units[unit] = {"environment_files": env_files, "drop_in_paths": drop_ins}
     return units
 

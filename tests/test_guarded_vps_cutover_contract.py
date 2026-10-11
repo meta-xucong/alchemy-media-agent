@@ -28,6 +28,18 @@ def test_activation_targets_the_enabled_nginx_config_file() -> None:
     assert workflow.index("active_nginx_config_link_target_mismatch") < workflow.index('maintenance_active=1')
 
 
+def test_maintenance_probe_is_readable_by_nginx_and_hits_local_origin() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+
+    assert 'chmod 644 "$maintenance_flag"' in workflow
+    assert 'chmod 600 "$maintenance_flag"' not in workflow
+    assert "probe_maintenance_gate()" in workflow
+    assert "curl --noproxy '*' -ksS --resolve" in workflow
+    assert "alchemy.aiself.vip:443:127.0.0.1" in workflow
+    assert 'maintenance_status="$(probe_maintenance_gate)"' in workflow
+    assert 'status="$(probe_maintenance_gate)"' in workflow
+
+
 def test_activation_orders_fence_backup_prepare_verify_and_admission() -> None:
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
     markers = [

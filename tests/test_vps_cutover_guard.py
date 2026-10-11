@@ -736,6 +736,60 @@ def test_prestart_storage_unit_verification_needs_no_running_processes(tmp_path,
     assert _MODULE.verify_live_v2_storage_unit_roots(environment_file, roots)["status"] == "verified"
 
 
+def test_read_v2_unit_configuration_preserves_repeated_environment_files(monkeypatch, tmp_path):
+    roots = {
+        "V2_DATA_DIR": str(tmp_path / "data"),
+        "V2_STORAGE_DIR": str(tmp_path / "storage"),
+        "V2_IMAGE_HISTORY_PATH": str(tmp_path / "history.jsonl"),
+        "V2_TASK_QUEUE_DB_PATH": str(tmp_path / "queue.sqlite3"),
+    }
+    base_environment = "/etc/alchemy/alchemy-v2.env"
+    api_environment = "/etc/alchemy/alchemy-v2-api-runtime.env"
+    api_drop_in = "/etc/systemd/system/alchemy-v2-api.service.d/90-alchemy-worker-ownership.conf"
+
+    def fake_run(command, *, capture_output, text, check):
+        unit = command[2]
+        if unit == "alchemy-v2-api.service":
+            stdout = (
+                f"EnvironmentFiles={base_environment} (ignore_errors=no)\n"
+                f"EnvironmentFiles={api_environment} (ignore_errors=no)\n"
+                f"DropInPaths={api_drop_in}\n"
+            )
+        else:
+            stdout = f"EnvironmentFiles={base_environment} (ignore_errors=no)\nDropInPaths=\n"
+        return type("Result", (), {"returncode": 0, "stdout": stdout})()
+
+    monkeypatch.setattr(_MODULE.subprocess, "run", fake_run)
+    units = _MODULE.read_v2_unit_configuration()
+
+    assert units["alchemy-v2-api.service"] == {
+        "environment_files": [base_environment, api_environment],
+        "drop_in_paths": [api_drop_in],
+    }
+    resolved = lambda value: str(Path(value).resolve(strict=False))
+    allowed_drop_ins = {"alchemy-v2-api.service": [api_drop_in]}
+    allowed_environment_files = {
+        "alchemy-v2-api.service": [base_environment, api_environment],
+        "alchemy-v2-worker.service": [base_environment],
+        "alchemy-v2-sync-worker.service": [base_environment],
+    }
+    units = {
+        unit: {
+            "environment_files": [resolved(path) for path in config["environment_files"]],
+            "drop_in_paths": [resolved(path) for path in config["drop_in_paths"]],
+        }
+        for unit, config in units.items()
+    }
+    allowed_drop_ins = {unit: [resolved(path) for path in paths] for unit, paths in allowed_drop_ins.items()}
+    allowed_environment_files = {
+        unit: [resolved(path) for path in paths]
+        for unit, paths in allowed_environment_files.items()
+    }
+    assert _MODULE.verify_v2_storage_unit_roots(
+        roots, units, allowed_drop_ins, allowed_environment_files,
+    )["status"] == "verified"
+
+
 def test_backup_restore_preserves_original_file_metadata_and_keeps_backup_private(tmp_path):
     v1, _v2, _projects = _databases(tmp_path)
     source = tmp_path / "v1" / "history.jsonl"
