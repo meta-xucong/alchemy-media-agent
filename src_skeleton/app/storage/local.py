@@ -706,6 +706,15 @@ def _valid_legacy_history_record(record: Any) -> bool:
         if field in record and type(record[field]) is not bool:
             return False
     owner = record.get("veyra_user_id")
+    if not _valid_legacy_owner(owner):
+        return False
+    if _legacy_owner_is_empty(owner) and isinstance(record.get("alchemy_lab"), dict):
+        if not _valid_legacy_owner(record["alchemy_lab"].get("veyra_user_id")):
+            return False
+    return True
+
+
+def _valid_legacy_owner(owner: Any) -> bool:
     if owner is None or owner == "":
         return True
     if isinstance(owner, str):
@@ -724,12 +733,37 @@ def _valid_legacy_history_record(record: Any) -> bool:
     return type(owner) is int and 0 <= owner <= 2**63 - 1
 
 
+def _legacy_owner_is_empty(owner: Any) -> bool:
+    if owner is None:
+        return True
+    if type(owner) is int:
+        return owner == 0
+    if isinstance(owner, str):
+        value = owner.strip()
+        if not value:
+            return True
+        if re.fullmatch(r"\+?[0-9]+", value):
+            return int(value) == 0
+    return False
+
+
 def _history_owner_id(record: dict[str, Any]) -> int | None:
     try:
         owner_id = int(record.get("veyra_user_id") or 0)
     except (TypeError, ValueError):
         return None
-    return owner_id if owner_id > 0 else None
+    if owner_id > 0:
+        return owner_id
+    if owner_id < 0:
+        return None
+    lab_metadata = record.get("alchemy_lab")
+    if isinstance(lab_metadata, dict):
+        try:
+            lab_owner_id = int(lab_metadata.get("veyra_user_id") or 0)
+        except (TypeError, ValueError):
+            return None
+        return lab_owner_id if lab_owner_id > 0 else None
+    return None
 
 
 def _format_from_suffix(suffix: str) -> str | None:

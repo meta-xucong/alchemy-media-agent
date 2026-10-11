@@ -1006,6 +1006,7 @@ for (const shell of shells) {
       h.install([
         "loadMobileV3Projects", "mergeMobileV3ProjectItems", "mobileV3TemplateCards",
         "mobileV3TemplateById", "mobileV3ProjectCountLabel", "loadMobileV3HomePreviews",
+        "mobileV3ProjectDetailLoadingActive",
       ]);
       h.context.switchTab("v3");
     }

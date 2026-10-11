@@ -984,7 +984,7 @@ async def favorite_history_item(output_id: str, body: FavoriteImageRequest, requ
         if not await _run_sqlite_api_call(get_image_history_item, output_id):
             raise HTTPException(status_code=404, detail={"error_code": "history_output_not_found", "message": "V2 history output not found."})
     return await _run_sqlite_api_call(
-        set_favorite, output_id, body.favorite, veyra_user_id=context.get("user_id")
+        set_favorite, output_id, body.favorite, veyra_user_id=context.get("user_id"), require_ready=True
     )
 
 
@@ -1002,6 +1002,7 @@ async def history_reference_asset(
         include_legacy_public=True,
         include_all=context.get("is_admin", False),
         output_ids=[output_id],
+        require_ready=True,
     )
     if output_id not in favorite_ids:
         raise HTTPException(

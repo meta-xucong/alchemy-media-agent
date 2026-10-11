@@ -16,7 +16,7 @@ from app.repositories import repository
 from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageOutput
 from app.services.favorites import (
     attach_ready_favorites, delete_favorite, favorite_scope_predicate,
-    list_favorite_ids, prepare_favorites_index,
+    list_favorite_ids, prepare_favorites_index, require_favorites_ready,
 )
 from app.services.history_counts import HistoryCountIndexError, ensure_history_counts, read_history_count
 from app.services.output_storage import delete_output_storage
@@ -210,8 +210,9 @@ def _favorite_history_page(
 
 
 def get_image_history_item(output_id: str) -> ImageHistoryItem | None:
-    _ensure_history_index()
-    connection = _history_connect()
+    # Item lookups are used by API reads (downloads, thumbnails and ownership
+    # checks). They must never turn a cold request into a full legacy import.
+    connection = _history_connect(prepare=False)
     try:
         row = connection.execute(
             "SELECT payload FROM v2_image_history WHERE output_id=?", (output_id,)
@@ -222,7 +223,11 @@ def get_image_history_item(output_id: str) -> ImageHistoryItem | None:
 
 
 def delete_image_history_item(output_id: str) -> dict[str, Any]:
-    _ensure_history_index()
+    # Fail before touching files or repository rows if maintenance preparation
+    # has not completed. Deletion must not hide a full JSONL import either.
+    connection = _history_connect(prepare=False)
+    connection.close()
+    require_favorites_ready()
     removed_records = 0
     newest_removed: ImageHistoryItem | None = None
     if settings.image_history_path.exists():
@@ -273,7 +278,7 @@ def delete_image_history_item(output_id: str) -> dict[str, Any]:
             "removed_repository_output": False,
             **storage_result,
         }
-    removed_favorites = delete_favorite(output_id)
+    removed_favorites = delete_favorite(output_id, require_ready=True)
     return {
         "ok": True,
         "output_id": output_id,

@@ -198,7 +198,7 @@ def test_desktop_home_bootstrap_waits_for_first_page_output_and_images() -> None
     )[0]
 
 
-def test_mobile_home_bootstrap_waits_for_first_page_output_and_images() -> None:
+def test_mobile_home_bootstrap_releases_interaction_after_project_catalog() -> None:
     source = MOBILE.read_text(encoding="utf-8")
     loader = source.split("async function loadMobileV3Projects", 1)[1].split(
         "function setMobileV3LoadingLayer", 1
@@ -210,8 +210,10 @@ def test_mobile_home_bootstrap_waits_for_first_page_output_and_images() -> None:
     assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" not in loader
     assert "await waitForMobileV3FirstHomePreviewImage()" not in loader
     assert "await loadMobileV3HomePreviews" in loader
-    assert "await waitForMobileV3HomePreviewImages({ blockPage: true });" in loader
-    assert loader.index("await mobileV3Request(") < loader.index("await waitForMobileV3HomePreviewImages")
+    assert "waitForMobileV3HomePreviewImages" not in source
+    assert "setMobileV3LoadingLayer(false)" in loader
+    assert loader.index("renderMobileV3ProjectCards();") < loader.index("setMobileV3LoadingLayer(false)")
+    assert loader.index("setMobileV3LoadingLayer(false)") < loader.index("await loadMobileV3HomePreviews")
     assert "previewProjectIds" in source
     assert "已有封面 · 数量同步中" in source
 

@@ -5410,6 +5410,29 @@ body.v3-mobile-loading-active {
   min-width: 0;
 }
 
+.v3-mobile-project-open {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  font: inherit;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.v3-mobile-project-open:focus-visible {
+  outline: 2px solid var(--sage-deep);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+.v3-mobile-project-open:disabled {
+  cursor: not-allowed;
+}
+
 .v3-mobile-project-copy strong,
 .v3-mobile-output-copy strong {
   color: var(--ink);

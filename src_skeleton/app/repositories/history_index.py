@@ -375,7 +375,8 @@ def _owner(connection, output_id: str) -> tuple[int | None, bool]:
         if owner is not None:
             return owner, False
     history = connection.execute(
-        "SELECT owner_id,owner_conflict FROM v1_read_sources WHERE kind='history' AND source_key=?",
+        "SELECT owner_id,owner_conflict,lab_owner,is_lab FROM v1_read_sources "
+        "WHERE kind='history' AND source_key=?",
         (output_id,),
     ).fetchone()
     if history is not None:
@@ -384,7 +385,26 @@ def _owner(connection, output_id: str) -> tuple[int | None, bool]:
             return None, True
         owner = positive_owner(evidence[0]) if evidence is not None else positive_owner(history["owner_id"])
         if owner is not None:
+            nested_lab_owner = positive_owner(history["lab_owner"]) if history["is_lab"] else None
+            if nested_lab_owner is not None and nested_lab_owner != owner:
+                return None, True
             return owner, False
+        # Lab history uses alchemy_lab.veyra_user_id as an established owner
+        # source when older records lack the top-level field. Keep that same
+        # private ownership for media endpoints; otherwise the generic output
+        # route would treat the Lab-only owner as legacy-public. A conflicting
+        # Job copy must fail closed instead of overriding this evidence.
+        nested_lab_owner = positive_owner(history["lab_owner"]) if history["is_lab"] else None
+        if nested_lab_owner is not None:
+            job_owners = connection.execute(
+                "SELECT MIN(owner_id),MAX(owner_id) FROM v1_read_sources WHERE output_id=? AND kind='job'",
+                (output_id,),
+            ).fetchone()
+            if job_owners[0] != job_owners[1] or (
+                job_owners[0] is not None and job_owners[0] != nested_lab_owner
+            ):
+                return None, True
+            return nested_lab_owner, False
     # Aggregate the complete owner evidence without retaining duplicate rows or
     # their display payloads. MIN/MAX are sufficient to detect any disagreement.
     owners = connection.execute(

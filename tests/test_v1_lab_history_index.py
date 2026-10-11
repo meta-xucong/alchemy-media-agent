@@ -173,6 +173,53 @@ def test_lab_conflict_fails_closed_and_mock_counts_follow_changes(stores):
     assert_counts(store)
 
 
+def test_nested_only_lab_owner_protects_generic_output_authorization(stores, monkeypatch):
+    store, repo = stores
+    record, _ = manifest(store, owner=None, lab=True)
+    record["alchemy_lab"] = {"veyra_user_id": 41, "idea": "synthetic"}
+    store.save_history_record(record)
+    index.prepare_history_index(store)
+
+    # The Lab page already treats the nested owner as private. The generic
+    # media authorization lookup must use the same evidence.
+    assert page(store, surface="lab", owner_id=41)[1] == 1
+    assert index.lookup_output_owner(store, record["id"]) == (41, False)
+    from app import main as v1_main
+    monkeypatch.setattr(v1_main, "media_store", store)
+    monkeypatch.setattr(v1_main, "repository", repo)
+    assert v1_main._v1_output_owner_state(record["id"]) == (41, False)
+
+    connection = connect(repo.database_path)
+    try:
+        row = connection.execute(
+            "SELECT owner_id,lab_owner,is_lab FROM v1_read_sources "
+            "WHERE kind='history' AND source_key=?", (record["id"],),
+        ).fetchone()
+        assert row is not None and row[0] is None and row[1] == 41 and row[2] == 1
+    finally:
+        connection.close()
+
+    # A conflicting Job copy cannot make the nested Lab owner look public or
+    # transfer access to a different account.
+    other = job(9, output_id=record["id"], owner=77)
+    put_jobs(repo, [other])
+    assert index.lookup_output_owner(store, record["id"]) == (None, True)
+
+
+def test_duplicate_nested_lab_owners_remain_a_durable_conflict(stores):
+    store, _repo = stores
+    first, _ = manifest(store, owner=None, lab=True)
+    first["alchemy_lab"] = {"veyra_user_id": 41, "idea": "first"}
+    store.save_history_record(first)
+    second = {**first, "created_at": "2026-01-02T00:00:00Z",
+              "alchemy_lab": {"veyra_user_id": 77, "idea": "second"}}
+    store.save_history_record(second)
+    index.prepare_history_index(store)
+
+    assert index.lookup_output_owner(store, first["id"]) == (None, True)
+    assert page(store, surface="lab", all_owners=True) == ([], 0)
+
+
 def test_missing_file_repairs_manifest_but_not_job_candidate(stores, monkeypatch):
     store, repo = stores
     record, path = manifest(store, owner=41)

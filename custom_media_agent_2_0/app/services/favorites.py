@@ -47,6 +47,12 @@ def prepare_favorites_index() -> None:
         connection.close()
 
 
+def require_favorites_ready() -> None:
+    """Check preparation without applying an account-visibility shortcut."""
+    connection = _ready_connection()
+    connection.close()
+
+
 def _ready_connection() -> sqlite3.Connection:
     """Only bounded metadata checks; preparation never hides inside a read."""
     path = _database_path()
@@ -438,15 +444,25 @@ def list_favorite_ids(
         connection.close()
 
 
-def set_favorite(output_id: str, favorite: bool, *, veyra_user_id: int | None = None) -> dict[str, Any]:
+def set_favorite(
+    output_id: str,
+    favorite: bool,
+    *,
+    veyra_user_id: int | None = None,
+    require_ready: bool = False,
+) -> dict[str, Any]:
     clean_id = str(output_id or "").strip()
     if not clean_id:
         raise ValueError("output_id is required")
+    if require_ready:
+        ready = _ready_connection()
+        ready.close()
     connection = _connect()
     changed = False
     now = datetime.now(timezone.utc).isoformat()
     try:
-        _ensure_imported(connection)
+        if not require_ready:
+            _ensure_imported(connection)
         with connection:
             key = _owner_key(veyra_user_id)
             existing = connection.execute(
@@ -469,14 +485,18 @@ def set_favorite(output_id: str, favorite: bool, *, veyra_user_id: int | None = 
     return {"output_id": clean_id, "favorite": bool(favorite), "changed": changed or bool(favorite)}
 
 
-def delete_favorite(output_id: str) -> int:
+def delete_favorite(output_id: str, *, require_ready: bool = False) -> int:
     clean_id = str(output_id or "").strip()
     if not clean_id:
         return 0
+    if require_ready:
+        ready = _ready_connection()
+        ready.close()
     connection = _connect()
     try:
         with connection:
-            _ensure_imported(connection)
+            if not require_ready:
+                _ensure_imported(connection)
             cursor = connection.execute("DELETE FROM favorites WHERE output_id=?", (clean_id,))
             return int(cursor.rowcount)
     finally:

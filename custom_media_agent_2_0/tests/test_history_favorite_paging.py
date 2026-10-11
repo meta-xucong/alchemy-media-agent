@@ -1,4 +1,5 @@
 """Bounded V2 favorite pages and explicit cold preparation, synthetic only."""
+import asyncio
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -8,7 +9,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app.schemas import ImageHistoryItem, ImageJob, ImageOutput, ImagePromptPlan
+from app.schemas import (
+    FavoriteImageRequest, FavoriteReferenceAssetRequest, ImageHistoryItem,
+    ImageJob, ImageOutput, ImagePromptPlan,
+)
 from app.services import favorites, history_counts, image_history as history
 
 
@@ -189,6 +193,62 @@ def test_pending_history_never_opens_legacy_source_in_request(configured, monkey
     history.prepare_history_reads()
     result = history.list_image_history(veyra_user_id=7, favorite=favorite)
     assert result.total == (0 if favorite else 1)
+
+
+def test_pending_history_item_lookup_is_prepared_only(configured, monkeypatch):
+    configured.image_history_path.write_text(_item("pending-item", 7).model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(
+        history, "_ensure_history_index",
+        lambda: (_ for _ in ()).throw(AssertionError("item request must not import legacy JSONL")),
+    )
+    with pytest.raises(history.HistoryIndexNotReadyError):
+        history.get_image_history_item("pending-item")
+    assert not configured.image_history_path.with_name("image_history_index.sqlite3").exists()
+
+
+def test_item_routes_do_not_import_pending_history_or_favorites(configured, monkeypatch):
+    from app import main
+
+    configured.image_history_path.write_text(_item("pending-output", 7).model_dump_json(), encoding="utf-8")
+    favorite_source = favorites.favorites_path()
+    favorite_source.write_text(json.dumps({"items": [{"output_id": "pending-output", "veyra_user_id": 7}]}), encoding="utf-8")
+    monkeypatch.setattr(main.repository, "get_output", lambda _output_id: None)
+    with pytest.raises(history.HistoryIndexNotReadyError):
+        main._v2_output_owner_id("pending-output")
+
+    async def allow_output(*_args, **_kwargs):
+        return {"user_id": 7, "is_admin": False, "owner_id": 7}
+
+    monkeypatch.setattr(main, "_require_output_visible", allow_output)
+    monkeypatch.setattr(main.repository, "get_output", lambda _output_id: object())
+    with pytest.raises(favorites.FavoritesIndexNotReadyError):
+        asyncio.run(main.favorite_history_item(
+            "pending-output", FavoriteImageRequest(favorite=True), SimpleNamespace(), authorization="",
+        ))
+    with pytest.raises(favorites.FavoritesIndexNotReadyError):
+        asyncio.run(main.history_reference_asset(
+            "pending-output", FavoriteReferenceAssetRequest(), SimpleNamespace(), authorization="",
+        ))
+
+    # Deletion preflights both authorities before it edits the JSONL or files.
+    with pytest.raises(history.HistoryIndexNotReadyError):
+        history.delete_image_history_item("pending-output")
+    assert configured.image_history_path.exists() and favorite_source.exists()
+    assert not configured.image_history_path.with_name("image_history_index.sqlite3").exists()
+    assert not (configured.data_dir / "image_favorites.sqlite3").exists()
+    original_history = configured.image_history_path.read_bytes()
+    original_favorites = favorite_source.read_bytes()
+    history._ensure_history_index()  # explicit history preparation; favorites remain pending
+    side_effects = []
+    monkeypatch.setattr(history.repository, "delete_output", lambda *_args, **_kwargs: side_effects.append("repository"))
+    monkeypatch.setattr(history, "delete_output_storage", lambda *_args, **_kwargs: side_effects.append("media"))
+    with pytest.raises(favorites.FavoritesIndexNotReadyError):
+        history.delete_image_history_item("pending-output")
+    assert configured.image_history_path.read_bytes() == original_history
+    assert favorite_source.read_bytes() == original_favorites
+    assert history.get_image_history_item("pending-output") is not None
+    assert side_effects == []
+    assert not (configured.data_dir / "image_favorites.sqlite3").exists()
 
 
 @pytest.mark.parametrize("favorite", [False, True])
