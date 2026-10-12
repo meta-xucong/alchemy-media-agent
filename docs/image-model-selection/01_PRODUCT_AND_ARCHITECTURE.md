@@ -46,12 +46,14 @@ The catalog is an Alchemy allowlist and capability contract, not a new routing s
 
 ### 3.2 Administrators
 
-The existing server-side runtime configuration UI is extended, not a separate credential center. Admin can configure:
+The existing server-side runtime configuration UI is extended, not a separate credential center. The gateway origin is supplied only by protected deployment configuration; the admin UI can configure:
 
-1. One AISelf base URL and one logical secret through existing secret handling; do not echo the secret in read responses, logs, templates, or client payloads. V1/Lab and the isolated V2 process may each receive a protected runtime projection of that same source, but must not require separately entered per-product copies or drift independently.
+1. The single logical secret through existing protected secret handling. Do not echo it in read responses, logs, templates, or client payloads. V1/Lab and the isolated V2 process may each receive a protected runtime projection of that same source, but must not require separately entered per-product copies or drift independently.
 2. The default model for new tasks.
 3. Enabled exact model IDs and per-model curated capability profiles. An upstream model discovered but not yet classified remains disabled.
 4. Display metadata and, only when source data is reliable, price/estimate metadata.
+
+The deployment origin must be HTTPS, match a fixed deployment allowlist and resolve only to approved gateway egress. Reject loopback, private, link-local, unspecified, multicast, reserved, and IP-literal destinations; enforce this at the network egress boundary as well as URL validation to resist DNS rebinding. Disable redirects (or reject every cross-origin redirect before forwarding credentials). Never allow a request payload or ordinary admin setting to change the origin.
 
 Admin changes affect newly resolved jobs only. A running/queued job keeps its snapshot. Keep a prior known-good default available for configuration rollback, without automatically retrying a failed request on it.
 

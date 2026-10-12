@@ -41,12 +41,12 @@
 
 改动边界候选：
 
-- `src_skeleton/app/config.py`, `schemas.py`, 管理 runtime API/UI：添加 AISelf base URL 和 server-side secret 引用、默认 model ID、allowlist/catalog profile。
+- 部署环境安全配置提供固定 AISelf HTTPS origin（管理员/用户请求和 runtime UI 均不能修改）；V1 runtime API/UI 只配置 server-side secret 引用、默认 model ID、allowlist/catalog profile。origin 限受信 gateway hostname/egress allowlist，拒绝 HTTP、IP literal、环回/私网/link-local/保留地址；禁止跨 host redirect 和凭据转发，并用网络 egress 规则防 DNS rebinding。
 - 复用现有管理员运行设置持久化及脱敏返回；不得在 V1/V2/V3/Lab 普通运行时响应中返回 secret。
 - 定义只读、身份过滤的模型目录 projection；不要将原始 upstream `/v1/models` 全量暴露给普通用户。
 - 每张启用卡片都必须有 capability profile；unknown 为 fail-closed。
 
-最小单元测试：secret write/read redaction、非管理员拒绝管理写入、重复/无效 ID 拒绝、未知模型不出现在可选目录、profile 更新 revision、禁用不删历史、admin default 回退。
+最小单元测试：secret write/read redaction、用户/runtime-setting 输入不能改变 gateway origin、origin 只接受 allowlisted HTTPS hostname、拒绝 HTTP/IP literal/环回/私网/link-local/保留地址、跨 host redirect 不带 Authorization、非管理员拒绝管理写入、重复/无效 ID 拒绝、未知模型不出现在可选目录、profile 更新 revision、禁用不删历史、旧 job 历史显示名/profile snapshot 与现行设置隔离、profile 撤销后续跑 fail closed、admin default 回退。
 
 ### M2 — V1 与 V2 的请求/适配闭环
 

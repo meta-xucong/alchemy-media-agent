@@ -16,8 +16,9 @@
 | CAT-01 | Catalog | 已启用且经验证模型 | 只返回安全用户字段；准确 model ID 不变 |
 | CAT-02 | Catalog | Gateway 可发现但未分类的新模型 | 不向一般用户展示、不被自动启用 |
 | CAT-03 | Catalog | 禁用/过期/profile 缺字段 | 不可选择；历史仍可读取 |
-| CAT-04 | Admin | 管理员改 default/profile | secret readback 永不返回；profile revision 更新；新 Job 生效、现有 Job 不变 |
-| CAT-05 | Admin | 普通用户写模型目录/base URL/key | 403/拒绝；配置无变化 |
+| CAT-04 | Admin | 管理员改 default/profile | secret readback 永不返回；profile revision 更新；新 Job 生效、现有 Job 不变；旧 Job 仍显示创建时 model ID/display name |
+| CAT-05 | Admin | 普通用户写模型目录/base URL/key | 403/拒绝；配置无变化；gateway origin 只能来自受信部署 allowlist |
+| SEC-01 | Egress | 配置及请求重定向 | 只允许 allowlisted HTTPS gateway origin；拒绝 HTTP、IP literal、loopback/private/link-local/reserved 目标；跨 host redirect 不转发凭据 |
 | RES-01 | Resolve | request 显式 ID | 使用该 exact ID，不受浏览器默认、session default 或 admin default 干扰 |
 | RES-02 | Resolve | 未传 ID 的旧请求 | 兼容既有模块解析和当前默认；不得无意切换用户现有流量 |
 | RES-03 | Resolve | 未知/disabled/unverified ID | 有明确 4xx/配置错误；零 provider 调用、零扣费、无成功 Job |
@@ -30,13 +31,16 @@
 | RET-03 | Retry | catalog 更新后继续旧任务 | 使用已冻结 profile/model；若安全要求 profile 已撤销则 fail closed，不选默认 |
 | IDEM-01 | Idempotency | 相同 key/owner/payload/model | 复用本用户既有 Job，无重复费用 |
 | IDEM-02 | Idempotency | 同 key 但不同 model ID | 冲突，不返回另一型号的结果 |
+| IDEM-03 | Idempotency | 系统派生 key 且所选 model ID 不同 | 派生指纹不同；不会复用另一型号 Job |
 | HIST-01 | History | 管理员更新 default 后查看旧 job | 显示创建时 model snapshot，不用现行默认覆盖 |
+| HIST-02 | History/Resume | rename/disable/semantic revision 后读取或恢复旧 Job | 历史使用冻结的 ID/display-name/profile snapshot；续跑只能用冻结配置，若旧 route 已不可用则安全失败，不得解析成当前 default |
 | PRIV-01 | Security | 日志/异常/API 响应 | 无 Authorization、key、base64 图像、私有上游帐号路由 |
 | BILL-01 | Billing | 网关返回 usage/cost | 与 Alchemy customer charge 分开保存，数值精度正确 |
 | BILL-02 | Billing | 网关没有可用价格 | 估价明确 unavailable；现有余额和计费检查仍执行 |
 | MISM-01 | Routing identity | gateway 回报 served model 不同 | job 不呈现为成功调用了用户选定模型；保留可诊断、脱敏证据 |
 | UI-01 | Desktop/Mobile | 可选模型数量从 0/1/N 变化 | 0 显示配置状态，1 明示唯一型号，N 可选；两端目录和错误一致 |
 | API-01 | HTTP/MCP | 列目录、提交模型 ID | 只允许用户可见模型；生成按现有 API/MCP 身份和 billing 运行 |
+| API-02 | HTTP/MCP | 低权限身份伪造 `module=v3` 查询目录 | 仅返回实际授权模块可见目录（或按既有语义拒绝）；不泄露 V3 catalog；MCP 同样验证真实调用身份 |
 | ISO-01 | Module isolation | V2 standalone/import graph | 没有 V1 backend/storage/provider import；V2 自身模型快照正确 |
 | V3-01 | V3 governance | 请求所选模型 + review | 选型不绕过 Vision、review、winner、delivery gates |
 | V3-02 | V3 specialization | General / E-commerce / Photography / Brand / New Media | 只变 renderer route；垂类 deliverable map 不流入 General/shared cluster |
