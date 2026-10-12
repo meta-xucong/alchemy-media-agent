@@ -19,6 +19,7 @@
 | CAT-04 | Admin | 管理员改 default/profile | secret readback 永不返回；profile revision 更新；新 Job 生效、现有 Job 不变；旧 Job 仍显示创建时 model ID/display name |
 | CAT-05 | Admin | 普通用户写模型目录/base URL/key | 403/拒绝；配置无变化；gateway origin 只能来自受信部署 allowlist |
 | SEC-01 | Egress | 配置及请求重定向 | 只允许 allowlisted HTTPS gateway origin；拒绝 HTTP、IP literal、loopback/private/link-local/reserved 目标；跨 host redirect 不转发凭据 |
+| SEC-02 | Deployment egress | V1 与 V2 运行时的解析/egress | 在部署环境分别验证 DNS rebinding 到私网地址被网络出口规则阻断；仅 URL 字符串校验或单元测试不足以放行 |
 | RES-01 | Resolve | request 显式 ID | 使用该 exact ID，不受浏览器默认、session default 或 admin default 干扰 |
 | RES-02 | Resolve | 未传 ID 的旧请求 | 兼容既有模块解析和当前默认；不得无意切换用户现有流量 |
 | RES-03 | Resolve | 未知/disabled/unverified ID | 有明确 4xx/配置错误；零 provider 调用、零扣费、无成功 Job |
