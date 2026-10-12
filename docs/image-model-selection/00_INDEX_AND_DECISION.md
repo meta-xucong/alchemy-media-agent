@@ -1,7 +1,9 @@
 # Alchemy 图片模型统一选择：文档索引与决策记录
 
-状态：提案，文档阶段；不代表代码已经实现或生产网关已提供相应模型。  
-基线：`origin/main` / `569dffea4381bcd4175a44c50f3c76d0ebc46246`。  
+状态：提案，文档阶段；不代表代码已经实现或生产网关已提供相应模型。
+
+基线：`origin/main` / `569dffea4381bcd4175a44c50f3c76d0ebc46246`。
+
 范围：Alchemy V1、V2、V3、Alchemy Lab，以及其 Web、HTTP API、MCP 入口。只讨论 Alchemy 如何使用 AISelf 图片统一网关；AISelf 自身的改造在另一个任务设计。
 
 ## 1. 总体目标与本阶段目标
