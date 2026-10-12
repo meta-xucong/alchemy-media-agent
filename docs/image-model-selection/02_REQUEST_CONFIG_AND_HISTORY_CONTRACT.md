@@ -17,6 +17,12 @@
 
 这些是逻辑字段位置。实施前应对照当前具体 schema/endpoint 固定 JSONPath；不应为了跨版本“完全同构”而重写各版本 API。
 
+### 1.1.1 目录读取 API
+
+增加一个只读的 `GET /api/image-models` projection，由现有 Alchemy authentication/API scope 保护。可选 query 为 `module` (`v1|v2|v3|lab`)、`operation` (`generate|edit`) 和 `requires_reference=true|false`。它仅筛选已经 enabled 的 profile 并返回安全 UI 字段：`model_id`, `display_name`, `labels`, `supported_operations`, `compatible`。不可返回 base URL、secret、内部账户/通道、完整价格配置或未验证的上游目录数据。
+
+该 endpoint 的兼容性过滤仅为 UI 提示；所有写请求仍须重新校验 model ID、任务 operation 和输入能力。MCP 通过现有 HTTP 适配调用同一 endpoint，不另实现目录或缓存权威。管理 profile 的写接口仍限现有管理员设置边界，API Key/MCP 用户不能改目录。
+
 ### 1.2 解析优先级
 
 ```text

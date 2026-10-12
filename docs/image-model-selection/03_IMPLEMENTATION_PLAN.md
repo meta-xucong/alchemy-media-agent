@@ -69,6 +69,7 @@
 - 桌面与移动使用同一安全模型目录投影，选择字段透传且切换页面不会漂移。
 - V1/V2/V3/Lab 各入口显示不同的任务兼容状态；参考图任务只列满足要求的模型。
 - API/MCP 能读取允许的 model cards 并传可选精确 ID；不能写管理员目录或获得网关 secret。
+- `GET /api/image-models` 使用现有认证/API scope，并按 module/operation/reference requirements 返回安全模型卡片；MCP 通过同一 HTTP endpoint 读取，不复制一份目录。
 - 任务进度/历史展示 job snapshot，不被后续管理员改默认值追溯改变。
 - 对不兼容选项显示清楚原因；提交服务端再次校验，客户端过滤不是安全边界。
 
