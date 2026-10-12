@@ -92,7 +92,7 @@
 | Area | Current evidence location | Expected implementation boundary |
 |---|---|---|
 | V1 API/schema | `src_skeleton/app/schemas.py`, `main.py`, `services/image_service.py` | Optional request model ID; legacy parser; job snapshot/idempotency |
-| V1 adapter/config | `src_skeleton/app/config.py`, `providers/`, `services/runtime_model_settings.py` | Existing HTTP transport to AISelf; redacted admin settings |
+| V1 adapter/config | `src_skeleton/app/config.py`, `providers/`, `main.py` runtime provider-settings routes | Existing HTTP transport to AISelf; redacted admin settings |
 | V1 desktop/mobile | `src_skeleton/app/static/`, `mobile_static/` | Model cards and capability-based filtering |
 | V2 independent runtime | `custom_media_agent_2_0/app/schemas.py`, `services/generation.py`, `providers/images/`, `config.py` | V2-native request resolution and adapter; no V1 imports |
 | V2 frontend/admin | shared shell files plus V2 APIs | Pass selected model and show safe job snapshot |
