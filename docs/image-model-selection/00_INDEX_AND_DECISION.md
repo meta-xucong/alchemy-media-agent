@@ -4,7 +4,7 @@
 
 基线：`origin/main` / `569dffea4381bcd4175a44c50f3c76d0ebc46246`。
 
-范围：Alchemy V1、V2、V3、Alchemy Lab，以及其 Web、HTTP API、MCP 入口。只讨论 Alchemy 如何使用 AISelf 图片统一网关；AISelf 自身的改造在另一个任务设计。
+范围：Alchemy V1、V2、V3、Alchemy Lab，以及其 Web、HTTP API、HTTP-backed product MCP 入口。Codex Native ImageGen 与 frozen/materialized handoff 工具的执行路径不变，不纳入 AISelf 选型承诺。只讨论 Alchemy 如何使用 AISelf 图片统一网关；AISelf 自身的改造在另一个任务设计。
 
 ## 1. 总体目标与本阶段目标
 
@@ -37,10 +37,11 @@
 2. **一个服务端网关凭据**：仅管理员/部署环境可配置。普通用户只选型号，不能读取或提交网关密钥、base URL、上游 account/channel/provider。
 3. **不信任裸 `/v1/models` 作为能力证明**：模型 ID 发现与图像能力声明分开。Alchemy 仅展示处于 enabled 且通过 capability profile 校验的模型。发现到但能力未知的 ID 默认不可选。
 4. **能力过滤先于提交**：任务先解析所需操作与素材条件，再筛选支持该任务的型号。用户明确选了不兼容型号时，返回清晰校验错误，不暗中删参考图、降级操作或换型号。
-5. **请求快照优先**：每个 Job 固定 `requested_model_id`、能力 profile revision 和网关 route identity；重试/续跑默认沿用原型号。新任务可使用管理员新默认。
-6. **不静默切换模型**：网关超时、拒绝或上游未配置时遵守原模块重试/失败规则；不得自动换另一个 model ID。任何显式 fallback 都必须是用户确认的新任务/新修订。
-7. **兼容优先**：无新字段的旧请求继续按原配置解析；旧历史保留原 provider/model 解释，不回写成 AISelf 路由。
-8. **职责隔离**：共用的是公开请求语义和目录字段定义；V1/V3/Lab 的旧运行链与 V2 backend 不因此合并。V2 必须用 V2-native adapter 实现相同 contract。
+5. **请求快照优先**：每个新网关 Job 固定 `requested_model_id`、能力 profile revision 和非敏感 route/config revision；普通禁用仅阻止新准入，旧任务沿用快照，安全撤销或原路由不可用时才阻断执行。历史读取/幂等回放不重新准入或触发生成。
+6. **不静默切换模型或重复不确定付费调用**：重试/续跑沿用原型号。旧 provider 的重试规则不变；新 AISelf 调用若超时后是否已接单未知，没有经验证的上游去重保障就不得自动重发。任何换型号均是用户确认的新任务/新修订。
+7. **兼容优先**：所有省略 `image_model_id` 的请求均保留原模块解析，包括同时省略 legacy provider 的请求；不猜客户端新旧。新选择器必须显式提交具体型号，包括默认值和唯一选项；旧历史不回写成 AISelf 路由。
+8. **职责隔离**：共用的是公开请求语义和目录字段定义；V1/V3/Lab 的旧运行链与 V2 backend 不因此合并。V2 必须用 V2-native adapter 实现相同 contract，并单独验证配置版本和有界撤销新鲜度。
+9. **首期响应最小化**：新 AISelf adapter 只接收经过大小/MIME/解码校验的同步 inline base64 图片响应；拒绝图片 URL，不下载。AISelf 是否支持此形状尚未确认；不支持时保持模型禁用，不能自动扩展为下载/轮询模式。
 
 ## 5. 关键非目标
 
@@ -55,19 +56,28 @@
 
 Alchemy implementation assumes a server-to-server OpenAI-compatible image route supplied by AISelf. Exact `base_url`, header/auth format, catalog endpoint, model IDs, synchronous/asynchronous behavior, edit multipart shape, response usage fields, and prices remain external contract facts to be confirmed against the separate AISelf design before implementation. This proposal does **not** invent those values.
 
-Minimum integration facts to freeze before code:
+Minimum integration facts to freeze before gateway implementation/enablement (only offline M0 inventory/schema work may precede them):
 
 - Alchemy can authenticate using one server-held secret and one configured base URL.
 - Exact IDs used in the request are routable by the gateway; the adapter does not rewrite a selected ID silently.
 - Generation and edit/reference operations have documented request/response formats.
 - The gateway can return a request/trace identifier and, if available, served model/usage/cost metadata.
 - Alchemy has a curated allowlist/capability profile even if the gateway only exposes ordinary `/v1/models`.
+- AISelf supports the selected synchronous inline base64 response contract, with exact field names and byte/pixel/MIME limits. This remains unverified; response URLs and async/polling are disabled in the initial adapter.
+- Timeout/accepted-but-unknown outcomes, upstream idempotency scope and TTL, polling/cancellation availability, error and charge semantics are documented. A client Job key alone does not prove upstream deduplication; absent that proof, do not repeat an uncertain paid call.
+- V2 receives versioned protected config and fresh security revocations through an existing supported bridge/mount, with a concrete maximum staleness bound frozen at M0. No new configuration service is introduced.
 
-If one of these facts is unavailable, the implementation phase must explicitly choose a tested adapter strategy or hold the affected operation; it must not guess from model naming.
+If one of these facts is unavailable, hold the affected gateway implementation/operation at G0. Offline M0 inventory/schema tests may proceed without credentials, network calls or enablement; they do not pass G0. Do not guess from model naming or silently broaden the initial response contract.
 
 ## 7. Review state
 
 - Design risk: `A2` — public request contracts, credentials, user-visible model routing, and billing evidence.
 - Implementation difficulty: `I2` — four independently implemented product paths must retain their own state and quality semantics while sharing the model-selection contract.
-- Design ambiguity: `D0` at Alchemy scope — use AISelf as the sole gateway and require exact model IDs. Unknown gateway details are documented as integration preconditions, not silently assumed.
+- Design direction is fixed at Alchemy scope: use AISelf as the sole new gateway and require exact model IDs. Endpoint mappings, V2 delivery/freshness bounds and external gateway facts remain M0/G0 preconditions; this is not a claim of zero remaining implementation ambiguity.
 - This version is for independent design audit. Any audit-driven contract change requires a new frozen revision before implementation.
+
+## 8. 审计修订记录（2026-10-12）
+
+修订对象是产品/请求契约层的矛盾，不是运行代码：省略字段却区分新旧客户端、普通禁用却阻断冻结任务、宽泛 MCP 承诺、未冻结的 URL/异步响应与不确定付费重试。最小修正分别由 02 的兼容/幂等顺序、快照与新鲜撤销分离、HTTP-backed MCP 范围及同步 inline-only 契约统一约束；01/03/04 同步采用这些规则。V2 直接 image-job 与 creative-run 字段位置分开盘点，回滚区分 feature flag 与旧二进制。
+
+本文仅记录已纳入的设计修正，未宣称独立复审 PASS、功能实现、真实 AISelf 可用或发布通过。未定的接口映射与外部事实仍须满足 03 的 M0 和 04 的 G0 退出条件。
