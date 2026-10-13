@@ -6251,7 +6251,14 @@ function openMobileV3ProjectGallery(project) {
 function renderMobileV3ProjectGallery(project) {
   const grid = document.querySelector("#mobileV3GalleryGrid");
   if (!grid) return;
-  const outputs = mobileV3HistoryOutputsForProject(project?.project_id);
+  const reviewItems = mobileV3ReviewOutputsForProject(project?.project_id).filter(
+    (item) => Boolean(mobileV3ThumbUrl(item) || mobileV3PreviewUrl(item) || mobileV3FullUrl(item)),
+  );
+  const outputs = mobileV3DedupeOutputItems([
+    ...mobileV3HistoryOutputsForProject(project?.project_id),
+    ...reviewItems,
+  ]);
+  const reviewOnlyIds = new Set(reviewItems.map(mobileV3OutputId));
   const group = mobileV3ProjectGroupsFromProjects().find(
     (candidate) => candidate.projectId === String(project?.project_id || ""),
   );
@@ -6270,10 +6277,11 @@ function renderMobileV3ProjectGallery(project) {
       const thumb = mobileV3ThumbUrl(item);
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `v3-mobile-gallery-image${mobileV3HistoryOnlyOutputVisible(item) ? " history-only" : ""}`;
+      const reviewOnly = reviewOnlyIds.has(mobileV3OutputId(item)) || item?.review_only === true || item?.metadata?.review_only === true;
+      button.className = `v3-mobile-gallery-image${reviewOnly ? " review-only" : mobileV3HistoryOnlyOutputVisible(item) ? " history-only" : ""}`;
       button.dataset.mobileV3GalleryPreview = mobileV3OutputId(item);
-      const label = mobileV3HistoryOnlyOutputVisible(item) ? "历史图片" : "项目图片";
-      button.innerHTML = thumb ? `<img data-mobile-media-url="${escapeHtml(thumb)}" alt="${label} ${index + 1}" loading="lazy" decoding="async" />` : `<span>${label} ${index + 1}</span>`;
+      const label = reviewOnly ? "复核图" : mobileV3HistoryOnlyOutputVisible(item) ? "历史图片" : "项目图片";
+      button.innerHTML = `${thumb ? `<img data-mobile-media-url="${escapeHtml(thumb)}" alt="${label} ${index + 1}" loading="lazy" decoding="async" />` : `<span>${label} ${index + 1}</span>`}${reviewOnly ? '<span class="v3-mobile-gallery-review-badge">复核图 · 非交付</span>' : ""}`;
       const image = button.querySelector("img[data-mobile-media-url]");
       if (image) bindImageWithFallback(image, [image.dataset.mobileMediaUrl], { emptyAlt: image.alt });
       grid.appendChild(button);
@@ -6618,13 +6626,8 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
 function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   const grid = document.querySelector("#mobileV3OutputGrid");
   if (!grid || !project?.project_id) return;
-  if (mobileV3EcommerceReviewWithheldFinalizationOperation(project)) {
-    setText("#mobileV3OutputCount", "0 张");
-    grid.innerHTML = "";
-    grid.classList.remove("empty-v2-list");
-    return;
-  }
-  const outputs = mobileV3DisplayOutputsForProject(project);
+  const reviewFinalizationWithheld = mobileV3EcommerceReviewWithheldFinalizationOperation(project);
+  const outputs = reviewFinalizationWithheld ? [] : mobileV3DisplayOutputsForProject(project);
   const historyItems = mobileV3HistoryOnlyOutputsForProject(project.project_id);
   const reviewById = new Map();
   [...mobileV3ReviewOutputsForProject(project.project_id), ...mobileV3ReviewOnlyJobImageItems()]
@@ -6641,9 +6644,18 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     const lines = mobileV3JobReviewLines();
     notice.className = "v3-mobile-review-hold";
     notice.innerHTML = `
-      <strong>图片已生成，但未通过自动审查</strong>
+      <strong>图片已生成 · ${escapeHtml(mobileV3JobFinalDeliveryHoldLabel())}</strong>
       <span>${escapeHtml(mobileV3JobFinalDeliveryNotice())}</span>
       ${lines.length ? `<small>${escapeHtml(lines.join("；"))}</small>` : ""}
+    `;
+    grid.appendChild(notice);
+  }
+  if (reviewFinalizationWithheld) {
+    const notice = document.createElement("article");
+    notice.className = "v3-mobile-review-hold history-only";
+    notice.innerHTML = `
+      <strong>图片保留在复核区</strong>
+      <span>最终审核闭环尚未完成。下面的图片仅供查看，不属于正式交付，也不能设为后续参考。</span>
     `;
     grid.appendChild(notice);
   }
@@ -7693,6 +7705,14 @@ function mobileV3UniversalReviewHoldKind(job = mobileV3State.currentJob) {
   return "";
 }
 
+function mobileV3JobFinalDeliveryHoldLabel(job = mobileV3State.currentJob) {
+  const kind = mobileV3UniversalReviewHoldKind(job);
+  if (kind === "evidence_incomplete") return "审核证据需确认";
+  if (kind === "review_uncertain") return "自动审核需确认";
+  if (kind === "quality_failure") return "视觉问题需处理";
+  return "自动审查未通过";
+}
+
 function mobileV3JobFinalDeliveryNotice(job = mobileV3State.currentJob) {
   const lines = mobileV3JobReviewLines(job);
   const kind = mobileV3UniversalReviewHoldKind(job);
@@ -7743,14 +7763,66 @@ function mobileV3ReviewOnlyJobImageItems(job = mobileV3State.currentJob) {
       return itemJobId === String(job.job_id || "").trim()
         || (!itemJobId && reviewOutputIds.has(mobileV3OutputId(item)));
     });
-  const source = candidates.length ? candidates : assets.length ? assets : projectReviewItems;
+  const source = mergeMobileV3ReviewImageSources(projectReviewItems, candidates, assets);
   return source.filter((item) => {
+    const identity = mobileV3OutputId(item);
     const selectionState = String(item?.selection_state || "").trim().toLowerCase();
     return (
       selectionState !== "rejected"
       && Boolean(mobileV3ThumbUrl(item) || mobileV3PreviewUrl(item) || mobileV3FullUrl(item))
     );
   });
+}
+
+function mergeMobileV3ReviewImageSources(...sources) {
+  const merged = [];
+  const indexesByAlias = new Map();
+  const aliasesFor = (item) => ["output_id", "asset_id", "candidate_id", "output_ref_id"]
+    .map((field) => [field, String(item?.[field] || "").trim()])
+    .filter(([, value]) => value)
+    .map(([field, value]) => `${field}:${value}`);
+  const sameScope = (left, right) => {
+    const leftJobId = String(left?.job_id || "").trim();
+    const rightJobId = String(right?.job_id || "").trim();
+    const leftProjectId = String(left?.project_id || "").trim();
+    const rightProjectId = String(right?.project_id || "").trim();
+    return (!leftJobId || !rightJobId || leftJobId === rightJobId)
+      && (!leftProjectId || !rightProjectId || leftProjectId === rightProjectId);
+  };
+  const registerAliases = (item, index) => {
+    aliasesFor(item).forEach((alias) => {
+      if (!indexesByAlias.has(alias)) indexesByAlias.set(alias, new Set());
+      indexesByAlias.get(alias).add(index);
+    });
+  };
+  for (const item of sources.flat()) {
+    if (!item || typeof item !== "object") continue;
+    const aliases = aliasesFor(item);
+    const possibleIndexes = [...new Set(aliases.flatMap((alias) => [...(indexesByAlias.get(alias) || [])]))];
+    const existingIndex = possibleIndexes.find((index) => sameScope(merged[index], item));
+    if (!Number.isInteger(existingIndex)) {
+      const index = merged.push(item) - 1;
+      registerAliases(item, index);
+      continue;
+    }
+    const existing = merged[existingIndex];
+    const hasExistingMedia = Boolean(mobileV3ThumbUrl(existing) || mobileV3PreviewUrl(existing) || mobileV3FullUrl(existing));
+    const hasIncomingMedia = Boolean(mobileV3ThumbUrl(item) || mobileV3PreviewUrl(item) || mobileV3FullUrl(item));
+    const preferred = hasExistingMedia || !hasIncomingMedia ? existing : item;
+    const fallback = preferred === existing ? item : existing;
+    merged[existingIndex] = {
+      ...fallback,
+      ...preferred,
+      thumbnail_url: preferred.thumbnail_url || fallback.thumbnail_url || "",
+      preview_url: preferred.preview_url || fallback.preview_url || "",
+      download_url: preferred.download_url || fallback.download_url || "",
+      metadata: { ...(fallback.metadata || {}), ...(preferred.metadata || {}) },
+    };
+    registerAliases(existing, existingIndex);
+    registerAliases(item, existingIndex);
+    registerAliases(merged[existingIndex], existingIndex);
+  }
+  return merged;
 }
 
 function mobileV3DedupeOutputItems(items) {

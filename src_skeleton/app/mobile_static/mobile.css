@@ -6354,6 +6354,7 @@ body.v3-mobile-loading-active {
 }
 
 .v3-mobile-gallery-image {
+  position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
   display: grid;
@@ -6370,6 +6371,23 @@ body.v3-mobile-loading-active {
   height: 100%;
   display: block;
   object-fit: cover;
+}
+
+.v3-mobile-gallery-review-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  max-width: calc(100% - 8px);
+  overflow: hidden;
+  padding: 3px 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(122, 65, 39, 0.88);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .v3-mobile-workflow-list {
