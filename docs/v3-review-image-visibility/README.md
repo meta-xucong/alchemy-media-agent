@@ -37,7 +37,7 @@
 3. `incomplete`、`needs_manual_review`、`quality_failure=false` 必须保持各自语义；UI 不把它们改写为“质量失败”或“审核通过”。
 4. 复核图只用于观察，不提供正式选择、设置后续参考、写入品牌记忆或正式导出的新入口。
 5. 文件/URL-less 候选与持久复核记录合并时，`output_id` 是首要图片身份；两个非空 `output_id` 不同时，不允许通过较弱别名合并。缺少 output ID 时才按相同 candidate ID 或 output-ref ID 精确匹配；共享 `asset_id` 单独不足以证明是同一图片。top-level、metadata 与 `related_job_id` 中的项目/任务身份必须一致。只有身份已确认后才补媒体 URL 和缺失元数据。
-6. `hidden_output_ids` 不授予访问权限，也不替代逐图审核。授权的 review-only 区域可显示后端返回的未交付图片；它们仍不能进入正式交付、选择、后续参考、品牌记忆或 generic export。generic export 只使用 `_public_final_delivery_projection` 提供的合格 output/asset 精确绑定；E-Commerce 专属导出继续使用其既有绑定规则。用户权限和后端投影优先，前端不能恢复后端未返回的资源。
+6. `hidden_output_ids` 不授予访问权限，也不替代逐图审核。授权的 review-only 区域可显示后端返回的未交付图片；它们仍不能进入正式交付、选择、后续参考、品牌记忆或 generic export。generic export 只使用 `_public_final_delivery_projection` 提供的合格 output/asset 精确绑定；若持久选择同时有 candidate 和 asset ID，candidate 精确身份优先，asset ID 只作一致性校验，不能经共享 asset alias 扩大导出集合。E-Commerce 专属导出继续使用其既有绑定规则。用户权限和后端投影优先，前端不能恢复后端未返回的资源。
 
 ## 最小实现方案
 
@@ -69,7 +69,7 @@
 - 移动端：证据未闭环图片显示审核证据待确认提示；明确 `fail_final` 图片显示质量审核失败原因，不显示“审核未闭环/证据不完整”；两者均可查看但正式输出为空，图库显示非交付徽标。
 - 两端：跨字段 ID 碰撞、不同 Job/项目同值 ID 不会误合并；同字段且同 scope 的匹配记录可补媒体 URL。
 - 两端：不同非空 `output_id`、共享 asset、跨字段 ID 碰撞或互相矛盾的 scope 不会合并；相同已确认图片才补 URL/元数据。
-- 移动端：复核卡可直接打开灯箱并显示非交付标题与原因；终态复核空集合分别显示读取失败、仍在读取或确实暂无图，不退化为普通“还没有图片”。
+- 移动端：通过生产项目打开入口进入项目主页，断言详情与候选复核按钮可见后正常点击；复核卡打开灯箱时显示非交付标题与逐图原因。终态复核空集合分别显示读取失败、仍在读取或确实暂无图，不退化为普通“还没有图片”。
 - generic export：全失败不含图片 URL；部分合格只导出合格图；manifest 与 download 一致。
 
 ## 验收标准
@@ -101,7 +101,7 @@
 - 设计审计：通过；明确 `hidden_output_ids` 只阻止正式推荐/交付晋升，授权复核区仍可看 fail-final 图，并说明对 Doc55 默认 UX 的有限修订。
 - Dot 增量审计指出前端身份合并、移动端终态空态/灯箱、浏览器断言不可靠及 generic export 缺逐图资格过滤。身份合并已改为 output/candidate/ref 精确匹配并核对 scope；灯箱优先按 output、再 candidate 匹配原因；generic manifest/download 使用共享正式交付投影和审核认可的精确 `(output_id, asset_id)` 对。
 - Node 回归共 169 项通过，覆盖桌面/移动图片身份合并、共享资产和跨字段同值下的灯箱审核原因、终态提示、历史分页与资源清理。JS 语法检查通过。
-- `pytest` 当前不可用；generic export 的 4 个真实 service 回归函数通过隔离 Python harness 直接调用（混合 pass/fail、全拦截、审核绑定错配、共享 asset ID 下按所选 candidate 精确过滤及下载/manifest 一致）。这不是 pytest 套件通过记录。
+- `pytest` 当前不可用；generic export 的 4 个真实 service 回归函数通过隔离 Python harness 直接调用（混合 pass/fail、全拦截、审核绑定错配、真实 `select_result` 保存 candidate+asset 后共享 asset ID 下仍只导出所选 candidate，以及下载/manifest 一致）。这不是 pytest 套件通过记录。
 - Python AST/语法解析通过 3 个文件，`git diff --check` 通过。Playwright 浏览器用例已修正 badge/`innerHTML` 断言并扩展覆盖，但因环境缺少 pytest/Playwright 未运行，不能记为浏览器通过。
 - 独立只读复审：代码改动范围 PASS，无新增生产代码阻断；pytest/Playwright 完整运行仍待具备依赖的环境补验。
 - 未调用真实模型、未修改 VPS；PR #34 仍未合并或部署。

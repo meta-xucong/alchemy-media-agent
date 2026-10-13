@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, SelectedResult, V3UploadedAssetStore
+from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3UploadedAssetStore
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
 
@@ -133,11 +133,19 @@ def test_generic_export_selection_does_not_cross_bind_shared_asset_ids(tmp_path)
         assets[index] = asset.model_copy(update={"asset_id": shared_asset_id})
     result.asset_pack = result.asset_pack.model_copy(update={"assets": assets})
     record.generation_result = result
-    record.selected_result = SelectedResult(selected_candidate_ids=["generic-candidate-2"])
     service.job_store.save(record)
+    selection = service.select_result(
+        record.job_id,
+        {"selected_candidate_ids": ["generic-candidate-2"]},
+    )
+    assert selection.selected_result.metadata["selection_status"] == "selected"
+    assert selection.selected_result.selected_candidate_ids == ["generic-candidate-2"]
+    assert selection.selected_result.selected_asset_ids == [shared_asset_id]
 
     response = service.export_job(record.job_id)
+    downloaded = service.export_job_download(record.job_id)
 
     assert {item["output_id"] for item in response.manifest["generated_assets"]} == {
         "generic-output-2",
     }
+    assert json.loads(downloaded.content) == response.manifest

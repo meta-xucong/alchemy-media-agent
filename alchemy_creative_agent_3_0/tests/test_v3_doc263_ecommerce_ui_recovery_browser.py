@@ -39,7 +39,7 @@ window.fetch = async (input, init = {}) => {
     body = window.__doc263OutputPayload || { items: [], review_items: [] };
   } else if (/\\/jobs\\/doc263-new-job/.test(url)) {
     body = { job_id: "doc263-new-job", status: "blocked", metadata: { project_outputs: [] } };
-  } else if (/\\/projects\\/doc263-project$/.test(url)) {
+  } else if (/\\/projects\\/doc263-project(?:\\?view=summary)?$/.test(url)) {
     body = { project };
   }
   return new Response(JSON.stringify(body), {
@@ -715,18 +715,27 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
                   mobileV3State.outputs = [];
                   mobileV3State.reviewOutputs = [reviewOutput, failFinalOutput, foreignProjectOutput];
                   mobileV3State.outputsLoaded = true;
+                  window.__doc263ServerProject = project;
+                  window.__doc263OutputPayload = {
+                    items: [],
+                    review_items: [reviewOutput, failFinalOutput, foreignProjectOutput],
+                  };
                   window.__reviewMergeCollisionCount = mergeMobileV3ReviewImageSources(
                     [{ output_id: "cross-field-collision", job_id: "job-a" }],
                     [{ candidate_id: "cross-field-collision", job_id: "job-a" }],
                   ).length;
-                  renderMobileV3ProjectOutputs(project);
                   renderMobileV3ProjectGallery(project);
+                  openMobileV3ProjectDetail(project);
                 }
                 """,
                 {"project": project, "reviewOutput": review_output, "failFinalOutput": fail_final_output, "foreignProjectOutput": foreign_project_output},
             )
 
             output_grid = page.locator("#mobileV3OutputGrid")
+            page.wait_for_function(
+                "document.querySelector('#mobileV3LoadingLayer').hidden && document.body.dataset.mobileActiveSurface === 'v3-project-detail'"
+            )
+            assert page.locator("#mobileV3ProjectDetail").is_visible()
             assert "图片保留在复核区" in output_grid.inner_text()
             assert "审核证据需确认" in output_grid.inner_text()
             assert "尚未证明图片质量不合格" in output_grid.inner_text()
@@ -740,7 +749,9 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
             assert all("复核图 · 非交付" in text for text in badge_texts)
             assert gallery.locator("button.review-only img").first.get_attribute("alt") == "复核图 1"
 
-            output_grid.locator("button[data-mobile-v3-gallery-preview]").nth(2).click()
+            candidate_only_button = output_grid.locator("button[data-mobile-v3-gallery-preview]").nth(2)
+            assert candidate_only_button.is_visible()
+            candidate_only_button.click()
             assert page.locator("#lightboxTitle").inner_text() == "复核图 · 非正式交付"
             assert "Candidate-only review reason." in page.locator("#lightboxMeta").inner_text()
             assert "仅供复核，不属于正式交付" in page.locator("#lightboxMeta").inner_text()

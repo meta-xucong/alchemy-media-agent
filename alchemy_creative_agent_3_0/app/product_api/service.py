@@ -15910,9 +15910,13 @@ class V3ProductApiService:
             asset_id = str(asset.asset_id or "").strip()
             candidate_id = str(metadata.get("selected_candidate_id") or "").strip()
             binding = (output_id, asset_id)
-            if binding in bindings and (
-                asset_id in selected_asset_ids or candidate_id in selected_candidate_ids
-            ):
+            selection_matches = (
+                candidate_id in selected_candidate_ids
+                and (not selected_asset_ids or asset_id in selected_asset_ids)
+                if selected_candidate_ids
+                else asset_id in selected_asset_ids
+            )
+            if binding in bindings and selection_matches:
                 selected_bindings.add(binding)
         return selected_bindings
 
