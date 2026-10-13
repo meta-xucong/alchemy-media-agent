@@ -6282,6 +6282,8 @@ function renderMobileV3ProjectGallery(project) {
       button.dataset.mobileV3GalleryPreview = mobileV3OutputId(item);
       const label = reviewOnly ? "复核图" : mobileV3HistoryOnlyOutputVisible(item) ? "历史图片" : "项目图片";
       button.innerHTML = `${thumb ? `<img data-mobile-media-url="${escapeHtml(thumb)}" alt="${label} ${index + 1}" loading="lazy" decoding="async" />` : `<span>${label} ${index + 1}</span>`}${reviewOnly ? '<span class="v3-mobile-gallery-review-badge">复核图 · 非交付</span>' : ""}`;
+      button.__mobileV3OutputItem = item;
+      if (reviewOnly) button.dataset.mobileV3ReviewOnly = "true";
       const image = button.querySelector("img[data-mobile-media-url]");
       if (image) bindImageWithFallback(image, [image.dataset.mobileMediaUrl], { emptyAlt: image.alt });
       grid.appendChild(button);
@@ -6356,6 +6358,8 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   refreshMobileV3ProjectDetail(projectId, { detailEpoch })
     .catch((error) => {
       if (mobileV3ProjectDetailIsCurrent(projectId, detailEpoch)) {
+        mobileV3State.outputError = friendlyError(error);
+        renderMobileV3ProjectOutputs(mobileV3State.currentProject);
         updateMobileV3Status(`项目详情加载失败：${friendlyError(error)}`);
       }
     })
@@ -6476,6 +6480,7 @@ async function refreshMobileV3ProjectDetail(projectId, options = {}) {
   }
   const requestedProjectId = String(projectId || "").trim();
   if (!requestedProjectId || !mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
+  mobileV3State.outputError = "";
   const [projectResult, previewResult] = await Promise.allSettled([
     mobileV3RequestWithTimeout(`/projects/${encodeURIComponent(requestedProjectId)}?view=summary`),
     mobileV3RequestWithTimeout(`/project-outputs?limit=1&compact=true&project_id=${encodeURIComponent(requestedProjectId)}&surface=delivery_preview`),
@@ -6498,6 +6503,7 @@ async function refreshMobileV3ProjectDetail(projectId, options = {}) {
   mobileV3State.selectedTemplate = templateId;
   setMobileV3ProjectComposeAvailability(project);
   const previewPayload = previewResult.status === "fulfilled" ? previewResult.value : null;
+  mobileV3State.outputError = previewResult.status === "rejected" ? friendlyError(previewResult.reason) : "";
   const previewItems = Array.isArray(previewPayload?.items) ? previewPayload.items : [];
   const previewHistoryItems = Array.isArray(previewPayload?.history_items) ? previewPayload.history_items : [];
   mobileV3MergeProjectOutputs(requestedProjectId, previewItems, [], previewHistoryItems);
@@ -6532,6 +6538,8 @@ async function refreshMobileV3ProjectDetail(projectId, options = {}) {
     shouldContinue,
   }).catch((error) => {
     if (mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) {
+      mobileV3State.outputError = friendlyError(error);
+      renderMobileV3ProjectOutputs(mobileV3State.currentProject);
       updateMobileV3Status(`项目记录后台同步失败：${friendlyError(error)}`);
     }
   });
@@ -6570,6 +6578,7 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
   const scopedHistoryOutputs = Array.isArray(outputsPayload.history_items) ? outputsPayload.history_items : [];
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
   mobileV3MergeProjectOutputs(project.project_id, scopedOutputs, scopedReviewOutputs, scopedHistoryOutputs);
+  mobileV3State.outputError = "";
   mobileV3State.previewProjectIds.delete(String(project.project_id));
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
   mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
@@ -6660,7 +6669,21 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     grid.appendChild(notice);
   }
   if (!outputs.length && !reviewItems.length && !historyItems.length) {
-    if (!mobileV3JobDeliveryWithheld()) grid.textContent = "还没有图片，点“继续项目”生成第一组。";
+    if (!mobileV3JobDeliveryWithheld() && !reviewFinalizationWithheld) {
+      grid.textContent = "还没有图片，点“继续项目”生成第一组。";
+      return;
+    }
+    const emptyState = document.createElement("article");
+    emptyState.className = "v3-mobile-review-hold review-empty";
+    const loadingLayer = document.querySelector("#mobileV3LoadingLayer");
+    const isLoading = Boolean(loadingLayer && !loadingLayer.hidden);
+    const message = mobileV3State.outputError
+      ? `复核图片暂时读取失败：${mobileV3State.outputError}。可刷新后重试；读取失败不代表图片质量不合格。`
+      : isLoading
+        ? "正在读取复核图片；审核状态已保留，请稍后查看。"
+        : "当前没有可显示的复核图片；项目和审核状态仍已保留，可以稍后刷新查看。";
+    emptyState.innerHTML = `<strong>尚无可显示的复核图片</strong><span>${escapeHtml(message)}</span>`;
+    grid.appendChild(emptyState);
     return;
   }
   if (reviewItems.length) {
@@ -6687,6 +6710,11 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       </div>
     `;
     grid.appendChild(card);
+    const reviewPreview = card.querySelector("[data-mobile-v3-gallery-preview]");
+    if (reviewPreview) {
+      reviewPreview.__mobileV3OutputItem = item;
+      reviewPreview.dataset.mobileV3ReviewOnly = "true";
+    }
     const reviewImage = card.querySelector("img[data-mobile-media-url]");
     if (reviewImage) bindImageWithFallback(reviewImage, [reviewImage.dataset.mobileMediaUrl], { emptyAlt: reviewImage.alt });
   });
@@ -6713,6 +6741,8 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       </div>
     `;
     grid.appendChild(card);
+    const historyPreview = card.querySelector("[data-mobile-v3-gallery-preview]");
+    if (historyPreview) historyPreview.__mobileV3OutputItem = item;
     const historyImage = card.querySelector("img[data-mobile-media-url]");
     if (historyImage) bindImageWithFallback(historyImage, [historyImage.dataset.mobileMediaUrl], { emptyAlt: historyImage.alt });
   });
@@ -6739,6 +6769,8 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       </div>
     `;
     grid.appendChild(card);
+    const outputPreview = card.querySelector("[data-mobile-v3-gallery-preview]");
+    if (outputPreview) outputPreview.__mobileV3OutputItem = item;
     const outputImage = card.querySelector("img[data-mobile-media-url]");
     if (outputImage) bindImageWithFallback(outputImage, [outputImage.dataset.mobileMediaUrl], { emptyAlt: outputImage.alt });
   });
@@ -7595,22 +7627,49 @@ function handleMobileV3GalleryPreviewClick(event) {
   if (!button) return;
   event.preventDefault();
   event.stopPropagation();
-  const item = [...(mobileV3State.outputs || []), ...(mobileV3State.reviewOutputs || [])]
+  const item = button.__mobileV3OutputItem || [...(mobileV3State.outputs || []), ...(mobileV3State.reviewOutputs || [])]
     .find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
   if (!item) return;
-  openMobileV3OutputLightbox(item);
+  const reviewOnly = button.dataset.mobileV3ReviewOnly === "true"
+    || button.classList.contains("review-only")
+    || item?.review_only === true
+    || item?.metadata?.review_only === true;
+  openMobileV3OutputLightbox(item, { reviewOnly });
 }
 
-function openMobileV3OutputLightbox(item, { promptOpen = false } = {}) {
+function mobileV3ReviewImageReason(item) {
+  const direct = String(item?.review_reason || item?.metadata?.review_reason || "").trim();
+  if (direct) return direct;
+  const review = mobileV3State.currentJob?.metadata?.post_generation_review_package
+    || mobileV3State.currentJob?.metadata?.post_generation_review
+    || {};
+  const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const outputId = String(item?.output_id || metadata.output_id || "").trim();
+  const candidateId = String(item?.candidate_id || metadata.candidate_id || "").trim();
+  const assetId = String(item?.asset_id || metadata.asset_id || "").trim();
+  const inspections = Array.isArray(review.inspections) ? review.inspections : [];
+  const inspection = (outputId && inspections.find((row) => String(row?.output_id || "") === outputId))
+    || (candidateId && inspections.find((row) => String(row?.candidate_id || "") === candidateId))
+    || (assetId && inspections.find((row) => String(row?.asset_id || "") === assetId));
+  const issues = Array.isArray(inspection?.detected_issues)
+    ? inspection.detected_issues.map((issue) => issue?.message || issue?.code || "").filter(Boolean)
+    : [];
+  return String(inspection?.review_reason || issues.join("；") || "仅供复核，不属于正式交付。").trim();
+}
+
+function openMobileV3OutputLightbox(item, { promptOpen = false, reviewOnly = false } = {}) {
+  const isReviewOnly = reviewOnly || item?.review_only === true || item?.metadata?.review_only === true;
   openImageLightbox({
     id: mobileV3OutputId(item),
-    title: "V3 项目图片",
+    title: isReviewOnly ? "复核图 · 非正式交付" : "V3 项目图片",
     url: mobileV3FullUrl(item),
     downloadUrl: mobileV3DownloadUrl(item),
     thumbnailUrl: mobileV3ThumbUrl(item),
     previewUrl: mobileV3PreviewUrl(item),
     format: item?.metadata?.format || "png",
-    meta: mobileV3OutputSummary(item),
+    meta: isReviewOnly
+      ? `${mobileV3ReviewImageReason(item)}\n仅供复核，不属于正式交付。`
+      : mobileV3OutputSummary(item),
     promptText: item?.metadata?.final_prompt || item?.prompt || "",
   });
   if (promptOpen && els.lightboxPromptPanel?.hidden) toggleLightboxPrompt();
@@ -7776,51 +7835,67 @@ function mobileV3ReviewOnlyJobImageItems(job = mobileV3State.currentJob) {
 
 function mergeMobileV3ReviewImageSources(...sources) {
   const merged = [];
-  const indexesByAlias = new Map();
-  const aliasesFor = (item) => ["output_id", "asset_id", "candidate_id", "output_ref_id"]
-    .map((field) => [field, String(item?.[field] || "").trim()])
-    .filter(([, value]) => value)
-    .map(([field, value]) => `${field}:${value}`);
-  const sameScope = (left, right) => {
-    const leftJobId = String(left?.job_id || "").trim();
-    const rightJobId = String(right?.job_id || "").trim();
-    const leftProjectId = String(left?.project_id || "").trim();
-    const rightProjectId = String(right?.project_id || "").trim();
-    return (!leftJobId || !rightJobId || leftJobId === rightJobId)
-      && (!leftProjectId || !rightProjectId || leftProjectId === rightProjectId);
+  const scopedValue = (item, fields) => {
+    const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+    const values = [...new Set(fields.flatMap((field) => [item?.[field], metadata[field]])
+      .map((value) => String(value || "").trim()).filter(Boolean))];
+    return { consistent: values.length <= 1, value: values[0] || "" };
   };
-  const registerAliases = (item, index) => {
-    aliasesFor(item).forEach((alias) => {
-      if (!indexesByAlias.has(alias)) indexesByAlias.set(alias, new Set());
-      indexesByAlias.get(alias).add(index);
-    });
+  const sameScope = (left, right) => {
+    const leftJob = scopedValue(left, ["job_id", "related_job_id"]);
+    const rightJob = scopedValue(right, ["job_id", "related_job_id"]);
+    const leftProject = scopedValue(left, ["project_id"]);
+    const rightProject = scopedValue(right, ["project_id"]);
+    return leftJob.consistent && rightJob.consistent
+      && leftProject.consistent && rightProject.consistent
+      && (!leftJob.value || !rightJob.value || leftJob.value === rightJob.value)
+      && (!leftProject.value || !rightProject.value || leftProject.value === rightProject.value);
+  };
+  const sameImage = (left, right) => {
+    if (!sameScope(left, right)) return false;
+    const leftOutput = scopedValue(left, ["output_id"]);
+    const rightOutput = scopedValue(right, ["output_id"]);
+    const leftCandidate = scopedValue(left, ["candidate_id"]);
+    const rightCandidate = scopedValue(right, ["candidate_id"]);
+    const leftOutputRef = scopedValue(left, ["output_ref_id"]);
+    const rightOutputRef = scopedValue(right, ["output_ref_id"]);
+    if (![leftOutput, rightOutput, leftCandidate, rightCandidate, leftOutputRef, rightOutputRef].every((value) => value.consistent)) return false;
+    const leftOutputId = leftOutput.value;
+    const rightOutputId = rightOutput.value;
+    if (leftOutputId && rightOutputId) return leftOutputId === rightOutputId;
+    const leftCandidateId = leftCandidate.value;
+    const rightCandidateId = rightCandidate.value;
+    if (leftCandidateId && rightCandidateId) return leftCandidateId === rightCandidateId;
+    const leftOutputRefId = leftOutputRef.value;
+    const rightOutputRefId = rightOutputRef.value;
+    return Boolean(leftOutputRefId && rightOutputRefId && leftOutputRefId === rightOutputRefId);
+  };
+  const mergeSameImage = (existing, incoming) => {
+    const mergedItem = { ...existing };
+    const fillFields = ["output_id", "candidate_id", "asset_id", "output_ref_id", "job_id", "project_id", "related_job_id", "review_reason", "review_status", "delivery_state"];
+    for (const field of fillFields) {
+      if (!String(mergedItem[field] || "").trim() && String(incoming?.[field] || "").trim()) mergedItem[field] = incoming[field];
+    }
+    for (const field of ["thumbnail_url", "preview_url", "download_url", "url", "preview_uri"]) {
+      const currentUrl = mergedItem[field] || mergedItem.metadata?.[field];
+      const incomingUrl = incoming?.[field] || incoming?.metadata?.[field];
+      if (!currentUrl && incomingUrl) mergedItem[field] = incomingUrl;
+    }
+    const metadata = { ...(incoming?.metadata || {}), ...(existing?.metadata || {}) };
+    for (const [key, value] of Object.entries(incoming?.metadata || {})) {
+      if ((metadata[key] == null || metadata[key] === "") && value != null && value !== "") metadata[key] = value;
+    }
+    mergedItem.metadata = metadata;
+    return mergedItem;
   };
   for (const item of sources.flat()) {
     if (!item || typeof item !== "object") continue;
-    const aliases = aliasesFor(item);
-    const possibleIndexes = [...new Set(aliases.flatMap((alias) => [...(indexesByAlias.get(alias) || [])]))];
-    const existingIndex = possibleIndexes.find((index) => sameScope(merged[index], item));
-    if (!Number.isInteger(existingIndex)) {
-      const index = merged.push(item) - 1;
-      registerAliases(item, index);
+    const existingIndex = merged.findIndex((existing) => sameImage(existing, item));
+    if (existingIndex < 0) {
+      merged.push(item);
       continue;
     }
-    const existing = merged[existingIndex];
-    const hasExistingMedia = Boolean(mobileV3ThumbUrl(existing) || mobileV3PreviewUrl(existing) || mobileV3FullUrl(existing));
-    const hasIncomingMedia = Boolean(mobileV3ThumbUrl(item) || mobileV3PreviewUrl(item) || mobileV3FullUrl(item));
-    const preferred = hasExistingMedia || !hasIncomingMedia ? existing : item;
-    const fallback = preferred === existing ? item : existing;
-    merged[existingIndex] = {
-      ...fallback,
-      ...preferred,
-      thumbnail_url: preferred.thumbnail_url || fallback.thumbnail_url || "",
-      preview_url: preferred.preview_url || fallback.preview_url || "",
-      download_url: preferred.download_url || fallback.download_url || "",
-      metadata: { ...(fallback.metadata || {}), ...(preferred.metadata || {}) },
-    };
-    registerAliases(existing, existingIndex);
-    registerAliases(item, existingIndex);
-    registerAliases(merged[existingIndex], existingIndex);
+    merged[existingIndex] = mergeSameImage(merged[existingIndex], item);
   }
   return merged;
 }
@@ -7924,6 +7999,10 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
     mobileV3State.previewProjectIds.delete(String(projectId));
     persistMobileV3Caches();
     renderMobileV3ProjectCards();
+    if (mobileV3State.currentProject?.project_id === projectId) {
+      renderMobileV3ProjectOutputs(mobileV3State.currentProject);
+      renderMobileV3ProjectGallery(mobileV3State.currentProject);
+    }
     return outputs;
   } catch (error) {
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
@@ -7934,6 +8013,7 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
     persistMobileV3Caches();
     renderMobileV3ProjectCards();
     if (mobileV3State.currentProject?.project_id === projectId) {
+      renderMobileV3ProjectOutputs(mobileV3State.currentProject);
       renderMobileV3ProjectGallery(mobileV3State.currentProject);
     }
     return [];

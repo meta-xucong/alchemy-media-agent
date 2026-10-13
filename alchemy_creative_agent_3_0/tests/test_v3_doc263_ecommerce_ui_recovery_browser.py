@@ -36,7 +36,7 @@ window.fetch = async (input, init = {}) => {
   } else if (/\\/projects\\/doc263-project\\/timeline/.test(url)) {
     body = { items: [] };
   } else if (/\\/project-outputs/.test(url)) {
-    body = { items: [], review_items: [] };
+    body = window.__doc263OutputPayload || { items: [], review_items: [] };
   } else if (/\\/jobs\\/doc263-new-job/.test(url)) {
     body = { job_id: "doc263-new-job", status: "blocked", metadata: { project_outputs: [] } };
   } else if (/\\/projects\\/doc263-project$/.test(url)) {
@@ -552,7 +552,9 @@ def test_doc_review_only_generated_images_are_visible_without_delivery_promotion
             details = page.locator("#v3ProjectOutputBoard details.v3-review-output-details")
             assert details.count() == 1
             assert details.evaluate("node => node.open") is True
-            assert "仅供复核 · 未进入正式交付" in details.inner_text()
+            badges = details.locator(".v3-review-output-tile .mini-pill").all_text_contents()
+            assert len(badges) == 2
+            assert all("仅供复核 · 未进入正式交付" in badge for badge in badges)
             assert details.locator("img").count() == 2
             assert page.evaluate("window.__reviewMergeCollisionCount") == 2
             assert page.evaluate("window.__evidenceIncompleteHoldLabel") == "审核证据需确认"
@@ -690,12 +692,19 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
                       output_id: "withheld-review",
                     }, {
                       job_id: "doc-review-job",
+                      candidate_id: "candidate-only-review",
+                      output_id: "candidate-only-output",
+                      thumbnail_url: reviewOutput.thumbnail_url,
+                      preview_url: reviewOutput.preview_url,
+                      review_reason: "Candidate-only review reason.",
+                    }, {
+                      job_id: "doc-review-job",
                       candidate_id: "cross-field-collision",
                     }],
                     metadata: {
                       final_delivery: { delivery_gate_applies: true, automatic_delivery_available: false },
                       post_generation_review: {
-                        review_output_ids: ["withheld-review", "fail-final-output"],
+                        review_output_ids: ["withheld-review", "fail-final-output", "candidate-only-output"],
                         review_reason: "evidence_incomplete",
                         evidence_state: "incomplete",
                         quality_assessment: "needs_manual_review",
@@ -722,12 +731,76 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
             assert "审核证据需确认" in output_grid.inner_text()
             assert "尚未证明图片质量不合格" in output_grid.inner_text()
             assert "FOREIGN PROJECT IMAGE SHOULD NOT APPEAR" not in output_grid.inner_text()
-            assert output_grid.locator(".v3-mobile-output-card.review-only img").count() == 2
+            assert output_grid.locator(".v3-mobile-output-card.review-only img").count() == 3
             assert page.evaluate("window.__reviewMergeCollisionCount") == 2
             gallery = page.locator("#mobileV3GalleryGrid")
             assert gallery.locator("button.review-only img").count() == 2
-            assert "复核图 · 非交付" in gallery.locator(".v3-mobile-gallery-review-badge").inner_text()
-            assert "复核图 1" in gallery.locator("button.review-only").first.get_attribute("innerHTML")
+            badge_texts = gallery.locator(".v3-mobile-gallery-review-badge").all_text_contents()
+            assert len(badge_texts) == 2
+            assert all("复核图 · 非交付" in text for text in badge_texts)
+            assert gallery.locator("button.review-only img").first.get_attribute("alt") == "复核图 1"
+
+            output_grid.locator("button[data-mobile-v3-gallery-preview]").nth(2).click()
+            assert page.locator("#lightboxTitle").inner_text() == "复核图 · 非正式交付"
+            assert "Candidate-only review reason." in page.locator("#lightboxMeta").inner_text()
+            assert "仅供复核，不属于正式交付" in page.locator("#lightboxMeta").inner_text()
+
+            page.evaluate(
+                """
+                (project) => {
+                  mobileV3State.currentProject = project;
+                  mobileV3State.currentJob = null;
+                  mobileV3State.reviewOutputs = [];
+                  mobileV3State.outputs = [];
+                  mobileV3State.outputError = "503 Service Unavailable";
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                project,
+            )
+            empty_hold = page.locator("#mobileV3OutputGrid")
+            assert "复核图片暂时读取失败" in empty_hold.inner_text()
+            assert "还没有图片" not in empty_hold.inner_text()
+
+            page.evaluate(
+                """
+                (project) => {
+                  mobileV3State.outputError = "";
+                  document.querySelector("#mobileV3LoadingLayer").hidden = false;
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                project,
+            )
+            assert "正在读取复核图片" in page.locator("#mobileV3OutputGrid").inner_text()
+
+            page.evaluate(
+                """
+                (project) => {
+                  mobileV3State.outputError = "";
+                  document.querySelector("#mobileV3LoadingLayer").hidden = true;
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                project,
+            )
+            assert "当前没有可显示的复核图片" in page.locator("#mobileV3OutputGrid").inner_text()
+            assert "还没有图片" not in page.locator("#mobileV3OutputGrid").inner_text()
+
+            page.evaluate(
+                """
+                async ({ project, reviewOutput }) => {
+                  document.querySelector("#mobileV3LoadingLayer").hidden = true;
+                  window.__doc263OutputPayload = { items: [], review_items: [reviewOutput] };
+                  await loadMobileV3ProjectOutputs(project.project_id);
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                {"project": project, "reviewOutput": review_output},
+            )
+            recovered_grid = page.locator("#mobileV3OutputGrid")
+            assert "复核图片暂时读取失败" not in recovered_grid.inner_text()
+            assert recovered_grid.locator(".v3-mobile-output-card.review-only img").count() == 1
 
             page.evaluate(
                 """

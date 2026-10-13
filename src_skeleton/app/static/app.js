@@ -5594,51 +5594,67 @@ function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
 
 function mergeV3ReviewImageSources(...sources) {
   const merged = [];
-  const indexesByAlias = new Map();
-  const aliasesFor = (item) => ["output_id", "asset_id", "candidate_id", "output_ref_id"]
-    .map((field) => [field, String(item?.[field] || "").trim()])
-    .filter(([, value]) => value)
-    .map(([field, value]) => `${field}:${value}`);
-  const sameScope = (left, right) => {
-    const leftJobId = String(left?.job_id || "").trim();
-    const rightJobId = String(right?.job_id || "").trim();
-    const leftProjectId = String(left?.project_id || "").trim();
-    const rightProjectId = String(right?.project_id || "").trim();
-    return (!leftJobId || !rightJobId || leftJobId === rightJobId)
-      && (!leftProjectId || !rightProjectId || leftProjectId === rightProjectId);
+  const scopedValue = (item, fields) => {
+    const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+    const values = [...new Set(fields.flatMap((field) => [item?.[field], metadata[field]])
+      .map((value) => String(value || "").trim()).filter(Boolean))];
+    return { consistent: values.length <= 1, value: values[0] || "" };
   };
-  const registerAliases = (item, index) => {
-    aliasesFor(item).forEach((alias) => {
-      if (!indexesByAlias.has(alias)) indexesByAlias.set(alias, new Set());
-      indexesByAlias.get(alias).add(index);
-    });
+  const sameScope = (left, right) => {
+    const leftJob = scopedValue(left, ["job_id", "related_job_id"]);
+    const rightJob = scopedValue(right, ["job_id", "related_job_id"]);
+    const leftProject = scopedValue(left, ["project_id"]);
+    const rightProject = scopedValue(right, ["project_id"]);
+    return leftJob.consistent && rightJob.consistent
+      && leftProject.consistent && rightProject.consistent
+      && (!leftJob.value || !rightJob.value || leftJob.value === rightJob.value)
+      && (!leftProject.value || !rightProject.value || leftProject.value === rightProject.value);
+  };
+  const sameImage = (left, right) => {
+    if (!sameScope(left, right)) return false;
+    const leftOutput = scopedValue(left, ["output_id"]);
+    const rightOutput = scopedValue(right, ["output_id"]);
+    const leftCandidate = scopedValue(left, ["candidate_id"]);
+    const rightCandidate = scopedValue(right, ["candidate_id"]);
+    const leftOutputRef = scopedValue(left, ["output_ref_id"]);
+    const rightOutputRef = scopedValue(right, ["output_ref_id"]);
+    if (![leftOutput, rightOutput, leftCandidate, rightCandidate, leftOutputRef, rightOutputRef].every((value) => value.consistent)) return false;
+    const leftOutputId = leftOutput.value;
+    const rightOutputId = rightOutput.value;
+    if (leftOutputId && rightOutputId) return leftOutputId === rightOutputId;
+    const leftCandidateId = leftCandidate.value;
+    const rightCandidateId = rightCandidate.value;
+    if (leftCandidateId && rightCandidateId) return leftCandidateId === rightCandidateId;
+    const leftOutputRefId = leftOutputRef.value;
+    const rightOutputRefId = rightOutputRef.value;
+    return Boolean(leftOutputRefId && rightOutputRefId && leftOutputRefId === rightOutputRefId);
+  };
+  const mergeSameImage = (existing, incoming) => {
+    const mergedItem = { ...existing };
+    const fillFields = ["output_id", "candidate_id", "asset_id", "output_ref_id", "job_id", "project_id", "related_job_id", "review_reason", "review_status", "delivery_state"];
+    for (const field of fillFields) {
+      if (!String(mergedItem[field] || "").trim() && String(incoming?.[field] || "").trim()) mergedItem[field] = incoming[field];
+    }
+    for (const field of ["thumbnail_url", "preview_url", "download_url", "url", "preview_uri"]) {
+      const currentUrl = mergedItem[field] || mergedItem.metadata?.[field];
+      const incomingUrl = incoming?.[field] || incoming?.metadata?.[field];
+      if (!currentUrl && incomingUrl) mergedItem[field] = incomingUrl;
+    }
+    const metadata = { ...(incoming?.metadata || {}), ...(existing?.metadata || {}) };
+    for (const [key, value] of Object.entries(incoming?.metadata || {})) {
+      if ((metadata[key] == null || metadata[key] === "") && value != null && value !== "") metadata[key] = value;
+    }
+    mergedItem.metadata = metadata;
+    return mergedItem;
   };
   for (const item of sources.flat()) {
     if (!item || typeof item !== "object") continue;
-    const aliases = aliasesFor(item);
-    const possibleIndexes = [...new Set(aliases.flatMap((alias) => [...(indexesByAlias.get(alias) || [])]))];
-    const existingIndex = possibleIndexes.find((index) => sameScope(merged[index], item));
-    if (!Number.isInteger(existingIndex)) {
-      const index = merged.push(item) - 1;
-      registerAliases(item, index);
+    const existingIndex = merged.findIndex((existing) => sameImage(existing, item));
+    if (existingIndex < 0) {
+      merged.push(item);
       continue;
     }
-    const existing = merged[existingIndex];
-    const hasExistingMedia = v3OutputImageCandidates(existing).length > 0;
-    const hasIncomingMedia = v3OutputImageCandidates(item).length > 0;
-    const preferred = hasExistingMedia || !hasIncomingMedia ? existing : item;
-    const fallback = preferred === existing ? item : existing;
-    merged[existingIndex] = {
-      ...fallback,
-      ...preferred,
-      thumbnail_url: preferred.thumbnail_url || fallback.thumbnail_url || "",
-      preview_url: preferred.preview_url || fallback.preview_url || "",
-      download_url: preferred.download_url || fallback.download_url || "",
-      metadata: { ...(fallback.metadata || {}), ...(preferred.metadata || {}) },
-    };
-    registerAliases(existing, existingIndex);
-    registerAliases(item, existingIndex);
-    registerAliases(merged[existingIndex], existingIndex);
+    merged[existingIndex] = mergeSameImage(merged[existingIndex], item);
   }
   return merged;
 }
@@ -6071,6 +6087,7 @@ function renderV3ProjectOutputBoard() {
       card.className = "v3-review-output-tile";
       card.innerHTML = `
         <button class="v3-process-output-tile" type="button" aria-label="查看${escapeHtml(title)}"><img alt="${escapeHtml(title)}" loading="lazy" /></button>
+        <strong class="mini-pill">仅供复核 · 未进入正式交付</strong>
         <strong>${escapeHtml(title)}</strong>
         <span>${escapeHtml(v3ProjectReviewReason(item))}</span>
       `;
