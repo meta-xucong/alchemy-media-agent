@@ -12071,17 +12071,20 @@ class V3ProductApiService:
             )
 
         pack_output = self._ecommerce_pack_output(record)
+        eligible_asset_bindings = self._ecommerce_eligible_output_bindings(record)
         eligible_output_ids = self._ecommerce_formal_output_ids(record)
         export_package = self._ecommerce_runtime_export_package(
             record,
             pack_output,
             eligible_output_ids=eligible_output_ids,
+            eligible_asset_bindings=eligible_asset_bindings,
         )
         manifest = self._ecommerce_export_manifest(
             record,
             pack_output,
             export_package,
             eligible_output_ids=eligible_output_ids,
+            eligible_asset_bindings=eligible_asset_bindings,
         )
         return V3ExportPackageResponse(
             job_id=record.job_id,
@@ -15622,10 +15625,12 @@ class V3ProductApiService:
         pack_output = self._ecommerce_pack_output(record)
         warnings = self._ecommerce_public_warnings(record, pack_output)
         output_intents = self._ecommerce_output_intents(record)
+        eligible_asset_bindings = self._ecommerce_eligible_output_bindings(record)
         export_package = self._ecommerce_runtime_export_package(
             record,
             pack_output,
             eligible_output_ids=self._ecommerce_formal_output_ids(record),
+            eligible_asset_bindings=eligible_asset_bindings,
         )
         creative_context = dict(record.request.metadata.get("ecommerce_creative_context") or {})
         return EcommerceCapabilitySummary(
@@ -15680,13 +15685,18 @@ class V3ProductApiService:
         output: EcommercePackOutput,
         *,
         eligible_output_ids: set[str] | None = None,
+        eligible_asset_bindings: set[tuple[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Bind actual provider outputs to opaque Brain-selected output IDs."""
 
         package = output.export_package.model_dump(mode="json")
         output_by_asset = {
             str(item.get("asset_id") or ""): item
-            for item in self._generated_asset_records(record, eligible_output_ids=eligible_output_ids)
+            for item in self._generated_asset_records(
+                record,
+                eligible_output_ids=eligible_output_ids,
+                eligible_asset_bindings=eligible_asset_bindings,
+            )
             if str(item.get("asset_id") or "")
         }
         files: list[dict[str, Any]] = []
@@ -15746,6 +15756,7 @@ class V3ProductApiService:
         export_package: dict[str, Any],
         *,
         eligible_output_ids: set[str] | None = None,
+        eligible_asset_bindings: set[tuple[str, str]] | None = None,
     ) -> dict[str, Any]:
         return {
             "manifest_version": "v3_ecommerce_export_manifest_001",
@@ -15764,6 +15775,7 @@ class V3ProductApiService:
             "generated_assets": self._generated_asset_records(
                 record,
                 eligible_output_ids=eligible_output_ids,
+                eligible_asset_bindings=eligible_asset_bindings,
             ),
             "export_files": list(export_package.get("files") or []),
             "review_checks": [dict(item) for item in output.critic.checks],
@@ -15779,6 +15791,8 @@ class V3ProductApiService:
         }
 
     def _generic_export_manifest(self, record: ProductJobRecord, scenario_id: str | None) -> dict[str, Any]:
+        eligible_bindings = self._generic_eligible_output_bindings(record)
+        eligible_output_ids = {output_id for output_id, _asset_id in eligible_bindings}
         return {
             "manifest_version": "v3_generic_export_manifest_001",
             "job_id": record.job_id,
@@ -15786,13 +15800,18 @@ class V3ProductApiService:
             "job_status": record.status.value,
             "source_asset_ids": list(record.request.uploaded_asset_ids),
             "uploaded_assets": self._uploaded_asset_records(record.request.uploaded_asset_ids),
-            "generated_assets": self._generated_asset_records(record),
+            "generated_assets": self._generated_asset_records(
+                record,
+                eligible_output_ids=eligible_output_ids,
+                eligible_asset_bindings=eligible_bindings,
+            ),
             "lifecycle": self._lifecycle_summary(record),
             "warnings": list(record.warnings),
             "metadata": {
                 "source": "V3ProductApiService",
                 "rules_version": RULE_VERSION,
                 "v3_independent_product_api": True,
+                "export_scope": "formal_delivery_only",
             },
         }
 
@@ -15842,6 +15861,65 @@ class V3ProductApiService:
                 selected_output_ids.add(output_id)
         return selected_output_ids
 
+    def _generic_eligible_output_bindings(self, record: ProductJobRecord) -> set[tuple[str, str]]:
+        """Return only exact image bindings authorized by the shared delivery projection."""
+
+        result = record.generation_result
+        if result is None:
+            return set()
+        final_delivery, eligible_output_ids, eligible_asset_ids = self._public_final_delivery_projection(result)
+        if not final_delivery.get("automatic_delivery_available"):
+            return set()
+        package = result.metadata.get("post_generation_review_package")
+        inspections = package.get("inspections") if isinstance(package, dict) else []
+        certified_bindings = {
+            (
+                str(item.get("output_id") or "").strip(),
+                str(item.get("asset_id") or "").strip(),
+            )
+            for item in inspections or []
+            if isinstance(item, dict)
+            and str(item.get("status") or "").strip().lower() in {"pass", "warning"}
+            and self._is_verified_real_pixel_inspection(item)
+            and str(item.get("output_id") or "").strip() in eligible_output_ids
+            and str(item.get("asset_id") or "").strip() in eligible_asset_ids
+        }
+        bindings: set[tuple[str, str]] = set()
+        for asset in result.asset_pack.assets:
+            metadata = dict(asset.metadata or {})
+            candidate_metadata = metadata.get("candidate_metadata")
+            candidate_metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
+            output_id = str(candidate_metadata.get("output_id") or metadata.get("output_id") or "").strip()
+            asset_id = str(asset.asset_id or "").strip()
+            if (output_id, asset_id) in certified_bindings:
+                bindings.add((output_id, asset_id))
+
+        selected = record.selected_result
+        if selected is None or not bindings:
+            return bindings
+        selected_candidate_ids = set(self._dedupe_strings(selected.selected_candidate_ids))
+        selected_asset_ids = set(self._dedupe_strings(selected.selected_asset_ids))
+        if not selected_candidate_ids and not selected_asset_ids:
+            return bindings
+        selected_bindings: set[tuple[str, str]] = set()
+        for asset in result.asset_pack.assets:
+            metadata = dict(asset.metadata or {})
+            candidate_metadata = metadata.get("candidate_metadata")
+            candidate_metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
+            output_id = str(candidate_metadata.get("output_id") or metadata.get("output_id") or "").strip()
+            asset_id = str(asset.asset_id or "").strip()
+            candidate_id = str(metadata.get("selected_candidate_id") or "").strip()
+            binding = (output_id, asset_id)
+            selection_matches = (
+                candidate_id in selected_candidate_ids
+                and (not selected_asset_ids or asset_id in selected_asset_ids)
+                if selected_candidate_ids
+                else asset_id in selected_asset_ids
+            )
+            if binding in bindings and selection_matches:
+                selected_bindings.add(binding)
+        return selected_bindings
+
     def _ecommerce_eligible_output_bindings(self, record: ProductJobRecord) -> set[tuple[str, str]]:
         result = record.generation_result
         if result is None:
@@ -15867,6 +15945,7 @@ class V3ProductApiService:
         record: ProductJobRecord,
         *,
         eligible_output_ids: set[str] | None = None,
+        eligible_asset_bindings: set[tuple[str, str]] | None = None,
     ) -> list[dict[str, Any]]:
         result = record.generation_result
         if result is None:
@@ -15878,21 +15957,19 @@ class V3ProductApiService:
             for item in inspections or []
             if isinstance(item, dict) and str(item.get("output_id") or "").strip()
         }
-        eligible_bindings = (
-            self._ecommerce_eligible_output_bindings(record)
-            if eligible_output_ids is not None
-            else None
-        )
         records: list[dict[str, Any]] = []
         for asset in result.asset_pack.assets:
-            candidate_metadata = asset.metadata.get("candidate_metadata", {})
-            output_id = candidate_metadata.get("output_id")
+            asset_metadata = dict(asset.metadata or {})
+            candidate_metadata = asset_metadata.get("candidate_metadata")
+            candidate_metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
+            output_id = candidate_metadata.get("output_id") or asset_metadata.get("output_id")
             if not output_id:
                 continue
             output_id = str(output_id).strip()
             if eligible_output_ids is not None and (
                 output_id not in eligible_output_ids
-                or (output_id, str(asset.asset_id or "").strip()) not in eligible_bindings
+                or eligible_asset_bindings is None
+                or (output_id, str(asset.asset_id or "").strip()) not in eligible_asset_bindings
             ):
                 continue
             records.append(
@@ -15902,9 +15979,9 @@ class V3ProductApiService:
                     "platform": asset.platform.value,
                     "aspect_ratio": asset.aspect_ratio,
                     "purpose": asset.purpose,
-                    "selected_candidate_id": asset.metadata.get("selected_candidate_id"),
+                    "selected_candidate_id": asset_metadata.get("selected_candidate_id"),
                     "output_id": output_id,
-                    "provider": candidate_metadata.get("actual_provider") or asset.metadata.get("selected_candidate_provider"),
+                    "provider": candidate_metadata.get("actual_provider") or asset_metadata.get("selected_candidate_provider"),
                     "model": candidate_metadata.get("actual_model"),
                     "file_path": asset.file_path,
                     "download_url": candidate_metadata.get("download_url") or candidate_metadata.get("url"),

@@ -4892,11 +4892,12 @@ function renderV3ProjectHistoryGrid(group) {
     const previewUrl = previewCandidates[0] || "";
     const imageTitle = v3ReadableText(item.title, group.title || `图片 ${index + 1}`);
     const card = document.createElement("article");
-    card.className = "v3-project-history-image-card";
+    card.className = `v3-project-history-image-card${item?._v3ReviewOnly === true ? " review-only" : ""}`;
     card.innerHTML = `
       <button class="v3-project-history-image" type="button" data-v3-history-image="${index}" aria-label="查看项目图片">
         ${previewUrl ? `<img alt="${escapeHtml(v3ReadableText(group.title, "V3 项目图片"))}" loading="lazy" decoding="async" />` : "<span>图片准备中</span>"}
       </button>
+      ${item?._v3ReviewOnly === true ? `<strong class="mini-pill">仅供复核 · 未进入正式交付</strong><span>${escapeHtml(v3ProjectReviewReason(item))}</span>` : ""}
       <div class="v3-project-history-image-meta">
         <strong>${escapeHtml(v3ShortText(imageTitle, 24))}</strong>
         <span>${escapeHtml(formatDate(item.created_at || item.updated_at))}</span>
@@ -5566,7 +5567,8 @@ function v3JobHasTerminalOutcome(job = v3State.currentJob) {
 }
 
 function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
-  if (!job || v3FailureArtifactExpired(job) || !v3JobDeliveryWithheld(job)) return [];
+  const finalizationWithheld = v3EcommerceReviewWithheldFinalizationOperation(v3State.currentProject, job);
+  if (!job || v3FailureArtifactExpired(job) || (!v3JobDeliveryWithheld(job) && !finalizationWithheld)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
   const reviewOutputIds = v3ReviewOutputIdSet("review_output_ids", job);
@@ -5576,8 +5578,7 @@ function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
       return itemJobId === String(job.job_id || "").trim()
         || (!itemJobId && reviewOutputIds.has(v3OutputItemIdentity(item)));
     });
-  const source = candidates.length ? candidates : assets.length ? assets : projectReviewItems;
-  const hiddenIds = v3ReviewOutputIdSet("hidden_output_ids", job);
+  const source = mergeV3ReviewImageSources(projectReviewItems, candidates, assets);
   return source
     .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "review_only" }))
     .filter((item) => {
@@ -5586,10 +5587,76 @@ function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
       return (
         v3OutputImageCandidates(item).length > 0
         && selectionState !== "rejected"
-        && !hiddenIds.has(identity)
       );
     })
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
+}
+
+function mergeV3ReviewImageSources(...sources) {
+  const merged = [];
+  const scopedValue = (item, fields) => {
+    const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+    const values = [...new Set(fields.flatMap((field) => [item?.[field], metadata[field]])
+      .map((value) => String(value || "").trim()).filter(Boolean))];
+    return { consistent: values.length <= 1, value: values[0] || "" };
+  };
+  const sameScope = (left, right) => {
+    const leftJob = scopedValue(left, ["job_id", "related_job_id"]);
+    const rightJob = scopedValue(right, ["job_id", "related_job_id"]);
+    const leftProject = scopedValue(left, ["project_id"]);
+    const rightProject = scopedValue(right, ["project_id"]);
+    return leftJob.consistent && rightJob.consistent
+      && leftProject.consistent && rightProject.consistent
+      && (!leftJob.value || !rightJob.value || leftJob.value === rightJob.value)
+      && (!leftProject.value || !rightProject.value || leftProject.value === rightProject.value);
+  };
+  const sameImage = (left, right) => {
+    if (!sameScope(left, right)) return false;
+    const leftOutput = scopedValue(left, ["output_id"]);
+    const rightOutput = scopedValue(right, ["output_id"]);
+    const leftCandidate = scopedValue(left, ["candidate_id"]);
+    const rightCandidate = scopedValue(right, ["candidate_id"]);
+    const leftOutputRef = scopedValue(left, ["output_ref_id"]);
+    const rightOutputRef = scopedValue(right, ["output_ref_id"]);
+    if (![leftOutput, rightOutput, leftCandidate, rightCandidate, leftOutputRef, rightOutputRef].every((value) => value.consistent)) return false;
+    const leftOutputId = leftOutput.value;
+    const rightOutputId = rightOutput.value;
+    if (leftOutputId && rightOutputId) return leftOutputId === rightOutputId;
+    const leftCandidateId = leftCandidate.value;
+    const rightCandidateId = rightCandidate.value;
+    if (leftCandidateId && rightCandidateId) return leftCandidateId === rightCandidateId;
+    const leftOutputRefId = leftOutputRef.value;
+    const rightOutputRefId = rightOutputRef.value;
+    return Boolean(leftOutputRefId && rightOutputRefId && leftOutputRefId === rightOutputRefId);
+  };
+  const mergeSameImage = (existing, incoming) => {
+    const mergedItem = { ...existing };
+    const fillFields = ["output_id", "candidate_id", "asset_id", "output_ref_id", "job_id", "project_id", "related_job_id", "review_reason", "review_status", "delivery_state"];
+    for (const field of fillFields) {
+      if (!String(mergedItem[field] || "").trim() && String(incoming?.[field] || "").trim()) mergedItem[field] = incoming[field];
+    }
+    for (const field of ["thumbnail_url", "preview_url", "download_url", "url", "preview_uri"]) {
+      const currentUrl = mergedItem[field] || mergedItem.metadata?.[field];
+      const incomingUrl = incoming?.[field] || incoming?.metadata?.[field];
+      if (!currentUrl && incomingUrl) mergedItem[field] = incomingUrl;
+    }
+    const metadata = { ...(incoming?.metadata || {}), ...(existing?.metadata || {}) };
+    for (const [key, value] of Object.entries(incoming?.metadata || {})) {
+      if ((metadata[key] == null || metadata[key] === "") && value != null && value !== "") metadata[key] = value;
+    }
+    mergedItem.metadata = metadata;
+    return mergedItem;
+  };
+  for (const item of sources.flat()) {
+    if (!item || typeof item !== "object") continue;
+    const existingIndex = merged.findIndex((existing) => sameImage(existing, item));
+    if (existingIndex < 0) {
+      merged.push(item);
+      continue;
+    }
+    merged[existingIndex] = mergeSameImage(merged[existingIndex], item);
+  }
+  return merged;
 }
 
 function v3ReviewCertificationModes(certification) {
@@ -5698,7 +5765,8 @@ function v3StoredProjectReviewOutputItems(project = v3State.currentProject) {
   const projectId = project?.project_id || "";
   return Array.isArray(v3State.projectReviewOutputs)
     ? v3State.projectReviewOutputs
-        .filter((item) => !projectId || item?.project_id === projectId)
+        .filter((item) => projectId && String(item?.project_id || item?.metadata?.project_id || "") === String(projectId))
+        .filter((item) => !v3FailureArtifactExpired(item))
         .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "project_review_output" }))
     : [];
 }
@@ -6003,6 +6071,7 @@ function renderV3ProjectOutputBoard() {
   if (reviewItems.length) {
     const details = document.createElement("details");
     details.className = "v3-review-output-details";
+    details.open = true;
     details.innerHTML = `
       <summary>
         <span>复核记录 ${reviewItems.length} 张</span>
@@ -6018,6 +6087,7 @@ function renderV3ProjectOutputBoard() {
       card.className = "v3-review-output-tile";
       card.innerHTML = `
         <button class="v3-process-output-tile" type="button" aria-label="查看${escapeHtml(title)}"><img alt="${escapeHtml(title)}" loading="lazy" /></button>
+        <strong class="mini-pill">仅供复核 · 未进入正式交付</strong>
         <strong>${escapeHtml(title)}</strong>
         <span>${escapeHtml(v3ProjectReviewReason(item))}</span>
       `;
@@ -7545,8 +7615,8 @@ function renderV3ProjectNextActions() {
       '<button class="button ghost compact" type="button" data-v3-project-action="start_first_generation">重新尝试一次</button>',
     );
   } else if (withheld) {
-    title = "图片已生成，但未通过自动审查";
-    detail = "图片和审查记录已经保留。你可以先查看复核图，再修改需求或继续制作，不会被卡在等待状态。";
+    title = `图片已生成 · ${v3JobFinalDeliveryHoldLabel(job)}`;
+    detail = v3JobFinalDeliveryNotice(job);
     actionRows.push(
       '<button class="button primary compact" type="button" data-v3-project-action="show_project_results">查看复核图</button>',
       '<button class="button secondary compact" type="button" data-v3-project-action="continue_same_style">修改后继续生成</button>',
@@ -12139,23 +12209,24 @@ function renderV3ResultBoard(job) {
   const assets = Array.isArray(job?.asset_series) ? job.asset_series : [];
   const candidates = Array.isArray(job?.candidates) ? job.candidates : [];
   const warnings = Array.isArray(job?.warnings) ? job.warnings : [];
+  const finalizationWithheld = v3EcommerceReviewWithheldFinalizationOperation(v3State.currentProject, job);
   releaseV3ImageBindingsWithin(els.v3ResultBoard);
   els.v3ResultBoard.innerHTML = "";
-  if (v3EcommerceReviewWithheldFinalizationOperation()) {
+  if (finalizationWithheld) {
     v3State.resultItems = [];
     els.v3ResultBoard.classList.remove("empty-v3-board");
-    els.v3ResultBoard.innerHTML = `
-      <article class="v3-result-card v3-result-card-wide v3-review-hold-card">
-        <div class="v3-card-head">
-          <strong>图片已保留，等待人工确认</strong>
-          <span class="mini-pill">人工复核</span>
-        </div>
-        <p>这次图片没有进入正式交付。请在项目复核记录中查看。</p>
-      </article>
+    const notice = document.createElement("article");
+    notice.className = "v3-result-card v3-result-card-wide v3-review-hold-card";
+    notice.innerHTML = `
+      <div class="v3-card-head">
+        <strong>审核未闭环，图片保留在复核区</strong>
+        <span class="mini-pill">仅供复核</span>
+      </div>
+      <p>正式交付尚未确认。下面的图片仅供查看，不会作为正式交付或后续参考。</p>
     `;
-    return;
+    els.v3ResultBoard.appendChild(notice);
   }
-  const persistedItems = v3ProjectOutputsForJob(job?.job_id);
+  const persistedItems = finalizationWithheld ? [] : v3ProjectOutputsForJob(job?.job_id);
   const hasPersistedDelivery = persistedItems.some((item) => v3OutputVisibleInProject(item));
   els.v3ResultBoard.classList.toggle("empty-v3-board", !job);
   if (!job) {
@@ -12163,15 +12234,15 @@ function renderV3ResultBoard(job) {
     els.v3ResultBoard.textContent = copy.emptyResult;
     return;
   }
-  const reviewCertification = v3ReviewCertification(job);
-  if (!v3JobDeliverySettled(job) && !hasPersistedDelivery) {
+  const reviewCertification = finalizationWithheld ? null : v3ReviewCertification(job);
+  if ((!v3JobDeliverySettled(job) || finalizationWithheld) && !hasPersistedDelivery) {
     v3State.resultItems = [];
     els.v3ResultBoard.classList.add("empty-v3-board");
-    if (v3JobDeliveryWithheld(job)) {
+    if (v3JobDeliveryWithheld(job) || finalizationWithheld) {
       const notice = document.createElement("article");
       notice.className = "v3-result-card v3-result-card-wide v3-review-hold-card";
       const reviewLines = v3JobFinalDeliveryReviewLines(job);
-      notice.innerHTML = `
+      notice.innerHTML = finalizationWithheld ? "" : `
         <div class="v3-card-head">
           <strong>${escapeHtml(reviewCertification ? v3ReviewCertificationLabel(reviewCertification) : v3JobFinalDeliveryHoldLabel(job))}</strong>
           <span class="mini-pill">已结束 · 需要确认</span>
@@ -12180,7 +12251,7 @@ function renderV3ResultBoard(job) {
         ${reviewLines.length ? `<ul class="v3-review-reasons">${reviewLines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : ""}
       `;
       els.v3ResultBoard.classList.remove("empty-v3-board");
-      els.v3ResultBoard.appendChild(notice);
+      if (!finalizationWithheld) els.v3ResultBoard.appendChild(notice);
       const reviewItems = v3ReviewOnlyJobImageItems(job);
       reviewItems.slice(0, 8).forEach((item, index) => {
         const card = document.createElement("article");

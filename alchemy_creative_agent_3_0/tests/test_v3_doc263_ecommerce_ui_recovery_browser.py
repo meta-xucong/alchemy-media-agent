@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
 
@@ -36,10 +37,16 @@ window.fetch = async (input, init = {}) => {
   } else if (/\\/projects\\/doc263-project\\/timeline/.test(url)) {
     body = { items: [] };
   } else if (/\\/project-outputs/.test(url)) {
-    body = { items: [], review_items: [] };
+    body = window.__doc263OutputPayload || { items: [], review_items: [] };
+  } else if (method === "GET" && window.__doc263Jobs && /\\/jobs\\/[^/?]+$/.test(url)) {
+    const jobId = decodeURIComponent(url.split("/").pop());
+    if (!Object.hasOwn(window.__doc263Jobs, jobId)) throw new Error(`Unexpected fixture Job: ${jobId}`);
+    window.__doc263RequestedJobId = jobId;
+    if (window.__doc263JobGate) await window.__doc263JobGate;
+    body = window.__doc263Jobs[jobId];
   } else if (/\\/jobs\\/doc263-new-job/.test(url)) {
     body = { job_id: "doc263-new-job", status: "blocked", metadata: { project_outputs: [] } };
-  } else if (/\\/projects\\/doc263-project$/.test(url)) {
+  } else if (/\\/projects\\/doc263-project(?:\\?view=summary)?$/.test(url)) {
     body = { project };
   }
   return new Response(JSON.stringify(body), {
@@ -50,7 +57,7 @@ window.fetch = async (input, init = {}) => {
 """
 
 
-def _browser_page(browser: Browser, *, html_path: Path, script_path: Path) -> Page:
+def _browser_page(browser: Browser, *, html_path: Path, script_path: Path, expose_panes: bool = True) -> Page:
     page = browser.new_page()
     page.set_content(_inline_shell(html_path))
     page.add_script_tag(content=script_path.read_text(encoding="utf-8"))
@@ -58,7 +65,8 @@ def _browser_page(browser: Browser, *, html_path: Path, script_path: Path) -> Pa
     # The normal product route opens just one surface at a time. The browser
     # contract drives the same controls directly, so make the test shell's
     # otherwise hidden project panes visible to real Playwright clicks.
-    page.evaluate("document.querySelectorAll('[hidden]').forEach((node) => { node.hidden = false; })")
+    if expose_panes:
+        page.evaluate("document.querySelectorAll('[hidden]').forEach((node) => { node.hidden = false; })")
     return page
 
 
@@ -478,5 +486,398 @@ def test_doc263_mobile_needs_input_stops_before_job_polling_and_opens_review_pat
             ) == 0
             assert "商品原图需要重新确认" in page.locator("body").inner_text()
             assert page.locator("#mobileV3GenerateBtn").is_disabled() is False
+        finally:
+            browser.close()
+
+
+def test_doc_review_only_generated_images_are_visible_without_delivery_promotion() -> None:
+    project = _ecommerce_project()
+    review_output = {
+        **_withheld_review_output(),
+        "job_id": "doc-review-job",
+        "candidate_id": "doc-review-candidate",
+        "asset_id": "doc-review-asset",
+        "thumbnail_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "preview_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    }
+    fail_final_output = {
+        **review_output,
+        "output_id": "fail-final-output",
+        "job_id": "doc-fail-final-job",
+        "candidate_id": "fail-final-candidate",
+        "delivery_state": "fail_final",
+        "review_reason": "Certified quality review failed.",
+    }
+    foreign_project_output = {**review_output, "output_id": "foreign-project-output", "candidate_id": "foreign-project-candidate", "project_id": "another-project", "title": "FOREIGN PROJECT IMAGE SHOULD NOT APPEAR"}
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            page.evaluate(
+                """
+                ({ project, reviewOutput, failFinalOutput, foreignProjectOutput }) => {
+                  v3State.currentProject = project;
+                  v3State.currentJob = {
+                    job_id: "doc-review-job",
+                    status: "blocked",
+                    candidates: [{
+                      job_id: "doc-review-job",
+                      candidate_id: "doc-review-candidate",
+                      asset_id: "doc-review-asset",
+                      output_id: "withheld-review",
+                    }, {
+                      job_id: "doc-review-job",
+                      candidate_id: "cross-field-collision",
+                    }],
+                    metadata: {
+                      final_delivery: { delivery_gate_applies: true, automatic_delivery_available: false },
+                      post_generation_review: {
+                        review_output_ids: ["withheld-review", "fail-final-output"],
+                        review_reason: "evidence_incomplete",
+                        evidence_state: "incomplete",
+                        quality_assessment: "needs_manual_review",
+                        quality_failure: false,
+                      },
+                    },
+                  };
+                  v3State.projectOutputs = [];
+                  v3State.projectReviewOutputs = [reviewOutput, failFinalOutput, foreignProjectOutput];
+                  window.__evidenceIncompleteHoldLabel = v3JobFinalDeliveryHoldLabel(v3State.currentJob);
+                  window.__qualityFailureHoldLabel = v3JobFinalDeliveryHoldLabel({
+                    metadata: { post_generation_review: { quality_failure: true } },
+                  });
+                  window.__reviewMergeCollisionCount = mergeV3ReviewImageSources(
+                    [{ output_id: "cross-field-collision", job_id: "job-a" }],
+                    [{ candidate_id: "cross-field-collision", job_id: "job-a" }],
+                  ).length;
+                  renderV3ProjectOutputBoard();
+                  renderV3ResultBoard(v3State.currentJob);
+                }
+                """,
+                {"project": project, "reviewOutput": review_output, "failFinalOutput": fail_final_output, "foreignProjectOutput": foreign_project_output},
+            )
+
+            details = page.locator("#v3ProjectOutputBoard details.v3-review-output-details")
+            assert details.count() == 1
+            assert details.evaluate("node => node.open") is True
+            badges = details.locator(".v3-review-output-tile .mini-pill").all_text_contents()
+            assert len(badges) == 2
+            assert all("仅供复核 · 未进入正式交付" in badge for badge in badges)
+            assert details.locator("img").count() == 2
+            assert page.evaluate("window.__reviewMergeCollisionCount") == 2
+            assert page.evaluate("window.__evidenceIncompleteHoldLabel") == "审核证据需确认"
+            assert page.evaluate("window.__qualityFailureHoldLabel") == "视觉问题需处理"
+            assert "FOREIGN PROJECT IMAGE SHOULD NOT APPEAR" not in details.inner_text()
+            assert details.locator("[data-v3-output-action='select']").count() == 0
+            assert page.locator("#v3ResultBoard .v3-review-only-card img").count() == 1
+            assert page.locator("#v3ProjectOutputBoard .v3-project-output-tile").count() == 0
+            assert "已生成，但没有进入正式交付" in page.locator("#v3ResultBoard").inner_text()
+
+            page.evaluate(
+                """
+                ({ project, failFinalOutput }) => {
+                  v3State.currentProject = project;
+                  v3State.projectReviewOutputs = [failFinalOutput];
+                  v3State.projectOutputs = [];
+                  v3State.currentJob = {
+                    job_id: "doc-fail-final-job",
+                    status: "generated",
+                    candidates: [{
+                      job_id: "doc-fail-final-job",
+                      candidate_id: failFinalOutput.candidate_id,
+                      output_id: failFinalOutput.output_id,
+                    }],
+                    metadata: {
+                      final_delivery: { delivery_gate_applies: true, automatic_delivery_available: false },
+                      post_generation_review: {
+                        quality_failure: true,
+                        hidden_output_ids: [failFinalOutput.output_id],
+                        review_reason: "quality_failure",
+                        user_visible_summary: ["Certified quality review failed."],
+                      },
+                    },
+                  };
+                  renderV3ResultBoard(v3State.currentJob);
+                }
+                """,
+                {"project": project, "failFinalOutput": fail_final_output},
+            )
+            failure_board = page.locator("#v3ResultBoard")
+            assert "视觉问题需处理" in failure_board.inner_text()
+            assert "自动审核发现需要处理的视觉问题" in failure_board.inner_text()
+            assert "审核证据需确认" not in failure_board.inner_text()
+            assert "审核证据不完整" not in failure_board.inner_text()
+            assert failure_board.locator(".v3-review-only-card img").count() == 1
+            assert failure_board.locator(".v3-result-card:not(.v3-review-only-card) [data-v3-preview]").count() == 0
+
+            page.evaluate(
+                """
+                ({ project, reviewOutput }) => {
+                  project.metadata.current_operation = {
+                    state: "review_withheld_finalization_failed",
+                    terminal: true,
+                    pending: false,
+                    next_actions: [],
+                  };
+                  v3State.currentProject = project;
+                  v3State.projectOutputs = [{
+                    job_id: "doc-review-job",
+                    output_id: "must-not-be-formal",
+                    project_id: project.project_id,
+                    thumbnail_url: reviewOutput.thumbnail_url,
+                    delivery_state: "final_delivery",
+                  }];
+                  v3State.projectReviewOutputs = [reviewOutput];
+                  v3State.currentJob = {
+                    job_id: "doc-review-job",
+                    status: "generated",
+                    candidates: [{
+                      job_id: "doc-review-job",
+                      candidate_id: "doc-review-candidate",
+                      output_id: reviewOutput.output_id,
+                    }],
+                    metadata: {
+                      final_delivery: { delivery_gate_applies: true, automatic_delivery_available: true },
+                      post_generation_review: { review_output_ids: [reviewOutput.output_id] },
+                    },
+                  };
+                  renderV3ResultBoard(v3State.currentJob);
+                }
+                """,
+                {"project": project, "reviewOutput": review_output},
+            )
+            finalization_board = page.locator("#v3ResultBoard")
+            assert "审核未闭环，图片保留在复核区" in finalization_board.inner_text()
+            assert finalization_board.locator(".v3-review-only-card img").count() == 1
+            assert finalization_board.locator("[data-v3-preview]").count() == 0
+            assert page.evaluate("v3State.resultItems.length") == 0
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("defer_job_response", [False, True], ids=["immediate-job", "deferred-job"])
+def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery(defer_job_response: bool) -> None:
+    project = _ecommerce_project()
+    project["job_ids"] = ["doc-fail-final-job", "doc-review-job"]
+    project["metadata"]["current_operation"] = {
+        "state": "review_withheld_finalization_failed",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [],
+    }
+    review_output = {
+        **_withheld_review_output(),
+        "job_id": "doc-review-job",
+        "candidate_id": "doc-review-candidate",
+        "asset_id": "doc-review-asset",
+        "thumbnail_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "preview_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    }
+    fail_final_output = {
+        **review_output,
+        "output_id": "fail-final-output",
+        "job_id": "doc-fail-final-job",
+        "candidate_id": "fail-final-candidate",
+        "delivery_state": "fail_final",
+        "review_reason": "Certified quality review failed.",
+    }
+    foreign_project_output = {**review_output, "output_id": "foreign-project-output", "candidate_id": "foreign-project-candidate", "project_id": "another-project", "title": "FOREIGN PROJECT IMAGE SHOULD NOT APPEAR"}
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS, expose_panes=False)
+            page.evaluate(
+                """
+                ({ project, reviewOutput, failFinalOutput, foreignProjectOutput, deferJobResponse }) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  mobileV3State.currentProject = project;
+                  mobileV3State.projects = [project];
+                  const reviewJob = {
+                    job_id: "doc-review-job",
+                    status: "generated",
+                    candidates: [{
+                      job_id: "doc-review-job",
+                      candidate_id: "doc-review-candidate",
+                      asset_id: "doc-review-asset",
+                      output_id: "withheld-review",
+                    }, {
+                      job_id: "doc-review-job",
+                      candidate_id: "candidate-only-review",
+                      output_id: "candidate-only-output",
+                      thumbnail_url: reviewOutput.thumbnail_url,
+                      preview_url: reviewOutput.preview_url,
+                      review_reason: "Candidate-only review reason.",
+                    }, {
+                      job_id: "doc-review-job",
+                      candidate_id: "cross-field-collision",
+                    }],
+                    metadata: {
+                      project_id: project.project_id,
+                      final_delivery: { delivery_gate_applies: true, automatic_delivery_available: false },
+                      post_generation_review: {
+                        review_output_ids: ["withheld-review", "fail-final-output", "candidate-only-output"],
+                        review_reason: "evidence_incomplete",
+                        evidence_state: "incomplete",
+                        quality_assessment: "needs_manual_review",
+                        quality_failure: false,
+                      },
+                    },
+                  };
+                  window.__doc263Jobs = { [reviewJob.job_id]: reviewJob };
+                  if (deferJobResponse) {
+                    window.__doc263JobGate = new Promise(resolve => { window.__doc263ReleaseJob = resolve; });
+                  }
+                  mobileV3State.currentJob = null;
+                  mobileV3State.outputs = [];
+                  mobileV3State.reviewOutputs = [];
+                  mobileV3State.outputsLoaded = false;
+                  window.__doc263ServerProject = project;
+                  window.__doc263OutputPayload = {
+                    items: [],
+                    review_items: [reviewOutput, failFinalOutput, foreignProjectOutput],
+                  };
+                  window.__reviewMergeCollisionCount = mergeMobileV3ReviewImageSources(
+                    [{ output_id: "cross-field-collision", job_id: "job-a" }],
+                    [{ candidate_id: "cross-field-collision", job_id: "job-a" }],
+                  ).length;
+                  openMobileV3ProjectDetail(project);
+                }
+                """,
+                {"project": project, "reviewOutput": review_output, "failFinalOutput": fail_final_output, "foreignProjectOutput": foreign_project_output, "deferJobResponse": defer_job_response},
+            )
+
+            output_grid = page.locator("#mobileV3OutputGrid")
+            page.wait_for_function(
+                "document.querySelector('#mobileV3LoadingLayer').hidden && document.body.dataset.mobileActiveSurface === 'v3-project-detail'"
+            )
+            if defer_job_response:
+                page.wait_for_function("window.__doc263RequestedJobId === 'doc-review-job'")
+                assert page.evaluate("mobileV3State.currentJob") is None
+                assert output_grid.locator("button[data-mobile-v3-gallery-preview='candidate-only-output']").count() == 0
+                page.evaluate("window.__doc263ReleaseJob()")
+            # The overlay only acknowledges the preview. Wait for the full Job
+            # to be applied and its candidate to be rendered by production code.
+            page.wait_for_function("""() =>
+                window.__doc263RequestedJobId === 'doc-review-job' &&
+                mobileV3State.currentJob?.job_id === 'doc-review-job' &&
+                mobileV3State.currentJob?.candidates?.some(item => item.output_id === 'candidate-only-output') &&
+                document.querySelector('#mobileV3OutputGrid button[data-mobile-v3-gallery-preview="candidate-only-output"]')
+            """)
+            assert page.locator("#mobileV3ProjectDetail").is_visible()
+            assert "图片保留在复核区" in output_grid.inner_text()
+            assert "审核证据需确认" in output_grid.inner_text()
+            assert "尚未证明图片质量不合格" in output_grid.inner_text()
+            assert "FOREIGN PROJECT IMAGE SHOULD NOT APPEAR" not in output_grid.inner_text()
+            assert output_grid.locator(".v3-mobile-output-card.review-only img").count() == 3
+            assert page.evaluate("window.__reviewMergeCollisionCount") == 2
+            # Gallery is a separate surface, not refreshed by detail loading.
+            # Exercise its renderer only after the authoritative data is applied.
+            page.evaluate("renderMobileV3ProjectGallery(mobileV3State.currentProject)")
+            gallery = page.locator("#mobileV3GalleryGrid")
+            assert gallery.locator("button.review-only img").count() == 2
+            badge_texts = gallery.locator(".v3-mobile-gallery-review-badge").all_text_contents()
+            assert len(badge_texts) == 2
+            assert all("复核图 · 非交付" in text for text in badge_texts)
+            assert gallery.locator("button.review-only img").first.get_attribute("alt") == "复核图 1"
+
+            candidate_only_button = output_grid.locator("button[data-mobile-v3-gallery-preview='candidate-only-output']")
+            assert candidate_only_button.is_visible()
+            candidate_only_button.click()
+            assert page.locator("#lightboxTitle").inner_text() == "复核图 · 非正式交付"
+            assert "Candidate-only review reason." in page.locator("#lightboxMeta").inner_text()
+            assert "仅供复核，不属于正式交付" in page.locator("#lightboxMeta").inner_text()
+
+            page.evaluate(
+                """
+                (project) => {
+                  mobileV3State.currentProject = project;
+                  mobileV3State.currentJob = null;
+                  mobileV3State.reviewOutputs = [];
+                  mobileV3State.outputs = [];
+                  mobileV3State.outputError = "503 Service Unavailable";
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                project,
+            )
+            empty_hold = page.locator("#mobileV3OutputGrid")
+            assert "复核图片暂时读取失败" in empty_hold.inner_text()
+            assert "还没有图片" not in empty_hold.inner_text()
+
+            page.evaluate(
+                """
+                (project) => {
+                  mobileV3State.outputError = "";
+                  document.querySelector("#mobileV3LoadingLayer").hidden = false;
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                project,
+            )
+            assert "正在读取复核图片" in page.locator("#mobileV3OutputGrid").inner_text()
+
+            page.evaluate(
+                """
+                (project) => {
+                  mobileV3State.outputError = "";
+                  document.querySelector("#mobileV3LoadingLayer").hidden = true;
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                project,
+            )
+            assert "当前没有可显示的复核图片" in page.locator("#mobileV3OutputGrid").inner_text()
+            assert "还没有图片" not in page.locator("#mobileV3OutputGrid").inner_text()
+
+            page.evaluate(
+                """
+                async ({ project, reviewOutput }) => {
+                  document.querySelector("#mobileV3LoadingLayer").hidden = true;
+                  window.__doc263OutputPayload = { items: [], review_items: [reviewOutput] };
+                  await loadMobileV3ProjectOutputs(project.project_id);
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                {"project": project, "reviewOutput": review_output},
+            )
+            recovered_grid = page.locator("#mobileV3OutputGrid")
+            assert "复核图片暂时读取失败" not in recovered_grid.inner_text()
+            assert recovered_grid.locator(".v3-mobile-output-card.review-only img").count() == 1
+
+            page.evaluate(
+                """
+                ({ project, failOutput }) => {
+                  project.metadata.current_operation.state = "failed_no_delivery";
+                  mobileV3State.currentProject = project;
+                  mobileV3State.currentJob = {
+                    job_id: "doc-fail-final-job",
+                    status: "generated",
+                    candidates: [{ job_id: "doc-fail-final-job", candidate_id: failOutput.candidate_id, output_id: failOutput.output_id }],
+                    metadata: {
+                      project_id: project.project_id,
+                      final_delivery: { delivery_gate_applies: true, automatic_delivery_available: false },
+                      post_generation_review: {
+                        quality_failure: true,
+                        hidden_output_ids: [failOutput.output_id],
+                        review_reason: "quality_failure",
+                        user_visible_summary: ["Certified quality review failed."],
+                      },
+                    },
+                  };
+                  mobileV3State.reviewOutputs = [failOutput];
+                  mobileV3State.outputs = [];
+                  renderMobileV3ProjectOutputs(project);
+                }
+                """,
+                {"project": project, "failOutput": fail_final_output},
+            )
+            failure_grid = page.locator("#mobileV3OutputGrid")
+            assert "视觉问题需处理" in failure_grid.inner_text()
+            assert "自动审核发现需要处理的视觉问题" in failure_grid.inner_text()
+            assert "审核证据不完整" not in failure_grid.inner_text()
+            assert "审核未闭环" not in failure_grid.inner_text()
+            assert failure_grid.locator(".v3-mobile-output-card.review-only img").count() == 1
+            assert failure_grid.locator(".v3-mobile-output-card:not(.review-only)").count() == 0
         finally:
             browser.close()
