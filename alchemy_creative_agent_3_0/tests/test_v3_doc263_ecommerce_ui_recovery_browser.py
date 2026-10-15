@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
 
@@ -37,6 +38,12 @@ window.fetch = async (input, init = {}) => {
     body = { items: [] };
   } else if (/\\/project-outputs/.test(url)) {
     body = window.__doc263OutputPayload || { items: [], review_items: [] };
+  } else if (method === "GET" && window.__doc263Jobs && /\\/jobs\\/[^/?]+$/.test(url)) {
+    const jobId = decodeURIComponent(url.split("/").pop());
+    if (!Object.hasOwn(window.__doc263Jobs, jobId)) throw new Error(`Unexpected fixture Job: ${jobId}`);
+    window.__doc263RequestedJobId = jobId;
+    if (window.__doc263JobGate) await window.__doc263JobGate;
+    body = window.__doc263Jobs[jobId];
   } else if (/\\/jobs\\/doc263-new-job/.test(url)) {
     body = { job_id: "doc263-new-job", status: "blocked", metadata: { project_outputs: [] } };
   } else if (/\\/projects\\/doc263-project(?:\\?view=summary)?$/.test(url)) {
@@ -50,7 +57,7 @@ window.fetch = async (input, init = {}) => {
 """
 
 
-def _browser_page(browser: Browser, *, html_path: Path, script_path: Path) -> Page:
+def _browser_page(browser: Browser, *, html_path: Path, script_path: Path, expose_panes: bool = True) -> Page:
     page = browser.new_page()
     page.set_content(_inline_shell(html_path))
     page.add_script_tag(content=script_path.read_text(encoding="utf-8"))
@@ -58,7 +65,8 @@ def _browser_page(browser: Browser, *, html_path: Path, script_path: Path) -> Pa
     # The normal product route opens just one surface at a time. The browser
     # contract drives the same controls directly, so make the test shell's
     # otherwise hidden project panes visible to real Playwright clicks.
-    page.evaluate("document.querySelectorAll('[hidden]').forEach((node) => { node.hidden = false; })")
+    if expose_panes:
+        page.evaluate("document.querySelectorAll('[hidden]').forEach((node) => { node.hidden = false; })")
     return page
 
 
@@ -596,8 +604,9 @@ def test_doc_review_only_generated_images_are_visible_without_delivery_promotion
             )
             failure_board = page.locator("#v3ResultBoard")
             assert "视觉问题需处理" in failure_board.inner_text()
-            assert "自动质量审查未通过" in failure_board.inner_text()
+            assert "自动审核发现需要处理的视觉问题" in failure_board.inner_text()
             assert "审核证据需确认" not in failure_board.inner_text()
+            assert "审核证据不完整" not in failure_board.inner_text()
             assert failure_board.locator(".v3-review-only-card img").count() == 1
             assert failure_board.locator(".v3-result-card:not(.v3-review-only-card) [data-v3-preview]").count() == 0
 
@@ -646,8 +655,10 @@ def test_doc_review_only_generated_images_are_visible_without_delivery_promotion
             browser.close()
 
 
-def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -> None:
+@pytest.mark.parametrize("defer_job_response", [False, True], ids=["immediate-job", "deferred-job"])
+def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery(defer_job_response: bool) -> None:
     project = _ecommerce_project()
+    project["job_ids"] = ["doc-fail-final-job", "doc-review-job"]
     project["metadata"]["current_operation"] = {
         "state": "review_withheld_finalization_failed",
         "terminal": True,
@@ -674,15 +685,15 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
-            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS, expose_panes=False)
             page.evaluate(
                 """
-                ({ project, reviewOutput, failFinalOutput, foreignProjectOutput }) => {
+                ({ project, reviewOutput, failFinalOutput, foreignProjectOutput, deferJobResponse }) => {
                   ensureMobileLayers();
                   setupMobileV3Adapter();
                   mobileV3State.currentProject = project;
                   mobileV3State.projects = [project];
-                  mobileV3State.currentJob = {
+                  const reviewJob = {
                     job_id: "doc-review-job",
                     status: "generated",
                     candidates: [{
@@ -702,6 +713,7 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
                       candidate_id: "cross-field-collision",
                     }],
                     metadata: {
+                      project_id: project.project_id,
                       final_delivery: { delivery_gate_applies: true, automatic_delivery_available: false },
                       post_generation_review: {
                         review_output_ids: ["withheld-review", "fail-final-output", "candidate-only-output"],
@@ -712,9 +724,14 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
                       },
                     },
                   };
+                  window.__doc263Jobs = { [reviewJob.job_id]: reviewJob };
+                  if (deferJobResponse) {
+                    window.__doc263JobGate = new Promise(resolve => { window.__doc263ReleaseJob = resolve; });
+                  }
+                  mobileV3State.currentJob = null;
                   mobileV3State.outputs = [];
-                  mobileV3State.reviewOutputs = [reviewOutput, failFinalOutput, foreignProjectOutput];
-                  mobileV3State.outputsLoaded = true;
+                  mobileV3State.reviewOutputs = [];
+                  mobileV3State.outputsLoaded = false;
                   window.__doc263ServerProject = project;
                   window.__doc263OutputPayload = {
                     items: [],
@@ -724,17 +741,29 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
                     [{ output_id: "cross-field-collision", job_id: "job-a" }],
                     [{ candidate_id: "cross-field-collision", job_id: "job-a" }],
                   ).length;
-                  renderMobileV3ProjectGallery(project);
                   openMobileV3ProjectDetail(project);
                 }
                 """,
-                {"project": project, "reviewOutput": review_output, "failFinalOutput": fail_final_output, "foreignProjectOutput": foreign_project_output},
+                {"project": project, "reviewOutput": review_output, "failFinalOutput": fail_final_output, "foreignProjectOutput": foreign_project_output, "deferJobResponse": defer_job_response},
             )
 
             output_grid = page.locator("#mobileV3OutputGrid")
             page.wait_for_function(
                 "document.querySelector('#mobileV3LoadingLayer').hidden && document.body.dataset.mobileActiveSurface === 'v3-project-detail'"
             )
+            if defer_job_response:
+                page.wait_for_function("window.__doc263RequestedJobId === 'doc-review-job'")
+                assert page.evaluate("mobileV3State.currentJob") is None
+                assert output_grid.locator("button[data-mobile-v3-gallery-preview='candidate-only-output']").count() == 0
+                page.evaluate("window.__doc263ReleaseJob()")
+            # The overlay only acknowledges the preview. Wait for the full Job
+            # to be applied and its candidate to be rendered by production code.
+            page.wait_for_function("""() =>
+                window.__doc263RequestedJobId === 'doc-review-job' &&
+                mobileV3State.currentJob?.job_id === 'doc-review-job' &&
+                mobileV3State.currentJob?.candidates?.some(item => item.output_id === 'candidate-only-output') &&
+                document.querySelector('#mobileV3OutputGrid button[data-mobile-v3-gallery-preview="candidate-only-output"]')
+            """)
             assert page.locator("#mobileV3ProjectDetail").is_visible()
             assert "图片保留在复核区" in output_grid.inner_text()
             assert "审核证据需确认" in output_grid.inner_text()
@@ -742,6 +771,9 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
             assert "FOREIGN PROJECT IMAGE SHOULD NOT APPEAR" not in output_grid.inner_text()
             assert output_grid.locator(".v3-mobile-output-card.review-only img").count() == 3
             assert page.evaluate("window.__reviewMergeCollisionCount") == 2
+            # Gallery is a separate surface, not refreshed by detail loading.
+            # Exercise its renderer only after the authoritative data is applied.
+            page.evaluate("renderMobileV3ProjectGallery(mobileV3State.currentProject)")
             gallery = page.locator("#mobileV3GalleryGrid")
             assert gallery.locator("button.review-only img").count() == 2
             badge_texts = gallery.locator(".v3-mobile-gallery-review-badge").all_text_contents()
@@ -749,7 +781,7 @@ def test_doc_mobile_review_only_images_survive_finalization_hold_and_gallery() -
             assert all("复核图 · 非交付" in text for text in badge_texts)
             assert gallery.locator("button.review-only img").first.get_attribute("alt") == "复核图 1"
 
-            candidate_only_button = output_grid.locator("button[data-mobile-v3-gallery-preview]").nth(2)
+            candidate_only_button = output_grid.locator("button[data-mobile-v3-gallery-preview='candidate-only-output']")
             assert candidate_only_button.is_visible()
             candidate_only_button.click()
             assert page.locator("#lightboxTitle").inner_text() == "复核图 · 非正式交付"

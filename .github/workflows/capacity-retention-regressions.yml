@@ -5,9 +5,11 @@ on:
     paths:
       - "src_skeleton/**"
       - "custom_media_agent_2_0/**"
+      - "alchemy_creative_agent_3_0/**"
       - "tests/**"
       - "docs/migrations/**"
       - "docs/history-read-scalability/**"
+      - "docs/v3-review-image-visibility/**"
       - "scripts/benchmark_history_reads.py"
       - "scripts/probe_browser_history_windows.mjs"
       - "scripts/prepare_v1_history_index.py"
@@ -30,6 +32,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  v3-review-export-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MEDIA_AGENT_MODE: mock
+      MEDIA_STORAGE_ROOT: ${{ runner.temp }}/v3-review-media
+      CODEX_AUTH_FILE: /tmp/nonexistent-v3-review-auth.json
+      CLAUDE_SETTINGS_FILE: /tmp/nonexistent-v3-review-claude.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated V3 contract dependencies
+        run: python -m pip install pytest==8.3.3 pydantic==2.13.4 Pillow==12.3.0 httpx==0.28.1 python-dotenv==1.2.2 playwright==1.62.0
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Verify export eligibility and real desktop/mobile review UI
+        run: >-
+          python -m pytest -q
+          alchemy_creative_agent_3_0/tests/test_v3_generic_export_review_gate.py
+          alchemy_creative_agent_3_0/tests/test_v3_doc263_ecommerce_ui_recovery_browser.py
+          --junitxml=${{ runner.temp }}/v3-review-acceptance.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v3-review-acceptance-${{ github.sha }}
+          path: ${{ runner.temp }}/v3-review-acceptance.xml
+          if-no-files-found: warn
+
   history-browser-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 10
