@@ -48,4 +48,10 @@ On Linux CI, Chromium installation uses `--with-deps`. The local tests exercise 
 
 ## Boundaries
 
+### CI definition follow-up
+
+The first pushed follow-up (`88f348ad`) did not start CI jobs: run `38692200870` failed at workflow validation with zero check runs. YAML parsing alone did not validate GitHub expression contexts. The new job-level environment used `runner.temp`, which is not available at that evaluation level. Correction: use `github.workspace/.ci-v3-review-media` for the job-level isolated data root (as the existing jobs do), and retain `runner.temp` only in step-level fields where it is available. This changes CI orchestration only. Do not count the rejected run as a product test failure or a passed CI receipt.
+
+Actionlint 1.7.12 reproduced the exact forbidden-context error before correction and passed afterward (shellcheck/pyflakes integrations disabled). The same independent auditor confirmed the proposed one-line correction against GitHub's context-availability contract and reached terminal completion; no product tests or code changed in this follow-up.
+
 DOT reported Doc260 retry evidence-plan failure on both PR and `569dffea`; this phase does not change that separate behavior or count it as passing. Track separately before claiming broader V3 acceptance. No real provider, VPS, production migration or live-browser production acceptance is part of this phase.
