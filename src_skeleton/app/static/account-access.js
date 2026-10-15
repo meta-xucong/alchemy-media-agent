@@ -64,6 +64,7 @@
         cache: "no-store",
         redirect: "error",
         signal: controller.signal,
+        priority: "high",
       });
       const payload = await response.json().catch(() => ({}));
     if (!response.ok) {

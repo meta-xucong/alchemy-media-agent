@@ -788,6 +788,9 @@ function clearHistoryMedia(root) {
   for (const image of root.querySelectorAll("img")) {
     // Invalidate a detached image's pending resolver as well as its current Blob.
     image.dataset.mediaLoadToken = "";
+    authenticatedImageLoadControllers.get(image)?.abort();
+    authenticatedImageLoadControllers.delete(image);
+    cancelDeferredAuthenticatedImage(image);
     releaseImageObjectUrl(image);
     image.onload = null;
     image.onerror = null;
@@ -1494,7 +1497,7 @@ function renderLabHistory(items) {
     const previewUrl = item.preview_url || thumbnailUrl;
     article.innerHTML = `
       <button class="v2-live-preview lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}" aria-label="展开图片">
-        <img alt="${escapeHtml(title)}" loading="eager" decoding="async" />
+        <img alt="${escapeHtml(title)}" loading="lazy" decoding="async" />
       </button>
       <div class="v2-history-meta lab-history-meta">
         <strong>${escapeHtml(title)}</strong>
@@ -12215,14 +12218,127 @@ function mediaUrlNeedsAuthenticatedFetch(url) {
   return allowedOrigins.has(parsed.origin);
 }
 
-async function resolveAuthenticatedMediaSource(url) {
+const protectedMediaQueue = [];
+const protectedMediaInflight = new Map();
+const authenticatedImageLoadControllers = new WeakMap();
+let protectedMediaActive = 0;
+const protectedMediaConcurrency = 2;
+const deferredAuthenticatedImages = new Map();
+let deferredAuthenticatedImageObserver = null;
+
+function protectedMediaAbortError() {
+  const error = new Error("Protected image load was cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function scheduleProtectedMediaFetches() {
+  while (protectedMediaActive < protectedMediaConcurrency && protectedMediaQueue.length) {
+    const entry = protectedMediaQueue.shift();
+    if (!entry || entry.waiters <= 0) {
+      if (entry) {
+        if (protectedMediaInflight.get(entry.key) === entry) protectedMediaInflight.delete(entry.key);
+        entry.reject(protectedMediaAbortError());
+      }
+      continue;
+    }
+    entry.started = true;
+    protectedMediaActive += 1;
+    void (async () => {
+      const response = await fetch(entry.url, {
+        credentials: "include",
+        headers: entry.token ? { Authorization: `Bearer ${entry.token}` } : undefined,
+        signal: entry.controller.signal,
+        priority: "low",
+      });
+      if (!response.ok) throw Object.assign(new Error(`Media request failed (${response.status})`), { status: response.status });
+      const blob = await response.blob();
+      if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) throw new Error("Media response did not contain an image.");
+      return blob;
+    })().then(entry.resolve, entry.reject).finally(() => {
+      protectedMediaActive = Math.max(0, protectedMediaActive - 1);
+      if (protectedMediaInflight.get(entry.key) === entry) protectedMediaInflight.delete(entry.key);
+      scheduleProtectedMediaFetches();
+    });
+  }
+}
+
+function fetchProtectedMediaBlob(url, signal) {
+  if (signal?.aborted) return Promise.reject(protectedMediaAbortError());
+  const token = getVeyraToken();
+  const key = JSON.stringify([url, token]);
+  let entry = protectedMediaInflight.get(key);
+  if (!entry) {
+    let resolveEntry;
+    let rejectEntry;
+    const promise = new Promise((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
+    promise.catch(() => {});
+    entry = { key, url, token, controller: new AbortController(), promise, resolve: resolveEntry, reject: rejectEntry, waiters: 0, started: false };
+    protectedMediaInflight.set(key, entry);
+    protectedMediaQueue.push(entry);
+  }
+  entry.waiters += 1;
+  scheduleProtectedMediaFetches();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const release = () => {
+      if (settled) return false;
+      settled = true;
+      entry.waiters = Math.max(0, entry.waiters - 1);
+      signal?.removeEventListener("abort", onAbort);
+      if (!entry.waiters) {
+        if (!entry.started) {
+          const index = protectedMediaQueue.indexOf(entry);
+          if (index >= 0) protectedMediaQueue.splice(index, 1);
+          if (protectedMediaInflight.get(key) === entry) protectedMediaInflight.delete(key);
+          entry.reject(protectedMediaAbortError());
+        } else {
+          entry.controller.abort();
+          if (protectedMediaInflight.get(key) === entry) protectedMediaInflight.delete(key);
+        }
+      }
+      return true;
+    };
+    const onAbort = () => { if (release()) reject(protectedMediaAbortError()); };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    entry.promise.then((blob) => { if (release()) resolve(blob); }, (error) => { if (release()) reject(error); });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+function cancelDeferredAuthenticatedImage(image) {
+  const pending = deferredAuthenticatedImages.get(image);
+  if (!pending) return;
+  deferredAuthenticatedImages.delete(image);
+  deferredAuthenticatedImageObserver?.unobserve(image);
+  pending.signal?.removeEventListener("abort", pending.onAbort);
+}
+
+function deferAuthenticatedImageUntilVisible(image, start, signal) {
+  if (signal?.aborted) return;
+  if (typeof IntersectionObserver !== "function") { start(); return; }
+  if (!deferredAuthenticatedImageObserver) {
+    deferredAuthenticatedImageObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const pending = deferredAuthenticatedImages.get(entry.target);
+        if (!pending) continue;
+        if (!entry.target.isConnected) { cancelDeferredAuthenticatedImage(entry.target); continue; }
+        if (!entry.isIntersecting && entry.intersectionRatio <= 0) continue;
+        cancelDeferredAuthenticatedImage(entry.target);
+        pending.start();
+      }
+    }, { rootMargin: "240px 0px" });
+  }
+  const onAbort = () => cancelDeferredAuthenticatedImage(image);
+  deferredAuthenticatedImages.set(image, { start, signal, onAbort });
+  signal?.addEventListener("abort", onAbort, { once: true });
+  deferredAuthenticatedImageObserver.observe(image);
+}
+
+async function resolveAuthenticatedMediaSource(url, { signal = null } = {}) {
   const value = String(url || "").trim();
   if (!mediaUrlNeedsAuthenticatedFetch(value)) return { url: value, objectUrl: false };
-  const token = getVeyraToken();
-  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-  const response = await fetch(value, { credentials: "include", headers });
-  if (!response.ok) throw new Error(`Media request failed (${response.status})`);
-  const blob = await response.blob();
+  const blob = await fetchProtectedMediaBlob(value, signal);
   if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) {
     throw new Error("Media response did not contain an image.");
   }
@@ -12237,6 +12353,9 @@ function releaseImageObjectUrl(image) {
 
 function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用", shouldContinue = () => true } = {}) {
   if (!image || !shouldContinue()) return;
+  authenticatedImageLoadControllers.get(image)?.abort();
+  authenticatedImageLoadControllers.delete(image);
+  cancelDeferredAuthenticatedImage(image);
   const urls = uniqueNonEmpty(candidates || []);
   const loadToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   image.dataset.mediaLoadToken = loadToken;
@@ -12248,12 +12367,22 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
     image.classList.add("image-load-missing");
     return;
   }
+  const imageController = new AbortController();
+  const signal = imageController.signal;
+  authenticatedImageLoadControllers.set(image, imageController);
+  const deferAuthenticated = image.loading === "lazy";
   image.classList.remove("image-load-missing", "image-load-failed");
   image.dataset.fallbackUrls = JSON.stringify(urls);
-  image.onload = () => image.classList.remove("image-load-failed", "image-load-missing");
+  image.onload = () => {
+    image.classList.remove("image-load-failed", "image-load-missing");
+    authenticatedImageLoadControllers.get(image)?.abort();
+    authenticatedImageLoadControllers.delete(image);
+  };
   const fail = () => {
     if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) return;
     image.onerror = null;
+    authenticatedImageLoadControllers.get(image)?.abort();
+    authenticatedImageLoadControllers.delete(image);
     releaseImageObjectUrl(image);
     image.classList.add("image-load-failed");
   };
@@ -12266,7 +12395,7 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
     }
     image.dataset.fallbackIndex = String(index);
     try {
-      const resolved = await resolveAuthenticatedMediaSource(candidate);
+      const resolved = await resolveAuthenticatedMediaSource(candidate, { signal });
       if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) {
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
         return;
@@ -12275,6 +12404,7 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
       if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
       image.src = resolved.url;
     } catch {
+      if (signal?.aborted) return;
       await loadCandidate(index + 1);
     }
   };
@@ -12284,6 +12414,10 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
   // DOM, so this branch cannot expose a raw protected URL.
   if (!mediaUrlNeedsAuthenticatedFetch(urls[0])) {
     image.src = urls[0];
+    return;
+  }
+  if (deferAuthenticated) {
+    deferAuthenticatedImageUntilVisible(image, () => { void loadCandidate(0); }, signal);
     return;
   }
   void loadCandidate(0);
@@ -12336,7 +12470,7 @@ function bindProgressiveGridImage(image, { thumbnailUrl = "", previewUrl = "", e
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   image.dataset.progressiveGridToken = token;
   bindImageWithFallback(image, uniqueNonEmpty([thumbnail, preview]), { emptyAlt });
-  if (!preview || preview === thumbnail) return;
+  if (!preview || preview === thumbnail || image.loading === "lazy") return;
   image.classList.add("is-loading-full");
   const preloader = new Image();
   preloader.decoding = "async";
@@ -12852,6 +12986,7 @@ function renderAccountEmpty(container, message, actionLabel = "", onAction = nul
 function renderVeyraAccountHistory(items = []) {
   if (!accountSectionVisible(els.veyraAccountHistoryGrid)) return;
   if (!els.veyraAccountHistoryGrid) return;
+  clearHistoryMedia(els.veyraAccountHistoryGrid);
   els.veyraAccountHistoryGrid.innerHTML = "";
   if (!hasVeyraClientSession()) {
     renderAccountEmpty(els.veyraAccountHistoryGrid, "登录后这里会按账户展示你自己的生图记录。");
@@ -12963,6 +13098,7 @@ async function buildVeyraTemplateHistory(v2Items = [], { enrich = true, shouldCo
 function renderVeyraTemplateHistory(items = []) {
   if (!accountSectionVisible(els.veyraTemplateHistoryList)) return;
   if (!els.veyraTemplateHistoryList) return;
+  clearHistoryMedia(els.veyraTemplateHistoryList);
   els.veyraTemplateHistoryList.innerHTML = "";
   if (!hasVeyraClientSession()) {
     renderAccountEmpty(els.veyraTemplateHistoryList, "登录后这里会展示 V2.0 曾经使用过的模板。");
@@ -14431,10 +14567,10 @@ function renderFavoritePicker() {
     const preview = document.createElement("span");
     preview.className = "favorite-picker-preview";
     const image = document.createElement("img");
-    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.favoritePickerGrid, true) });
     image.alt = `星标图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
+    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.favoritePickerGrid, true) });
     preview.appendChild(image);
     const meta = document.createElement("div");
     meta.className = "favorite-picker-meta";
@@ -14523,10 +14659,10 @@ function renderRevisionSelection() {
     preview.innerHTML = "";
     if (selected?.imageUrl) {
       const image = document.createElement("img");
-      bindImageWithFallback(image, [selected.imageUrl], { emptyAlt: image.alt });
       image.alt = selected.title || "继续修改参考图";
       image.loading = "lazy";
       image.decoding = "async";
+      bindImageWithFallback(image, [selected.imageUrl], { emptyAlt: image.alt });
       preview.appendChild(image);
     } else {
       const empty = document.createElement("span");

@@ -7,6 +7,18 @@ const source = readFileSync(
   new URL("../src_skeleton/app/static/app.js", import.meta.url),
   "utf8",
 );
+const mobileSource = readFileSync(
+  new URL("../src_skeleton/app/mobile_static/mobile.js", import.meta.url),
+  "utf8",
+);
+const apiAccessSource = readFileSync(
+  new URL("../src_skeleton/app/static/api-access.js", import.meta.url),
+  "utf8",
+);
+const accountAccessSource = readFileSync(
+  new URL("../src_skeleton/app/static/account-access.js", import.meta.url),
+  "utf8",
+);
 
 function extractFunction(name, nextMarker) {
   const start = source.indexOf(`function ${name}(`);
@@ -16,6 +28,13 @@ function extractFunction(name, nextMarker) {
   assert.ok(functionStart >= 0 && end > functionStart, `${name} function must be present`);
   return source.slice(functionStart, end);
 }
+
+test("API/MCP account requests are explicitly prioritized over media fetches", () => {
+  assert.match(apiAccessSource, /priority:\s*"high"/);
+  assert.match(accountAccessSource, /priority:\s*"high"/);
+  assert.match(source, /priority:\s*"low"/);
+  assert.match(mobileSource, /priority:\s*"low"/);
+});
 
 test("job output projection signature ignores progress-only changes", () => {
   const context = {};
@@ -272,6 +291,116 @@ test("V3 authenticated image fetch waits for intersection and cancels offscreen 
   observers[0].intersect(cancelled);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(fetchCount, 1);
+});
+
+test("desktop lazy protected history images wait for visibility and abort when the list is cleared", async () => {
+  const start = source.indexOf("const v3DeferredImageLoads = new Map();");
+  const end = source.indexOf("function bindProgressiveLightboxImage", start);
+  const cleanupStart = source.indexOf("function clearHistoryMedia(");
+  const cleanupEnd = source.indexOf("\nfunction historyWindowLabel", cleanupStart);
+  assert.ok(start >= 0 && end > start && cleanupEnd > cleanupStart);
+  const imageSource = `${source.slice(start, end)}\n${source.slice(cleanupStart, cleanupEnd)}`;
+  let observer;
+  class MockIntersectionObserver {
+    constructor(callback) { this.callback = callback; observer = this; }
+    observe(image) { this.image = image; }
+    unobserve() { this.image = null; }
+    intersect(image) { this.callback([{ target: image, isIntersecting: true, intersectionRatio: 1 }]); }
+  }
+  let fetchSignal = null;
+  const context = {
+    Map, WeakMap, AbortController, IntersectionObserver: MockIntersectionObserver,
+    Date, Math, URL, uniqueNonEmpty: (values) => [...new Set(values.filter(Boolean))],
+    mediaUrlNeedsAuthenticatedFetch: () => true,
+    releaseImageObjectUrl: () => {},
+    resolveAuthenticatedMediaSource: (_url, options) => {
+      fetchSignal = options.signal;
+      return new Promise(() => {});
+    },
+    v3State: {}, v3ProjectDetailSignal: () => undefined,
+  };
+  vm.runInNewContext(imageSource, context);
+  const image = {
+    dataset: {}, loading: "lazy", isConnected: true,
+    classList: { add() {}, remove() {} },
+    removeAttribute() { this.src = ""; },
+  };
+  context.bindImageWithFallback(image, ["/api/v2/image/history/out_1/thumbnail"]);
+  assert.equal(fetchSignal, null, "lazy protected media must not fetch before intersection");
+  observer.intersect(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(fetchSignal);
+  const root = { querySelectorAll: () => [image], innerHTML: "" };
+  context.clearHistoryMedia(root);
+  assert.equal(fetchSignal.aborted, true, "clearing a history window must cancel its active image request");
+});
+
+test("mobile protected media queue deduplicates requests and caps active fetches at two", async () => {
+  const start = mobileSource.indexOf("const protectedMediaQueue = [];");
+  const end = mobileSource.indexOf("function cancelDeferredAuthenticatedImage", start);
+  assert.ok(start >= 0 && end > start, "mobile protected media scheduler must be present");
+  let active = 0;
+  let peak = 0;
+  const fetches = new Map();
+  const context = {
+    Map, WeakMap, AbortController, Promise, Error, getVeyraToken: () => "test-token",
+    fetch: async (url) => {
+      fetches.set(url, Number(fetches.get(url) || 0) + 1);
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return { ok: true, blob: async () => ({ size: 1, type: "image/png" }) };
+    },
+  };
+  vm.runInNewContext(mobileSource.slice(start, end), context);
+  const blobs = await Promise.all([
+    context.fetchProtectedMediaBlob("/api/v2/media/a", null),
+    context.fetchProtectedMediaBlob("/api/v2/media/a", null),
+    context.fetchProtectedMediaBlob("/api/v2/media/b", null),
+    context.fetchProtectedMediaBlob("/api/v2/media/c", null),
+  ]);
+  assert.equal(blobs.length, 4);
+  assert.equal(fetches.get("/api/v2/media/a"), 1);
+  assert.equal(peak, 2);
+});
+
+test("mobile lazy protected history images defer until visible and cancel when cleared", async () => {
+  const start = mobileSource.indexOf("const protectedMediaQueue = [];");
+  const end = mobileSource.indexOf("function bindProgressiveLightboxImage", start);
+  const cleanupStart = mobileSource.indexOf("function clearHistoryMedia(");
+  const cleanupEnd = mobileSource.indexOf("\nfunction historyWindowLabel", cleanupStart);
+  assert.ok(start >= 0 && end > start && cleanupEnd > cleanupStart);
+  const imageSource = `${mobileSource.slice(start, end)}\n${mobileSource.slice(cleanupStart, cleanupEnd)}`;
+  let observer;
+  class MockIntersectionObserver {
+    constructor(callback) { this.callback = callback; observer = this; }
+    observe(image) { this.image = image; }
+    unobserve() { this.image = null; }
+    intersect(image) { this.callback([{ target: image, isIntersecting: true, intersectionRatio: 1 }]); }
+  }
+  let fetchSignal = null;
+  const context = {
+    Map, WeakMap, AbortController, IntersectionObserver: MockIntersectionObserver,
+    Date, Math, URL, uniqueNonEmpty: (values) => [...new Set(values.filter(Boolean))],
+    mediaUrlNeedsAuthenticatedFetch: () => true,
+    releaseImageObjectUrl: () => {},
+    fetch: (_url, options) => { fetchSignal = options.signal; return new Promise(() => {}); },
+    getVeyraToken: () => "test-token",
+  };
+  vm.runInNewContext(imageSource, context);
+  const image = {
+    dataset: {}, loading: "lazy", isConnected: true,
+    classList: { add() {}, remove() {} },
+    removeAttribute() { this.src = ""; },
+  };
+  context.bindImageWithFallback(image, ["/api/v2/image/history/out_1/thumbnail"]);
+  assert.equal(fetchSignal, null, "lazy protected media must not fetch before intersection");
+  observer.intersect(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(fetchSignal);
+  context.clearHistoryMedia({ querySelectorAll: () => [image], innerHTML: "" });
+  assert.equal(fetchSignal.aborted, true);
 });
 
 test("V3 deferred image teardown releases disconnected image references and subscriptions", () => {

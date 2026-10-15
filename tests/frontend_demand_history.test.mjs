@@ -186,7 +186,7 @@ function createHarness(shell, { active = "image", ticket = false, respond } = {}
     return {};
   };
   const context = vm.createContext({
-    console: { warn() {}, error() {} }, URL, URLSearchParams, AbortController,
+    console: { warn() {}, error() {} }, URL, URLSearchParams, AbortController, WeakMap,
     setTimeout, clearTimeout,
     document, els, activeTabName: active, accountReturnTabName: "image", mobileHistoryToken: 0,
     window: {
@@ -204,6 +204,8 @@ function createHarness(shell, { active = "image", ticket = false, respond } = {}
     v2State: { history: [], historyTotal: 0, historyRenderLimit: 24, historyFavoritesOnly: false, historyLoadingMore: false, templateDetailCache: {}, loaded: false },
     veyraState: { account: { user: { user_id: "owner", balance: 10 } }, history: [], usage: [], usedTemplates: [] },
     labState: { history: [] }, v3State: {},
+    authenticatedImageLoadControllers: new WeakMap(),
+    cancelV3DeferredImageLoad() {}, cancelDeferredAuthenticatedImage() {},
     pendingModuleRouteStorageKey: "pending-route", veyraAccountStorageKey: "account",
     veyraTokenStorageKey: "alchemy_veyra_access_token",
     request: (path, options) => request("v1", path, options),

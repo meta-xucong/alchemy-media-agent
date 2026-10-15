@@ -28,7 +28,7 @@
     if (token) headers.Authorization = `Bearer ${token}`;
     if (options.method && options.method !== "GET") { headers["Content-Type"] = "application/json"; headers["X-Alchemy-UI"] = "api-access"; }
     try {
-      const response = await fetch(path, { ...options, headers, signal: controller.signal, credentials: "same-origin", cache: "no-store", redirect: "error" });
+      const response = await fetch(path, { ...options, headers, signal: controller.signal, credentials: "same-origin", cache: "no-store", redirect: "error", priority: "high" });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const error = new Error(payload.detail?.code || payload.detail?.error_code || "request_failed");

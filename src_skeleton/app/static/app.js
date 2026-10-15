@@ -1134,6 +1134,9 @@ function clearHistoryMedia(root) {
   for (const image of root.querySelectorAll("img")) {
     // Invalidate a detached image's pending resolver as well as its current Blob.
     image.dataset.mediaLoadToken = "";
+    authenticatedImageLoadControllers.get(image)?.abort();
+    authenticatedImageLoadControllers.delete(image);
+    cancelV3DeferredImageLoad(image);
     releaseImageObjectUrl(image);
     image.onload = null;
     image.onerror = null;
@@ -2008,7 +2011,7 @@ function renderLabHistory(items) {
     const previewUrl = item.preview_url || thumbnailUrl;
     article.innerHTML = `
       <button class="v2-live-preview lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}" aria-label="展开图片">
-        <img alt="${escapeHtml(title)}" loading="eager" decoding="async" />
+        <img alt="${escapeHtml(title)}" loading="lazy" decoding="async" />
       </button>
       <div class="v2-history-meta lab-history-meta">
         <strong>${escapeHtml(title)}</strong>
@@ -17141,6 +17144,7 @@ function scheduleV3ProtectedMediaFetches() {
         credentials: "include",
         headers: entry.token ? { Authorization: `Bearer ${entry.token}` } : undefined,
         signal: entry.controller.signal,
+        priority: "low",
       });
       if (!response.ok) {
         const error = new Error(`Media request failed (${response.status})`);
@@ -17223,7 +17227,7 @@ function fetchV3ProtectedMediaBlob(url, signal) {
   });
 }
 
-async function resolveAuthenticatedMediaSource(url, { signal = null, v3Queued = false } = {}) {
+async function resolveAuthenticatedMediaSource(url, { signal = null, v3Queued = true } = {}) {
   const value = String(url || "").trim();
   if (!mediaUrlNeedsAuthenticatedFetch(value)) return { url: value, objectUrl: false };
   const token = getVeyraToken();
@@ -17254,6 +17258,7 @@ function releaseImageObjectUrl(image) {
 
 const v3DeferredImageLoads = new Map();
 const v3ImageBindingStates = new WeakMap();
+const authenticatedImageLoadControllers = new WeakMap();
 let v3DeferredImageObserver = null;
 
 function cancelV3DeferredImageLoad(image) {
@@ -17271,6 +17276,8 @@ function releaseV3ImageBindingsWithin(root) {
   for (const image of images) {
     v3ImageBindingStates.get(image)?.cleanup();
     v3ImageBindingStates.delete(image);
+    authenticatedImageLoadControllers.get(image)?.abort();
+    authenticatedImageLoadControllers.delete(image);
     cancelV3DeferredImageLoad(image);
     releaseImageObjectUrl(image);
     image.onload = null;
@@ -17308,9 +17315,11 @@ function deferV3ImageUntilVisible(image, start, signal) {
 function bindImageWithFallback(
   image,
   candidates,
-  { emptyAlt = "图片暂不可用", onExhausted = null, signal = null, deferAuthenticated = false, v3Queued = false, shouldContinue = () => true } = {},
+  { emptyAlt = "图片暂不可用", onExhausted = null, signal = null, deferAuthenticated = null, v3Queued = true, shouldContinue = () => true } = {},
 ) {
   if (!image || !shouldContinue()) return;
+  authenticatedImageLoadControllers.get(image)?.abort();
+  authenticatedImageLoadControllers.delete(image);
   cancelV3DeferredImageLoad(image);
   const urls = uniqueNonEmpty(candidates || []);
   const loadToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -17324,10 +17333,16 @@ function bindImageWithFallback(
     onExhausted?.();
     return;
   }
+  const imageController = signal ? null : new AbortController();
+  const effectiveSignal = signal || imageController.signal;
+  if (imageController) authenticatedImageLoadControllers.set(image, imageController);
+  const shouldDeferAuthenticated = deferAuthenticated ?? image.loading === "lazy";
   image.classList.remove("image-load-missing", "image-load-failed");
   image.dataset.fallbackUrls = JSON.stringify(urls);
   image.onload = () => {
     image.classList.remove("image-load-failed", "image-load-missing");
+    authenticatedImageLoadControllers.get(image)?.abort();
+    authenticatedImageLoadControllers.delete(image);
   };
   const fail = () => {
     if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) return;
@@ -17345,7 +17360,7 @@ function bindImageWithFallback(
     }
     image.dataset.fallbackIndex = String(index);
     try {
-      const resolved = await resolveAuthenticatedMediaSource(candidate, { signal, v3Queued });
+      const resolved = await resolveAuthenticatedMediaSource(candidate, { signal: effectiveSignal, v3Queued });
       if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) {
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
         return;
@@ -17354,7 +17369,7 @@ function bindImageWithFallback(
       if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
       image.src = resolved.url;
     } catch {
-      if (signal?.aborted) return;
+      if (effectiveSignal?.aborted) return;
       await loadCandidate(index + 1);
     }
   };
@@ -17368,8 +17383,8 @@ function bindImageWithFallback(
     image.src = urls[0];
     return;
   }
-  if (deferAuthenticated && image.loading !== "eager") {
-    deferV3ImageUntilVisible(image, () => { void loadCandidate(0); }, signal);
+  if (shouldDeferAuthenticated && image.loading !== "eager") {
+    deferV3ImageUntilVisible(image, () => { void loadCandidate(0); }, effectiveSignal);
     return;
   }
   void loadCandidate(0);
@@ -17452,7 +17467,7 @@ function bindProgressiveGridImage(image, { thumbnailUrl = "", previewUrl = "", e
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   image.dataset.progressiveGridToken = token;
   bindImageWithFallback(image, uniqueNonEmpty([thumbnail, preview]), { emptyAlt });
-  if (!preview || preview === thumbnail) return;
+  if (!preview || preview === thumbnail || image.loading === "lazy") return;
   image.classList.add("is-loading-full");
   const preloader = new Image();
   preloader.decoding = "async";
@@ -17916,6 +17931,7 @@ function renderAccountEmpty(container, message, actionLabel = "", onAction = nul
 function renderVeyraAccountHistory(items = []) {
   if (!accountSectionVisible(els.veyraAccountHistoryGrid)) return;
   if (!els.veyraAccountHistoryGrid) return;
+  clearHistoryMedia(els.veyraAccountHistoryGrid);
   els.veyraAccountHistoryGrid.innerHTML = "";
   if (!hasVeyraClientSession()) {
     renderAccountEmpty(els.veyraAccountHistoryGrid, "登录后这里会按账户展示你自己的生图记录。");
@@ -18024,6 +18040,7 @@ async function buildVeyraTemplateHistory(v2Items = [], { enrich = true, shouldCo
 function renderVeyraTemplateHistory(items = []) {
   if (!accountSectionVisible(els.veyraTemplateHistoryList)) return;
   if (!els.veyraTemplateHistoryList) return;
+  clearHistoryMedia(els.veyraTemplateHistoryList);
   els.veyraTemplateHistoryList.innerHTML = "";
   if (!hasVeyraClientSession()) {
     renderAccountEmpty(els.veyraTemplateHistoryList, "登录后这里会展示 V2.0 曾经使用过的模板。");
@@ -18042,10 +18059,10 @@ function renderVeyraTemplateHistory(items = []) {
     if (previewUrl) {
       preview.type = "button";
       const image = document.createElement("img");
-    bindImageWithFallback(image, [previewUrl], { emptyAlt: "模板预览暂不可用", shouldContinue: accountMediaDemand(els.veyraTemplateHistoryList) });
       image.alt = item.title || `历史使用模板 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
+      bindImageWithFallback(image, [previewUrl], { emptyAlt: "模板预览暂不可用", shouldContinue: accountMediaDemand(els.veyraTemplateHistoryList) });
       preview.appendChild(image);
       preview.addEventListener("click", () => openV2CasePreview(item.template || item, v2CasePreviewUrl(item.preview_url, item.index_version)));
     } else {
