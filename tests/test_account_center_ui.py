@@ -78,12 +78,14 @@ def test_account_center_opens_and_contains_api_mcp(native, account_browser, mobi
         secret = page.locator("#accountAccessSecretInput").input_value()
         assert secret.startswith("alk_")
         page.locator("[data-account-access-copy-api]").click()
+        expect(page.locator("[data-account-access-copy-api]")).to_have_text("已复制 ✓")
         api_example = page.locator("#accountAccessManualCopy").input_value()
         assert "/api/v3/creative-agent/projects" in api_example
         assert "/jobs" in api_example
         expect(page.locator("#accountAccessSecretFeedback")).to_have_text("已复制到剪贴板。")
         assert "/api/v3/creative-agent/projects" in page.evaluate("window.__clipboardValue")
         page.locator("[data-account-access-copy-mcp]").click()
+        expect(page.locator("[data-account-access-copy-mcp]")).to_have_text("已复制 ✓")
         mcp = json.loads(page.locator("#accountAccessManualCopy").input_value())
         assert mcp["env"]["ALCHEMY_PRODUCT_API_BASE_URL"] == "https://ui.test"
         assert mcp["env"]["ALCHEMY_PRODUCT_SESSION_TOKEN"] == secret

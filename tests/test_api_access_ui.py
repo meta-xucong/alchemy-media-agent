@@ -57,10 +57,12 @@ def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,wid
         assert re.fullmatch(r"alk_(?:v3|live)_[A-Za-z0-9_-]{43}", secret)
         assert len([x for x in calls if x==("POST","/api/access/keys")])==1
         page.click("#copySecret")
+        expect(page.locator("#copySecret")).to_have_text("已复制 ✓")
         assert page.locator("#manualCopy").input_value()==secret
         assert page.evaluate("window.__clipboardValue")==secret
         page.locator("#secretDialog details summary").click()
         page.click("#copyApi")
+        expect(page.locator("#copyApi")).to_have_text("已复制 ✓")
         api_example=page.locator("#manualCopy").input_value()
         assert "创建项目" in api_example
         assert "/api/v3/creative-agent/projects" in api_example
@@ -69,6 +71,7 @@ def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,wid
         assert "/export" in api_example
         assert "创建项目" in page.evaluate("window.__clipboardValue")
         page.click("#copyMcp")
+        expect(page.locator("#copyMcp")).to_have_text("已复制 ✓")
         config=json.loads(page.locator("#manualCopy").input_value())
         assert config["env"]["ALCHEMY_PRODUCT_SESSION_TOKEN"]==secret
         assert config["env"]["ALCHEMY_PRODUCT_API_BASE_URL"]=="https://ui.test"

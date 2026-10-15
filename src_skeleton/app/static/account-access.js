@@ -16,6 +16,7 @@
     revokeTarget: null,
     epoch: 0,
   };
+  const copyFeedbackStates = new WeakMap();
   const messages = {
     api_key_invalid: "密钥已过期、停用或不正确，请创建新密钥。",
     account_login_not_configured: "当前服务尚未启用原账户登录，请联系管理员。",
@@ -215,7 +216,25 @@
     }
   }
 
-  async function selectForCopy(value, message = "") {
+  function showCopyFeedback(button, copied) {
+    if (!button) return;
+    let feedbackState = copyFeedbackStates.get(button);
+    if (!feedbackState) {
+      feedbackState = { defaultText: button.textContent.trim(), defaultAriaLabel: button.getAttribute("aria-label"), timer: 0 };
+      copyFeedbackStates.set(button, feedbackState);
+    }
+    if (feedbackState.timer) window.clearTimeout(feedbackState.timer);
+    button.textContent = copied ? "已复制 ✓" : "请手动复制";
+    button.setAttribute("aria-label", copied ? feedbackState.defaultText + "，已复制到剪贴板" : feedbackState.defaultText + "，请手动复制");
+    feedbackState.timer = window.setTimeout(() => {
+      button.textContent = feedbackState.defaultText;
+      if (feedbackState.defaultAriaLabel === null) button.removeAttribute("aria-label");
+      else button.setAttribute("aria-label", feedbackState.defaultAriaLabel);
+      copyFeedbackStates.delete(button);
+    }, 1800);
+  }
+
+  async function selectForCopy(value, button, message = "") {
     if (!value) return;
     const manual = $("#accountAccessManualCopy");
     const feedback = $("#accountAccessSecretFeedback");
@@ -226,6 +245,7 @@
       manual.value = value;
       manual.hidden = true;
       if (feedback) feedback.textContent = message || "已复制到剪贴板。";
+      showCopyFeedback(button, true);
       return;
     } catch {
       // Preserve a keyboard/touch selection fallback when clipboard access is
@@ -236,6 +256,7 @@
     manual.focus();
     manual.select();
     if (feedback) feedback.textContent = "浏览器未授权直接复制，内容已选中；请使用系统复制操作。";
+    showCopyFeedback(button, false);
   }
 
   function apiGenerationExample(origin, apiKey) {
@@ -340,10 +361,10 @@ for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${proje
     $("#accountAccessSecretDialog")?.addEventListener("cancel", clearSecret);
     $("#accountAccessSecretDialog")?.addEventListener("close", clearSecret);
     $("#accountAccessRevokeDialog")?.addEventListener("close", () => { state.revokeTarget = null; });
-    $("[data-account-access-copy-secret]")?.addEventListener("click", () => selectForCopy(state.secret));
-    $("[data-account-access-copy-api]")?.addEventListener("click", () => selectForCopy(apiGenerationExample(location.origin, state.secret)));
-    $("[data-account-access-copy-mcp]")?.addEventListener("click", () => selectForCopy(mcpConfig(location.origin, state.secret)));
-    $("[data-account-access-copy-address]")?.addEventListener("click", () => selectForCopy(location.origin, "服务地址已复制到剪贴板。"));
+    $("[data-account-access-copy-secret]")?.addEventListener("click", (event) => selectForCopy(state.secret, event.currentTarget));
+    $("[data-account-access-copy-api]")?.addEventListener("click", (event) => selectForCopy(apiGenerationExample(location.origin, state.secret), event.currentTarget));
+    $("[data-account-access-copy-mcp]")?.addEventListener("click", (event) => selectForCopy(mcpConfig(location.origin, state.secret), event.currentTarget));
+    $("[data-account-access-copy-address]")?.addEventListener("click", (event) => selectForCopy(location.origin, event.currentTarget, "服务地址已复制到剪贴板。"));
     document.addEventListener("click", (event) => {
       const viewButton = event.target.closest("[data-account-view-target]");
       if (viewButton && accountShell().contains(viewButton)) {

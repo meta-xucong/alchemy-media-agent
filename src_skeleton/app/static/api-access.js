@@ -8,6 +8,7 @@
   const admin = location.pathname === "/admin/api-access";
   let sessionEpoch = 0;
   let secret = "", offset = 0, query = "", ready = false, creating = false, loading = false, activeCount = 0, revokeTarget = null;
+  const copyFeedbackStates = new WeakMap();
   const messages = {
     api_key_invalid: "密钥已过期、停用或不正确，请创建新密钥。",
     account_login_not_configured: "当前服务尚未启用原账户登录。请联系管理员，不要填写模型供应商密钥。",
@@ -132,7 +133,24 @@
     } catch (error) { $("revokeFeedback").textContent = friendly(error) + (error.unknown ? " 请刷新确认是否已停用。" : ""); }
     finally { $("confirmRevoke").disabled = false; }
   }
-  async function selectForCopy(value) {
+  function showCopyFeedback(button, copied) {
+    if (!button) return;
+    let feedbackState = copyFeedbackStates.get(button);
+    if (!feedbackState) {
+      feedbackState = { defaultText: button.textContent.trim(), defaultAriaLabel: button.getAttribute("aria-label"), timer: 0 };
+      copyFeedbackStates.set(button, feedbackState);
+    }
+    if (feedbackState.timer) window.clearTimeout(feedbackState.timer);
+    button.textContent = copied ? "已复制 ✓" : "请手动复制";
+    button.setAttribute("aria-label", copied ? feedbackState.defaultText + "，已复制到剪贴板" : feedbackState.defaultText + "，请手动复制");
+    feedbackState.timer = window.setTimeout(() => {
+      button.textContent = feedbackState.defaultText;
+      if (feedbackState.defaultAriaLabel === null) button.removeAttribute("aria-label");
+      else button.setAttribute("aria-label", feedbackState.defaultAriaLabel);
+      copyFeedbackStates.delete(button);
+    }, 1800);
+  }
+  async function selectForCopy(value, button) {
     if (!value) return;
     const field = $("manualCopy"); field.value = value; field.hidden = false;
     try {
@@ -140,10 +158,12 @@
       await navigator.clipboard.writeText(value);
       field.hidden = true;
       $("secretFeedback").textContent = "已复制到剪贴板。";
+      showCopyFeedback(button, true);
     } catch {
       field.hidden = false;
       field.focus(); field.select();
       $("secretFeedback").textContent = "浏览器未授权直接复制，内容已选中；请使用系统复制操作。";
+      showCopyFeedback(button, false);
     }
   }
   function apiGenerationExample(origin, apiKey) {
@@ -242,15 +262,17 @@ for (;;) {
     $("cancelRevoke").addEventListener("click", () => $("revokeDialog").close());
     $("revokeDialog").addEventListener("close", () => { revokeTarget = null; });
     $("confirmRevoke").addEventListener("click", revoke);
-    $("copySecret").addEventListener("click", () => selectForCopy(secret));
-    $("copyApi").addEventListener("click", () => { if (secret) selectForCopy(apiGenerationExample(location.origin, secret)); });
-    $("copyMcp").addEventListener("click", () => { if (secret) selectForCopy(JSON.stringify({ env: { ALCHEMY_PRODUCT_API_BASE_URL: location.origin, ALCHEMY_PRODUCT_SESSION_TOKEN: secret } }, null, 2)); });
-    $("copyAddress").addEventListener("click", async () => {
+    $("copySecret").addEventListener("click", (event) => selectForCopy(secret, event.currentTarget));
+    $("copyApi").addEventListener("click", (event) => { if (secret) selectForCopy(apiGenerationExample(location.origin, secret), event.currentTarget); });
+    $("copyMcp").addEventListener("click", (event) => { if (secret) selectForCopy(JSON.stringify({ env: { ALCHEMY_PRODUCT_API_BASE_URL: location.origin, ALCHEMY_PRODUCT_SESSION_TOKEN: secret } }, null, 2), event.currentTarget); });
+    $("copyAddress").addEventListener("click", async (event) => {
       try {
         await navigator.clipboard.writeText(location.origin);
         notice("服务地址已复制到剪贴板。");
+        showCopyFeedback(event.currentTarget, true);
       } catch {
         $("serviceAddress").focus(); $("serviceAddress").select(); notice("浏览器未授权直接复制，地址已选中；请使用系统复制操作。");
+        showCopyFeedback(event.currentTarget, false);
       }
     });
     window.addEventListener("pagehide", () => { sessionEpoch += 1; ready = false; clearSecret(); if ($("secretDialog").open) $("secretDialog").close(); });
