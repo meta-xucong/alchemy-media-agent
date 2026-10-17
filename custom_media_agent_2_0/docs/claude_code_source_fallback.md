@@ -6,9 +6,8 @@ Core rule:
 
 ```text
 Claude Code remains the creative brain.
-Text-only orchestration uses the fast text source.
-Uploaded-image / visual-understanding orchestration uses the multimodal source.
-GPT is the preferred text fallback, with Kimi as the final backup.
+Text-only and uploaded-image orchestration use the configured Claude Sonnet 5.5 source.
+GPT-6.1 Sol is the configured fallback.
 ```
 
 ## Why This Exists
@@ -22,22 +21,22 @@ Primary routing still calls `claude -p`. For fallback, V2 first uses the GPT Ope
 Primary routing:
 
 1. V2 starts a staged Claude checkpoint run through Claude Code.
-2. Text-only requests use `V2_CLAUDE_ORCHESTRATOR_MODEL`, currently `deepseek-v4-pro-260425`.
-3. Requests with uploaded assets that require visual understanding or hard input-image preservation use `V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL`, currently `doubao-seed-2-0-lite-260428`.
+2. Text-only requests use `V2_CLAUDE_ORCHESTRATOR_MODEL`, currently `claude-sonnet-5-5`.
+3. Requests with uploaded assets that require visual understanding or hard input-image preservation use `V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL`, currently `claude-sonnet-5-5`.
 4. V2 writes `claude_source_selection.json` into the Claude workspace, so every checkpoint stage and single-stage call uses the same selected source for that request.
 5. A stage soft timeout first triggers shorter compression/retry stages on the same selected source.
-6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the fallback source. GPT fallback uses the OpenAI-compatible checkpoint lane; Kimi fallback uses the Claude Code Anthropic-compatible lane.
+6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the GPT-6.1 Sol OpenAI-compatible checkpoint lane.
 7. If the selected multimodal source is required for uploaded-image understanding, V2 must fail closed when that source is unavailable. It must not continue with a text-only fallback that cannot inspect uploaded images.
 
 Current production intent:
 
 ```text
-text source: deepseek-v4-pro-260425
-multimodal source: doubao-seed-2-0-lite-260428
-fallback source: gpt-5.6-terra -> kimi-k2.6 -> kimi-for-coding
+text source: claude-sonnet-5-5
+multimodal source: claude-sonnet-5-5
+fallback source: gpt-6.1-sol
 ```
 
-DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. GPT is the preferred text fallback when the primary text source is unavailable, and Kimi remains the last conservative backup. DeepSeek is never used for required uploaded-image understanding because it is not a multimodal source.
+Claude Sonnet 5.5 handles text and uploaded-image understanding. GPT-6.1 Sol is the single configured text fallback. This reflects the current production model selection; provider/model values remain environment-configurable.
 
 ## Configuration
 
@@ -46,16 +45,16 @@ Set these in the V2 service environment, not in committed files:
 ```bash
 V2_CLAUDE_ORCHESTRATOR_ENABLED=true
 V2_CLAUDE_CHECKPOINT_ORCHESTRATOR_ENABLED=true
-V2_CLAUDE_ORCHESTRATOR_MODEL=deepseek-v4-pro-260425
-V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=doubao-seed-2-0-lite-260428
+V2_CLAUDE_ORCHESTRATOR_MODEL=claude-sonnet-5-5
+V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=claude-sonnet-5-5
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN=<private fallback API key>
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.6-terra,kimi-k2.6,kimi-for-coding
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-6.1-sol
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=1
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=120
 ```
 
-The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. GPT fallback uses `V2_OPENAI_API_KEY` / `V2_OPENAI_BASE_URL` or the shared OpenAI settings. Kimi backup uses `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` / `V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL`.
+The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. GPT fallback uses `V2_OPENAI_API_KEY` / `V2_OPENAI_BASE_URL` or the shared OpenAI settings.
 
 ## Source Selection
 

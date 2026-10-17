@@ -1945,8 +1945,8 @@ def test_frontend_static_app_is_served():
     assert "自动应用" in index.text
     assert "Gemini Image" in index.text
     assert "Gemini 生图 Base URL" in index.text
-    assert "Kimi 思考模型" in index.text
-    assert "Kimi Base URL" in index.text
+    assert "Claude 思考模型" in index.text
+    assert "Claude Base URL" in index.text
     assert "geminiImageBaseUrlInput" in index.text
     assert "geminiImageApiKeyInput" in index.text
     assert "openaiImageModelInput" in index.text

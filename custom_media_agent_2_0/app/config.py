@@ -9,9 +9,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_CLAUDE_CODE_FALLBACK_MODELS: tuple[str, ...] = (
-    "gpt-5.6-terra",
-    "kimi-k2.6",
-    "kimi-for-coding",
+    "gpt-6.1-sol",
 )
 
 
@@ -77,7 +75,7 @@ class Settings:
     object_storage_prefix: str = "v2/"
     trace_project: str = "alchemy-media-agent-v2"
     agent_runtime: str = "openai_agents_sdk"
-    default_agent_model: str = "gpt-4.1-mini"
+    default_agent_model: str = "gpt-6.1-sol"
     data_dir: Path = PROJECT_ROOT / ".v2_data"
     storage_dir: Path = PROJECT_ROOT / ".v2_storage"
     case_index_path: Path = PROJECT_ROOT / ".v2_data" / "case_index.json"
@@ -138,7 +136,7 @@ class Settings:
     claude_orchestrator_enabled: bool = False
     claude_orchestrator_cli: str = "claude"
     claude_orchestrator_model: str | None = None
-    claude_orchestrator_multimodal_model: str | None = "doubao-seed-2-0-lite-260428"
+    claude_orchestrator_multimodal_model: str | None = "claude-sonnet-5-5"
     claude_orchestrator_timeout_seconds: float = 240.0
     claude_orchestrator_max_output_tokens: int = 32000
     claude_orchestrator_effort: str = "low"
@@ -229,7 +227,7 @@ def load_settings() -> Settings:
         object_storage_prefix=os.getenv("V2_OBJECT_STORAGE_PREFIX", "v2/"),
         trace_project=os.getenv("V2_AGENT_TRACE_PROJECT", "alchemy-media-agent-v2"),
         agent_runtime=os.getenv("V2_AGENT_RUNTIME", "openai_agents_sdk"),
-        default_agent_model=os.getenv("V2_AGENT_DEFAULT_MODEL", "gpt-4.1-mini"),
+        default_agent_model=os.getenv("V2_AGENT_DEFAULT_MODEL", "gpt-6.1-sol"),
         data_dir=Path(os.getenv("V2_DATA_DIR", str(PROJECT_ROOT / ".v2_data"))),
         storage_dir=Path(os.getenv("V2_STORAGE_DIR", str(PROJECT_ROOT / ".v2_storage"))),
         case_index_path=Path(os.getenv("V2_CASE_INDEX_PATH", str(PROJECT_ROOT / ".v2_data" / "case_index.json"))),
@@ -345,7 +343,7 @@ def load_settings() -> Settings:
         claude_orchestrator_cli=os.getenv("V2_CLAUDE_ORCHESTRATOR_CLI", "claude"),
         claude_orchestrator_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL") or None,
         claude_orchestrator_multimodal_model=(
-            os.getenv("V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL") or "doubao-seed-2-0-lite-260428"
+            os.getenv("V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL") or "claude-sonnet-5-5"
         ),
         claude_orchestrator_timeout_seconds=float(os.getenv("V2_CLAUDE_ORCHESTRATOR_TIMEOUT_SECONDS", "240")),
         claude_orchestrator_max_output_tokens=max(

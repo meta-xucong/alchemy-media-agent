@@ -20,7 +20,7 @@ sudo scripts/vps_prepare_v2_runtime.sh \
 sudo systemctl enable --now alchemy-v2-api alchemy-v2-worker alchemy-v2-sync-worker
 ```
 
-Edit `/etc/alchemy/alchemy-v2.env` before starting production. In particular, configure domain CORS, image provider credentials, Claude Code access, and any Kimi/sub2api timeout or failover settings outside this app.
+Edit `/etc/alchemy/alchemy-v2.env` before starting production. In particular, configure domain CORS, the AISelf OpenAI-compatible image/model gateway, its local API key, and the Anthropic-compatible Claude Code credentials. Keep all keys out of Git.
 
 The templates assume:
 

@@ -9721,8 +9721,8 @@ async function loadProviders() {
   els.openaiImageModelInput.value = runtime.openai_image_model || "gpt-image-2";
   els.doubaoImageModelInput.value = runtime.doubao_image_model || "doubao-seedream-4-0-250828";
   els.geminiImageModelInput.value = runtime.gemini_image_model || "gemini-3-pro-image-preview";
-  els.openaiLlmModelInput.value = runtime.openai_llm_model || "gpt-5.6-terra";
-  els.agentLlmModelInput.value = runtime.kimi_llm_model || "kimi-for-coding";
+  els.openaiLlmModelInput.value = runtime.openai_llm_model || "gpt-6.1-sol";
+  els.agentLlmModelInput.value = runtime.kimi_llm_model || "claude-sonnet-5-5";
   if (els.deepseekLlmModelInput) els.deepseekLlmModelInput.value = runtime.deepseek_llm_model || "deepseek-v4-pro-260425";
   if (els.deepseekBaseUrlInput) els.deepseekBaseUrlInput.value = runtime.deepseek_llm_base_url || "https://aiself.vip";
   els.doubaoImageBaseUrlInput.value = runtime.doubao_image_base_url || "";
@@ -9751,7 +9751,7 @@ async function loadProviders() {
       ? runtime.gemini_image_model
       : "需 API";
   els.openaiThinkingState.textContent = runtime.openai_api_key_configured ? runtime.openai_llm_model : "需 API";
-  els.agentThinkingState.textContent = runtime.anthropic_api_key_configured ? runtime.kimi_llm_model || "已配置" : "需 Kimi API";
+  els.agentThinkingState.textContent = runtime.anthropic_api_key_configured ? runtime.kimi_llm_model || "已配置" : "需 Claude API";
   if (els.deepseekThinkingState) {
     els.deepseekThinkingState.textContent = runtime.deepseek_llm_api_key_configured
       ? runtime.deepseek_llm_model || "已配置"
@@ -9920,7 +9920,7 @@ function setImageProviderAvailability(provider, enabled, title) {
 }
 
 function thinkingProviderLabel(provider) {
-  if (provider === "anthropic") return "Kimi";
+  if (provider === "anthropic") return "Claude";
   if (provider === "deepseek") return "DeepSeek V4";
   return "GPT";
 }
@@ -9952,8 +9952,8 @@ async function syncProviderSettings({ silent, version = providerChangeVersion })
       gemini_image_base_url: els.geminiImageBaseUrlInput.value.trim(),
       default_llm_provider: state.selectedLlmProvider,
       default_llm_model: selectedThinkingModel(),
-      openai_llm_model: els.openaiLlmModelInput.value.trim() || "gpt-5.6-terra",
-      kimi_llm_model: els.agentLlmModelInput.value.trim() || "kimi-for-coding",
+      openai_llm_model: els.openaiLlmModelInput.value.trim() || "gpt-6.1-sol",
+      kimi_llm_model: els.agentLlmModelInput.value.trim() || "claude-sonnet-5-5",
       deepseek_llm_model: els.deepseekLlmModelInput?.value.trim() || "deepseek-v4-pro-260425",
       deepseek_llm_base_url: els.deepseekBaseUrlInput?.value.trim() || "",
       image_work_intensity: state.selectedIntensity,
@@ -10015,12 +10015,12 @@ function selectedImageModel() {
 
 function selectedThinkingModel() {
   if (state.selectedLlmProvider === "anthropic") {
-    return els.agentLlmModelInput.value.trim() || "kimi-for-coding";
+    return els.agentLlmModelInput.value.trim() || "claude-sonnet-5-5";
   }
   if (state.selectedLlmProvider === "deepseek") {
     return els.deepseekLlmModelInput?.value.trim() || "deepseek-v4-pro-260425";
   }
-  return els.openaiLlmModelInput.value.trim() || "gpt-5.6-terra";
+  return els.openaiLlmModelInput.value.trim() || "gpt-6.1-sol";
 }
 
 function toggleProviderSaving(isSaving) {
@@ -10123,7 +10123,7 @@ function renderV2ModelSettings() {
   }
   const selectedImageProvider = v2EffectiveImageProvider(settings);
   setInputValue(els.v2ImageProviderInput, selectedImageProvider || "auto");
-  setInputValue(els.v2AgentModelInput, settings.default_agent_model || "gpt-4.1-mini");
+  setInputValue(els.v2AgentModelInput, settings.default_agent_model || "gpt-6.1-sol");
   setInputValue(els.v2ClaudeModelInput, settings.claude_orchestrator_model || "");
   setInputValue(els.v2ClaudeFallbackModelInput, settings.claude_orchestrator_fallback_model || "");
   setInputValue(els.v2CaseIntelligenceProviderInput, settings.case_intelligence_provider || "rules");
@@ -10299,7 +10299,7 @@ function hydrateV2CaseIntelligenceModelHint() {
 function v2ClaudeFallbackModelQueue() {
   const primary = els.v2ClaudeModelInput?.value.trim() || "";
   const explicitFallback = els.v2ClaudeFallbackModelInput?.value.trim() || "";
-  return [explicitFallback, "gpt-5.6-terra", "kimi-k2.6", "kimi-for-coding"]
+  return [explicitFallback, "gpt-6.1-sol"]
     .map((model) => model.trim())
     .filter((model, index, models) => model && model !== primary && models.indexOf(model) === index);
 }
@@ -10322,7 +10322,7 @@ async function applyV2ModelSettings() {
         openai_image_model: els.openaiImageModelInput?.value.trim() || "gpt-image-2",
         doubao_image_model: els.doubaoImageModelInput?.value.trim() || "doubao-seedream-4-0-250828",
         gemini_image_model: els.geminiImageModelInput?.value.trim() || "gemini-2.5-flash-image",
-        default_agent_model: els.v2AgentModelInput?.value.trim() || "gpt-4.1-mini",
+        default_agent_model: els.v2AgentModelInput?.value.trim() || "gpt-6.1-sol",
         output_review_agent_enabled: true,
         output_review_agent_model: els.v2ReviewModelInput?.value.trim(),
         claude_orchestrator_enabled: true,
@@ -11244,8 +11244,8 @@ function v2FallbackReasonLabel(reason) {
   if (/claude_output_token_limit|output token maximum|MAX_OUTPUT_TOKENS/i.test(text)) {
     return "Claude 中枢输出触达上限，系统应压缩续跑；若仍无可恢复结果则停止出图。";
   }
-  if (/kimi_context_canceled|context canceled|kimi/i.test(text)) {
-    return "Kimi 主源连接波动，系统会尝试压缩续跑或备用源接力。";
+  if (/kimi_context_canceled|context canceled|kimi|claude/i.test(text)) {
+    return "Claude 主源连接波动，系统会尝试压缩续跑或备用源接力。";
   }
   if (/claude_api_error|api error/i.test(text)) {
     return "Claude 中枢暂时不可用，系统会尝试备用源接力；无可恢复结果则停止出图。";
