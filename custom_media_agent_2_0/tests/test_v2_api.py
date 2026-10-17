@@ -5708,7 +5708,7 @@ def test_claude_code_fallback_model_queue_prioritizes_stronger_models() -> None:
 
     queue = claude_orchestrator_service._claude_code_model_fallback_queue()
 
-    assert queue[:3] == ["gpt-5.6-terra", "kimi-k2.6", "kimi-for-coding"]
+    assert queue == ["gpt-6.1-sol"]
 
 
 def test_gpt_model_fallback_uses_openai_compatible_checkpoint_lane(monkeypatch, tmp_path: Path) -> None:

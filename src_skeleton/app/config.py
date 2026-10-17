@@ -187,18 +187,18 @@ class Settings(BaseModel):
     gemini_image_generation_enabled: bool = os.getenv("GEMINI_IMAGE_GENERATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     byteplus_api_key: str | None = os.getenv("BYTEPLUS_API_KEY")
-    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "deepseek")
+    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "anthropic")
     default_llm_model: str = os.getenv(
         "DEFAULT_LLM_MODEL",
-        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro")),
+        os.getenv("KIMI_LLM_MODEL", "claude-sonnet-5-5"),
     )
     backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "openai")
     backup_llm_model: str = os.getenv(
         "BACKUP_LLM_MODEL",
-        os.getenv("OPENAI_LLM_MODEL", "gpt-5.6-terra"),
+        os.getenv("OPENAI_LLM_MODEL", "gpt-6.1-sol"),
     )
-    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-5.6-terra")
-    kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", "kimi-for-coding")
+    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-6.1-sol")
+    kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", "claude-sonnet-5-5")
     deepseek_llm_model: str = os.getenv(
         "DEEPSEEK_LLM_MODEL",
         os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro"),
@@ -207,10 +207,10 @@ class Settings(BaseModel):
     deepseek_llm_api_key: str | None = _deepseek_api_key_from_env()
     llm_prompt_planning_enabled: bool = os.getenv("LLM_PROMPT_PLANNING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     lab_llm_enabled: bool = os.getenv("LAB_LLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-    lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "deepseek"))
+    lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "anthropic"))
     lab_llm_model: str = os.getenv(
         "LAB_LLM_MODEL",
-        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "deepseek-v4-pro")),
+        os.getenv("KIMI_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "claude-sonnet-5-5")),
     )
     lab_openai_api_key: str | None = _normalize_openai_api_key(
         os.getenv("LAB_OPENAI_API_KEY")
@@ -239,7 +239,7 @@ class Settings(BaseModel):
     )
     lab_doubao_vision_model: str = os.getenv(
         "LAB_DOUBAO_VISION_MODEL",
-        os.getenv("V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL", "doubao-seed-2-0-lite-260428"),
+        "doubao-seed-2-0-lite-260428",
     )
     default_image_provider: str = os.getenv("DEFAULT_IMAGE_PROVIDER", "openai_gpt_image")
     default_image_model: str = os.getenv("DEFAULT_IMAGE_MODEL", "gpt-image-2")

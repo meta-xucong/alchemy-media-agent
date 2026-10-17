@@ -129,7 +129,8 @@ def test_v3_brain_route_is_explicit_in_all_runtime_bootstraps() -> None:
         "V3_LLM_BRAIN_ENABLED": "true",
         "V3_LLM_BRAIN_REMOTE_ENABLED": "true",
         "V3_LLM_BRAIN_PROVIDER": "openai",
-        "V3_LLM_BRAIN_MODEL": "gpt-5.6-terra",
+        "V3_LLM_BRAIN_MODEL": "gpt-6.1-sol",
+        "V3_LLM_BRAIN_REASONING_EFFORT": "medium",
         "V3_LLM_BRAIN_TRANSPORT": "chat_nonstream",
         "V3_LLM_BRAIN_TIMEOUT_SECONDS": "300",
         "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS": "550",
@@ -141,3 +142,40 @@ def test_v3_brain_route_is_explicit_in_all_runtime_bootstraps() -> None:
         assert f'"{key}={value}"' in bootstrap
         assert f"{key}=${{{key}:-{value}}}" in direct_deploy
     assert "retired and performs no changes" in migration
+
+
+def test_alchemy_upstream_defaults_match_current_model_selection() -> None:
+    root = Path(__file__).parents[1]
+    v1_example = (root / "src_skeleton" / ".env.example").read_text(encoding="utf-8")
+    v2_example = (root / "custom_media_agent_2_0" / "deploy" / "systemd" / "alchemy-v2.env.example").read_text(encoding="utf-8")
+    v2_config = (root / "custom_media_agent_2_0" / "app" / "config.py").read_text(encoding="utf-8")
+    v1_config = (root / "src_skeleton" / "app" / "config.py").read_text(encoding="utf-8")
+    web = (root / "src_skeleton" / "app" / "static" / "index.html").read_text(encoding="utf-8")
+    mobile = (root / "src_skeleton" / "app" / "mobile_static" / "index.html").read_text(encoding="utf-8")
+
+    for setting in (
+        "DEFAULT_LLM_PROVIDER=anthropic",
+        "DEFAULT_LLM_MODEL=claude-sonnet-5-5",
+        "BACKUP_LLM_MODEL=gpt-6.1-sol",
+        "V3_LLM_BRAIN_MODEL=gpt-6.1-sol",
+        "V3_LLM_BRAIN_REASONING_EFFORT=medium",
+        "OPENAI_BASE_URL=https://aiself.vip/v1",
+        "ANTHROPIC_BASE_URL=https://aiself.vip",
+    ):
+        assert setting in v1_example
+
+    for setting in (
+        "V2_OPENAI_IMAGE_MODEL=gpt-image-2",
+        "V2_OPENAI_BASE_URL=https://aiself.vip/v1",
+        "V2_AGENT_DEFAULT_MODEL=gpt-6.1-sol",
+        "V2_CLAUDE_ORCHESTRATOR_MODEL=claude-sonnet-5-5",
+        "V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=claude-sonnet-5-5",
+        "V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-6.1-sol",
+        "ANTHROPIC_BASE_URL=https://aiself.vip",
+    ):
+        assert setting in v2_example
+
+    assert 'default_agent_model=os.getenv("V2_AGENT_DEFAULT_MODEL", "gpt-6.1-sol")' in v2_config
+    assert '"doubao-seed-2-0-lite-260428",\n    )' in v1_config
+    assert "Claude 思考模型" in web and "Claude 思考模型" in mobile
+    assert "gpt-5.6-terra" not in web and "gpt-5.6-terra" not in mobile
