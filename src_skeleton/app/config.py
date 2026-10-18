@@ -271,7 +271,7 @@ class Settings(BaseModel):
     openai_image_local_queue_timeout_seconds: float = _float_env("OPENAI_IMAGE_LOCAL_QUEUE_TIMEOUT_SECONDS", 900.0)
     openai_image_upstream_cooldown_seconds: float = _float_env("OPENAI_IMAGE_UPSTREAM_COOLDOWN_SECONDS", 90.0)
     openai_image_max_retry_after_seconds: float = _float_env("OPENAI_IMAGE_MAX_RETRY_AFTER_SECONDS", 900.0)
-    openai_image_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_REQUEST_TIMEOUT_SECONDS", 240.0)
+    openai_image_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_REQUEST_TIMEOUT_SECONDS", 600.0)
     openai_image_edit_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_EDIT_REQUEST_TIMEOUT_SECONDS", 420.0)
     openai_image_high_resolution_timeout_seconds: float = _float_env(
         "OPENAI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", 900.0

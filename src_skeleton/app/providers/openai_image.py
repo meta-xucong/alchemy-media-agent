@@ -1582,7 +1582,6 @@ class OpenAIGPTImageProvider:
                     "account",
                     "schedulable",
                     "aicodexvip",
-                    "aiai",
                     "404token",
                     "temporarily",
                     "cooldown",

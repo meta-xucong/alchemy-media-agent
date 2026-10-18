@@ -115,7 +115,7 @@ class Settings:
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_image_model: str = "gpt-image-2"
-    openai_image_timeout_seconds: float = 240.0
+    openai_image_timeout_seconds: float = 600.0
     openai_image_high_resolution_timeout_seconds: float = 900.0
     openai_image_local_max_requests_per_minute: int = 12
     openai_image_local_max_outputs_per_minute: int = 24

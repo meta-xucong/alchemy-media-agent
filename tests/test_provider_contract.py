@@ -1144,7 +1144,7 @@ def test_openai_image_provider_retries_gateway_image_edit_500_once(tmp_path, mon
         async def edit(self, **kwargs):
             captured["attempts"] += 1
             if captured["attempts"] == 1:
-                raise Gateway500Error("500 internal_server_error from aiai image edit")
+                raise Gateway500Error("500 internal_server_error from image edit")
             return SimpleNamespace(
                 data=[
                     SimpleNamespace(
