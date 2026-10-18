@@ -29,7 +29,7 @@ providers that are no longer in service.
 ## Acceptance
 
 - Focused Alchemy configuration tests require at least 300 seconds.
-- Validate the Nginx configuration before reload and restart only the Alchemy
-  V2 API after changing its environment.
+- Validate the Nginx configuration before reload; restart the Alchemy V2 API
+  and worker after changing their environment file.
 - Do not use real image generation as a timeout probe. Verify deployed settings
   and preserve existing upstream timeout records.
