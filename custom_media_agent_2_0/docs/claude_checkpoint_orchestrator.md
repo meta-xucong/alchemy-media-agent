@@ -302,7 +302,7 @@ MAX_THINKING_TOKENS=0
 
 ### Claude Code Model Fallback
 
-When the Claude Code route is available, it remains the primary creative brain that V2 calls. GPT fallback uses a narrow OpenAI-compatible checkpoint executor for the same JSON schema; Kimi-style backup re-invokes Claude Code for the same checkpoint stage with a different `--model` and optional `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` overrides.
+When the Claude Code route is available, it remains the primary creative brain that V2 calls. On eligible failure, Kimi K3 is attempted first and GPT-6.1-sol follows if needed, using the unified gateway key and protocol-correct adapters for the same JSON schema.
 
 This keeps the external V2 framework unchanged: same Claude checkpoint prompts, same JSON schema, same visual grammar lock, same uploaded-asset fusion policy, same output caps, and same selected-template priority. Model order is deliberately strongest-first:
 
@@ -312,7 +312,7 @@ kimi-k2.6
 kimi-for-coding
 ```
 
-If the selected primary text source returns temporary upstream failures such as quota exhaustion, no available accounts, 502, context cancellation, timeout, or structured-output exhaustion, the controller tries the next Claude Code model in the queue. GPT is the preferred text fallback when exposed by the gateway; Kimi is the final backup. Secrets must not be committed; set `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` in the service environment, or use `OPENAI_API_KEY` / Codex auth on local machines.
+If the selected primary text source returns a failover-eligible upstream failure such as quota exhaustion, no available accounts, 502, context cancellation, timeout, or structured-output exhaustion, the controller tries Kimi K3 and advances to GPT-6.1-sol after an eligible Kimi failure. Both use the same configured gateway key; secrets must not be committed.
 
 ## Workspace 文件布局
 

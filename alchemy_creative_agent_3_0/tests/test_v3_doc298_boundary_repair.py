@@ -876,7 +876,6 @@ def test_brain_availability_explains_disabled_and_missing_credentials(monkeypatc
 
     monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED")
     monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
-    monkeypatch.setattr(providers_module, "_settings_value", lambda name: None)
     monkeypatch.setattr(providers_module, "_remote_enabled", lambda force=False: True)
     assert provider.availability()["reason_code"] == "missing_credentials"
 

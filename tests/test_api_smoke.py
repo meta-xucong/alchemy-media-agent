@@ -1945,15 +1945,18 @@ def test_frontend_static_app_is_served():
     assert "自动应用" in index.text
     assert "Gemini Image" in index.text
     assert "Gemini 生图 Base URL" in index.text
-    assert "Kimi 思考模型" in index.text
-    assert "Kimi Base URL" in index.text
+    assert 'id="llmModelList"' in index.text
+    assert 'value="claude-sonnet-5-5" list="llmModelList"' in index.text
+    assert 'value="kimi-k3" list="llmModelList"' in index.text
+    assert "Kimi 思考模型" not in index.text
+    assert "Kimi Base URL" not in index.text
     assert "geminiImageBaseUrlInput" in index.text
     assert "geminiImageApiKeyInput" in index.text
     assert "openaiImageModelInput" in index.text
     assert "geminiImageModelInput" in index.text
     assert "openaiLlmModelInput" in index.text
     assert "agentLlmModelInput" in index.text
-    assert "anthropicBaseUrlInput" in index.text
+    assert 'id="llmGatewayApiKeyInput"' in index.text
     assert "heroHistoryCarousel" in index.text
     assert "lightboxPromptPanel" in index.text
     assert "lightboxPromptText" in index.text
@@ -2191,7 +2194,12 @@ def test_frontend_static_app_is_served():
     assert "selectedQuality" in script.text
     assert "openaiLlmModelInput" in script.text
     assert "agentLlmModelInput" in script.text
-    assert "anthropicBaseUrlInput" in script.text
+    assert "textProviderForModel" in script.text
+    assert 'default_llm_model: els.agentLlmModelInput.value.trim() || "claude-sonnet-5-5"' in script.text
+    assert 'backup_llm_model: els.openaiLlmModelInput.value.trim() || "kimi-k3"' in script.text
+    assert 'id="agentLlmModelInput" type="text" value="claude-sonnet-5-5" list="llmModelList"' in index.text
+    assert 'id="openaiLlmModelInput" type="text" value="kimi-k3" list="llmModelList"' in index.text
+    assert "anthropicBaseUrlInput" not in script.text
     assert "default_llm_provider" in script.text
     assert "selectedAssetRoles" in script.text
     assert "asset_intents: state.assetIds.flatMap" in script.text
@@ -2200,8 +2208,8 @@ def test_frontend_static_app_is_served():
     assert "doubao_image_model" in script.text
     assert "gemini_image_model" in script.text
     assert "openai_llm_model" in script.text
-    assert "kimi_llm_model" in script.text
-    assert "anthropic_api_key" in script.text
+    assert "kimi_llm_model" not in script.text
+    assert "anthropic_api_key" not in script.text
     assert "gemini_image_base_url" in script.text
     assert "gemini_image_api_key" in script.text
     assert "doubaoImageModelInput" in script.text
@@ -2600,6 +2608,9 @@ def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():
         assert "状态查询暂时中断" in text
         assert "return deferV1ImageJob(job" in text
         assert "function refreshV1GenerationSideEffects" in text
+        assert "function textProviderForModel" in text
+        assert 'default_llm_model: els.agentLlmModelInput.value.trim() || "claude-sonnet-5-5"' in text
+        assert 'backup_llm_model: els.openaiLlmModelInput.value.trim() || "kimi-k3"' in text
         assert "V1 post-generation" in text
         assert "scrollV1GalleryIntoView();" in text
         assert "else if (v1ImageJobDeferred(completedJob))" in text
@@ -4744,9 +4755,8 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
     original_key = settings.openai_api_key
     original_backup_provider = settings.backup_llm_provider
     original_backup_model = settings.backup_llm_model
-    original_anthropic_base_url = settings.anthropic_base_url
-    original_anthropic_api_key = settings.anthropic_api_key
-    original_anthropic_auth_token = settings.anthropic_auth_token
+    original_gateway_key = settings.llm_gateway_api_key
+    original_gateway_base_url = settings.llm_gateway_base_url
 
     try:
         settings.persist_runtime_settings = True
@@ -4763,15 +4773,17 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
                 "gemini_image_model": "gemini-image-test",
                 "gemini_image_api_key": "sk-test-gemini-image-only",
                 "gemini_image_base_url": "https://gemini-image.example.test",
-                "default_llm_provider": "anthropic",
-                "default_llm_model": "kimi-for-coding-test",
-                "openai_llm_model": "gpt-5.5-test",
+                "default_llm_provider": "openai",
+                "default_llm_model": "gpt-primary-test",
+                "backup_llm_provider": "openai",
+                "backup_llm_model": "gpt-backup-test",
+                "openai_llm_model": "gpt-primary-test",
                 "kimi_llm_model": "kimi-for-coding-test",
                 "image_work_intensity": "studio",
                 "openai_api_key": "sk-test-runtime-only",
                 "openai_base_url": "https://example.test",
-                "anthropic_api_key": "sk-test-backup-only",
-                "anthropic_base_url": "https://backup.example.test",
+                "llm_gateway_api_key": "sk-test-unified-text-only",
+                "llm_gateway_base_url": "https://gateway.example.test/v1",
             },
         )
 
@@ -4785,36 +4797,36 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         assert body["gemini_image_model"] == "gemini-image-test"
         assert body["gemini_image_base_url"] == "https://gemini-image.example.test"
         assert body["gemini_image_api_key_configured"] is True
-        assert body["default_llm_provider"] == "anthropic"
-        assert body["default_llm_model"] == "kimi-for-coding-test"
-        assert body["openai_llm_model"] == "gpt-5.5-test"
+        assert body["default_llm_provider"] == "openai"
+        assert body["default_llm_model"] == "gpt-primary-test"
+        assert body["openai_llm_model"] == "gpt-primary-test"
         assert body["kimi_llm_model"] == "kimi-for-coding-test"
-        assert body["backup_llm_model"] == "gpt-5.5-test"
+        assert body["backup_llm_model"] == "gpt-backup-test"
         assert body["default_llm_model"] != body["default_image_model"]
         assert body["image_work_intensity"] == "studio"
         assert body["openai_base_url"] == "https://example.test/v1"
-        assert body["anthropic_base_url"] == "https://backup.example.test"
         assert body["openai_api_key_configured"] is True
-        assert body["anthropic_api_key_configured"] is True
+        assert body["llm_gateway_api_key_configured"] is True
+        assert body["llm_gateway_base_url"] == "https://gateway.example.test/v1"
         assert "sk-test-runtime-only" not in response.text
         assert "sk-test-doubao-image-only" not in response.text
-        assert "sk-test-backup-only" not in response.text
+        assert "sk-test-unified-text-only" not in response.text
         assert "sk-test-gemini-image-only" not in response.text
         env_text = settings.runtime_env_path.read_text(encoding="utf-8")
         assert "DEFAULT_IMAGE_PROVIDER=openai_gpt_image" in env_text
         assert "DEFAULT_IMAGE_MODEL=gpt-image-2-test" in env_text
-        assert "DEFAULT_LLM_PROVIDER=anthropic" in env_text
-        assert "DEFAULT_LLM_MODEL=kimi-for-coding-test" in env_text
+        assert "DEFAULT_LLM_PROVIDER=openai" in env_text
+        assert "DEFAULT_LLM_MODEL=gpt-primary-test" in env_text
         assert "BACKUP_LLM_PROVIDER=openai" in env_text
-        assert "BACKUP_LLM_MODEL=gpt-5.5-test" in env_text
+        assert "BACKUP_LLM_MODEL=gpt-backup-test" in env_text
         assert "OPENAI_BASE_URL=https://example.test/v1" in env_text
         assert "DOUBAO_IMAGE_MODEL=doubao-seedream-test" in env_text
         assert "DOUBAO_IMAGE_BASE_URL=https://doubao-image.example.test/v1" in env_text
         assert "GEMINI_IMAGE_BASE_URL=https://gemini-image.example.test" in env_text
-        assert "ANTHROPIC_BASE_URL=https://backup.example.test" in env_text
+        assert "LLM_GATEWAY_API_KEY=sk-test-unified-text-only" in env_text
+        assert "LLM_GATEWAY_BASE_URL=https://gateway.example.test/v1" in env_text
         assert "sk-test-runtime-only" not in env_text
         assert "sk-test-doubao-image-only" not in env_text
-        assert "sk-test-backup-only" not in env_text
         assert "sk-test-gemini-image-only" not in env_text
 
         providers = client.get("/v1/providers").json()
@@ -4852,9 +4864,8 @@ def test_runtime_provider_settings_are_safe_and_take_effect(tmp_path):
         settings.openai_api_key = original_key
         settings.backup_llm_provider = original_backup_provider
         settings.backup_llm_model = original_backup_model
-        settings.anthropic_base_url = original_anthropic_base_url
-        settings.anthropic_api_key = original_anthropic_api_key
-        settings.anthropic_auth_token = original_anthropic_auth_token
+        settings.llm_gateway_api_key = original_gateway_key
+        settings.llm_gateway_base_url = original_gateway_base_url
 
 
 def test_runtime_provider_settings_accept_deepseek_route():
@@ -4875,29 +4886,24 @@ def test_runtime_provider_settings_accept_deepseek_route():
         response = client.post(
             "/v1/runtime/provider-settings",
             json={
-                "default_llm_provider": "deepseek",
+                "default_llm_provider": "openai",
                 "default_llm_model": "deepseek-v4-pro-260425",
-                "deepseek_llm_model": "deepseek-v4-pro-260425",
-                "deepseek_llm_api_key": "sk-test-deepseek-only",
-                "deepseek_llm_base_url": "https://deepseek-compatible.example.test",
-                "openai_llm_model": "gpt-5.5-test",
-                "lab_llm_provider": "deepseek",
+                "backup_llm_provider": "openai",
+                "backup_llm_model": "gpt-backup-test",
+                "openai_llm_model": "deepseek-v4-pro-260425",
+                "lab_llm_provider": "openai",
                 "lab_llm_model": "deepseek-v4-pro-260425",
             },
         )
 
         assert response.status_code == 200
         body = response.json()
-        assert body["default_llm_provider"] == "deepseek"
+        assert body["default_llm_provider"] == "openai"
         assert body["default_llm_model"] == "deepseek-v4-pro-260425"
         assert body["backup_llm_provider"] == "openai"
-        assert body["backup_llm_model"] == "gpt-5.5-test"
-        assert body["deepseek_llm_model"] == "deepseek-v4-pro-260425"
-        assert body["deepseek_llm_base_url"] == "https://deepseek-compatible.example.test"
-        assert body["deepseek_llm_api_key_configured"] is True
-        assert body["lab_llm_provider"] == "deepseek"
+        assert body["backup_llm_model"] == "gpt-backup-test"
+        assert body["lab_llm_provider"] == "openai"
         assert body["lab_llm_model"] == "deepseek-v4-pro-260425"
-        assert "sk-test-deepseek-only" not in response.text
     finally:
         settings.persist_runtime_settings = original_persist
         settings.default_llm_provider = original_llm_provider
@@ -4911,7 +4917,7 @@ def test_runtime_provider_settings_accept_deepseek_route():
         settings.lab_llm_model = original_lab_model
 
 
-def test_lab_image_planner_never_routes_to_deepseek():
+def test_lab_text_uses_unified_models_and_image_planner_never_routes_to_deepseek():
     original_lab_provider = settings.lab_llm_provider
     original_lab_vision_provider = settings.lab_vision_provider
     original_lab_doubao_key = settings.lab_doubao_vision_api_key
@@ -4920,6 +4926,9 @@ def test_lab_image_planner_never_routes_to_deepseek():
     original_lab_openai_key = settings.lab_openai_api_key
     original_kimi_key = settings.lab_kimi_api_key
     original_kimi_model = settings.kimi_llm_model
+    original_lab_model = settings.lab_llm_model
+    original_backup_model = settings.backup_llm_model
+    original_gateway_key = settings.llm_gateway_api_key
 
     try:
         settings.lab_llm_provider = "deepseek"
@@ -4930,11 +4939,18 @@ def test_lab_image_planner_never_routes_to_deepseek():
         settings.lab_openai_api_key = "sk-test-lab-openai"
         settings.lab_kimi_api_key = "sk-test-kimi"
         settings.kimi_llm_model = "kimi-k2.6"
+        settings.lab_llm_model = "claude-sonnet-5-5"
+        settings.backup_llm_model = "gpt-6.1-sol"
+        settings.llm_gateway_api_key = "sk-test-unified"
 
         text_candidates = alchemy_lab_llm_module._planner_candidates(image_paths=False)
         image_candidates = alchemy_lab_llm_module._planner_candidates(image_paths=True)
 
-        assert [candidate["provider"] for candidate in text_candidates][:3] == ["deepseek", "doubao", "openai"]
+        assert text_candidates == [
+            {"provider": "anthropic", "model": "claude-sonnet-5-5"},
+            {"provider": "openai", "model": "kimi-k3"},
+            {"provider": "openai", "model": "gpt-6.1-sol"},
+        ]
         assert [candidate["provider"] for candidate in image_candidates][:3] == ["doubao", "openai", "kimi"]
         assert "deepseek" not in {candidate["provider"] for candidate in image_candidates}
         assert image_candidates[2]["model"] == "kimi-k2.6"
@@ -4947,6 +4963,9 @@ def test_lab_image_planner_never_routes_to_deepseek():
         settings.lab_openai_api_key = original_lab_openai_key
         settings.lab_kimi_api_key = original_kimi_key
         settings.kimi_llm_model = original_kimi_model
+        settings.lab_llm_model = original_lab_model
+        settings.backup_llm_model = original_backup_model
+        settings.llm_gateway_api_key = original_gateway_key
 
 
 def test_lab_status_reports_the_selected_openai_vision_route(monkeypatch):

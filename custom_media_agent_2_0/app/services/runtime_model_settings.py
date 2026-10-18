@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from app.config import settings
@@ -47,6 +48,29 @@ def apply_persisted_runtime_model_settings() -> None:
         _apply_runtime_updates(_normalize_updates(payload), persist=False)
 
 
+def refresh_runtime_gateway_credentials() -> None:
+    """Reload the shared runtime credential so separately running workers see API updates."""
+    path = settings.data_dir / "llm_gateway.env"
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return
+    values: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key.strip() in {"LLM_GATEWAY_API_KEY", "LLM_GATEWAY_BASE_URL"}:
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    if "LLM_GATEWAY_API_KEY" in values:
+        object.__setattr__(settings, "llm_gateway_api_key", values["LLM_GATEWAY_API_KEY"] or None)
+    if "LLM_GATEWAY_BASE_URL" in values:
+        object.__setattr__(settings, "llm_gateway_base_url", values["LLM_GATEWAY_BASE_URL"] or None)
+
+
 def get_runtime_model_settings() -> V2RuntimeModelSettingsResponse:
     return V2RuntimeModelSettingsResponse(
         image_generation_provider=settings.image_generation_provider,
@@ -73,8 +97,8 @@ def get_runtime_model_settings() -> V2RuntimeModelSettingsResponse:
         claude_orchestrator_max_output_tokens=settings.claude_orchestrator_max_output_tokens,
         claude_checkpoint_orchestrator_enabled=settings.claude_checkpoint_orchestrator_enabled,
         claude_orchestrator_fallback_models=list(settings.claude_orchestrator_fallback_models),
-        claude_orchestrator_fallback_base_url_configured=bool(settings.claude_orchestrator_fallback_base_url),
-        claude_orchestrator_fallback_auth_token_configured=bool(settings.claude_orchestrator_fallback_auth_token),
+        llm_gateway_api_key_configured=bool(settings.llm_gateway_api_key),
+        llm_gateway_base_url=settings.llm_gateway_base_url,
         case_intelligence_provider=settings.case_intelligence_provider,  # type: ignore[arg-type]
         case_intelligence_model=settings.case_intelligence_model,
         persisted=runtime_model_settings_path().exists(),
@@ -83,14 +107,25 @@ def get_runtime_model_settings() -> V2RuntimeModelSettingsResponse:
 
 def update_runtime_model_settings(body: V2RuntimeModelSettingsRequest) -> V2RuntimeModelSettingsResponse:
     updates = _normalize_updates(body.model_dump(exclude_unset=True))
+    gateway_key = updates.pop("llm_gateway_api_key", None) if "llm_gateway_api_key" in updates else None
+    gateway_base = updates.pop("llm_gateway_base_url", None) if "llm_gateway_base_url" in updates else None
+    if gateway_key is not None or gateway_base is not None:
+        next_key = gateway_key if gateway_key is not None else settings.llm_gateway_api_key
+        next_base = gateway_base if gateway_base is not None else settings.llm_gateway_base_url
+        _persist_gateway_env(gateway_key=next_key, gateway_base=next_base)
     _apply_runtime_updates(updates, persist=True)
+    if gateway_key is not None or gateway_base is not None:
+        if gateway_key is not None:
+            object.__setattr__(settings, "llm_gateway_api_key", gateway_key)
+        if gateway_base is not None:
+            object.__setattr__(settings, "llm_gateway_base_url", gateway_base)
     return get_runtime_model_settings()
 
 
 def _normalize_updates(raw: dict[str, Any]) -> dict[str, Any]:
     updates: dict[str, Any] = {}
     for key, value in raw.items():
-        if key not in RUNTIME_MODEL_FIELDS:
+        if key not in RUNTIME_MODEL_FIELDS and key not in {"llm_gateway_api_key", "llm_gateway_base_url"}:
             continue
         if isinstance(value, str):
             value = value.strip()
@@ -126,6 +161,43 @@ def _normalize_updates(raw: dict[str, Any]) -> dict[str, Any]:
         updates.pop("gemini_image_model", None)
 
     return updates
+
+
+def _persist_gateway_env(*, gateway_key: str | None, gateway_base: str | None) -> None:
+    """Persist the write-only gateway secret in V2 data, never JSON settings."""
+    path = settings.data_dir / "llm_gateway.env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []
+    except OSError:
+        lines = []
+    values = {
+        "LLM_GATEWAY_API_KEY": str(gateway_key or ""),
+        "LLM_GATEWAY_BASE_URL": str(gateway_base or ""),
+    }
+    output: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        key = stripped.split("=", 1)[0].removeprefix("export ").strip() if "=" in stripped else ""
+        if key in values:
+            if key not in seen:
+                output.append(f"{key}={values[key]}")
+                seen.add(key)
+        else:
+            output.append(line)
+    for key, value in values.items():
+        if key not in seen:
+            output.append(f"{key}={value}")
+    temp = path.with_suffix(path.suffix + ".tmp")
+    descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(output).rstrip() + "\n")
+    temp.replace(path)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _normalize_model_queue(value: Any) -> tuple[str, ...]:

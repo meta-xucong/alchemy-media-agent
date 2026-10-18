@@ -175,43 +175,35 @@ class Settings(BaseModel):
         "V3_CAPABILITY_SHADOW_AUDIT_ENABLED", "true"
     ).lower() in {"1", "true", "yes", "on"}
     mock_image_provider_enabled: bool = os.getenv("MOCK_IMAGE_PROVIDER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    # One credential and base URL serve both text-model protocols. Image
+    # provider credentials below remain independent.
+    llm_gateway_api_key: str | None = os.getenv("LLM_GATEWAY_API_KEY")
+    # Text-model traffic must use the explicitly configured unified gateway.
+    # OPENAI_BASE_URL may belong to image generation and must not silently
+    # become the text router.
+    llm_gateway_base_url: str | None = os.getenv("LLM_GATEWAY_BASE_URL") or None
     openai_api_key: str | None = _normalize_openai_api_key(
         os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
     )
     openai_base_url: str | None = _normalize_openai_base_url(os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))
-    anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
-    anthropic_auth_token: str | None = os.getenv("ANTHROPIC_AUTH_TOKEN") or _claude_env_value("ANTHROPIC_AUTH_TOKEN")
-    anthropic_base_url: str | None = os.getenv("ANTHROPIC_BASE_URL") or _claude_env_value("ANTHROPIC_BASE_URL")
     gemini_image_api_key: str | None = os.getenv("GEMINI_IMAGE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     gemini_image_base_url: str | None = os.getenv("GEMINI_IMAGE_BASE_URL") or os.getenv("GOOGLE_GEMINI_BASE_URL")
     gemini_image_generation_enabled: bool = os.getenv("GEMINI_IMAGE_GENERATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     byteplus_api_key: str | None = os.getenv("BYTEPLUS_API_KEY")
-    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "deepseek")
-    default_llm_model: str = os.getenv(
-        "DEFAULT_LLM_MODEL",
-        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro")),
-    )
+    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "anthropic")
+    default_llm_model: str = os.getenv("DEFAULT_LLM_MODEL", "claude-sonnet-5-5")
     backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "openai")
-    backup_llm_model: str = os.getenv(
-        "BACKUP_LLM_MODEL",
-        os.getenv("OPENAI_LLM_MODEL", "gpt-5.6-terra"),
-    )
-    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-5.6-terra")
+    backup_llm_model: str = os.getenv("BACKUP_LLM_MODEL", "kimi-k3")
+    openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-6.1-sol")
     kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", "kimi-for-coding")
-    deepseek_llm_model: str = os.getenv(
-        "DEEPSEEK_LLM_MODEL",
-        os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro"),
-    )
+    deepseek_llm_model: str = os.getenv("DEEPSEEK_LLM_MODEL", "deepseek-v4-pro")
     deepseek_llm_base_url: str | None = _deepseek_base_url_from_env()
     deepseek_llm_api_key: str | None = _deepseek_api_key_from_env()
     llm_prompt_planning_enabled: bool = os.getenv("LLM_PROMPT_PLANNING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     lab_llm_enabled: bool = os.getenv("LAB_LLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-    lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "deepseek"))
-    lab_llm_model: str = os.getenv(
-        "LAB_LLM_MODEL",
-        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "deepseek-v4-pro")),
-    )
+    lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", "anthropic")
+    lab_llm_model: str = os.getenv("LAB_LLM_MODEL", "claude-sonnet-5-5")
     lab_openai_api_key: str | None = _normalize_openai_api_key(
         os.getenv("LAB_OPENAI_API_KEY")
         or os.getenv("V2_OPENAI_API_KEY")
@@ -361,6 +353,8 @@ def update_runtime_settings(
     doubao_image_api_key: str | None = None,
     doubao_image_base_url: str | None = None,
     gemini_image_model: str | None = None,
+    llm_gateway_api_key: str | None = None,
+    llm_gateway_base_url: str | None = None,
     default_llm_provider: str | None = None,
     default_llm_model: str | None = None,
     backup_llm_model: str | None = None,
@@ -377,14 +371,9 @@ def update_runtime_settings(
     image_work_intensity: str | None = None,
     openai_api_key: str | None = None,
     openai_base_url: str | None = None,
-    anthropic_api_key: str | None = None,
-    anthropic_base_url: str | None = None,
-    deepseek_llm_api_key: str | None = None,
     gemini_image_api_key: str | None = None,
     gemini_image_base_url: str | None = None,
     gemini_image_generation_enabled: bool | None = None,
-    lab_openai_api_key: str | None = None,
-    lab_kimi_api_key: str | None = None,
     lab_doubao_vision_api_key: str | None = None,
 ) -> Settings:
     if default_image_provider:
@@ -395,6 +384,10 @@ def update_runtime_settings(
         settings.doubao_image_model = doubao_image_model.strip()
     if gemini_image_model:
         settings.gemini_image_model = gemini_image_model.strip()
+    if llm_gateway_api_key:
+        settings.llm_gateway_api_key = llm_gateway_api_key.strip()
+    if llm_gateway_base_url is not None:
+        settings.llm_gateway_base_url = llm_gateway_base_url.strip().rstrip("/") or None
     if default_image_model:
         settings.default_image_model = default_image_model.strip()
         if settings.default_image_provider == "gemini_image":
@@ -427,29 +420,10 @@ def update_runtime_settings(
         settings.lab_doubao_vision_base_url = _normalize_openai_base_url(lab_doubao_vision_base_url.strip()) if lab_doubao_vision_base_url.strip() else None
     if default_llm_model:
         settings.default_llm_model = default_llm_model.strip()
-        if settings.default_llm_provider in {"anthropic", "kimi"}:
-            settings.kimi_llm_model = default_llm_model.strip()
-        elif settings.default_llm_provider == "deepseek":
-            settings.deepseek_llm_model = default_llm_model.strip()
-        else:
-            settings.openai_llm_model = default_llm_model.strip()
     if backup_llm_model:
         settings.backup_llm_model = backup_llm_model.strip()
-    if settings.default_llm_provider in {"anthropic", "kimi"}:
-        settings.default_llm_provider = "anthropic"
-        settings.default_llm_model = settings.kimi_llm_model
-        settings.backup_llm_provider = "openai"
-        settings.backup_llm_model = settings.openai_llm_model
-    elif settings.default_llm_provider == "deepseek":
-        settings.default_llm_provider = "deepseek"
-        settings.default_llm_model = settings.deepseek_llm_model
-        settings.backup_llm_provider = "openai"
-        settings.backup_llm_model = settings.openai_llm_model
-    else:
-        settings.default_llm_provider = "openai"
-        settings.default_llm_model = settings.openai_llm_model
-        settings.backup_llm_provider = "deepseek"
-        settings.backup_llm_model = settings.deepseek_llm_model
+    settings.default_llm_provider = "anthropic" if settings.default_llm_model.strip().lower().startswith("claude-") else "openai"
+    settings.backup_llm_provider = "anthropic" if settings.backup_llm_model.strip().lower().startswith("claude-") else "openai"
     if settings.default_image_provider == "gemini_image" and settings.gemini_image_generation_enabled:
         settings.default_image_model = settings.gemini_image_model
     elif settings.default_image_provider == "doubao_image":
@@ -467,12 +441,6 @@ def update_runtime_settings(
         settings.doubao_image_api_key = doubao_image_api_key.strip()
     if doubao_image_base_url is not None:
         settings.doubao_image_base_url = _normalize_openai_base_url(doubao_image_base_url.strip()) if doubao_image_base_url.strip() else None
-    if anthropic_api_key:
-        settings.anthropic_auth_token = anthropic_api_key.strip()
-    if anthropic_base_url is not None:
-        settings.anthropic_base_url = anthropic_base_url.strip() or None
-    if deepseek_llm_api_key:
-        settings.deepseek_llm_api_key = deepseek_llm_api_key.strip()
     if gemini_image_api_key:
         settings.gemini_image_api_key = gemini_image_api_key.strip()
     if gemini_image_base_url is not None:
@@ -481,10 +449,6 @@ def update_runtime_settings(
         settings.gemini_image_generation_enabled = bool(gemini_image_generation_enabled)
         if settings.gemini_image_generation_enabled and settings.default_image_provider == "gemini_image":
             settings.default_image_model = settings.gemini_image_model
-    if lab_openai_api_key:
-        settings.lab_openai_api_key = _normalize_openai_api_key(lab_openai_api_key)
-    if lab_kimi_api_key:
-        settings.lab_kimi_api_key = lab_kimi_api_key.strip()
     if lab_doubao_vision_api_key:
         settings.lab_doubao_vision_api_key = lab_doubao_vision_api_key.strip()
     return settings
@@ -495,6 +459,8 @@ def persist_runtime_settings_to_env(env_path: Path | None = None) -> None:
         return
     path = Path(env_path or settings.runtime_env_path)
     values = {
+        "LLM_GATEWAY_API_KEY": settings.llm_gateway_api_key or "",
+        "LLM_GATEWAY_BASE_URL": settings.llm_gateway_base_url or "",
         "DEFAULT_IMAGE_PROVIDER": settings.default_image_provider,
         "DEFAULT_IMAGE_MODEL": settings.default_image_model,
         "OPENAI_IMAGE_MODEL": settings.openai_image_model,
@@ -510,16 +476,12 @@ def persist_runtime_settings_to_env(env_path: Path | None = None) -> None:
         "OPENAI_LLM_MODEL": settings.openai_llm_model,
         "KIMI_LLM_MODEL": settings.kimi_llm_model,
         "DEEPSEEK_LLM_MODEL": settings.deepseek_llm_model,
-        "DEEPSEEK_LLM_BASE_URL": settings.deepseek_llm_base_url or "",
         "LAB_LLM_PROVIDER": settings.lab_llm_provider,
         "LAB_LLM_MODEL": settings.lab_llm_model,
-        "LAB_OPENAI_BASE_URL": settings.lab_openai_base_url or "",
-        "LAB_KIMI_BASE_URL": settings.lab_kimi_base_url or "",
         "LAB_DOUBAO_VISION_MODEL": settings.lab_doubao_vision_model,
         "LAB_DOUBAO_VISION_BASE_URL": settings.lab_doubao_vision_base_url or "",
         "IMAGE_WORK_INTENSITY": settings.image_work_intensity,
         "OPENAI_BASE_URL": settings.openai_base_url or "",
-        "ANTHROPIC_BASE_URL": settings.anthropic_base_url or "",
     }
     _write_env_values(path, values)
 

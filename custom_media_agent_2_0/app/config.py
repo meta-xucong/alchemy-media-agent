@@ -9,13 +9,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_CLAUDE_CODE_FALLBACK_MODELS: tuple[str, ...] = (
-    "gpt-5.6-terra",
-    "kimi-k2.6",
-    "kimi-for-coding",
+    "kimi-k3",
+    "gpt-6.1-sol",
 )
 
 
-def _load_env_file(path: Path) -> None:
+def _load_env_file(path: Path, *, override: bool = False) -> None:
     if not path.exists():
         return
     try:
@@ -32,7 +31,10 @@ def _load_env_file(path: Path) -> None:
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         if key:
-            os.environ.setdefault(key, value)
+            if override and key in {"LLM_GATEWAY_API_KEY", "LLM_GATEWAY_BASE_URL"}:
+                os.environ[key] = value
+            else:
+                os.environ.setdefault(key, value)
 
 
 def _load_project_env() -> None:
@@ -40,6 +42,12 @@ def _load_project_env() -> None:
     if configured:
         _load_env_file(Path(configured).expanduser())
     _load_env_file(PROJECT_ROOT / ".env")
+    runtime_gateway_env = Path(
+        os.getenv("V2_DATA_DIR", str(PROJECT_ROOT / ".v2_data"))
+    ).expanduser() / "llm_gateway.env"
+    # Runtime settings own this one write-only credential and intentionally
+    # override stale startup EnvironmentFile values after a settings update.
+    _load_env_file(runtime_gateway_env, override=True)
 
 
 _load_project_env()
@@ -77,7 +85,7 @@ class Settings:
     object_storage_prefix: str = "v2/"
     trace_project: str = "alchemy-media-agent-v2"
     agent_runtime: str = "openai_agents_sdk"
-    default_agent_model: str = "gpt-4.1-mini"
+    default_agent_model: str = "claude-sonnet-5-5"
     data_dir: Path = PROJECT_ROOT / ".v2_data"
     storage_dir: Path = PROJECT_ROOT / ".v2_storage"
     case_index_path: Path = PROJECT_ROOT / ".v2_data" / "case_index.json"
@@ -112,6 +120,8 @@ class Settings:
     case_thumbnail_prewarm_variant: str = "grid"
     case_thumbnail_prewarm_limit: int = 0
     image_generation_provider: str = "auto"
+    llm_gateway_api_key: str | None = None
+    llm_gateway_base_url: str | None = None
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_image_model: str = "gpt-image-2"
@@ -150,7 +160,7 @@ class Settings:
     claude_orchestrator_fallback_base_url: str | None = None
     claude_orchestrator_fallback_auth_token: str | None = None
     claude_orchestrator_fallback_max_models_per_stage: int = 3
-    claude_orchestrator_fallback_stage_timeout_seconds: float = 25.0
+    claude_orchestrator_fallback_stage_timeout_seconds: float = 90.0
     claude_checkpoint_orchestrator_enabled: bool = False
     claude_checkpoint_max_stage_retries: int = 2
     claude_checkpoint_stage_timeout_seconds: float = 180.0
@@ -229,7 +239,7 @@ def load_settings() -> Settings:
         object_storage_prefix=os.getenv("V2_OBJECT_STORAGE_PREFIX", "v2/"),
         trace_project=os.getenv("V2_AGENT_TRACE_PROJECT", "alchemy-media-agent-v2"),
         agent_runtime=os.getenv("V2_AGENT_RUNTIME", "openai_agents_sdk"),
-        default_agent_model=os.getenv("V2_AGENT_DEFAULT_MODEL", "gpt-4.1-mini"),
+        default_agent_model=os.getenv("V2_AGENT_DEFAULT_MODEL", "claude-sonnet-5-5"),
         data_dir=Path(os.getenv("V2_DATA_DIR", str(PROJECT_ROOT / ".v2_data"))),
         storage_dir=Path(os.getenv("V2_STORAGE_DIR", str(PROJECT_ROOT / ".v2_storage"))),
         case_index_path=Path(os.getenv("V2_CASE_INDEX_PATH", str(PROJECT_ROOT / ".v2_data" / "case_index.json"))),
@@ -290,10 +300,12 @@ def load_settings() -> Settings:
         case_thumbnail_prewarm_variant=os.getenv("V2_CASE_THUMBNAIL_PREWARM_VARIANT", "grid"),
         case_thumbnail_prewarm_limit=max(0, int(os.getenv("V2_CASE_THUMBNAIL_PREWARM_LIMIT", "0"))),
         image_generation_provider=os.getenv("V2_IMAGE_GENERATION_PROVIDER", "auto"),
+        llm_gateway_api_key=os.getenv("LLM_GATEWAY_API_KEY") or None,
+        llm_gateway_base_url=(os.getenv("LLM_GATEWAY_BASE_URL") or "").rstrip() or None,
         openai_api_key=os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY") or None,
         openai_base_url=_normalize_openai_base_url(os.getenv("V2_OPENAI_BASE_URL")),
         openai_image_model=os.getenv("V2_OPENAI_IMAGE_MODEL", "gpt-image-2"),
-        openai_image_timeout_seconds=float(os.getenv("V2_OPENAI_IMAGE_TIMEOUT_SECONDS", "240")),
+        openai_image_timeout_seconds=float(os.getenv("V2_OPENAI_IMAGE_TIMEOUT_SECONDS", "600")),
         openai_image_high_resolution_timeout_seconds=float(
             os.getenv("V2_OPENAI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", "900")
         ),
@@ -343,7 +355,7 @@ def load_settings() -> Settings:
         claude_orchestrator_enabled=os.getenv("V2_CLAUDE_ORCHESTRATOR_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
         claude_orchestrator_cli=os.getenv("V2_CLAUDE_ORCHESTRATOR_CLI", "claude"),
-        claude_orchestrator_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL") or None,
+        claude_orchestrator_model=os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "claude-sonnet-5-5") or None,
         claude_orchestrator_multimodal_model=(
             os.getenv("V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL") or "doubao-seed-2-0-lite-260428"
         ),
@@ -368,23 +380,15 @@ def load_settings() -> Settings:
             "V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS",
             DEFAULT_CLAUDE_CODE_FALLBACK_MODELS,
         ),
-        claude_orchestrator_fallback_base_url=(
-            os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL") or ""
-        ).rstrip()
-        or None,
-        claude_orchestrator_fallback_auth_token=(
-            os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN")
-            or os.getenv("OPENAI_API_KEY")
-            or _codex_auth_value("OPENAI_API_KEY")
-            or None
-        ),
+        claude_orchestrator_fallback_base_url=None,
+        claude_orchestrator_fallback_auth_token=None,
         claude_orchestrator_fallback_max_models_per_stage=max(
             1,
             int(os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE", "3")),
         ),
         claude_orchestrator_fallback_stage_timeout_seconds=max(
             5.0,
-            float(os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS", "25")),
+            float(os.getenv("V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS", "90")),
         ),
         claude_checkpoint_orchestrator_enabled=os.getenv(
             "V2_CLAUDE_CHECKPOINT_ORCHESTRATOR_ENABLED",

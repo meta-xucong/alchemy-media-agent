@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
+import copy
 import json
 import math
 import os
@@ -22,6 +23,7 @@ from .contracts import (
     BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
     BrainRunRequest,
 )
+from .model_routing_receipts import sanitize_model_attempts
 from .prompts import build_remote_payload, system_prompt_for_stage
 from .stage_trace import record_stage_event
 
@@ -36,6 +38,10 @@ class BrainProviderUnavailable(RuntimeError):
 
 class BrainProviderError(RuntimeError):
     """Raised when a configured remote brain provider fails."""
+
+
+class BrainPolicyRefusalError(BrainProviderError):
+    """Raised when a provider explicitly refuses the requested content."""
 
 
 class _BrainProtocolUnsupported(BrainProviderError):
@@ -119,6 +125,10 @@ class BrainPromptRequestContractInvalid(BrainPromptContractInvalid):
 
 class BrainExecutionBudgetExceeded(BrainProviderError):
     """The shared logical Brain budget ended before another remote call."""
+
+
+class BrainCandidateBudgetExceeded(BrainProviderError):
+    """One model used its allocated slice while time remains for the next model."""
 
 
 class BrainInvalidJsonResponse(BrainProviderError):
@@ -369,6 +379,7 @@ _ACTIVE_EXECUTION_BUDGET: ContextVar[_BrainExecutionBudget | None] = ContextVar(
     "v3_active_remote_brain_execution_budget",
     default=None,
 )
+_ACTIVE_CANDIDATE_DEADLINE: ContextVar[float | None] = ContextVar("v3_brain_candidate_deadline", default=None)
 _ACTIVE_TRANSPORT_TRACE: ContextVar[dict[str, Any] | None] = ContextVar(
     "v3_active_remote_brain_transport_trace",
     default=None,
@@ -387,6 +398,8 @@ _STREAM_SEMANTIC_IDLE_TIMEOUT_MAX_SECONDS = 45.0
 _TRANSPORT_TRACE_ATTR = "_v3_brain_transport_trace"
 _TRANSPORT_WORKER_STOPPED_ATTR = "_v3_brain_transport_worker_stopped"
 _TRANSPORT_FAILURE_RECEIPT_ATTR = "_v3_brain_transport_failure_receipt"
+_TRANSPORT_MODEL_ATTEMPTS_ATTR = "_v3_brain_model_attempts"
+_TRANSPORT_MODEL_ROUTING_ATTR = "_v3_brain_model_routing"
 _TRANSPORT_ATTEMPT_RECEIPT_KEY = "_alchemy_brain_transport_attempt"
 _BRAIN_OUTPUT_TOKEN_DEFAULT = 20_000
 _BRAIN_OUTPUT_TOKEN_MAX = 32_768
@@ -396,9 +409,10 @@ class V3LLMBrainProvider:
     """Small provider adapter that keeps V3 brain calls optional."""
 
     def __init__(self) -> None:
-        self.provider = _env("V3_LLM_BRAIN_PROVIDER") or _preferred_provider()
-        self.provider = self.provider.strip().lower()
-        self.model = _env("V3_LLM_BRAIN_MODEL") or _default_model(self.provider)
+        self.model = _env("V3_LLM_BRAIN_MODEL") or "claude-sonnet-5-5"
+        self.backup_model = _env("V3_LLM_BRAIN_BACKUP_MODEL") or "kimi-k3"
+        self.provider = _model_protocol(self.model) or "unsupported"
+        self.backup_provider = _model_protocol(self.backup_model) or "unsupported"
         # A provider-specific reasoning control is opt-in. The collector can
         # observe private reasoning without changing the model's creative
         # decision policy; transport compatibility must not silently change
@@ -479,6 +493,14 @@ class V3LLMBrainProvider:
                 "model": model,
                 "health_checked": False,
             }
+        if provider not in {"anthropic", "openai"}:
+            return {
+                "available": False,
+                "reason_code": "unsupported_model_route",
+                "provider": provider,
+                "model": model,
+                "health_checked": False,
+            }
         try:
             _api_key, base_url = self._credentials()
         except BrainProviderUnavailable:
@@ -514,6 +536,93 @@ class V3LLMBrainProvider:
         }
 
     def run(self, request: BrainRunRequest) -> dict[str, Any]:
+        fallback_models = ["kimi-k3", self.backup_model, "gpt-6.1-sol"]
+        fallback_candidates = []
+        seen_models = {self.model.strip().lower()}
+        for model in fallback_models:
+            normalized = model.strip().lower()
+            if not normalized or normalized in seen_models:
+                continue
+            seen_models.add(normalized)
+            fallback_candidates.append((_model_protocol(model) or "unsupported", model))
+        candidates = [(self.provider, self.model), *fallback_candidates]
+        attempts: list[dict[str, Any]] = []
+        last_error: BrainProviderError | None = None
+        for index, (provider_name, model_name) in enumerate(candidates):
+            if provider_name not in {"anthropic", "openai"}:
+                raise BrainProviderUnavailable(
+                    f"remote Brain model {model_name!r} has no supported gateway protocol route",
+                    reason_code="unsupported_model_route",
+                )
+            candidate = copy.copy(self)
+            candidate.provider = provider_name
+            candidate.model = model_name
+            budget = _ACTIVE_EXECUTION_BUDGET.get()
+            candidate_deadline: float | None = None
+            if budget is not None:
+                now = time.perf_counter()
+                reserve = _required_finalizer_reserve_seconds(request)
+                stage_end = budget.deadline - reserve
+                available = max(0.0, stage_end - now)
+                remaining_candidates = len(candidates) - index
+                if available < BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS * remaining_candidates:
+                    budget_error = BrainExecutionBudgetExceeded(
+                        "remote Brain logical execution budget cannot fit the remaining model candidates and finalizer reserve"
+                    )
+                    if (
+                        index > 0
+                        and isinstance(last_error, BrainTransportTimeoutError)
+                        and budget.remaining_seconds() > 0.0
+                    ):
+                        raise last_error from budget_error
+                    if index > 0 and last_error is not None:
+                        raise budget_error from last_error
+                    raise budget_error
+                candidate_deadline = now + available / remaining_candidates
+            token = _ACTIVE_CANDIDATE_DEADLINE.set(candidate_deadline)
+            started = time.perf_counter()
+            try:
+                result = candidate._run_single_model(request)
+                receipt = result.get(_TRANSPORT_RECEIPT_KEY)
+                if isinstance(receipt, dict):
+                    receipt.update(
+                        {
+                            "primary_model": candidates[0][1],
+                            "selected_model": model_name,
+                            "selected_provider": provider_name,
+                            "fallback_used": index > 0,
+                            "model_attempts": attempts + [
+                                {"model": model_name, "outcome": "accepted", "elapsed_ms": int((time.perf_counter() - started) * 1000)}
+                            ],
+                        }
+                    )
+                return result
+            except BrainProviderError as exc:
+                last_error = exc
+                attempts.append(
+                    {"model": model_name, "outcome": "failed", "failure_class": _safe_failure_class(exc), "elapsed_ms": int((time.perf_counter() - started) * 1000)}
+                )
+                if index + 1 >= len(candidates) or not _is_model_failover_eligible(exc):
+                    setattr(exc, _TRANSPORT_MODEL_ATTEMPTS_ATTR, _safe_model_attempts(attempts))
+                    setattr(
+                        exc,
+                        _TRANSPORT_MODEL_ROUTING_ATTR,
+                        {
+                            "stage": _safe_brain_stage(request.stage),
+                            "primary_model": candidates[0][1],
+                            "selected_model": model_name,
+                            "selected_provider": provider_name,
+                            "fallback_used": index > 0,
+                        },
+                    )
+                    raise
+            finally:
+                _ACTIVE_CANDIDATE_DEADLINE.reset(token)
+        if last_error is not None:
+            raise last_error
+        raise BrainProviderUnavailable("no configured remote Brain model candidates")
+
+    def _run_single_model(self, request: BrainRunRequest) -> dict[str, Any]:
         """Run one Brain decision with bounded transport and JSON recovery.
 
         A malformed JSON reply is not an accepted creative decision.  The
@@ -611,7 +720,7 @@ class V3LLMBrainProvider:
                 raise
             try:
                 self._ensure_budget_available()
-            except BrainExecutionBudgetExceeded as budget_error:
+            except (BrainExecutionBudgetExceeded, BrainCandidateBudgetExceeded) as budget_error:
                 budget = _ACTIVE_EXECUTION_BUDGET.get()
                 if (
                     isinstance(first_error, BrainTransportTimeoutError)
@@ -652,7 +761,7 @@ class V3LLMBrainProvider:
                 raise
             try:
                 recovered = self._run_remote_attempt(runner, request, json_recovery=False)
-            except BrainExecutionBudgetExceeded as budget_error:
+            except (BrainExecutionBudgetExceeded, BrainCandidateBudgetExceeded) as budget_error:
                 budget = _ACTIVE_EXECUTION_BUDGET.get()
                 if (
                     isinstance(first_error, BrainTransportTimeoutError)
@@ -790,6 +899,13 @@ class V3LLMBrainProvider:
             raise BrainExecutionBudgetExceeded(
                 "remote Brain logical execution budget exhausted before another remote decision"
             )
+        candidate_deadline = _ACTIVE_CANDIDATE_DEADLINE.get()
+        if candidate_deadline is not None:
+            available_for_stage = min(available_for_stage, max(0.0, candidate_deadline - now))
+            if available_for_stage < BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS:
+                raise BrainCandidateBudgetExceeded(
+                    "remote Brain candidate slice expired while preserving the finalizer handoff window"
+                )
         # ``_call_with_timeout`` may grant one bounded progress grace window
         # when a streaming response is still producing semantic content.  A
         # real-image plan must pay for that grace from its own stage window;
@@ -871,6 +987,7 @@ class V3LLMBrainProvider:
         timeout_seconds = self._effective_timeout_seconds(request)
         started = time.perf_counter()
         try:
+            import httpx
             from openai import OpenAI
 
             # Central Brain has one bounded remote attempt.  SDK-level retries
@@ -894,12 +1011,14 @@ class V3LLMBrainProvider:
                         {"role": "user", "content": build_remote_payload(request)},
                     ],
                     text={"format": {"type": "json_object"}},
-                    timeout=timeout_seconds,
+                    timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds)),
                     max_output_tokens=self.max_tokens,
                 )
                 _mark_transport_event("request_dispatched")
                 _mark_transport_event("complete_response_started")
                 _mark_transport_event("complete_response_observed")
+                if _openai_response_has_policy_refusal(response):
+                    raise BrainPolicyRefusalError("remote Brain policy refusal")
                 text = getattr(response, "output_text", None) or ""
                 if not text:
                     text = _response_text_from_openai(response)
@@ -912,6 +1031,8 @@ class V3LLMBrainProvider:
             finally:
                 _unregister_transport_close(client_registration)
         except BrainTransportTimeoutError:
+            raise
+        except BrainPolicyRefusalError:
             raise
         except BrainInvalidJsonResponse:
             raise
@@ -972,7 +1093,6 @@ class V3LLMBrainProvider:
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 "response_format": {"type": "json_object"},
-                "temperature": 0,
                 "max_tokens": self.max_tokens,
                 "stream": True,
             }
@@ -992,6 +1112,8 @@ class V3LLMBrainProvider:
             _mark_transport_event("json_parse_completed")
             return parsed
         except BrainTransportTimeoutError:
+            raise
+        except BrainPolicyRefusalError:
             raise
         except BrainInvalidJsonResponse:
             raise
@@ -1031,6 +1153,7 @@ class V3LLMBrainProvider:
         timeout_seconds = self._effective_timeout_seconds(request)
         started = time.perf_counter()
         try:
+            import httpx
             from openai import OpenAI
 
             _mark_transport_event("client_constructing")
@@ -1052,7 +1175,7 @@ class V3LLMBrainProvider:
                     ],
                     response_format={"type": "json_object"},
                     temperature=0,
-                    timeout=timeout_seconds,
+                    timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds)),
                     max_tokens=self.max_tokens,
                 )
                 _mark_transport_event("request_dispatched")
@@ -1063,6 +1186,10 @@ class V3LLMBrainProvider:
                 if _response_ended_at_output_limit(response, choice=choice):
                     raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
                 message = getattr(choice, "message", None)
+                finish_reason = str(getattr(choice, "finish_reason", "") or "").strip().lower()
+                refusal = getattr(message, "refusal", None)
+                if finish_reason == "content_filter" or refusal:
+                    raise BrainPolicyRefusalError("remote Brain policy refusal")
                 text = _chat_completion_message_text(message)
                 if text:
                     _mark_transport_event("first_content_observed")
@@ -1073,6 +1200,8 @@ class V3LLMBrainProvider:
             finally:
                 _unregister_transport_close(client_registration)
         except BrainTransportTimeoutError:
+            raise
+        except BrainPolicyRefusalError:
             raise
         except BrainInvalidJsonResponse:
             raise
@@ -1105,16 +1234,16 @@ class V3LLMBrainProvider:
             headers[token_header] = api_key if token_header == "x-api-key" else f"Bearer {api_key}"
             if self.provider == "anthropic":
                 headers["anthropic-version"] = "2023-06-01"
-            url = f"{base_url.rstrip('/')}/v1/messages"
+                headers["authorization"] = f"Bearer {api_key}"
+            url = _anthropic_messages_url(base_url)
             payload = {
                 "model": self.model,
                 "max_tokens": self.max_tokens,
-                "temperature": 0.2,
                 "system": _system_prompt(request.stage, json_recovery=json_recovery),
                 "messages": [{"role": "user", "content": build_remote_payload(request)}],
             }
             _mark_transport_event("client_constructing")
-            with httpx.Client(timeout=timeout_seconds) as client:
+            with httpx.Client(timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds))) as client:
                 client_registration = _register_transport_close(client)
                 try:
                     _mark_transport_event("client_constructed")
@@ -1129,11 +1258,15 @@ class V3LLMBrainProvider:
                     _unregister_transport_close(client_registration)
             _mark_transport_event("json_parse_started")
             response_json = response.json()
+            if _anthropic_response_has_policy_refusal(response_json):
+                raise BrainPolicyRefusalError("remote Brain policy refusal")
             if _response_ended_at_output_limit(response_json):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
             parsed = _loads_json_object(_anthropic_text(response_json))
             _mark_transport_event("json_parse_completed")
             return parsed
+        except BrainPolicyRefusalError:
+            raise
         except BrainTransportTimeoutError:
             raise
         except BrainInvalidJsonResponse:
@@ -1149,60 +1282,14 @@ class V3LLMBrainProvider:
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
     def _credentials(self) -> tuple[str, str | None]:
-        if self.provider in {"anthropic", "kimi", "claude"}:
-            api_key = (
-                _env("V3_LLM_BRAIN_API_KEY")
-                or _settings_value("anthropic_auth_token")
-                or _settings_value("anthropic_api_key")
-                or _settings_value("lab_kimi_api_key")
-            )
-            base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("anthropic_base_url") or _settings_value("lab_kimi_base_url")
-        elif self.provider == "deepseek":
-            # DeepSeek is OpenAI-compatible at transport level, but it owns
-            # its own configured credential/base URL.  Do not silently route
-            # Central Brain calls through the unrelated image gateway simply
-            # because OPENAI_API_KEY is also present in the process.
-            api_key = (
-                _env("V3_LLM_BRAIN_API_KEY")
-                or _settings_value("deepseek_llm_api_key")
-            )
-            base_url = (
-                _env("V3_LLM_BRAIN_BASE_URL")
-                or _settings_value("deepseek_llm_base_url")
-            )
-        else:
-            api_key = _env("V3_LLM_BRAIN_API_KEY") or _settings_value("openai_api_key") or _settings_value("lab_openai_api_key")
-            base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("openai_base_url") or _settings_value("lab_openai_base_url")
+        api_key = _env("LLM_GATEWAY_API_KEY")
+        base_url = _env("LLM_GATEWAY_BASE_URL")
         api_key = _normalize_provider_api_key(api_key)
         if not api_key:
             raise BrainProviderUnavailable("remote brain API key is not configured")
-        return str(api_key), str(base_url) if base_url else None
-
-
-def _default_model(provider: str) -> str:
-    if provider in {"anthropic", "kimi", "claude"}:
-        return _settings_value("kimi_llm_model") or _settings_value("backup_llm_model") or "kimi-for-coding"
-    if provider == "deepseek":
-        return _settings_value("deepseek_llm_model") or _settings_value("default_llm_model") or "deepseek-v4-pro"
-    return _settings_value("openai_llm_model") or _settings_value("default_llm_model") or "gpt-5.6-terra"
-
-
-def _preferred_provider() -> str:
-    configured = str(_settings_value("default_llm_provider") or "").strip().lower()
-    if configured in {"openai", "deepseek", "anthropic", "kimi", "claude"}:
-        return configured
-    if _settings_value("openai_api_key") or _settings_value("lab_openai_api_key"):
-        return "openai"
-    return _settings_value("default_llm_provider") or "openai"
-
-
-def _settings_value(name: str) -> Any:
-    try:
-        from app.config import settings
-
-        return getattr(settings, name, None)
-    except Exception:
-        return None
+        if not base_url or not str(base_url).strip():
+            raise BrainProviderUnavailable("unified LLM gateway base URL is not configured")
+        return str(api_key), str(base_url)
 
 
 def _request_timeout_cap_seconds(request: BrainRunRequest) -> float | None:
@@ -1678,6 +1765,9 @@ def _annotate_transport_failure(
     )
     if receipt.get("stage") == "unknown" and stage:
         receipt["stage"] = _safe_brain_stage(stage)
+    model_attempts = getattr(exc, _TRANSPORT_MODEL_ATTEMPTS_ATTR, None)
+    if isinstance(model_attempts, list):
+        receipt["model_attempts"] = _safe_model_attempts(model_attempts)
     setattr(exc, _TRANSPORT_FAILURE_RECEIPT_ATTR, receipt)
     return exc
 
@@ -1698,15 +1788,43 @@ def transport_failure_receipt(exc: BaseException) -> dict[str, Any]:
     # Dropping the cause trace would misclassify a real upstream call as a
     # local preflight failure.
     receipts: list[dict[str, Any]] = []
+    model_attempts: list[dict[str, Any]] = []
+    model_routing: dict[str, Any] = {}
     for item in chain:
         annotated = getattr(item, _TRANSPORT_FAILURE_RECEIPT_ATTR, None)
         if isinstance(annotated, dict):
             receipts.append(annotated)
+        recorded_model_attempts = getattr(item, _TRANSPORT_MODEL_ATTEMPTS_ATTR, None)
+        if isinstance(recorded_model_attempts, list):
+            model_attempts.extend(recorded_model_attempts)
+        recorded_routing = getattr(item, _TRANSPORT_MODEL_ROUTING_ATTR, None)
+        if isinstance(recorded_routing, dict) and not model_routing:
+            model_routing = recorded_routing
         trace = getattr(item, _TRANSPORT_TRACE_ATTR, None)
         if isinstance(trace, dict):
             receipts.append(_safe_transport_trace_receipt(trace))
-    if not receipts:
+    safe_attempts = _safe_model_attempts(model_attempts)
+    if not receipts and not safe_attempts:
         return {}
+    if not receipts:
+        aggregate = {
+            "schema_version": "v3_brain_transport_attempt_v1",
+            "stage": str(model_routing.get("stage") or "unknown"),
+            "attempts": min(2, len(safe_attempts)),
+            "request_acceptance": "unknown",
+            "request_dispatched": False,
+            "response_started": False,
+            "first_content_observed": False,
+            "complete_response_observed": False,
+            "json_parse_started": False,
+            "json_parse_completed": False,
+            "json_recovery": False,
+            "protocol_fallback_attempted": False,
+            "json_serialization_recovery_attempted": False,
+            "transient_recovery_attempted": False,
+        }
+        _add_safe_model_routing(aggregate, model_routing, safe_attempts)
+        return aggregate
     stage = next(
         (
             str(item.get("stage") or "")
@@ -1725,7 +1843,7 @@ def transport_failure_receipt(exc: BaseException) -> dict[str, Any]:
         isinstance(item.get("attempts"), int) and not isinstance(item.get("attempts"), bool)
         for item in receipts
     ) else 0
-    return {
+    aggregate = {
         "schema_version": "v3_brain_transport_attempt_v1",
         "stage": stage if stage in _SAFE_BRAIN_STAGES else "unknown",
         "attempts": max(0, min(2, attempts)),
@@ -1747,6 +1865,40 @@ def transport_failure_receipt(exc: BaseException) -> dict[str, Any]:
             bool(item.get("transient_recovery_attempted")) for item in receipts
         ),
     }
+    _add_safe_model_routing(aggregate, model_routing, safe_attempts)
+    return aggregate
+
+
+def _add_safe_model_routing(
+    receipt: dict[str, Any],
+    routing: dict[str, Any],
+    model_attempts: list[dict[str, Any]],
+) -> None:
+    if not model_attempts:
+        return
+    stage = routing.get("stage")
+    if isinstance(stage, str) and stage in _SAFE_BRAIN_STAGES:
+        receipt["stage"] = stage
+    if (
+        isinstance(routing.get("primary_model"), str)
+        and isinstance(routing.get("selected_model"), str)
+        and routing.get("selected_provider") in {"anthropic", "openai"}
+        and isinstance(routing.get("fallback_used"), bool)
+    ):
+        receipt.update(
+            {
+                "primary_model": str(routing["primary_model"])[:120],
+                "selected_model": str(routing["selected_model"])[:120],
+                "selected_provider": routing["selected_provider"],
+                "fallback_used": routing["fallback_used"],
+            }
+        )
+        receipt["model_attempts"] = model_attempts[:4]
+
+
+def _safe_model_attempts(attempts: list[Any]) -> list[dict[str, Any]]:
+    """Keep only bounded model ids, outcome classes, and elapsed time."""
+    return sanitize_model_attempts(attempts) or []
 
 
 def _register_transport_close(resource: Any) -> tuple[_TransportCancellation, int] | None:
@@ -1951,7 +2103,7 @@ def _mark_transport_dispatch_from_exception(error: BaseException) -> None:
             return
 
 
-_RETRYABLE_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+_RETRYABLE_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 _RETRYABLE_TRANSIENT_PROVIDER_MESSAGE_PATTERNS = (
     re.compile(
@@ -2004,11 +2156,76 @@ def _is_retryable_transient_provider_error(error: BaseException) -> bool:
     return False
 
 
+def _is_model_failover_eligible(error: BaseException) -> bool:
+    chain: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and id(current) not in {id(item) for item in chain} and len(chain) < 8:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    for item in chain:
+        if isinstance(item, BrainPolicyRefusalError):
+            return False
+        message = str(item).lower()
+        if any(marker in message for marker in ("safety refusal", "policy refusal", "content policy", "permission denied")):
+            return False
+        if isinstance(item, BrainCandidateBudgetExceeded):
+            return True
+        if isinstance(item, BrainInvalidJsonResponse):
+            return True
+        if isinstance(item, BrainTransportTimeoutError) and not _transport_worker_stopped(item):
+            return False
+        if isinstance(item, BrainTransportTimeoutError) or _is_transport_timeout_exception(item):
+            return True
+        response = getattr(item, "response", None)
+        status = getattr(response, "status_code", None) or getattr(item, "status_code", None)
+        if isinstance(status, int):
+            if status in _RETRYABLE_TRANSIENT_HTTP_STATUS_CODES:
+                return True
+            if status == 403:
+                try:
+                    body = response.json() if response is not None else getattr(item, "body", None)
+                except Exception:
+                    body = None
+                if not isinstance(body, dict):
+                    return False
+                error = body.get("error") if isinstance(body.get("error"), dict) else body
+                code = str(error.get("code") or error.get("type") or "").strip().lower()
+                scope = str(error.get("scope") or error.get("category") or "").strip().lower()
+                return code in {"model_not_found", "model_not_available", "model_access_denied", "model_permission"} and scope in {"model", "candidate"}
+            return False
+        if _is_retryable_transient_provider_error(item):
+            return True
+    return False
+
+
+def _safe_failure_class(error: BaseException) -> str:
+    if isinstance(error, BrainPolicyRefusalError):
+        return "policy_refusal"
+    if isinstance(error, BrainCandidateBudgetExceeded):
+        return "candidate_budget_exhausted"
+    if isinstance(error, (BrainTransportTimeoutError,)) or _is_transport_timeout_exception(error):
+        return "timeout"
+    if isinstance(error, BrainInvalidJsonResponse):
+        return "invalid_structured_response"
+    if _is_retryable_transient_provider_error(error):
+        return "retryable_upstream"
+    return "provider_error"
+
+
 def _chat_completions_url(base_url: str | None) -> str:
     base = str(base_url or "https://api.openai.com/v1").rstrip("/")
     if not base:
         base = "https://api.openai.com/v1"
     return f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+
+
+def _anthropic_messages_url(base_url: str | None) -> str:
+    base = str(base_url or "https://api.anthropic.com").rstrip("/")
+    if base.endswith("/v1/messages"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/messages"
+    return f"{base}/v1/messages"
 
 
 def _collect_openai_chat_completion_stream(
@@ -2032,7 +2249,7 @@ def _collect_openai_chat_completion_stream(
         max(0.1, stream_progress_timeout + 1.0),
     )
     timeout = httpx.Timeout(
-        connect=min(20.0, max(0.1, float(timeout_seconds))),
+        connect=min(8.0, max(0.1, float(timeout_seconds))),
         read=stream_read_timeout,
         write=min(30.0, max(0.1, float(timeout_seconds))),
         pool=min(20.0, max(0.1, float(timeout_seconds))),
@@ -2067,6 +2284,9 @@ def _collect_openai_chat_completion_stream(
             if isinstance(choice, dict)
             else ""
         )
+        delta = choice.get("delta") if isinstance(choice, dict) else None
+        if finish_reason == "content_filter" or _stream_delta_text(delta, "refusal"):
+            raise BrainPolicyRefusalError("remote Brain policy refusal")
         if isinstance(choice, dict) and (
             _response_ended_at_output_limit(item, choice=choice)
             or finish_reason
@@ -2079,7 +2299,6 @@ def _collect_openai_chat_completion_stream(
             }
         ):
             raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-        delta = choice.get("delta") if isinstance(choice, dict) else None
         reasoning_content = _stream_delta_text(delta, "reasoning_content")
         if reasoning_content:
             trace = _ACTIVE_TRANSPORT_TRACE.get()
@@ -2302,14 +2521,7 @@ def _remote_enabled(*, force: bool = False) -> bool:
         return raw.strip().lower() in {"1", "true", "yes", "on"}
     if force:
         return True
-    if _env("V3_LLM_BRAIN_API_KEY"):
-        return True
-    provider = (_env("V3_LLM_BRAIN_PROVIDER") or _preferred_provider()).strip().lower()
-    if provider == "deepseek":
-        return bool(_settings_value("deepseek_llm_api_key"))
-    if provider in {"anthropic", "kimi", "claude"}:
-        return bool(_settings_value("anthropic_auth_token") or _settings_value("anthropic_api_key"))
-    return bool(_settings_value("openai_api_key") or _settings_value("lab_openai_api_key"))
+    return bool(_env("LLM_GATEWAY_API_KEY") and _env("LLM_GATEWAY_BASE_URL"))
 
 
 def _float_env(name: str, default: float) -> float:
@@ -2327,6 +2539,15 @@ def _int_env(name: str, default: int) -> int:
 
 
 _SUPPORTED_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max", "xhigh"})
+
+
+def _model_protocol(model: str | None) -> str | None:
+    normalized = str(model or "").strip().lower()
+    if normalized.startswith("claude-"):
+        return "anthropic"
+    if normalized.startswith(("gpt-", "o1", "o3", "o4", "deepseek-", "kimi-", "doubao-")):
+        return "openai"
+    return None
 
 
 def _configured_reasoning_effort(provider: str) -> str | None:
@@ -2465,6 +2686,43 @@ def pop_transport_receipt(payload: dict[str, Any]) -> dict[str, Any]:
         "json_serialization_recovery_attempted": attempted,
         "json_serialization_recovery_succeeded": succeeded,
     }
+    primary_model = raw.get("primary_model")
+    selected_model = raw.get("selected_model")
+    selected_provider = raw.get("selected_provider")
+    fallback_used = raw.get("fallback_used")
+    if any(value is not None for value in (primary_model, selected_model, selected_provider, fallback_used)):
+        if not (
+            isinstance(primary_model, str)
+            and isinstance(selected_model, str)
+            and selected_provider in {"anthropic", "openai"}
+            and isinstance(fallback_used, bool)
+        ):
+            return {}
+        receipt.update(
+            {
+                "primary_model": primary_model[:120],
+                "selected_model": selected_model[:120],
+                "selected_provider": selected_provider,
+                "fallback_used": fallback_used,
+            }
+        )
+        model_attempts = raw.get("model_attempts")
+        if isinstance(model_attempts, list):
+            if len(model_attempts) > 4:
+                return {}
+            sanitized = []
+            for item in model_attempts:
+                if not isinstance(item, dict) or not isinstance(item.get("model"), str) or item.get("outcome") not in {"failed", "accepted"}:
+                    return {}
+                sanitized.append(
+                    {
+                        "model": item["model"][:120],
+                        "outcome": item["outcome"],
+                        **({"failure_class": str(item["failure_class"])[:48]} if item.get("failure_class") else {}),
+                        **({"elapsed_ms": max(0, int(item["elapsed_ms"]))} if isinstance(item.get("elapsed_ms"), int) else {}),
+                    }
+                )
+            receipt["model_attempts"] = sanitized
     transport_attempt = raw.get("transport_attempt")
     if transport_attempt is not None:
         if not isinstance(transport_attempt, dict):
@@ -2512,6 +2770,8 @@ def pop_transport_receipt(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _response_text_from_openai(response: Any) -> str:
+    if _openai_response_has_policy_refusal(response):
+        raise BrainPolicyRefusalError("remote Brain policy refusal")
     chunks: list[str] = []
     for item in getattr(response, "output", []) or []:
         for content in getattr(item, "content", []) or []:
@@ -2521,9 +2781,44 @@ def _response_text_from_openai(response: Any) -> str:
     return "\n".join(chunks)
 
 
+def _openai_response_has_policy_refusal(response: Any) -> bool:
+    def field(value: Any, name: str) -> Any:
+        return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+    status = str(field(response, "status") or "").strip().lower()
+    incomplete = field(response, "incomplete_details")
+    incomplete_reason = str(field(incomplete, "reason") or "").strip().lower()
+    if status == "refusal" or incomplete_reason in {"content_filter", "refusal"}:
+        return True
+    for item in field(response, "output") or []:
+        if str(field(item, "type") or "").strip().lower() == "refusal":
+            return True
+        for content in field(item, "content") or []:
+            if str(field(content, "type") or "").strip().lower() == "refusal":
+                return True
+    return False
+
+
 def _anthropic_text(payload: dict[str, Any]) -> str:
     chunks: list[str] = []
     for item in payload.get("content", []) if isinstance(payload, dict) else []:
         if isinstance(item, dict) and item.get("type") == "text":
             chunks.append(str(item.get("text") or ""))
     return "\n".join(chunks)
+
+
+def _anthropic_response_has_policy_refusal(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if str(payload.get("stop_reason") or "").strip().lower() == "refusal":
+        return True
+    stop_details = payload.get("stop_details")
+    if isinstance(stop_details, dict) and str(stop_details.get("type") or "").strip().lower() == "refusal":
+        return True
+    content = payload.get("content")
+    if isinstance(content, list):
+        return any(
+            isinstance(block, dict) and str(block.get("type") or "").strip().lower() == "refusal"
+            for block in content
+        )
+    return False

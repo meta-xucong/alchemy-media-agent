@@ -8,14 +8,14 @@ Core rule:
 Claude Code remains the creative brain.
 Text-only orchestration uses the fast text source.
 Uploaded-image / visual-understanding orchestration uses the multimodal source.
-GPT is the preferred text fallback, with Kimi as the final backup.
+Kimi K3 is the first text fallback, followed by GPT-6.1-sol.
 ```
 
 ## Why This Exists
 
 V2 depends on Claude Code for creative orchestration. The app must not bypass Claude and continue with a deterministic creative fallback when any upstream source is overloaded, out of quota, or slow.
 
-Primary routing still calls `claude -p`. For fallback, V2 first uses the GPT OpenAI-compatible checkpoint lane when the fallback model is GPT, then falls back to Claude Code model switching for Kimi-style Anthropic-compatible backups. Both paths must emit the same checkpoint JSON schema.
+Primary routing still calls `claude -p`. On an eligible route failure, V2 attempts Kimi K3 and then GPT-6.1-sol through the unified gateway key, using protocol-correct adapters and the same checkpoint JSON schema.
 
 ## Runtime Strategy
 
@@ -26,7 +26,7 @@ Primary routing:
 3. Requests with uploaded assets that require visual understanding or hard input-image preservation use `V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL`, currently `doubao-seed-2-0-lite-260428`.
 4. V2 writes `claude_source_selection.json` into the Claude workspace, so every checkpoint stage and single-stage call uses the same selected source for that request.
 5. A stage soft timeout first triggers shorter compression/retry stages on the same selected source.
-6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the fallback source. GPT fallback uses the OpenAI-compatible checkpoint lane; Kimi fallback uses the Claude Code Anthropic-compatible lane.
+6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries Kimi K3, then GPT-6.1-sol after an eligible Kimi failure.
 7. If the selected multimodal source is required for uploaded-image understanding, V2 must fail closed when that source is unavailable. It must not continue with a text-only fallback that cannot inspect uploaded images.
 
 Current production intent:
@@ -37,7 +37,7 @@ multimodal source: doubao-seed-2-0-lite-260428
 fallback source: gpt-5.6-terra -> kimi-k2.6 -> kimi-for-coding
 ```
 
-DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. GPT is the preferred text fallback when the primary text source is unavailable, and Kimi remains the last conservative backup. DeepSeek is never used for required uploaded-image understanding because it is not a multimodal source.
+DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. Kimi K3 is the first text fallback and GPT-6.1-sol follows when the primary route is unavailable. DeepSeek is never used for required uploaded-image understanding because it is not a multimodal source.
 
 ## Configuration
 

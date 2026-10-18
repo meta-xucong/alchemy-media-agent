@@ -183,7 +183,6 @@ def offline_transport(monkeypatch, tmp_path):
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "deepseek")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "doc290-offline-not-a-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://doc290.invalid/v1")
-    monkeypatch.setattr(brain_providers, "_settings_value", lambda _name: None)
 
     from app.config import settings
 

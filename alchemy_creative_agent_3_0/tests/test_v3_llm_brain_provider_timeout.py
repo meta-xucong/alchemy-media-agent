@@ -21,19 +21,26 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainExecutionBudgetExceeded,
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
+    BrainPolicyRefusalError,
     BrainTransportTimeoutError,
     V3LLMBrainProvider,
 )
 
 
 class _HangingBrainProvider(V3LLMBrainProvider):
+    def _run_anthropic_compatible(self, request: BrainRunRequest, *, json_recovery: bool = False):
+        time.sleep(2.0)
+        return {"image_set_plan": {"outputs": []}}
+
     def _run_openai_compatible(self, request: BrainRunRequest, *, json_recovery: bool = False):
         time.sleep(2.0)
         return {"image_set_plan": {"outputs": []}}
 
 
-def test_brain_provider_request_timeout_is_outer_hard_cap(monkeypatch) -> None:
-    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+def test_brain_provider_timeout_is_bounded_per_model_attempt(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
     provider = _HangingBrainProvider()
 
     request = BrainRunRequest(
@@ -50,7 +57,9 @@ def test_brain_provider_request_timeout_is_outer_hard_cap(monkeypatch) -> None:
     with pytest.raises(BrainTransportTimeoutError, match="timed out") as failure:
         provider.run(request)
 
-    assert time.perf_counter() - started < 1.6
+    # Direct provider calls without an outer V3 execution scope may use one
+    # bounded attempt for each model; each individual attempt remains capped.
+    assert time.perf_counter() - started < 2.6
     assert failure.value.safe_metadata() == {
         "schema_version": "v3_brain_transport_failure_v1",
         "stage": "provider_prompt_finalize",
@@ -893,12 +902,16 @@ def test_stream_read_timeout_does_not_underbid_post_semantic_idle_window(monkeyp
         timeout_seconds=120,
     )
 
+    assert fake_client.calls[0]["timeout"].kwargs["connect"] == 8.0
     assert fake_client.calls[0]["timeout"].kwargs["read"] == 31.0
 
 
 def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:
     provider = object.__new__(V3LLMBrainProvider)
     provider.provider = "openai"
+    provider.model = "gpt-6.1-sol"
+    provider.backup_provider = "openai"
+    provider.backup_model = "gpt-backup-test"
     provider.timeout = 0.1
     provider.max_tokens = 8_000
     release = threading.Event()
@@ -932,7 +945,7 @@ def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:
         requested_image_count=1,
         metadata={"canonical_prompt_context": {}},
     )
-    budget = _BrainExecutionBudget(total_seconds=2.0, started_at=time.perf_counter())
+    budget = _BrainExecutionBudget(total_seconds=30.0, started_at=time.perf_counter())
     budget_token = _ACTIVE_EXECUTION_BUDGET.set(budget)
     worker_finished = False
     try:
@@ -950,6 +963,9 @@ def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:
 def test_stopped_timeout_gets_only_one_bounded_retry() -> None:
     provider = object.__new__(V3LLMBrainProvider)
     provider.provider = "openai"
+    provider.model = "gpt-6.1-sol"
+    provider.backup_provider = "openai"
+    provider.backup_model = "gpt-backup-test"
     provider.timeout = 0.1
     provider.max_tokens = 8_000
     calls = 0
@@ -975,7 +991,7 @@ def test_stopped_timeout_gets_only_one_bounded_retry() -> None:
         requested_image_count=1,
         metadata={"canonical_prompt_context": {}},
     )
-    budget = _BrainExecutionBudget(total_seconds=2.0, started_at=time.perf_counter())
+    budget = _BrainExecutionBudget(total_seconds=30.0, started_at=time.perf_counter())
     budget_token = _ACTIVE_EXECUTION_BUDGET.set(budget)
     try:
         result = provider.run(request)
@@ -1059,6 +1075,9 @@ def test_real_image_plan_retry_preserves_canonical_finalizer_handoff_window() ->
 def test_real_image_provider_run_preserves_timeout_when_retry_hits_handoff_window() -> None:
     provider = object.__new__(V3LLMBrainProvider)
     provider.provider = "openai"
+    provider.model = "gpt-6.1-sol"
+    provider.backup_provider = "openai"
+    provider.backup_model = "gpt-backup-test"
     provider.timeout = 300.0
     provider.max_tokens = 12000
     provider.calls = 0
@@ -1107,6 +1126,9 @@ def test_real_image_provider_run_preserves_timeout_when_retry_hits_handoff_windo
 def test_real_image_provider_run_keeps_budget_when_shared_deadline_is_exhausted() -> None:
     provider = object.__new__(V3LLMBrainProvider)
     provider.provider = "openai"
+    provider.model = "gpt-6.1-sol"
+    provider.backup_provider = "openai"
+    provider.backup_model = "gpt-backup-test"
     provider.timeout = 0.1
     provider.max_tokens = 8_000
     provider.calls = 0
@@ -1115,7 +1137,7 @@ def test_real_image_provider_run_keeps_budget_when_shared_deadline_is_exhausted(
         provider.calls += 1
         budget = _ACTIVE_EXECUTION_BUDGET.get()
         assert budget is not None
-        object.__setattr__(budget, "started_at", time.perf_counter() - 3.0)
+        object.__setattr__(budget, "started_at", time.perf_counter() - 31.0)
         raise BrainTransportTimeoutError(
             stage=request.stage,
             timeout_seconds=0.1,
@@ -1134,7 +1156,7 @@ def test_real_image_provider_run_keeps_budget_when_shared_deadline_is_exhausted(
         requested_image_count=1,
         metadata={"canonical_prompt_context": {}},
     )
-    budget = _BrainExecutionBudget(total_seconds=2.0, started_at=time.perf_counter())
+    budget = _BrainExecutionBudget(total_seconds=30.0, started_at=time.perf_counter())
     token = _ACTIVE_EXECUTION_BUDGET.set(budget)
     try:
         with pytest.raises(BrainExecutionBudgetExceeded) as failure:
@@ -1143,7 +1165,8 @@ def test_real_image_provider_run_keeps_budget_when_shared_deadline_is_exhausted(
         _ACTIVE_EXECUTION_BUDGET.reset(token)
 
     assert provider.calls == 1
-    assert isinstance(failure.value.__cause__, BrainTransportTimeoutError)
+    assert isinstance(failure.value.__cause__, BrainExecutionBudgetExceeded)
+    assert isinstance(failure.value.__cause__.__cause__, BrainTransportTimeoutError)
 
 
 @pytest.mark.parametrize("stage", ["plan", "generate", "doc277_project_planning"])
@@ -1283,6 +1306,27 @@ def test_openai_chat_stream_collector_returns_complete_json_and_marks_trace(monk
     assert trace["response_started"] is True
     assert trace["first_content_observed"] is True
     assert trace["complete_response_observed"] is True
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        'data: {"choices":[{"delta":{"refusal":"not allowed"}}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}',
+    ],
+)
+def test_openai_chat_stream_refusal_is_terminal(event, monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import _is_model_failover_eligible
+
+    _install_fake_httpx(monkeypatch, [event])
+    with pytest.raises(BrainPolicyRefusalError, match="policy refusal") as error:
+        _collect_openai_chat_completion_stream(
+            url="https://brain.example/v1/chat/completions",
+            api_key="redacted",
+            payload={"stream": True},
+            timeout_seconds=30,
+        )
+    assert not _is_model_failover_eligible(error.value)
 
 
 def test_openai_chat_stream_collector_flushes_multiline_sse_event_at_blank_line(monkeypatch) -> None:

@@ -64,6 +64,7 @@ def test_doc175_provider_shares_one_budget_and_blocks_before_a_late_remote_call(
     clock = [0.0]
     monkeypatch.setattr(providers_module.time, "perf_counter", lambda: clock[0])
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "300")
     provider = V3LLMBrainProvider()
     monkeypatch.setattr(provider, "_run_openai_compatible", lambda *_args, **_kwargs: {"ok": True})
@@ -461,6 +462,57 @@ def test_doc175_transport_attempt_projection_is_closed_and_preserves_dispatch_fa
     assert projected["request_dispatched"] is True
     assert "raw_prompt" not in projected
     assert _safe_remote_brain_transport_attempt({**receipt, "stage": "unsafe/path"}) == {}
+
+
+def test_doc175_terminal_model_attempts_survive_safe_public_projection() -> None:
+    from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+
+    receipt = {
+        "schema_version": "v3_brain_transport_attempt_v1",
+        "stage": "plan",
+        "attempts": 2,
+        "request_acceptance": "unknown",
+        "request_dispatched": False,
+        "response_started": False,
+        "first_content_observed": False,
+        "complete_response_observed": False,
+        "json_parse_started": False,
+        "json_parse_completed": False,
+        "json_recovery": False,
+        "json_serialization_recovery_attempted": False,
+        "transient_recovery_attempted": False,
+        "primary_model": "claude-sonnet-5-5",
+        "selected_model": "gpt-6.1-sol",
+        "selected_provider": "openai",
+        "fallback_used": True,
+        "model_attempts": [
+            {"model": "claude-sonnet-5-5", "outcome": "failed", "failure_class": "timeout", "elapsed_ms": 90},
+            {"model": "kimi-k3", "outcome": "failed", "failure_class": "retryable_upstream", "elapsed_ms": 90},
+            {"model": "gpt-custom-backup", "outcome": "failed", "failure_class": "retryable_upstream", "elapsed_ms": 90},
+            {"model": "gpt-6.1-sol", "outcome": "failed", "failure_class": "provider_api_error", "elapsed_ms": 91},
+        ],
+        "prompt": "must not leak",
+        "response": "must not leak",
+        "api_key": "must not leak",
+    }
+
+    runtime = _safe_remote_brain_transport_attempt(receipt)
+    public = V3ProductApiService._public_remote_brain_transport_attempt(receipt)
+    assert runtime["model_attempts"] == receipt["model_attempts"]
+    assert public["model_attempts"] == receipt["model_attempts"]
+    assert runtime["fallback_used"] is True
+    assert public["selected_model"] == "gpt-6.1-sol"
+    assert "must not leak" not in str(runtime)
+    assert "api_key" not in public
+
+    malformed = {
+        **receipt,
+        "model_attempts": [
+            {"model": "claude-sonnet-5-5", "outcome": "failed", "failure_class": "token=secret", "elapsed_ms": 12}
+        ],
+    }
+    assert _safe_remote_brain_transport_attempt(malformed) == {}
+    assert V3ProductApiService._public_remote_brain_transport_attempt(malformed) == {}
 
 
 def test_doc175_semantic_transport_attempt_reaches_blocked_outcome_safely(

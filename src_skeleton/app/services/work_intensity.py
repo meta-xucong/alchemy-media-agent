@@ -1,13 +1,31 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import re
+import time
 from typing import Any
 
 import httpx
 
 from app.config import openai_sdk_client_kwargs, settings
 from app.schemas import ImagePromptPlan
+
+
+class LLMStructuredOutputError(RuntimeError):
+    """A remote model returned content that did not match the JSON contract."""
+
+
+class LLMPlanningUnavailableError(RuntimeError):
+    """All configured remote planners failed; generation must stop."""
+
+    def __init__(self, message: str, *, model_attempts: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message)
+        self.model_attempts = list(model_attempts or [])
+
+
+LLM_LOGICAL_TIMEOUT_SECONDS = 210.0
+LLM_CANDIDATE_TIMEOUT_SECONDS = 90.0
 
 
 INTENSITY_PROFILES: dict[str, dict[str, Any]] = {
@@ -69,22 +87,34 @@ async def apply_work_intensity(
     if not _should_use_llm(intensity=intensity, provider_preference=provider_preference):
         return local_plan, summary
 
+    candidates = _planner_candidates()
+    if any(candidate["provider"] == "unsupported" for candidate in candidates):
+        raise LLMPlanningUnavailableError("A configured text model has no supported gateway protocol route.")
     llm_errors: dict[str, str] = {}
-    for index, candidate in enumerate(_planner_candidates()):
+    model_attempts: list[dict[str, Any]] = []
+    request_deadline = time.monotonic() + LLM_LOGICAL_TIMEOUT_SECONDS
+    for index, candidate in enumerate(candidates):
         provider = candidate["provider"]
         model = candidate["model"]
         if not _planner_configured(provider):
             continue
+        remaining = request_deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        candidate_timeout = _candidate_timeout_seconds(remaining, len(candidates) - index)
+        started = time.perf_counter()
         try:
-            llm_patch = await _ask_provider_for_prompt_plan(
-                provider,
-                model,
-                local_plan,
-                original_prompt=original_prompt,
-                intensity=intensity,
-                profile=profile,
-                asset_context=asset_context,
-            )
+            async with asyncio.timeout(candidate_timeout):
+                llm_patch = await _ask_provider_for_prompt_plan(
+                    provider,
+                    model,
+                    local_plan,
+                    original_prompt=original_prompt,
+                    intensity=intensity,
+                    profile=profile,
+                    asset_context=asset_context,
+                    timeout_seconds=candidate_timeout,
+                )
             fallback_used = index > 0 and bool(llm_errors)
             merged = _merge_llm_patch(
                 local_plan,
@@ -97,32 +127,41 @@ async def apply_work_intensity(
                 original_prompt=original_prompt,
                 asset_context=asset_context,
             )
+            model_attempts.append({
+                "model": model,
+                "outcome": "accepted",
+                "elapsed_ms": _elapsed_milliseconds(started),
+            })
             return merged, {
                 **summary,
                 "planner": "llm",
                 "llm_used": True,
                 "llm_provider": provider,
                 "llm_model": model,
+                "primary_model": candidates[0]["model"],
+                "selected_model": model,
+                "selected_provider": provider,
                 "fallback_used": fallback_used,
+                "model_attempts": model_attempts,
                 **llm_errors,
             }
         except Exception as exc:
+            model_attempts.append({
+                "model": model,
+                "outcome": "failed",
+                "failure_class": _safe_failure_class(exc),
+                "elapsed_ms": _elapsed_milliseconds(started),
+            })
             error_key = "selected_llm_error" if index == 0 else "fallback_llm_error"
             llm_errors[error_key] = type(exc).__name__
+            if not _is_failover_eligible(exc):
+                break
 
-    return local_plan.model_copy(
-        update={
-            "variables": {
-                **local_plan.variables,
-                **llm_errors,
-                "llm_planning_fallback": True,
-            }
-        }
-    ), {
-        **summary,
-        **llm_errors,
-        "llm_used": False,
-    }
+    raise LLMPlanningUnavailableError(
+        "All configured LLM planning candidates failed; image generation was stopped "
+        f"({', '.join(sorted(llm_errors)) or 'no candidate configured'}).",
+        model_attempts=model_attempts,
+    )
 
 
 def _apply_local_profile(
@@ -181,25 +220,56 @@ def _should_use_llm(*, intensity: str, provider_preference: str | None) -> bool:
         return False
     if not settings.llm_prompt_planning_enabled:
         return False
-    return any(_planner_configured(candidate["provider"]) for candidate in _planner_candidates())
+    # Configuration availability is not an opt-out. When remote planning is
+    # enabled, apply_work_intensity must fail closed if the unified gateway is
+    # missing instead of silently continuing with a local-only plan.
+    return True
 
 
 def _planner_candidates() -> list[dict[str, str]]:
-    selected = _normalize_llm_provider(settings.default_llm_provider)
-    fallback = _normalize_llm_provider(settings.backup_llm_provider)
-    order: list[str] = []
-    candidates = [selected]
-    if selected == "deepseek":
-        candidates.extend(["doubao", "openai", "anthropic"])
-    elif selected == "doubao":
-        candidates.extend(["deepseek", "openai", "anthropic"])
-    elif selected == "openai":
-        candidates.extend(["deepseek", "doubao", "anthropic"])
-    candidates.append(fallback)
-    for provider in candidates:
-        if provider not in order:
-            order.append(provider)
-    return [{"provider": provider, "model": _llm_model(provider)} for provider in order if _planner_configured(provider)]
+    if not settings.llm_gateway_api_key or not settings.llm_gateway_base_url:
+        return []
+    primary_model = settings.default_llm_model or "claude-sonnet-5-5"
+    fallback_model = settings.backup_llm_model or "kimi-k3"
+    fallback_models = ["kimi-k3", fallback_model, "gpt-6.1-sol"]
+    return [
+        {"provider": _text_model_protocol(primary_model), "model": primary_model},
+        *[
+            {"provider": _text_model_protocol(model), "model": model}
+            for model in dict.fromkeys(fallback_models)
+            if model.strip().lower() != primary_model.strip().lower()
+        ],
+    ]
+
+
+def _candidate_timeout_seconds(remaining_seconds: float, remaining_candidates: int) -> float:
+    """Return a hard wall-clock slice while retaining an equal fallback window."""
+
+    share = max(0.0, remaining_seconds) / max(1, remaining_candidates)
+    return min(LLM_CANDIDATE_TIMEOUT_SECONDS, share)
+
+
+def _elapsed_milliseconds(started: float) -> int:
+    return max(0, min(3_600_000, int((time.perf_counter() - started) * 1000)))
+
+
+def _safe_failure_class(exc: BaseException) -> str:
+    if isinstance(exc, LLMStructuredOutputError):
+        return "invalid_structured_response"
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return "timeout"
+    if _is_failover_eligible(exc):
+        return "retryable_upstream"
+    return "provider_error"
+
+
+def _text_model_protocol(model: str) -> str:
+    normalized = str(model or "").strip().lower()
+    if normalized.startswith("claude-"):
+        return "anthropic"
+    if normalized.startswith(("gpt-", "o1", "o3", "o4", "deepseek-", "kimi-", "doubao-")):
+        return "openai"
+    return "unsupported"
 
 
 def _normalize_llm_provider(provider: str | None) -> str:
@@ -224,11 +294,12 @@ def _llm_model(provider: str) -> str:
 
 
 def _planner_configured(provider: str) -> bool:
-    if provider == "openai":
-        return bool(settings.openai_api_key)
-    if provider in {"anthropic", "deepseek", "doubao"}:
-        return bool(_anthropic_token(provider))
-    return False
+    return bool(settings.llm_gateway_api_key and settings.llm_gateway_base_url) and provider in {"anthropic", "openai"}
+
+
+def _require_unified_gateway() -> None:
+    if not settings.llm_gateway_api_key or not settings.llm_gateway_base_url:
+        raise LLMPlanningUnavailableError("Unified text LLM gateway key and base URL must both be configured.")
 
 
 async def _ask_provider_for_prompt_plan(
@@ -240,6 +311,7 @@ async def _ask_provider_for_prompt_plan(
     intensity: str,
     profile: dict[str, Any],
     asset_context: dict[str, Any] | None = None,
+    timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
     if provider in {"anthropic", "deepseek", "doubao"}:
         return await _ask_anthropic_for_prompt_plan(
@@ -250,6 +322,7 @@ async def _ask_provider_for_prompt_plan(
             intensity=intensity,
             profile=profile,
             asset_context=asset_context,
+            timeout_seconds=timeout_seconds,
         )
     return await _ask_openai_for_prompt_plan(
         plan,
@@ -258,6 +331,7 @@ async def _ask_provider_for_prompt_plan(
         intensity=intensity,
         profile=profile,
         asset_context=asset_context,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -273,41 +347,73 @@ async def ask_llm_json_plan(
     if not settings.llm_prompt_planning_enabled:
         raise RuntimeError("LLM prompt planning is disabled")
     errors: dict[str, str] = {}
-    for index, candidate in enumerate(_planner_candidates()):
+    request_deadline = time.monotonic() + min(
+        LLM_LOGICAL_TIMEOUT_SECONDS,
+        max(1.0, timeout_seconds * 2.0),
+    )
+    candidates = _planner_candidates()
+    model_attempts: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates):
         provider = candidate["provider"]
         model = candidate["model"]
         if not _planner_configured(provider):
             continue
+        remaining = request_deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        candidate_timeout = _candidate_timeout_seconds(remaining, len(candidates) - index)
+        started = time.perf_counter()
         try:
-            if provider in {"anthropic", "deepseek", "doubao"}:
-                result = await _ask_anthropic_for_json_plan(
-                    provider=provider,
-                    system_prompt=system_prompt,
-                    user_payload=user_payload,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    timeout_seconds=timeout_seconds,
-                )
-            else:
-                result = await _ask_openai_for_json_plan(
-                    system_prompt=system_prompt,
-                    user_payload=user_payload,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    temperature=temperature,
-                    timeout_seconds=timeout_seconds,
-                )
+            async with asyncio.timeout(candidate_timeout):
+                if provider in {"anthropic", "deepseek", "doubao"}:
+                    result = await _ask_anthropic_for_json_plan(
+                        provider=provider,
+                        system_prompt=system_prompt,
+                        user_payload=user_payload,
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        timeout_seconds=candidate_timeout,
+                    )
+                else:
+                    result = await _ask_openai_for_json_plan(
+                        system_prompt=system_prompt,
+                        user_payload=user_payload,
+                        model=model,
+                        reasoning_effort=reasoning_effort,
+                        temperature=temperature,
+                        timeout_seconds=candidate_timeout,
+                    )
+            model_attempts.append({
+                "model": model,
+                "outcome": "accepted",
+                "elapsed_ms": _elapsed_milliseconds(started),
+            })
             return result, {
                 "llm_provider": provider,
                 "llm_model": model,
+                "primary_model": candidates[0]["model"],
+                "selected_model": model,
+                "selected_provider": provider,
                 "fallback_used": index > 0 and bool(errors),
+                "model_attempts": model_attempts,
                 **errors,
             }
         except Exception as exc:
+            model_attempts.append({
+                "model": model,
+                "outcome": "failed",
+                "failure_class": _safe_failure_class(exc),
+                "elapsed_ms": _elapsed_milliseconds(started),
+            })
             errors["selected_llm_error" if index == 0 else "fallback_llm_error"] = type(exc).__name__
+            if not _is_failover_eligible(exc):
+                break
     detail = "; ".join(f"{key}={value}" for key, value in errors.items())
-    raise RuntimeError(f"No configured LLM planner could return JSON{': ' + detail if detail else ''}")
+    raise LLMPlanningUnavailableError(
+        f"No configured LLM planner could return JSON{': ' + detail if detail else ''}",
+        model_attempts=model_attempts,
+    )
 
 
 async def _ask_openai_for_json_plan(
@@ -319,6 +425,7 @@ async def _ask_openai_for_json_plan(
     temperature: float,
     timeout_seconds: float,
 ) -> dict[str, Any]:
+    _require_unified_gateway()
     try:
         from openai import AsyncOpenAI
     except ModuleNotFoundError as exc:
@@ -326,9 +433,9 @@ async def _ask_openai_for_json_plan(
 
     client = AsyncOpenAI(
         **openai_sdk_client_kwargs(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            timeout=timeout_seconds,
+            api_key=settings.llm_gateway_api_key,
+            base_url=settings.llm_gateway_base_url,
+            timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds)),
             max_retries=0,
         )
     )
@@ -341,7 +448,6 @@ async def _ask_openai_for_json_plan(
         ],
         reasoning={"effort": reasoning_effort},
         text={"format": {"type": "json_object"}},
-        temperature=temperature,
         store=False,
     )
     return _loads_json_object(_response_text(response))
@@ -357,14 +463,14 @@ async def _ask_anthropic_for_json_plan(
     temperature: float,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    token = _anthropic_token(provider)
+    _require_unified_gateway()
+    token = settings.llm_gateway_api_key
     if not token:
         raise RuntimeError(f"{provider} compatible LLM token is not configured")
 
     payload = {
         "model": model,
         "max_tokens": _anthropic_max_tokens(provider, model, max_tokens),
-        "temperature": temperature,
         "system": system_prompt,
         "messages": [{"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
     }
@@ -374,8 +480,8 @@ async def _ask_anthropic_for_json_plan(
         "authorization": f"Bearer {token}",
         "x-api-key": token,
     }
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await client.post(_anthropic_messages_url(_anthropic_base_url(provider)), headers=headers, json=payload)
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds))) as client:
+        response = await client.post(_anthropic_messages_url(settings.llm_gateway_base_url), headers=headers, json=payload)
         response.raise_for_status()
     return _loads_json_object(_anthropic_response_text(response.json()))
 
@@ -388,7 +494,9 @@ async def _ask_openai_for_prompt_plan(
     intensity: str,
     profile: dict[str, Any],
     asset_context: dict[str, Any] | None = None,
+    timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
+    _require_unified_gateway()
     try:
         from openai import AsyncOpenAI
     except ModuleNotFoundError as exc:
@@ -396,9 +504,9 @@ async def _ask_openai_for_prompt_plan(
 
     client = AsyncOpenAI(
         **openai_sdk_client_kwargs(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            timeout=30.0,
+            api_key=settings.llm_gateway_api_key,
+            base_url=settings.llm_gateway_base_url,
+            timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds)),
             max_retries=0,
         )
     )
@@ -431,15 +539,16 @@ async def _ask_anthropic_for_prompt_plan(
     intensity: str,
     profile: dict[str, Any],
     asset_context: dict[str, Any] | None = None,
+    timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
-    token = _anthropic_token(provider)
+    _require_unified_gateway()
+    token = settings.llm_gateway_api_key
     if not token:
         raise RuntimeError(f"{provider} compatible LLM token is not configured")
 
     payload = {
         "model": model,
         "max_tokens": _anthropic_max_tokens(provider, model, 1200),
-        "temperature": 0.2,
         "system": _planner_instruction(),
         "messages": [
             {
@@ -454,8 +563,8 @@ async def _ask_anthropic_for_prompt_plan(
         "authorization": f"Bearer {token}",
         "x-api-key": token,
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(_anthropic_messages_url(_anthropic_base_url(provider)), headers=headers, json=payload)
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds))) as client:
+        response = await client.post(_anthropic_messages_url(settings.llm_gateway_base_url), headers=headers, json=payload)
         response.raise_for_status()
     return _loads_json_object(_anthropic_response_text(response.json()))
 
@@ -506,7 +615,7 @@ def _anthropic_token(provider: str = "anthropic") -> str | None:
         return settings.deepseek_llm_api_key
     if provider == "doubao":
         return settings.lab_doubao_vision_api_key
-    return settings.anthropic_api_key or settings.anthropic_auth_token
+    return settings.llm_gateway_api_key
 
 
 def _anthropic_base_url(provider: str = "anthropic") -> str | None:
@@ -514,7 +623,7 @@ def _anthropic_base_url(provider: str = "anthropic") -> str | None:
         return settings.deepseek_llm_base_url
     if provider == "doubao":
         return settings.lab_doubao_vision_base_url
-    return settings.anthropic_base_url
+    return settings.llm_gateway_base_url
 
 
 def _anthropic_max_tokens(provider: str, model: str, requested: int) -> int:
@@ -534,22 +643,76 @@ def _anthropic_messages_url(base_url: str | None) -> str:
     return f"{base}/v1/messages"
 
 
+def _is_failover_eligible(exc: BaseException) -> bool:
+    """Fail over only for a classified route failure, never for a local defect."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < 8 and current not in chain:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    for item in chain:
+        if isinstance(item, LLMStructuredOutputError):
+            return True
+        if isinstance(item, TimeoutError):
+            return True
+        if isinstance(item, (httpx.TimeoutException, httpx.TransportError)):
+            return True
+        response = getattr(item, "response", None)
+        status = getattr(response, "status_code", None) or getattr(item, "status_code", None)
+        if not isinstance(status, int):
+            continue
+        if status in {408, 425, 429, 500, 502, 503, 504}:
+            return True
+        if status == 403:
+            payload: Any = None
+            try:
+                payload = response.json() if response is not None else getattr(item, "body", None)
+            except Exception:
+                payload = None
+            if _is_model_scoped_denial(payload):
+                return True
+        # 401, unclassified 403, ordinary 4xx, and malformed local requests
+        # are terminal for this logical request.
+        return False
+    return False
+
+
+def _is_model_scoped_denial(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else payload
+    code = str(error.get("code") or error.get("type") or "").strip().lower()
+    scope = str(error.get("scope") or error.get("category") or "").strip().lower()
+    return code in {"model_not_found", "model_not_available", "model_access_denied", "model_permission"} and scope in {"model", "candidate"}
+
+
 def _response_text(response: Any) -> str:
+    incomplete = getattr(response, "incomplete_details", None)
+    incomplete_reason = getattr(incomplete, "reason", None)
+    if str(incomplete_reason or "").lower() in {"content_filter", "refusal"}:
+        raise PermissionError("OpenAI-compatible model refused or filtered the request; fallback is not permitted")
     output_text = getattr(response, "output_text", None)
-    if output_text:
-        return output_text
     chunks: list[str] = []
     for item in getattr(response, "output", []) or []:
+        if str(getattr(item, "type", "")).lower() == "refusal":
+            raise PermissionError("OpenAI-compatible model refused the request; fallback is not permitted")
         for content in getattr(item, "content", []) or []:
+            content_type = str(getattr(content, "type", "")).lower()
+            if content_type == "refusal" or getattr(content, "refusal", None):
+                raise PermissionError("OpenAI-compatible model refused the request; fallback is not permitted")
             text = getattr(content, "text", None)
             if text:
                 chunks.append(text)
+    if output_text and str(getattr(response, "status", "")).lower() != "incomplete":
+        return output_text
     if chunks:
         return "".join(chunks)
-    raise RuntimeError("LLM planner response did not include text")
+    raise LLMStructuredOutputError("LLM planner response did not include text")
 
 
 def _anthropic_response_text(payload: dict[str, Any]) -> str:
+    if str(payload.get("stop_reason") or "").lower() == "refusal":
+        raise PermissionError("Claude refused the request; fallback is not permitted")
     content = payload.get("content") or []
     chunks: list[str] = []
     for item in content:
@@ -559,7 +722,7 @@ def _anthropic_response_text(payload: dict[str, Any]) -> str:
         return "".join(chunks)
     if payload.get("completion"):
         return str(payload["completion"])
-    raise RuntimeError("Fallback LLM planner response did not include text")
+    raise LLMStructuredOutputError("Fallback LLM planner response did not include text")
 
 
 def _loads_json_object(value: str) -> dict[str, Any]:
@@ -573,14 +736,17 @@ def _loads_json_object(value: str) -> dict[str, Any]:
         text = "\n".join(lines).strip()
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as first_error:
         start = text.find("{")
         end = text.rfind("}")
         if start < 0 or end < start:
-            raise
-        parsed = json.loads(text[start : end + 1])
+            raise LLMStructuredOutputError("LLM planner response was not valid JSON") from first_error
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise LLMStructuredOutputError("LLM planner response was not valid JSON") from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError("LLM planner response was not a JSON object")
+        raise LLMStructuredOutputError("LLM planner response was not a JSON object")
     return parsed
 
 

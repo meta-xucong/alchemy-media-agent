@@ -2217,7 +2217,7 @@ def _remote_allowed_for_request(request: BrainRunRequest) -> bool:
     raw = os.getenv("V3_LLM_BRAIN_REMOTE_ENABLED")
     if raw is not None:
         return raw.strip().lower() in {"1", "true", "yes", "on"}
-    if os.getenv("V3_LLM_BRAIN_API_KEY"):
+    if os.getenv("LLM_GATEWAY_API_KEY"):
         return True
     return bool(request.metadata.get("require_real_images") or request.metadata.get("real_image_generation"))
 

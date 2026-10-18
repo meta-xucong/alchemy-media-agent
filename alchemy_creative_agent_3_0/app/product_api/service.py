@@ -44,6 +44,7 @@ from ..generation_router.providers import (
 )
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
 from ..llm_brain.contracts import BRAIN_TRANSPORT_TIMEOUT_PHASES
+from ..llm_brain.model_routing_receipts import safe_model_identifier, sanitize_model_attempts
 from ..llm_brain.finalizer_lifecycle import (
     remote_brain_receipts_are_monotonic,
     safe_remote_brain_finalizer_lifecycle,
@@ -13991,7 +13992,7 @@ class V3ProductApiService:
             or any(value.get(key) for key in boolean_keys)
         ):
             return {}
-        return {
+        receipt = {
             "schema_version": "v3_brain_transport_attempt_v1",
             "stage": stage,
             "attempts": attempts,
@@ -14003,6 +14004,33 @@ class V3ProductApiService:
             **{key: value[key] for key in boolean_keys},
             "protocol_fallback_attempted": protocol_fallback_attempted,
         }
+        primary_model = value.get("primary_model")
+        selected_model = value.get("selected_model")
+        selected_provider = value.get("selected_provider")
+        fallback_used = value.get("fallback_used")
+        if any(item is not None for item in (primary_model, selected_model, selected_provider, fallback_used)):
+            safe_primary_model = safe_model_identifier(primary_model)
+            safe_selected_model = safe_model_identifier(selected_model)
+            if not (
+                safe_primary_model
+                and safe_selected_model
+                and selected_provider in {"anthropic", "openai"}
+                and isinstance(fallback_used, bool)
+            ):
+                return {}
+            receipt.update({
+                "primary_model": safe_primary_model,
+                "selected_model": safe_selected_model,
+                "selected_provider": selected_provider,
+                "fallback_used": fallback_used,
+            })
+        model_attempts = value.get("model_attempts")
+        if model_attempts is not None:
+            sanitized = sanitize_model_attempts(model_attempts, strict=True)
+            if sanitized is None:
+                return {}
+            receipt["model_attempts"] = sanitized
+        return receipt
 
     @classmethod
     def _public_remote_brain_serialization_failure(cls, value: Any) -> dict[str, Any]:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import shutil
 import signal
 import subprocess
@@ -46,8 +48,9 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "claude_soft_timeout",
     "claude_timeout",
     "claude_structured_output_retries_exhausted",
-    "claude_policy_refusal",
-    "claude_api_error",
+    "claude_candidate_access_denied",
+    "claude_upstream_unavailable",
+    "claude_connection_error",
     "claude_reasoning_not_supported",
     "kimi_context_canceled",
     "kimi_sub2api_502",
@@ -56,8 +59,10 @@ _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "upstream_context_canceled",
 }
 _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
-    "claude_policy_refusal",
-    "claude_api_error",
+    "claude_timeout",
+    "claude_connection_error",
+    "claude_upstream_unavailable",
+    "claude_candidate_access_denied",
     "claude_reasoning_not_supported",
     "kimi_context_canceled",
     "kimi_sub2api_502",
@@ -124,7 +129,10 @@ class ClaudeSourceSelection:
 
 
 class ClaudeInvocationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None, retryable: bool | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 QR_PRESERVATION_INSTRUCTION = (
@@ -267,6 +275,9 @@ def orchestrate_creative_request(
     candidate_case_details: list[PromptCase] | None = None,
     progress_callback: ClaudeProgressCallback | None = None,
 ) -> CreativeOrchestratorDecision:
+    from app.services.runtime_model_settings import refresh_runtime_gateway_credentials
+
+    refresh_runtime_gateway_credentials()
     started = time.perf_counter()
     fallback = _fallback_decision(
         request=request,
@@ -521,8 +532,7 @@ def get_orchestrator_status() -> OrchestratorStatusResponse:
         max_output_tokens=settings.claude_orchestrator_max_output_tokens,
         checkpoint_enabled=settings.claude_checkpoint_orchestrator_enabled,
         fallback_models=_claude_code_model_fallback_queue(),
-        fallback_base_url_configured=bool(settings.claude_orchestrator_fallback_base_url),
-        fallback_auth_token_configured=bool(settings.claude_orchestrator_fallback_auth_token),
+        llm_gateway_configured=bool(settings.llm_gateway_api_key and settings.llm_gateway_base_url),
         recent_invocations=recent[:10],
         last_success_at=success_records[0].created_at if success_records else None,
         last_failure_at=failure_records[0].created_at if failure_records else None,
@@ -703,6 +713,7 @@ def _invoke_checkpoint_stage_with_micro(
     progress_callback: ClaudeProgressCallback | None = None,
 ) -> tuple[dict[str, Any] | None, int]:
     attempts = 0
+    stage_deadline = time.perf_counter() + _checkpoint_stage_hard_timeout_seconds()
     max_retries = max(0, settings.claude_checkpoint_max_stage_retries)
     prompts = [(stage_name, prompt)]
     seen_prompts = {prompt}
@@ -733,7 +744,11 @@ def _invoke_checkpoint_stage_with_micro(
     for attempt_stage_name, attempt_prompt in prompts:
         attempts += 1
         started = time.perf_counter()
-        timeout_seconds = _checkpoint_stage_timeout_seconds(attempt_stage_name)
+        remaining_stage_seconds = stage_deadline - started
+        if remaining_stage_seconds <= 0:
+            last_failure = "claude_timeout"
+            break
+        timeout_seconds = min(_checkpoint_stage_timeout_seconds(attempt_stage_name), remaining_stage_seconds)
         _emit_claude_progress(
             progress_callback,
             stage=attempt_stage_name,
@@ -750,6 +765,7 @@ def _invoke_checkpoint_stage_with_micro(
                 stage_name=attempt_stage_name,
                 prompt=attempt_prompt,
                 schema=schema,
+                timeout_override=timeout_seconds,
                 **primary_kwargs,
             )
         except ClaudeInvocationError as exc:
@@ -828,6 +844,7 @@ def _invoke_checkpoint_stage_with_micro(
                     stage_name=attempt_stage_name,
                     prompt=attempt_prompt,
                     schema=schema,
+                    deadline=stage_deadline,
                     progress_callback=progress_callback,
                 )
                 attempts += int(fallback_meta.get("attempts") or 0)
@@ -959,6 +976,7 @@ def _invoke_checkpoint_stage_with_micro(
                 stage_name=stage_name,
                 prompt=ultra_micro_prompt or micro_prompt,
                 schema=schema,
+                deadline=stage_deadline,
                 progress_callback=progress_callback,
             )
             attempts += int(fallback_meta.get("attempts") or 0)
@@ -1190,20 +1208,25 @@ def _format_duration_ms(value: Any) -> str:
 
 
 def _claude_code_model_fallback_configured() -> bool:
-    return bool(
-        _claude_code_model_fallback_queue()
-        and (
-            settings.claude_orchestrator_fallback_base_url
-            or settings.claude_orchestrator_fallback_auth_token
-        )
-    )
+    return bool(_claude_code_model_fallback_queue() and settings.llm_gateway_api_key and settings.llm_gateway_base_url)
 
 
 def _claude_code_model_fallback_queue(*, exclude_model: str | None = None) -> list[str]:
-    models: list[str] = []
-    if settings.claude_orchestrator_fallback_model:
-        models.append(settings.claude_orchestrator_fallback_model)
-    models.extend(settings.claude_orchestrator_fallback_models or [])
+    # Keep the configured, user-selectable queue authoritative. The legacy
+    # single fallback remains readable, but trails the current ordered queue.
+    configured_models = getattr(settings, "claude_orchestrator_fallback_models", ())
+    # Preserve the canonical recovery order even when an older saved setting
+    # contains only GPT or a custom model: Kimi gets the first backup attempt,
+    # GPT remains the final built-in route.
+    configured = [
+        _text_value(model)
+        for model in (configured_models or ())
+        if _text_value(model).lower() not in {"kimi-k3", "gpt-6.1-sol"}
+    ]
+    models = ["kimi-k3", *configured, "gpt-6.1-sol"]
+    legacy_model = _text_value(getattr(settings, "claude_orchestrator_fallback_model", None))
+    if legacy_model and legacy_model.lower() not in {"kimi-k3", "gpt-6.1-sol"}:
+        models.append(legacy_model)
     primary = _text_value(exclude_model) or _text_value(settings.claude_orchestrator_model)
     return _dedupe(
         [
@@ -1216,12 +1239,20 @@ def _claude_code_model_fallback_queue(*, exclude_model: str | None = None) -> li
 
 def _claude_code_fallback_env_overrides() -> dict[str, str]:
     overrides: dict[str, str] = {}
-    if settings.claude_orchestrator_fallback_base_url:
-        overrides["ANTHROPIC_BASE_URL"] = settings.claude_orchestrator_fallback_base_url
-    if settings.claude_orchestrator_fallback_auth_token:
-        overrides["ANTHROPIC_AUTH_TOKEN"] = settings.claude_orchestrator_fallback_auth_token
-        overrides["ANTHROPIC_API_KEY"] = settings.claude_orchestrator_fallback_auth_token
+    if settings.llm_gateway_base_url:
+        overrides["OPENAI_BASE_URL"] = settings.llm_gateway_base_url
+    if settings.llm_gateway_api_key:
+        overrides["OPENAI_API_KEY"] = settings.llm_gateway_api_key
     return overrides
+
+
+def _claude_cli_gateway_base_url(base_url: str | None) -> str | None:
+    """Claude Code appends its own /v1/messages path to ANTHROPIC_BASE_URL."""
+    value = _text_value(base_url)
+    if not value:
+        return None
+    normalized = value.rstrip("/")
+    return normalized[:-3] if normalized.lower().endswith("/v1") else normalized
 
 
 def _strip_claude_code_model_fallback_env(env: dict[str, str]) -> None:
@@ -1239,6 +1270,7 @@ def _invoke_claude_code_model_fallbacks(
     stage_name: str,
     prompt: str,
     schema: dict[str, Any],
+    deadline: float | None = None,
     progress_callback: ClaudeProgressCallback | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = 0
@@ -1249,6 +1281,13 @@ def _invoke_claude_code_model_fallbacks(
     ]
     env_overrides = _claude_code_fallback_env_overrides()
     for index, model in enumerate(queue):
+        remaining_budget = settings.claude_orchestrator_fallback_stage_timeout_seconds
+        if deadline is not None:
+            remaining_budget = min(remaining_budget, deadline - time.perf_counter())
+        remaining = remaining_budget / max(1, len(queue) - index)
+        if remaining < 5.0:
+            last_failure = "claude_stage_budget_exhausted"
+            break
         attempts += 1
         next_model = queue[index + 1] if index + 1 < len(queue) else None
         fallback_stage_name = f"{stage_name}_model_fallback_{index + 1}"
@@ -1260,20 +1299,22 @@ def _invoke_claude_code_model_fallbacks(
             provider="claude-code-model-fallback",
             model=model,
             fallback_model=next_model,
-            timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+            timeout_seconds=remaining,
             attempt=attempts,
         )
         try:
-            if _is_openai_compatible_fallback_model(model):
+            protocol = _fallback_protocol_for_model(model)
+            if protocol == "openai":
                 result = _invoke_openai_compatible_stage_json(
                     workspace=workspace,
                     stage_name=fallback_stage_name,
                     prompt=prompt,
                     schema=schema,
                     model=model,
-                    timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                    reasoning_effort=_text_value(getattr(settings, "claude_orchestrator_effort", "low")) or "low",
+                    timeout_seconds=remaining,
                 )
-            else:
+            elif protocol == "anthropic":
                 result = _invoke_claude_stage_json(
                     command=command,
                     workspace=workspace,
@@ -1281,13 +1322,15 @@ def _invoke_claude_code_model_fallbacks(
                     prompt=prompt,
                     schema=schema,
                     model_override=model,
-                    fallback_model_override=next_model,
                     env_overrides=env_overrides,
                     setting_sources_override="project,local",
-                    include_effort=False,
+                    include_effort=True,
                     strip_model_fallback_env=True,
-                    timeout_override=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                    timeout_override=remaining,
                 )
+            else:
+                last_failure = "fallback_model_protocol_unsupported"
+                continue
         except ClaudeInvocationError as exc:
             last_failure = str(exc)
             _emit_claude_progress(
@@ -1297,14 +1340,14 @@ def _invoke_claude_code_model_fallbacks(
                 provider="claude-code-model-fallback",
                 model=model,
                 fallback_model=next_model,
-                timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                timeout_seconds=remaining,
                 duration_ms=_elapsed_ms(fallback_started),
                 failure_code=last_failure,
                 attempt=attempts,
             )
-            if last_failure not in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES and "output_token_limit" not in last_failure:
+            if _is_openai_fallback_failure_retryable(exc):
                 continue
-            continue
+            break
         if result:
             _emit_claude_progress(
                 progress_callback,
@@ -1313,7 +1356,7 @@ def _invoke_claude_code_model_fallbacks(
                 provider="claude-code-model-fallback",
                 model=model,
                 fallback_model=next_model,
-                timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+                timeout_seconds=remaining,
                 duration_ms=_elapsed_ms(fallback_started),
                 attempt=attempts,
             )
@@ -1326,7 +1369,7 @@ def _invoke_claude_code_model_fallbacks(
             provider="claude-code-model-fallback",
             model=model,
             fallback_model=next_model,
-            timeout_seconds=settings.claude_orchestrator_fallback_stage_timeout_seconds,
+            timeout_seconds=remaining,
             duration_ms=_elapsed_ms(fallback_started),
             failure_code=last_failure,
             attempt=attempts,
@@ -1335,12 +1378,20 @@ def _invoke_claude_code_model_fallbacks(
 
 
 def _is_openai_compatible_fallback_model(model: str | None) -> bool:
+    return _fallback_protocol_for_model(model) == "openai"
+
+
+def _fallback_protocol_for_model(model: str | None) -> str | None:
     normalized = _text_value(model).lower()
-    return normalized.startswith("gpt-") or normalized.startswith("o1") or normalized.startswith("o3") or normalized.startswith("o4")
+    if normalized.startswith("claude-"):
+        return "anthropic"
+    if normalized.startswith(("gpt-", "o1", "o3", "o4", "deepseek-", "kimi-", "doubao-")):
+        return "openai"
+    return None
 
 
-def _openai_chat_completions_url() -> str:
-    base = (settings.openai_base_url or "https://api.openai.com/v1").rstrip("/")
+def _openai_chat_completions_url(base_url: str | None = None) -> str:
+    base = (base_url or settings.llm_gateway_base_url or "https://api.openai.com/v1").rstrip("/")
     if base.endswith("/chat/completions"):
         return base
     if base.endswith("/v1"):
@@ -1355,9 +1406,10 @@ def _invoke_openai_compatible_stage_json(
     prompt: str,
     schema: dict[str, Any],
     model: str,
-    timeout_seconds: float,
+    reasoning_effort: str = "low",
+    timeout_seconds: float = 90.0,
 ) -> dict[str, Any] | None:
-    if not settings.openai_api_key:
+    if not settings.llm_gateway_api_key or not settings.llm_gateway_base_url:
         raise ClaudeInvocationError("openai_fallback_not_configured")
     safe_stage = re.sub(r"[^a-zA-Z0-9_.-]+", "_", stage_name).strip("_") or "stage"
     payload = {
@@ -1373,32 +1425,83 @@ def _invoke_openai_compatible_stage_json(
             },
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.2,
         "response_format": {"type": "json_object"},
     }
+    effort = _openai_reasoning_effort(model, reasoning_effort)
+    if effort is not None:
+        payload["reasoning_effort"] = effort
     headers = {
-        "authorization": f"Bearer {settings.openai_api_key}",
+        "authorization": f"Bearer {settings.llm_gateway_api_key}",
         "content-type": "application/json",
     }
     try:
-        with httpx.Client(timeout=timeout_seconds) as client:
-            response = client.post(_openai_chat_completions_url(), headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-    except httpx.TimeoutException as exc:
-        raise ClaudeInvocationError("openai_fallback_timeout") from exc
+        async def send_request() -> dict[str, Any]:
+            async with asyncio.timeout(timeout_seconds):
+                async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=min(8.0, timeout_seconds))) as client:
+                    response = await client.post(
+                        _openai_chat_completions_url(settings.llm_gateway_base_url),
+                        headers=headers,
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    return response.json()
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            data = asyncio.run(send_request())
+        else:
+            # The orchestrator is synchronous and may be called from an async
+            # worker. Run the bounded async transport on a dedicated thread.
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                data = executor.submit(asyncio.run, send_request()).result(timeout=timeout_seconds + 1.0)
+    except (httpx.TimeoutException, TimeoutError) as exc:
+        raise ClaudeInvocationError("openai_fallback_timeout", retryable=True) from exc
+    except httpx.RequestError as exc:
+        raise ClaudeInvocationError("openai_fallback_connection_error", retryable=True) from exc
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
-        raise ClaudeInvocationError(f"openai_fallback_http_{status}") from exc
+        retryable = status in {408, 425, 429} or 500 <= status <= 599
+        if status == 403:
+            try:
+                payload = exc.response.json()
+            except Exception:
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else payload
+            code = str(error.get("code") or error.get("type") or "").strip().lower() if isinstance(error, dict) else ""
+            scope = str(error.get("scope") or error.get("category") or "").strip().lower() if isinstance(error, dict) else ""
+            retryable = code in {"model_not_found", "model_not_available", "model_access_denied", "model_permission"} and scope in {"model", "candidate"}
+        failure = "openai_fallback_http_retryable" if retryable else "openai_fallback_http_terminal"
+        raise ClaudeInvocationError(failure, status_code=status, retryable=retryable) from exc
     except Exception as exc:
         raise ClaudeInvocationError("openai_fallback_error") from exc
-    _write_text(workspace / f"{safe_stage}_openai_response.json", json.dumps(data, ensure_ascii=False))
+    # Keep only bounded non-content provenance; provider output may contain user data or secrets.
+    _write_text(
+        workspace / f"{safe_stage}_openai_response.json",
+        json.dumps({"received": True, "model": model, "choices": len(data.get("choices") or [])}, ensure_ascii=False),
+    )
     content = _openai_chat_content(data)
+    if _openai_chat_policy_refusal(data):
+        raise ClaudeInvocationError("openai_fallback_policy_refusal", retryable=False)
     parsed = _parse_structured_output(content)
     if not parsed:
         raise ClaudeInvocationError("openai_fallback_invalid_json")
     coerced = _coerce_checkpoint_payload(parsed, schema, workspace=workspace)
     return coerced if _matches_checkpoint_schema(coerced, schema) else None
+
+
+def _openai_reasoning_effort(model: str, configured_effort: str) -> str | None:
+    """Translate Claude's configured effort into the supported OpenAI field."""
+
+    normalized_model = _text_value(model).lower()
+    if not normalized_model.startswith(("gpt-", "o1", "o3", "o4")):
+        return None
+    normalized_effort = _text_value(configured_effort).lower()
+    if normalized_effort in {"xhigh", "max"}:
+        return "high"
+    if normalized_effort in {"low", "medium", "high"}:
+        return normalized_effort
+    return "low"
 
 
 def _openai_chat_content(payload: dict[str, Any]) -> str:
@@ -1415,6 +1518,27 @@ def _openai_chat_content(payload: dict[str, Any]) -> str:
                 chunks.append(str(item["text"]))
         return "".join(chunks)
     return str(content or "")
+
+
+def _openai_chat_policy_refusal(payload: dict[str, Any]) -> bool:
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return False
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    message = first.get("message") if isinstance(first.get("message"), dict) else {}
+    if str(first.get("finish_reason") or "").strip().lower() == "content_filter" or message.get("refusal"):
+        return True
+    content = message.get("content")
+    return bool(isinstance(content, list) and any(
+        isinstance(item, dict) and str(item.get("type") or "").lower() == "refusal" for item in content
+    ))
+
+
+def _is_openai_fallback_failure_retryable(error: ClaudeInvocationError) -> bool:
+    if error.retryable is not None:
+        return error.retryable
+    failure = str(error)
+    return failure in _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES or "output_token_limit" in failure
 
 
 def _run_claude_subprocess(
@@ -1489,13 +1613,14 @@ def _invoke_claude_stage_json(
     prompt: str,
     schema: dict[str, Any],
     model_override: str | None = None,
-    fallback_model_override: str | None = None,
     env_overrides: dict[str, str] | None = None,
     setting_sources_override: str | None = None,
     include_effort: bool = True,
     strip_model_fallback_env: bool = False,
     timeout_override: float | None = None,
 ) -> dict[str, Any] | None:
+    if not settings.llm_gateway_api_key or not settings.llm_gateway_base_url:
+        raise ClaudeInvocationError("llm_gateway_not_configured")
     safe_stage = re.sub(r"[^a-zA-Z0-9_.-]+", "_", stage_name).strip("_") or "stage"
     command_line = [
         *command,
@@ -1518,12 +1643,14 @@ def _invoke_claude_stage_json(
     if setting_sources_override:
         command_line.extend(["--setting-sources", setting_sources_override])
     model = model_override or settings.claude_orchestrator_model
-    fallback_model = fallback_model_override or settings.claude_orchestrator_fallback_model
     if model:
         command_line.extend(["--model", model])
-    if fallback_model and fallback_model != model:
-        command_line.extend(["--fallback-model", fallback_model])
     env = dict(os.environ)
+    if settings.llm_gateway_api_key:
+        env["ANTHROPIC_AUTH_TOKEN"] = settings.llm_gateway_api_key
+        env["ANTHROPIC_API_KEY"] = settings.llm_gateway_api_key
+    if settings.llm_gateway_base_url:
+        env["ANTHROPIC_BASE_URL"] = _claude_cli_gateway_base_url(settings.llm_gateway_base_url) or settings.llm_gateway_base_url
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
     if strip_model_fallback_env:
@@ -2270,8 +2397,6 @@ def _invoke_claude_file_mode(
         command_line.extend(["--setting-sources", str(source.stage_kwargs["setting_sources_override"])])
     if source.model:
         command_line.extend(["--model", source.model])
-    if settings.claude_orchestrator_fallback_model:
-        command_line.extend(["--fallback-model", settings.claude_orchestrator_fallback_model])
     env = dict(os.environ)
     if source.stage_kwargs.get("strip_model_fallback_env"):
         _strip_claude_code_model_fallback_env(env)
@@ -2469,8 +2594,6 @@ def _invoke_claude_inline_json(
         command_line.extend(["--setting-sources", str(source.stage_kwargs["setting_sources_override"])])
     if source.model:
         command_line.extend(["--model", source.model])
-    if settings.claude_orchestrator_fallback_model:
-        command_line.extend(["--fallback-model", settings.claude_orchestrator_fallback_model])
     env = dict(os.environ)
     if source.stage_kwargs.get("strip_model_fallback_env"):
         _strip_claude_code_model_fallback_env(env)
@@ -3616,7 +3739,8 @@ def _parse_json_from_text(text: str) -> dict[str, Any] | None:
 def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode: int) -> str | None:
     if returncode == 0 and _has_successful_structured_result(stdout):
         return None
-    text = f"{stdout or ''}\n{stderr or ''}".lower()
+    raw_text = f"{stdout or ''}\n{stderr or ''}"
+    text = raw_text.lower()
     if "reasoning" in text and ("not supported" in text or "not valid" in text):
         return "claude_reasoning_not_supported"
     if "usage policy" in text or '"stop_reason":"refusal"' in text or '"stop_reason": "refusal"' in text:
@@ -3625,8 +3749,18 @@ def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode:
         return "kimi_context_canceled"
     if "context canceled" in text:
         return "upstream_context_canceled"
+    if any(marker in text for marker in ("connection refused", "connection reset", "econnreset", "enotfound", "could not resolve", "name resolution")):
+        return "claude_connection_error"
     if "no available accounts" in text or ("api_error_status" in text and "503" in text and "available" in text):
         return "kimi_no_available_accounts"
+    if re.search(r"(?:status|http|api_error_status)[^0-9]{0,16}401\b", text):
+        return "claude_shared_credential_rejected"
+    if re.search(r"(?:status|http|api_error_status)[^0-9]{0,16}403\b", text):
+        if _structured_model_scoped_denial(raw_text):
+            return "claude_candidate_access_denied"
+        return "claude_unclassified_forbidden"
+    if re.search(r"(?:status|http|api_error_status)[^0-9]{0,16}(?:408|425|429|500|502|503|504)\b", text):
+        return "claude_upstream_unavailable"
     if "api.kimi.com" in text:
         return "kimi_upstream_error"
     if "502" in text and ("kimi" in text or "sub2api" in text):
@@ -3645,6 +3779,26 @@ def _classify_claude_failure(stdout: str | None, stderr: str | None, returncode:
     if returncode != 0:
         return f"claude_cli_exit_{returncode}"
     return None
+
+
+def _structured_model_scoped_denial(raw_text: str) -> bool:
+    """Recognize only explicit JSON error code plus candidate/model scope."""
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(raw_text):
+        if char != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(raw_text[index:])
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        error = payload.get("error") if isinstance(payload.get("error"), dict) else payload
+        code = str(error.get("code") or error.get("type") or "").strip().lower()
+        scope = str(error.get("scope") or error.get("category") or "").strip().lower()
+        if code in {"model_not_found", "model_not_available", "model_access_denied", "model_permission"} and scope in {"model", "candidate"}:
+            return True
+    return False
 
 
 def _has_successful_structured_result(stdout: str | None) -> bool:

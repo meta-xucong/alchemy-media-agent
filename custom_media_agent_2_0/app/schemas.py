@@ -438,8 +438,7 @@ class OrchestratorStatusResponse(BaseModel):
     max_output_tokens: int | None = None
     checkpoint_enabled: bool = False
     fallback_models: list[str] = Field(default_factory=list)
-    fallback_base_url_configured: bool = False
-    fallback_auth_token_configured: bool = False
+    llm_gateway_configured: bool = False
     recent_invocations: list[OrchestratorInvocationRecord] = Field(default_factory=list)
     last_success_at: datetime | None = None
     last_failure_at: datetime | None = None
@@ -471,14 +470,16 @@ class V2RuntimeModelSettingsResponse(BaseModel):
     claude_orchestrator_max_output_tokens: int
     claude_checkpoint_orchestrator_enabled: bool = False
     claude_orchestrator_fallback_models: list[str] = Field(default_factory=list)
-    claude_orchestrator_fallback_base_url_configured: bool = False
-    claude_orchestrator_fallback_auth_token_configured: bool = False
+    llm_gateway_api_key_configured: bool = False
+    llm_gateway_base_url: str | None = None
     case_intelligence_provider: Literal["rules", "claude-code"]
     case_intelligence_model: str | None = None
     persisted: bool = False
 
 
 class V2RuntimeModelSettingsRequest(BaseModel):
+    llm_gateway_api_key: str | None = Field(default=None, max_length=4096)
+    llm_gateway_base_url: str | None = Field(default=None, max_length=500)
     image_generation_provider: str | None = Field(default=None, max_length=80)
     openai_image_model: str | None = Field(default=None, max_length=120)
     doubao_image_model: str | None = Field(default=None, max_length=120)

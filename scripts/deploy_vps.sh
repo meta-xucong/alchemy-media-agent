@@ -19,7 +19,7 @@ Usage:
 
 Environment:
   OPENAI_API_KEY             Required unless --skip-env is used
-  ANTHROPIC_AUTH_TOKEN       Required unless --skip-env is used
+  LLM_GATEWAY_API_KEY        Required for text planning unless --skip-env is used
   GITHUB_TOKEN               Optional for cloning this private repo from a fresh VPS
   APP_PORT                   Host port, defaults to 8017
   DEPLOY_DIR                 Deploy directory, defaults to /opt/alchemy-media-agent
@@ -164,8 +164,8 @@ write_env_file() {
     echo "OPENAI_API_KEY is required. Pass it as an environment variable or use --skip-env with an existing src_skeleton/.env." >&2
     exit 1
   fi
-  if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
-    echo "ANTHROPIC_AUTH_TOKEN is required. Pass it as an environment variable or use --skip-env with an existing src_skeleton/.env." >&2
+  if [[ -z "${LLM_GATEWAY_API_KEY:-}" ]]; then
+    echo "LLM_GATEWAY_API_KEY is required. Pass it as an environment variable or use --skip-env with an existing src_skeleton/.env." >&2
     exit 1
   fi
 
@@ -197,15 +197,16 @@ OPENAI_IMAGE_MODEL=${OPENAI_IMAGE_MODEL:-gpt-image-2}
 GEMINI_IMAGE_MODEL=${GEMINI_IMAGE_MODEL:-gemini-3-pro-image-preview}
 GEMINI_IMAGE_BASE_URL=${GEMINI_IMAGE_BASE_URL:-}
 
-DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-deepseek}
-DEFAULT_LLM_MODEL=${DEFAULT_LLM_MODEL:-deepseek-v4-pro-260425}
+DEFAULT_LLM_PROVIDER=anthropic
+DEFAULT_LLM_MODEL=claude-sonnet-5-5
 BACKUP_LLM_PROVIDER=${BACKUP_LLM_PROVIDER:-openai}
-BACKUP_LLM_MODEL=${BACKUP_LLM_MODEL:-gpt-5.6-terra}
-OPENAI_LLM_MODEL=${OPENAI_LLM_MODEL:-gpt-5.6-terra}
+BACKUP_LLM_MODEL=kimi-k3
+OPENAI_LLM_MODEL=gpt-6.1-sol
 V3_LLM_BRAIN_ENABLED=${V3_LLM_BRAIN_ENABLED:-true}
 V3_LLM_BRAIN_REMOTE_ENABLED=${V3_LLM_BRAIN_REMOTE_ENABLED:-true}
-V3_LLM_BRAIN_PROVIDER=${V3_LLM_BRAIN_PROVIDER:-openai}
-V3_LLM_BRAIN_MODEL=${V3_LLM_BRAIN_MODEL:-gpt-5.6-terra}
+V3_LLM_BRAIN_PROVIDER=anthropic
+V3_LLM_BRAIN_MODEL=claude-sonnet-5-5
+V3_LLM_BRAIN_BACKUP_MODEL=kimi-k3
 V3_LLM_BRAIN_TRANSPORT=${V3_LLM_BRAIN_TRANSPORT:-chat_nonstream}
 V3_LLM_BRAIN_TIMEOUT_SECONDS=${V3_LLM_BRAIN_TIMEOUT_SECONDS:-300}
 V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS=${V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS:-550}
@@ -215,8 +216,8 @@ DEEPSEEK_LLM_MODEL=${DEEPSEEK_LLM_MODEL:-deepseek-v4-pro-260425}
 LAB_DOUBAO_VISION_BASE_URL=${LAB_DOUBAO_VISION_BASE_URL:-https://aiself.vip/v1}
 LAB_DOUBAO_VISION_MODEL=${LAB_DOUBAO_VISION_MODEL:-doubao-seed-2-0-lite-260428}
 DEEPSEEK_LLM_BASE_URL=${DEEPSEEK_LLM_BASE_URL:-${V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://aiself.vip}}}
-LAB_LLM_PROVIDER=${LAB_LLM_PROVIDER:-deepseek}
-LAB_LLM_MODEL=${LAB_LLM_MODEL:-deepseek-v4-pro-260425}
+LAB_LLM_PROVIDER=anthropic
+LAB_LLM_MODEL=claude-sonnet-5-5
 LAB_VISION_PROVIDER=${LAB_VISION_PROVIDER:-${default_lab_vision_provider}}
 V3_VISION_INSPECTION_PROVIDER=${V3_VISION_INSPECTION_PROVIDER:-${LAB_VISION_PROVIDER:-${default_lab_vision_provider}}}
 V3_VISION_INSPECTION_PROTOCOL=${V3_VISION_INSPECTION_PROTOCOL:-chat_completions}
@@ -229,13 +230,11 @@ IMAGE_WORK_INTENSITY=${IMAGE_WORK_INTENSITY:-atelier}
 
 OPENAI_API_KEY=${OPENAI_API_KEY}
 OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://aiself.vip/v1}
-ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
-ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://aiself.vip}
+LLM_GATEWAY_API_KEY=${LLM_GATEWAY_API_KEY}
+LLM_GATEWAY_BASE_URL=${LLM_GATEWAY_BASE_URL:-https://aiself.vip/v1}
 LAB_DOUBAO_VISION_API_KEY=${LAB_DOUBAO_VISION_API_KEY:-${existing_lab_doubao_vision_api_key}}
 LAB_DOUBAO_VISION_BASE_URL=${LAB_DOUBAO_VISION_BASE_URL}
 LAB_DOUBAO_VISION_MODEL=${LAB_DOUBAO_VISION_MODEL}
-DEEPSEEK_LLM_API_KEY=${DEEPSEEK_LLM_API_KEY:-${V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN:-${ANTHROPIC_AUTH_TOKEN:-${LAB_DOUBAO_VISION_API_KEY:-}}}}
 GEMINI_IMAGE_API_KEY=${GEMINI_IMAGE_API_KEY:-}
 BYTEPLUS_API_KEY=${BYTEPLUS_API_KEY:-}
 

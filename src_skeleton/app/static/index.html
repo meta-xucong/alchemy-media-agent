@@ -468,20 +468,15 @@
                     <span id="thinkingActiveLabel" class="state-pill">GPT</span>
                   </div>
                   <div class="model-options" role="radiogroup" aria-label="思考模型">
-                    <button class="model-option active" data-llm-provider="openai" type="button">
-                      <span>GPT</span>
-                      <strong>GPT 5.5</strong>
-                      <small id="openaiThinkingState">检查中</small>
-                    </button>
-                    <button class="model-option" data-llm-provider="anthropic" type="button">
-                      <span>Kimi</span>
-                      <strong>Kimi</strong>
+                    <button class="model-option active" data-llm-provider="anthropic" type="button" disabled aria-disabled="true">
+                      <span>首选</span>
+                      <strong>Claude Sonnet 5.5</strong>
                       <small id="agentThinkingState">检查中</small>
                     </button>
-                    <button class="model-option" data-llm-provider="deepseek" type="button">
-                      <span>DeepSeek</span>
-                      <strong>DeepSeek V4</strong>
-                      <small id="deepseekThinkingState">检查中</small>
+                    <button class="model-option" data-llm-provider="openai" type="button" disabled aria-disabled="true">
+                      <span>备用</span>
+                      <strong>Kimi K3 → GPT-6.1-sol</strong>
+                      <small id="openaiThinkingState">检查中</small>
                     </button>
                   </div>
                 </section>
@@ -548,50 +543,29 @@
                   <section class="api-subpanel">
                     <h4>思考模型 API</h4>
                     <label class="field">
-                      <span>GPT 思考模型</span>
-                      <input id="openaiLlmModelInput" type="text" list="llmModelList" placeholder="gpt-5.6-terra" />
-                      <datalist id="llmModelList">
-                        <option value="gpt-5.6-terra"></option>
-                        <option value="gpt-5.6-sol"></option>
-                        <option value="gpt-5.6-luna"></option>
-                      </datalist>
+                      <span>统一文本模型网关 API Key（Claude Sonnet 5.5 / Kimi K3 / GPT-6.1-sol 共用）</span>
+                      <input id="llmGatewayApiKeyInput" type="password" autocomplete="off" placeholder="粘贴一次，主备模型共用" />
                     </label>
                     <label class="field">
-                      <span>Kimi 思考模型</span>
-                      <input id="agentLlmModelInput" type="text" list="agentLlmModelList" placeholder="kimi-for-coding" />
-                      <datalist id="agentLlmModelList">
-                        <option value="kimi-for-coding"></option>
-                        <option value="kimi-latest"></option>
-                        <option value="kimi-k2"></option>
-                      </datalist>
+                      <span>统一文本模型网关 Base URL</span>
+                      <input id="llmGatewayBaseUrlInput" type="url" placeholder="https://aiself.vip/v1" />
                     </label>
                     <label class="field">
-                      <span>DeepSeek V4 思考模型</span>
-                      <input id="deepseekLlmModelInput" type="text" list="deepseekLlmModelList" placeholder="deepseek-v4-pro-260425" />
-                      <datalist id="deepseekLlmModelList">
-                        <option value="deepseek-v4-pro"></option>
-                        <option value="deepseek-v4-pro-260425"></option>
-                        <option value="deepseek-v4-flash"></option>
-                        <option value="deepseek-v4-flash-260425"></option>
-                        <option value="deepseek-v3-2-251201"></option>
-                      </datalist>
+                      <span>首选模型</span>
+                      <input id="agentLlmModelInput" type="text" value="claude-sonnet-5-5" list="llmModelList" />
                     </label>
                     <label class="field">
-                      <span>DeepSeek API Key</span>
-                      <input id="deepseekApiKeyInput" type="password" autocomplete="off" placeholder="复用 V2 Claude 中枢兼容 Key，可留空" />
+                      <span>备用模型</span>
+                      <input id="openaiLlmModelInput" type="text" value="kimi-k3" list="llmModelList" />
                     </label>
-                    <label class="field">
-                      <span>DeepSeek Base URL</span>
-                      <input id="deepseekBaseUrlInput" type="url" placeholder="https://aiself.vip" />
-                    </label>
-                    <label class="field">
-                      <span>Kimi API Key</span>
-                      <input id="anthropicApiKeyInput" type="password" autocomplete="off" placeholder="Kimi / Anthropic 兼容 Key" />
-                    </label>
-                    <label class="field">
-                      <span>Kimi Base URL</span>
-                      <input id="anthropicBaseUrlInput" type="url" placeholder="https://api.kimi.com 或你的代理地址" />
-                    </label>
+                    <datalist id="llmModelList">
+                      <option value="claude-sonnet-5-5"></option>
+                      <option value="gpt-6.1-sol"></option>
+                      <option value="kimi-k3"></option>
+                      <option value="gpt-5.6-terra"></option>
+                      <option value="deepseek-v4-pro"></option>
+                      <option value="kimi-k2.6"></option>
+                    </datalist>
                     <p class="model-help">Gemini 生图已接入；V2.0 可通过模型调度选择 Gemini 通道。</p>
                     <div id="providerList" class="provider-list compact-provider-list"></div>
                   </section>
@@ -944,6 +918,7 @@
                       <option value="gpt-4.1-mini"></option>
                       <option value="gpt-4.1"></option>
                       <option value="gpt-5.6-terra"></option>
+                      <option value="gpt-6.1-sol"></option>
                     </datalist>
                   </label>
                   <label class="field">
@@ -967,7 +942,17 @@
                   </label>
                   <label class="field">
                     <span>Claude 兜底模型</span>
-                    <input id="v2ClaudeFallbackModelInput" type="text" list="v2ClaudeModelList" placeholder="可留空" />
+                    <input id="v2ClaudeFallbackModelInput" type="text" list="v2FallbackModelList" placeholder="kimi-k3" />
+                    <datalist id="v2FallbackModelList">
+                      <option value="kimi-k3"></option>
+                      <option value="gpt-6.1-sol"></option>
+                      <option value="gpt-5.6-terra"></option>
+                      <option value="claude-sonnet-5-5"></option>
+                      <option value="deepseek-v4-pro"></option>
+                      <option value="deepseek-v4-flash"></option>
+                      <option value="kimi-k2.6"></option>
+                      <option value="kimi-for-coding"></option>
+                    </datalist>
                   </label>
                   <label class="field">
                     <span>案例理解来源</span>

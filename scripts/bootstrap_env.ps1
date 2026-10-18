@@ -39,21 +39,8 @@ function Get-CodexOpenAIKey {
     }
 }
 
-function Get-ClaudeToken {
-    $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
-    if (-not (Test-Path -LiteralPath $settingsPath)) {
-        return ""
-    }
-    try {
-        $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
-        return [string]$settings.env.ANTHROPIC_AUTH_TOKEN
-    } catch {
-        return ""
-    }
-}
-
 $openaiKey = Get-EnvOrDefault "OPENAI_API_KEY" (Get-CodexOpenAIKey)
-$anthropicToken = Get-EnvOrDefault "ANTHROPIC_AUTH_TOKEN" (Get-ClaudeToken)
+$llmGatewayKey = Get-EnvOrDefault "LLM_GATEWAY_API_KEY"
 
 $lines = @(
     "MEDIA_AGENT_MODE=live",
@@ -66,15 +53,16 @@ $lines = @(
     "GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview",
     "GEMINI_IMAGE_BASE_URL=",
     "",
-    "DEFAULT_LLM_PROVIDER=deepseek",
-    "DEFAULT_LLM_MODEL=deepseek-v4-pro-260425",
+    "DEFAULT_LLM_PROVIDER=anthropic",
+    "DEFAULT_LLM_MODEL=claude-sonnet-5-5",
     "BACKUP_LLM_PROVIDER=openai",
-    "BACKUP_LLM_MODEL=gpt-5.6-terra",
-    "OPENAI_LLM_MODEL=gpt-5.6-terra",
+    "BACKUP_LLM_MODEL=kimi-k3",
+    "OPENAI_LLM_MODEL=gpt-6.1-sol",
     "V3_LLM_BRAIN_ENABLED=true",
     "V3_LLM_BRAIN_REMOTE_ENABLED=true",
-    "V3_LLM_BRAIN_PROVIDER=openai",
-    "V3_LLM_BRAIN_MODEL=gpt-5.6-terra",
+    "V3_LLM_BRAIN_PROVIDER=anthropic",
+    "V3_LLM_BRAIN_MODEL=claude-sonnet-5-5",
+    "V3_LLM_BRAIN_BACKUP_MODEL=kimi-k3",
     "V3_LLM_BRAIN_TRANSPORT=chat_nonstream",
     "V3_LLM_BRAIN_TIMEOUT_SECONDS=300",
     "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS=550",
@@ -82,8 +70,8 @@ $lines = @(
     "KIMI_LLM_MODEL=kimi-for-coding",
     "DEEPSEEK_LLM_MODEL=deepseek-v4-pro-260425",
     "DEEPSEEK_LLM_BASE_URL=https://aiself.vip",
-    "LAB_LLM_PROVIDER=deepseek",
-    "LAB_LLM_MODEL=deepseek-v4-pro-260425",
+    "LAB_LLM_PROVIDER=anthropic",
+    "LAB_LLM_MODEL=claude-sonnet-5-5",
     "LAB_VISION_PROVIDER=openai",
     "V3_VISION_INSPECTION_PROTOCOL=chat_completions",
     "LLM_PROMPT_PLANNING_ENABLED=true",
@@ -92,10 +80,8 @@ $lines = @(
     "",
     "OPENAI_API_KEY=$openaiKey",
     "OPENAI_BASE_URL=https://aiself.vip/v1",
-    "ANTHROPIC_API_KEY=",
-    "ANTHROPIC_AUTH_TOKEN=$anthropicToken",
-    "ANTHROPIC_BASE_URL=https://aiself.vip",
-    "DEEPSEEK_LLM_API_KEY=",
+    "LLM_GATEWAY_API_KEY=$llmGatewayKey",
+    "LLM_GATEWAY_BASE_URL=https://aiself.vip/v1",
     "LAB_DOUBAO_VISION_API_KEY=",
     "LAB_DOUBAO_VISION_BASE_URL=https://aiself.vip/v1",
     "LAB_DOUBAO_VISION_MODEL=doubao-seed-2-0-lite-260428",
@@ -113,6 +99,6 @@ Write-Host "Wrote $OutputPath"
 if (-not $openaiKey) {
     Write-Host "OPENAI_API_KEY was not found in environment or %USERPROFILE%\.codex\auth.json"
 }
-if (-not $anthropicToken) {
-    Write-Host "ANTHROPIC_AUTH_TOKEN was not found in environment or %USERPROFILE%\.claude\settings.json"
+if (-not $llmGatewayKey) {
+    Write-Host "Set LLM_GATEWAY_API_KEY explicitly; image-provider and personal model credentials are not substituted for the gateway key."
 }

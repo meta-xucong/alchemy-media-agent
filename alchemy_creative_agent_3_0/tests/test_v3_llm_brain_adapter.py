@@ -11,6 +11,7 @@ from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    BrainPolicyRefusalError,
     BrainProviderUnavailable,
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
@@ -1492,32 +1493,222 @@ def test_remote_brain_default_output_budget_allows_complete_reasoning_contract(m
     assert provider.max_tokens == 20000
 
 
-def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monkeypatch) -> None:
-    """A configured default Brain must win over an unrelated OpenAI image key."""
-
+def test_remote_brain_uses_unified_gateway_with_claude_then_gpt(monkeypatch) -> None:
+    """Both V3 text candidates use one canonical gateway credential."""
     from app.config import settings
 
-    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "")
-    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "")
-    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "")
-    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
-    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
-    monkeypatch.setattr(settings, "default_llm_model", "deepseek-primary")
-    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
-    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
-    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
-    monkeypatch.setattr(settings, "openai_api_key", "image-gateway-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "old-per-model-key-must-be-ignored")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://old-gateway.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "one-gateway-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "openai_api_key", "image-only-key")
     monkeypatch.setattr(settings, "openai_base_url", "https://image.example.test/v1")
 
     provider = V3LLMBrainProvider()
+    api_key, base_url = provider._credentials()  # noqa: SLF001 - config boundary assertion
 
-    assert provider.provider == "deepseek"
-    assert provider.model == "deepseek-primary"
-    assert provider.available(force=True) is True
-    api_key, base_url = provider._credentials()  # noqa: SLF001 - configuration boundary assertion
-    assert api_key == "deepseek-test-key"
+    assert provider.provider == "anthropic"
+    assert provider.model == "claude-sonnet-5-5"
+    assert provider.backup_provider == "openai"
+    assert provider.backup_model == "kimi-k3"
+    assert api_key == "one-gateway-key"
     assert base_url == "https://brain.example.test/v1"
+
+
+def test_v3_tries_gpt_after_classified_claude_failure_with_same_request(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainTransportTimeoutError
+
+    provider = V3LLMBrainProvider()
+    request = BrainRunRequest(
+        user_input="Frozen request",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {"marker": "same"}},
+    )
+    seen: list[tuple[str, BrainRunRequest]] = []
+
+    def fake_run_one(self, same_request):
+        seen.append((self.model, same_request))
+        if self.provider == "anthropic":
+            error = BrainTransportTimeoutError(
+                stage="plan",
+                timeout_seconds=1,
+                elapsed_ms=1000,
+                timeout_phase="read_timeout",
+                request_dispatched=True,
+                request_acceptance="unknown",
+            )
+            setattr(error, providers._TRANSPORT_WORKER_STOPPED_ATTR, True)
+            raise error
+        return {providers._TRANSPORT_RECEIPT_KEY: {"schema_version": "test"}, "decision": "accepted"}
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", fake_run_one)
+    result = provider.run(request)
+
+    assert [model for model, _ in seen] == ["claude-sonnet-5-5", "kimi-k3"]
+    assert all(same_request is request for _, same_request in seen)
+    assert result["decision"] == "accepted"
+    assert result[providers._TRANSPORT_RECEIPT_KEY]["fallback_used"] is True
+    assert result[providers._TRANSPORT_RECEIPT_KEY]["selected_model"] == "kimi-k3"
+
+
+def test_v3_falls_through_kimi_to_gpt_after_eligible_failure(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainTransportTimeoutError
+
+    provider = V3LLMBrainProvider()
+    request = BrainRunRequest(user_input="same frozen request", stage="plan")
+    calls: list[str] = []
+
+    def fail_first_two(self, same_request):
+        calls.append(self.model)
+        if self.model in {"claude-sonnet-5-5", "kimi-k3"}:
+            error = BrainTransportTimeoutError(
+                stage=same_request.stage,
+                timeout_seconds=1,
+                elapsed_ms=1000,
+                timeout_phase="read_timeout",
+                request_dispatched=True,
+                request_acceptance="unknown",
+            )
+            setattr(error, providers._TRANSPORT_WORKER_STOPPED_ATTR, True)
+            raise error
+        return {providers._TRANSPORT_RECEIPT_KEY: {"schema_version": "test"}, "decision": "gpt accepted"}
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", fail_first_two)
+    result = provider.run(request)
+    assert calls == ["claude-sonnet-5-5", "kimi-k3", "gpt-6.1-sol"]
+    assert result["decision"] == "gpt accepted"
+    assert result[providers._TRANSPORT_RECEIPT_KEY]["selected_model"] == "gpt-6.1-sol"
+
+
+def test_v3_does_not_fall_over_for_shared_key_401(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderError, transport_failure_receipt
+
+    provider = V3LLMBrainProvider()
+    request = BrainRunRequest(
+        user_input="Frozen request",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}},
+    )
+    calls: list[str] = []
+
+    class Unauthorized(BrainProviderError):
+        status_code = 401
+
+    def fake_run_one(self, _request):
+        calls.append(self.model)
+        raise Unauthorized("shared key rejected")
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", fake_run_one)
+    with pytest.raises(Unauthorized) as failure:
+        provider.run(request)
+    assert calls == ["claude-sonnet-5-5"]
+    receipt = transport_failure_receipt(failure.value)
+    assert [item["model"] for item in receipt["model_attempts"]] == ["claude-sonnet-5-5"]
+    assert receipt["fallback_used"] is False
+
+
+def test_v3_terminal_failure_retains_bounded_four_model_attempts(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderError
+
+    provider = V3LLMBrainProvider()
+    provider.backup_model = "gpt-custom-backup"
+    request = BrainRunRequest(
+        user_input="Do not persist this prompt",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}},
+    )
+    calls: list[str] = []
+
+    class Unavailable(BrainProviderError):
+        status_code = 503
+
+    def fake_run_one(self, _request):
+        calls.append(self.model)
+        raise Unavailable("private upstream body and secret must not persist")
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", fake_run_one)
+    with pytest.raises(Unavailable) as failure:
+        provider.run(request)
+    receipt = providers.transport_failure_receipt(failure.value)
+    assert calls == ["claude-sonnet-5-5", "kimi-k3", "gpt-custom-backup", "gpt-6.1-sol"]
+    assert receipt["primary_model"] == "claude-sonnet-5-5"
+    assert receipt["selected_model"] == "gpt-6.1-sol"
+    assert receipt["fallback_used"] is True
+    assert [item["outcome"] for item in receipt["model_attempts"]] == ["failed"] * 4
+    assert [item["failure_class"] for item in receipt["model_attempts"]] == ["retryable_upstream"] * 4
+    assert "Do not persist this prompt" not in str(receipt)
+    assert "private upstream body" not in str(receipt)
+    assert "secret" not in str(receipt)
+
+
+def test_v3_candidate_budget_exhaustion_allows_backup_with_remaining_shared_budget(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+        BrainCandidateBudgetExceeded,
+        _ACTIVE_EXECUTION_BUDGET,
+        _BrainExecutionBudget,
+    )
+
+    provider = V3LLMBrainProvider()
+    request = BrainRunRequest(
+        user_input="Frozen request",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}, "require_real_images": True},
+    )
+    seen: list[str] = []
+    fallback_timeout: list[float] = []
+
+    def fake_run_one(self, same_request):
+        seen.append(self.model)
+        assert same_request is request
+        if self.provider == "anthropic":
+            raise BrainCandidateBudgetExceeded("Claude candidate slice exhausted")
+        fallback_timeout.append(self._effective_timeout_seconds(same_request))
+        return {providers._TRANSPORT_RECEIPT_KEY: {"schema_version": "test"}, "decision": "accepted"}
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", fake_run_one)
+    budget = _BrainExecutionBudget(total_seconds=520.0, started_at=providers.time.perf_counter() - 100.0)
+    token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        result = provider.run(request)
+        receipt = provider.execution_budget_receipt()
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(token)
+
+    assert seen == ["claude-sonnet-5-5", "kimi-k3"]
+    assert len(fallback_timeout) == 1
+    assert 60.0 <= fallback_timeout[0] <= 80.0
+    assert receipt["remaining_ms"] >= 220_000
+    assert result["decision"] == "accepted"
+    assert result[providers._TRANSPORT_RECEIPT_KEY]["fallback_used"] is True
+
+
+def test_v3_403_failover_requires_structured_candidate_scope() -> None:
+    import httpx
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import _is_model_failover_eligible
+
+    request = httpx.Request("POST", "https://gateway.test")
+    candidate = httpx.Response(403, json={"error": {"code": "model_access_denied", "scope": "candidate"}}, request=request)
+    unscoped = httpx.Response(403, json={"error": {"message": "model_access_denied"}}, request=request)
+    assert _is_model_failover_eligible(httpx.HTTPStatusError("403", request=request, response=candidate))
+    assert not _is_model_failover_eligible(httpx.HTTPStatusError("403", request=request, response=unscoped))
 
 
 def test_remote_brain_strips_leading_utf8_bom_from_api_key(monkeypatch) -> None:
@@ -1525,13 +1716,9 @@ def test_remote_brain_strips_leading_utf8_bom_from_api_key(monkeypatch) -> None:
 
     from app.config import settings
 
-    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
-    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "")
-    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "\ufeffbrain-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
-    monkeypatch.setattr(settings, "openai_api_key", "\ufeffbrain-test-key")
-    monkeypatch.setattr(settings, "openai_base_url", "https://brain.example.test/v1")
-    monkeypatch.setattr(settings, "lab_openai_api_key", None)
 
     provider = V3LLMBrainProvider()
 
@@ -1540,20 +1727,18 @@ def test_remote_brain_strips_leading_utf8_bom_from_api_key(monkeypatch) -> None:
     assert base_url == "https://brain.example.test/v1"
 
 
-def test_remote_brain_does_not_reuse_unrelated_anthropic_credential_for_deepseek(monkeypatch) -> None:
-    """A Claude/local-gateway credential is not an Aiself DeepSeek credential."""
+def test_remote_brain_does_not_reuse_image_or_legacy_key_without_gateway(monkeypatch) -> None:
+    """Image credentials and old model-specific aliases do not configure text routing."""
 
     from app.config import settings
 
-    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
-    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
-    monkeypatch.setattr(settings, "deepseek_llm_api_key", None)
-    monkeypatch.setattr(settings, "deepseek_llm_base_url", None)
-    monkeypatch.setattr(settings, "anthropic_auth_token", "local-gateway-token")
-    monkeypatch.setattr(settings, "anthropic_base_url", "http://127.0.0.1:15721")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "legacy-text-key")
+    monkeypatch.setattr(settings, "llm_gateway_api_key", None)
+    monkeypatch.setattr(settings, "llm_gateway_base_url", None)
+    monkeypatch.setattr(settings, "openai_api_key", "image-only-key")
+    monkeypatch.setattr(settings, "openai_base_url", "https://image.example.test/v1")
 
     provider = V3LLMBrainProvider()
 
@@ -1562,8 +1747,25 @@ def test_remote_brain_does_not_reuse_unrelated_anthropic_credential_for_deepseek
         provider._credentials()
 
 
-def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypatch) -> None:
-    """DeepSeek can exercise the legacy streamed Chat Completions transport."""
+def test_remote_brain_requires_explicit_gateway_base_url(monkeypatch) -> None:
+    from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "")
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "unified-test-key")
+    monkeypatch.setattr(settings, "llm_gateway_base_url", None)
+
+    provider = V3LLMBrainProvider()
+    assert brain_providers._remote_enabled() is False  # noqa: SLF001 - configuration status contract
+    assert provider.available() is False
+    with pytest.raises(BrainProviderUnavailable, match="base URL"):
+        provider._credentials()
+
+
+def test_unified_gpt_fallback_uses_chat_completions_transport(monkeypatch) -> None:
+    """GPT-6.1-sol uses the same canonical key on the compatible chat route."""
 
     from app.config import settings
     from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
@@ -1574,18 +1776,13 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
         calls.update(kwargs)
         return '{"remote": true}'
 
-    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
     # The production path is configured non-streaming.  This test covers the
     # retained legacy collector explicitly and must not inherit the developer
     # .env transport selection.
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
-    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
-    monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
-    monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
-    monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
     monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 
     provider = V3LLMBrainProvider()
@@ -1595,12 +1792,12 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
 
     assert result == {"remote": True}
     assert calls["url"] == "https://brain.example.test/v1/chat/completions"
-    assert calls["api_key"] == "deepseek-test-key"
+    assert calls["api_key"] == "unified-test-key"
     payload = calls["payload"]
     assert isinstance(payload, dict)
-    assert payload["model"] == "deepseek-primary"
+    assert payload["model"] == "gpt-6.1-sol"
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["temperature"] == 0
+    assert "temperature" not in payload
     assert "reasoning_effort" not in payload
 
 
@@ -1647,6 +1844,8 @@ def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "openai")
     monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.6-terra")
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
@@ -1659,6 +1858,16 @@ def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch
     assert result["remote"] is True
     assert result["_alchemy_brain_transport"]["transport_attempt"]["protocol_fallback_attempted"] is True
     assert calls == {"responses": 1, "chat": 1}
+
+
+def test_openai_responses_refusal_is_detected_even_when_output_text_exists() -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import _openai_response_has_policy_refusal
+
+    response = SimpleNamespace(
+        output_text='{"usable": true}',
+        output=[SimpleNamespace(type="message", content=[SimpleNamespace(type="refusal", text="blocked")])],
+    )
+    assert _openai_response_has_policy_refusal(response)  # noqa: SLF001
 
 
 def test_openai_brain_uses_portable_chat_transport_by_default(monkeypatch) -> None:
@@ -1713,7 +1922,7 @@ def test_openai_brain_chat_url_is_absolute_and_uses_configured_or_default_base(
     assert _chat_completions_url(base_url) == expected_url
 
 
-def test_openai_brain_availability_and_chat_transport_share_default_base(monkeypatch) -> None:
+def test_openai_brain_availability_and_chat_transport_share_unified_gateway_base(monkeypatch) -> None:
     from app.config import settings
     from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
 
@@ -1725,7 +1934,8 @@ def test_openai_brain_availability_and_chat_transport_share_default_base(monkeyp
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
-    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "")
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat")
     monkeypatch.setattr(settings, "openai_base_url", None)
@@ -1736,7 +1946,7 @@ def test_openai_brain_availability_and_chat_transport_share_default_base(monkeyp
     assert provider.availability(force=True)["available"] is True
     result = provider.run(BrainRunRequest(user_input="Create one direction."))
     assert result["remote"] is True
-    assert calls[0]["url"] == "https://api.openai.com/v1/chat/completions"
+    assert calls[0]["url"] == "https://gateway.example.test/v1/chat/completions"
 
 
 def test_anthropic_brain_sends_version_auth_path_and_message_body(monkeypatch) -> None:
@@ -1767,19 +1977,24 @@ def test_anthropic_brain_sends_version_auth_path_and_message_body(monkeypatch) -
             return FakeResponse()
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "anthropic")
-    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "anthropic-test-key")
-    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://anthropic.example")
-    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(Client=FakeClient))
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-anthropic-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
+    monkeypatch.setitem(
+        sys.modules,
+        "httpx",
+        SimpleNamespace(Client=FakeClient, Timeout=lambda timeout, **_kwargs: timeout),
+    )
 
     result = V3LLMBrainProvider()._run_anthropic_compatible(  # noqa: SLF001 - outbound contract
         request
     )
 
     assert result == {"remote": True}
-    assert calls[0]["url"] == "https://anthropic.example/v1/messages"
+    assert calls[0]["url"] == "https://gateway.example.test/v1/messages"
     assert calls[0]["headers"] == {
         "content-type": "application/json",
-        "x-api-key": "anthropic-test-key",
+        "x-api-key": "unified-anthropic-test-key",
+        "authorization": "Bearer unified-anthropic-test-key",
         "anthropic-version": "2023-06-01",
     }
     assert calls[0]["json"]["model"] == V3LLMBrainProvider().model
@@ -1788,6 +2003,51 @@ def test_anthropic_brain_sends_version_auth_path_and_message_body(monkeypatch) -
     assert calls[0]["json"]["messages"] == [
         {"role": "user", "content": brain_providers.build_remote_payload(request)}
     ]
+
+
+def test_anthropic_refusal_block_stops_before_gpt_backup(monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "stop_reason": "end_turn",
+                "content": [{"type": "refusal", "text": "blocked"}],
+            }
+
+    class FakeClient:
+        def __init__(self, *, timeout) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "one-unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("V3_LLM_BRAIN_BACKUP_MODEL", "gpt-6.1-sol")
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    provider = V3LLMBrainProvider()
+    backup_calls: list[str] = []
+    monkeypatch.setattr(
+        provider,
+        "_run_openai_compatible",
+        lambda *_args, **_kwargs: backup_calls.append("gpt-6.1-sol") or {"unexpected": True},
+    )
+
+    with pytest.raises(BrainPolicyRefusalError):
+        provider.run(BrainRunRequest(user_input="Create one direction."))
+
+    assert backup_calls == []
 
 
 def test_openai_brain_can_use_codex_compatible_complete_chat_transport(monkeypatch) -> None:
@@ -1813,8 +2073,12 @@ def test_openai_brain_can_use_codex_compatible_complete_chat_transport(monkeypat
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_nonstream")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "120")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "openai")
     monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.6-terra")
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
@@ -1829,7 +2093,56 @@ def test_openai_brain_can_use_codex_compatible_complete_chat_transport(monkeypat
     assert payload["model"] == "gpt-5.6-terra"
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["temperature"] == 0
+    import httpx
+
+    assert isinstance(payload["timeout"], httpx.Timeout)
+    assert payload["timeout"].connect == 8.0
+    assert payload["timeout"].read == 120.0
+    assert payload["timeout"].write == 120.0
+    assert payload["timeout"].pool == 120.0
     assert "stream" not in payload
+
+
+def test_openai_responses_transport_caps_connect_timeout(monkeypatch) -> None:
+    from app.config import settings
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs)
+            return SimpleNamespace(output_text='{"remote": true}')
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.6-terra")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    result = V3LLMBrainProvider().run(
+        BrainRunRequest(user_input="Create one remote photography direction.")
+    )
+
+    assert result["remote"] is True
+    assert len(calls) == 1
+    import httpx
+
+    timeout = calls[0]["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 8.0
+    assert timeout.read == 120.0
+    assert timeout.write == 120.0
+    assert timeout.pool == 120.0
 
 
 def test_openai_chat_protocol_mismatch_remains_typed_and_is_not_rewrapped(monkeypatch) -> None:
@@ -1911,13 +2224,18 @@ def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monk
     monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
     monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 
-    result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+    provider = V3LLMBrainProvider()
+    provider.model = "gpt-6.1-sol"
+    provider.provider = "openai"
+    result = provider._run_single_model(BrainRunRequest(user_input="Create one natural portrait."))  # noqa: SLF001 - same-candidate recovery
 
     assert result["remote"] is True
     transport = result["_alchemy_brain_transport"]
@@ -1937,7 +2255,7 @@ def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monk
     assert calls[0]["payload"]["messages"][1] == calls[1]["payload"]["messages"][1]
     assert "TRANSPORT RECOVERY" not in calls[0]["payload"]["messages"][0]["content"]
     assert "TRANSPORT RECOVERY" in calls[1]["payload"]["messages"][0]["content"]
-    assert all(call["payload"]["temperature"] == 0 for call in calls)
+    assert all("temperature" not in call["payload"] for call in calls)
 
 
 def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None:
@@ -1962,6 +2280,8 @@ def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
@@ -1969,7 +2289,10 @@ def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
 
     with pytest.raises(BrainInvalidJsonResponse, match="after one bounded serialization recovery") as exc_info:
-        V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+        provider = V3LLMBrainProvider()
+        provider.model = "gpt-6.1-sol"
+        provider.provider = "openai"
+        provider._run_single_model(BrainRunRequest(user_input="Create one natural portrait."))  # noqa: SLF001 - same-candidate recovery
 
     assert attempts == 2
     assert exc_info.value.safe_metadata() == {
@@ -2006,13 +2329,18 @@ def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(
     monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_MAX_TOKENS", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
     monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 
-    result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+    provider = V3LLMBrainProvider()
+    provider.model = "gpt-6.1-sol"
+    provider.provider = "openai"
+    result = provider._run_single_model(BrainRunRequest(user_input="Create one natural portrait."))  # noqa: SLF001 - same-candidate recovery
 
     assert result["remote"] is True
     assert result["_alchemy_brain_transport"]["attempts"] == 2
@@ -2046,6 +2374,8 @@ def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> No
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
@@ -2053,7 +2383,10 @@ def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> No
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
 
     with pytest.raises(BrainOutputTruncated, match="truncated after one bounded") as exc_info:
-        V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
+        provider = V3LLMBrainProvider()
+        provider.model = "gpt-6.1-sol"
+        provider.provider = "openai"
+        provider._run_single_model(BrainRunRequest(user_input="Create one natural portrait."))  # noqa: SLF001 - same-candidate recovery
 
     assert attempts == 2
     assert exc_info.value.safe_metadata() == {
@@ -2070,23 +2403,33 @@ def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> No
     }
 
 
-def test_remote_brain_explicit_v3_provider_still_overrides_default(monkeypatch) -> None:
+def test_remote_brain_model_id_selects_protocol_and_uses_unified_credentials(monkeypatch) -> None:
     from app.config import settings
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
-    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "brain-override")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-override-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://override.example.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://unified.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
 
     provider = V3LLMBrainProvider()
 
     assert provider.provider == "openai"
-    assert provider.model == "brain-override"
+    assert provider.model == "gpt-6.1-sol"
     api_key, base_url = provider._credentials()  # noqa: SLF001 - configuration boundary assertion
-    assert api_key == "brain-override-key"
-    assert base_url == "https://override.example.test/v1"
+    assert api_key == "unified-key"
+    assert base_url == "https://unified.example.test/v1"
+
+
+def test_remote_brain_unknown_model_route_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "custom-unmapped-model")
+    provider = V3LLMBrainProvider()
+
+    assert provider.provider == "unsupported"
+    assert provider.availability(force=True)["reason_code"] == "unsupported_model_route"
 
 
 def test_remote_brain_rejects_internally_inconsistent_image_set_plan(monkeypatch) -> None:
