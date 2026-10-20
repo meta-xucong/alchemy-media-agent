@@ -264,6 +264,9 @@ def test_candidate_migrates_only_the_known_old_v3_brain_budget() -> None:
     assert 'if [ "$brain_budget" = "550" ]; then' in candidate
     assert 'set_env_value "$env_file" V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS "2200"' in candidate
     assert "candidate_brain_budget_migration_invalid" in candidate
+    assert "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=" in candidate
+    assert "tail -n 120 \"$build_log\"" in candidate
+    assert "candidate_image_build_failed" in candidate
 
 
 def test_maintenance_flag_is_checked_before_any_https_route() -> None:

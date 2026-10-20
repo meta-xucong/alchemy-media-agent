@@ -145,7 +145,7 @@ jobs:
 
           normalized_env_digest() {
             local file="$1"
-            grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL)=' "$file" | sha256sum | awk '{print $1}'
+            grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=' "$file" | sha256sum | awk '{print $1}'
           }
 
           env_value() {
@@ -323,7 +323,13 @@ jobs:
           prepare_v2_runtime
 
           verify_release_source_tree "$candidate_release" || stop candidate_release_source_tree_changed_before_build
-          ALCHEMY_REVISION="$expected_sha" compose_candidate build alchemy-media-agent >/dev/null
+          build_log="$(mktemp)"
+          if ! ALCHEMY_REVISION="$expected_sha" compose_candidate build alchemy-media-agent >"$build_log" 2>&1; then
+            tail -n 120 "$build_log" >&2 || true
+            rm -f -- "$build_log"
+            stop candidate_image_build_failed
+          fi
+          rm -f -- "$build_log"
           docker tag alchemy-media-agent:latest "alchemy-media-agent:candidate-${expected_sha}"
           image_revision="$(docker image inspect "alchemy-media-agent:candidate-${expected_sha}" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
           [ "$image_revision" = "$expected_sha" ] || stop candidate_image_revision_mismatch
