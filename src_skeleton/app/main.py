@@ -4222,3 +4222,28 @@ def mcp_download_page():
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     return response
+
+
+# Optional, isolated Bridge preview. No default provider/Brain/job mutation.
+def _render_bridge_preview_project_snapshot(owner: str, project_id: str) -> dict | None:
+    project = v3_route_handlers.project_service.project_store.get_project(project_id)
+    if project is None or str(project.status) != "active":
+        return None
+    project_owner = _positive_int_or_none(dict(project.metadata or {}).get("veyra_user_id"))
+    if owner == "local_preview":
+        if settings.veyra_auth_enabled or project_owner is not None:
+            return None
+    elif project_owner is None or str(project_owner) != owner:
+        return None
+    snapshot = project.model_dump(mode="json")
+    revision = hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+    return {"revision": revision}
+
+
+from app.integrations.render_bridge.routes import install_render_bridge
+install_render_bridge(
+    app,
+    session_user=lambda request, authorization: _veyra_user_id_from_request(request, authorization),
+    auth_enabled=lambda: settings.veyra_auth_enabled,
+    project_snapshot=_render_bridge_preview_project_snapshot,
+)
