@@ -9,7 +9,8 @@ import time
 
 from .client import BridgeError
 
-TERMINAL = {"preview_ready", "canceled", "failed", "expired", "blocked_scope", "blocked_revision", "protocol_error"}
+TERMINAL = {"preview_ready", "registered", "plan_blocked", "rejected", "canceled",
+            "failed", "expired", "blocked_scope", "blocked_revision", "protocol_error"}
 
 
 class PreviewStore:

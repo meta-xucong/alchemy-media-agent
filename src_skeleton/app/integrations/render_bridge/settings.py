@@ -14,6 +14,7 @@ class BridgeSettings:
     workspace: str = ""
     storage: Path = Path(".render_bridge_preview")
     allow_local_preview: bool = False
+    native_enabled: bool = False
     profiles: tuple[str, ...] = ("fake-image",)
     poll_seconds: float = 2.0
     batch_size: int = 2
@@ -54,4 +55,5 @@ class BridgeSettings:
         return cls(mode=mode, base_url=base, token=token, workspace=workspace,
                    storage=Path(os.getenv("ALCHEMY_RENDER_BRIDGE_STORAGE", ".render_bridge_preview")),
                    allow_local_preview=os.getenv("ALCHEMY_RENDER_BRIDGE_LOCAL_PREVIEW") == "true",
+                   native_enabled=os.getenv("ALCHEMY_RENDER_BRIDGE_NATIVE_ENABLED") == "true",
                    profiles=profiles, config_error=error)

@@ -4240,10 +4240,29 @@ def _render_bridge_preview_project_snapshot(owner: str, project_id: str) -> dict
     return {"revision": revision}
 
 
+def _create_render_bridge_native_gateway(config):
+    # Imported only for explicit native-development enablement. This does not
+    # alter the existing provider registry or normal Generate route.
+    from alchemy_creative_agent_3_0.app.product_api.render_bridge_facade import RenderBridgeNativeFacade
+    from alchemy_creative_agent_3_0.app.product_api.render_bridge_native import NativeRenderBridgeGateway
+    return NativeRenderBridgeGateway(
+        facade=RenderBridgeNativeFacade(
+            get_job_record=_v3_product_service.get_job_record,
+            get_project_record=v3_route_handlers.project_service.project_store.get_project,
+            enabled=True,
+        ),
+        service=_v3_product_service,
+        project_service=v3_route_handlers.project_service,
+        journal_root=config.storage / "native-registration",
+        enabled=True,
+    )
+
+
 from app.integrations.render_bridge.routes import install_render_bridge
 install_render_bridge(
     app,
     session_user=lambda request, authorization: _veyra_user_id_from_request(request, authorization),
     auth_enabled=lambda: settings.veyra_auth_enabled,
     project_snapshot=_render_bridge_preview_project_snapshot,
+    native_gateway_factory=_create_render_bridge_native_gateway,
 )

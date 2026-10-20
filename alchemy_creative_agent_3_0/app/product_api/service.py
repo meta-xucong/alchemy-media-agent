@@ -1627,6 +1627,89 @@ class V3ProductApiService:
             doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
         )
 
+    def _render_bridge_plan_request(
+        self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+    ):
+        from ..generation_router.render_bridge_provider import RenderBridgePlanIdentity
+        from .contracts import ImageOutputOptions
+
+        if type(owner_user_id) is not int or owner_user_id <= 0:
+            raise ValueError("render_bridge_authenticated_owner_required")
+        if any(not isinstance(value, str) or not value.strip() for value in (project_id, user_input, plan_key)):
+            raise ValueError("render_bridge_plan_invalid")
+        if len(plan_key) > 128:
+            raise ValueError("render_bridge_plan_invalid")
+        identity = RenderBridgePlanIdentity(
+            project_id=project_id,
+            owner_user_id=owner_user_id,
+            plan_key=plan_key,
+            user_input_sha256=hashlib.sha256(user_input.encode("utf-8")).hexdigest(),
+        )
+        request = CreateCreativeJobRequest(
+            user_input=user_input,
+            scenario_selection={"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
+            image_options=ImageOutputOptions(size="1024x1024", quality="auto", output_format="png"),
+            metadata={
+                "project_id": project_id,
+                "veyra_user_id": owner_user_id,
+                "template_id": "general_template",
+                "requested_image_count": 1,
+                "requested_image_size": "1024x1024",
+                "require_real_images": True,
+            },
+        )
+        return request, identity
+
+    def lookup_render_bridge_plan(
+        self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+    ) -> ProductJobStatus | None:
+        request, identity = self._render_bridge_plan_request(
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+        )
+        request.metadata["v3_job_instance_id"] = identity.instance_id
+        job_id = self._planned_job_id_for_request(request)
+        record = self.get_job_record(job_id)
+        if record is None:
+            return None
+        if record.request.metadata.get("render_bridge_native_plan") != identity.safe_metadata():
+            raise ValueError("render_bridge_plan_identity_conflict")
+        return self._status_from_record(record)
+
+    def create_render_bridge_plan(
+        self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+    ) -> ProductJobStatus:
+        """Explicit plan-only entry. No generator or ordinary Generate call."""
+
+        existing = self.lookup_render_bridge_plan(
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+        )
+        if existing is not None:
+            return existing
+        request, identity = self._render_bridge_plan_request(
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+        )
+        return self._create_creative_job(request, _render_bridge_plan_identity=identity)
+
+    def cancel_render_bridge_plan(self, *, project_id: str, job_id: str, owner_user_id: int) -> dict[str, Any]:
+        """Abandon an opt-in target without deleting any native output."""
+
+        record = self.get_job_record(job_id)
+        marker = dict(record.request.metadata or {}).get("render_bridge_native_plan") if record else None
+        if (
+            not isinstance(marker, dict)
+            or marker.get("project_id") != project_id
+            or type(owner_user_id) is not int
+            or marker.get("owner_user_id") != owner_user_id
+        ):
+            raise ValueError("render_bridge_target_not_found")
+        if record.generation_result is not None:
+            return {"status": "already_registered"}
+        record.request.metadata = {**dict(record.request.metadata), "cancel_requested": True}
+        record.status = ProductJobStatusValue.BLOCKED
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return {"status": "canceled"}
+
     def create_project_visual_asset_bound_job(
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
@@ -1753,8 +1836,20 @@ class V3ProductApiService:
         doc270_source_library_enabled: bool = False,
         trusted_doc270_ecommerce_view_activation: bool = False,
         continuity_snapshot: dict[str, Any] | None = None,
+        _render_bridge_plan_identity: Any | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
+        if _render_bridge_plan_identity is not None:
+            from ..generation_router.render_bridge_provider import RenderBridgePlanIdentity
+
+            if (
+                not isinstance(_render_bridge_plan_identity, RenderBridgePlanIdentity)
+                or _render_bridge_plan_identity.project_id != create_request.metadata.get("project_id")
+                or _render_bridge_plan_identity.owner_user_id != create_request.metadata.get("veyra_user_id")
+                or _render_bridge_plan_identity.user_input_sha256
+                != hashlib.sha256(create_request.user_input.encode("utf-8")).hexdigest()
+            ):
+                raise ValueError("render_bridge_plan_identity_untrusted")
         if generation_channel == "mcp" and not (
             trusted_professional_anchor_preparation or trusted_professional_character_card
         ):
@@ -1808,6 +1903,12 @@ class V3ProductApiService:
                 ],
             }
         self._bind_server_job_instance_id(create_request)
+        if _render_bridge_plan_identity is not None:
+            create_request.metadata = {
+                **dict(create_request.metadata),
+                "v3_job_instance_id": _render_bridge_plan_identity.instance_id,
+                "render_bridge_native_plan": _render_bridge_plan_identity.safe_metadata(),
+            }
         if project_ecommerce_canonical_product_asset_ids is not None:
             canonical_ids = [
                 str(item).strip()
@@ -2167,6 +2268,30 @@ class V3ProductApiService:
                 }
         self._bind_capability_plan_provenance(create_request, job_id)
         self._bind_frozen_remote_creative_brain(create_request, runtime_result)
+        if _render_bridge_plan_identity is not None and planning_result is not None:
+            # Ordinary generation attaches this provider authority later. The
+            # explicit Bridge plan-only path must retain the already-issued
+            # Doc322 snapshot without invoking generation or freezing it anew.
+            frozen_references = ReferenceInputPlan.from_dict(
+                create_request.metadata.get(PLAN_KEY),
+                job_id=job_id,
+                project_id=_render_bridge_plan_identity.project_id,
+            )
+            if frozen_references.references(verify_bytes=False):
+                raise ValueError("render_bridge_native_references_unsupported")
+            authority = {
+                PLAN_KEY: frozen_references.as_dict(),
+                "project_id": _render_bridge_plan_identity.project_id,
+            }
+            planning_result.metadata = {
+                **planning_result.metadata,
+                **copy.deepcopy(authority),
+            }
+            for generation_plan in planning_result.generation_plans:
+                generation_plan.metadata = {
+                    **generation_plan.metadata,
+                    **copy.deepcopy(authority),
+                }
         self._bind_internal_copy_render_plan(create_request)
         self._seed_ecommerce_slot_root_lineage(create_request, job_id)
         self._seed_photography_role_root_lineage(create_request, job_id)
@@ -3630,6 +3755,10 @@ class V3ProductApiService:
         record = self.job_store.get(job_id)
         if record is None:
             return self._not_found_status(job_id)
+        if isinstance(record.request.metadata.get("render_bridge_native_plan"), dict):
+            # Only new opt-in Bridge plans are held here. Their pixels arrive
+            # through register_render_bridge_result, not the ordinary renderer.
+            return self._status_from_record(record)
         if _trusted_body_refresh_analysis_context is not None and not isinstance(
             _trusted_body_refresh_analysis_context,
             BodyRefreshAnalysisContext,
@@ -4886,6 +5015,21 @@ class V3ProductApiService:
                 "provider_request_started": True,
             }
             raise error
+        return self._project_frozen_provider_candidate(
+            record, planning_result, frozen_generation_plan, provider_response,
+            candidate, output_record, consumer="submitted_mcp",
+        )
+
+    def _project_frozen_provider_candidate(
+        self, record, planning_result, frozen_generation_plan, provider_response,
+        candidate, output_record, *, consumer: str,
+    ) -> PlanningResult:
+        """Project provider-owned persisted pixels without another generation pass."""
+
+        packaged = planning_result.asset_pack.assets[0]
+        candidate_metadata = dict(candidate.metadata or {})
+        output_uri = str(output_record.thumbnail_url or output_record.download_url or "")
+        candidates = list(provider_response.candidates)
         candidate_metadata = {
             **candidate_metadata,
             "output_id": output_record.output_id,
@@ -4903,7 +5047,7 @@ class V3ProductApiService:
             "planning_only": False,
             "selected_candidate_id": candidate.candidate_id,
             "selected_candidate_provider": candidate.provider,
-            "selected_candidate_is_mock": False,
+            "selected_candidate_is_mock": candidate.is_mock,
             "output_id": output_record.output_id,
             "file_path": output_record.file_path,
             "uri": output_uri,
@@ -4934,7 +5078,7 @@ class V3ProductApiService:
                     "generation_result",
                     record.job_id,
                     planning_result.planning_result_id,
-                    "submitted_mcp",
+                    consumer,
                 ),
                 "generation_plans": [frozen_generation_plan],
                 "asset_pack": generated_asset_pack,
@@ -4943,7 +5087,7 @@ class V3ProductApiService:
                     "planning_only": False,
                     "candidate_loop": True,
                     "candidate_count": len(candidates),
-                    "submitted_mcp_consumer": "frozen_planning_result",
+                    f"{consumer}_consumer": "frozen_planning_result",
                     "provider_metadata": dict(getattr(provider_response, "provider_metadata", {}) or {}),
                 },
             }
@@ -5020,6 +5164,7 @@ class V3ProductApiService:
         background_attempt_id: str = "",
         *,
         review_only: bool = False,
+        assert_current: Callable[[], None] | None = None,
     ) -> ProductJobStatus:
         generation_result = record.generation_result
         if generation_result is None:
@@ -5036,6 +5181,8 @@ class V3ProductApiService:
             return self._status_from_record(record)
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        if assert_current is not None:
+            assert_current()
         if review_recheck_required:
             generation_metadata = dict(generation_result.metadata)
             generation_metadata.pop("post_generation_review_recheck_required", None)
@@ -5058,6 +5205,8 @@ class V3ProductApiService:
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         record.generation_result = generation_result
+        if assert_current is not None:
+            assert_current()
         self._persist_mode_execution_projection_to_output_store(generation_result)
         package = generation_result.metadata.get("post_generation_review_package")
         review_still_pending = (
@@ -5119,6 +5268,121 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
+
+    def lookup_render_bridge_registration(self, binding) -> dict[str, Any]:
+        """Read the service-owned native checkpoint, not an integration claim."""
+
+        from ..generation_router.render_bridge_provider import RenderBridgeRegistration
+
+        if not isinstance(binding, RenderBridgeRegistration):
+            raise ValueError("render_bridge_registration_untrusted")
+        record = self.get_job_record(binding.job_id)
+        output = self.output_store.get_output(binding.output_id)
+        if record is None:
+            return {"status": "rejected", "reason_code": "render_bridge_target_not_found"}
+        if output is None:
+            return {"status": "not_registered"}
+        receipt = dict(output.metadata or {}).get("provider_raw_summary", {}).get("render_bridge_registration")
+        if receipt != binding.safe_metadata():
+            raise ValueError("render_bridge_native_checkpoint_conflict")
+        result = record.generation_result
+        committed = (
+            result is not None
+            and result.metadata.get("render_bridge_registration") == binding.safe_metadata()
+            and any(
+                asset.metadata.get("output_id") == binding.output_id
+                for asset in result.asset_pack.assets
+            )
+        )
+        if not committed:
+            return {"status": "output_checkpointed", "retry_safe": True}
+        return {
+            "status": "registered",
+            "native_registration_ref": binding.output_id,
+            "original_sha256": binding.original_sha256,
+            "normalized_sha256": str(output.metadata.get("content_sha256") or ""),
+            "review_status": str(record.status),
+            "formal_delivery": False if binding.execution_profile_id == "fake-image" else "review_owned",
+            "billing": {"mode": "v3_zero_credit_stub", "charged": False},
+            "test_fixture": binding.execution_profile_id == "fake-image",
+        }
+
+    def register_render_bridge_result(
+        self, binding, artifact_bytes: bytes, *, assert_current: Callable[[], None],
+    ) -> dict[str, Any]:
+        """Dedicated frozen-result continuation. Never re-enters Brain/rendering.
+
+        The caller owns authenticated target/revision checks and the scoped
+        import lock. This service owns native persistence, projection and the
+        existing shared review-only lifecycle.
+        """
+
+        from ..generation_router.render_bridge_provider import (
+            RenderBridgeReceiptProvider,
+            RenderBridgeRegistration,
+        )
+
+        if not isinstance(binding, RenderBridgeRegistration) or binding.execution_profile_id != "fake-image":
+            raise ValueError("render_bridge_profile_unverified")
+        if type(self.balance_adapter) is not V3BalanceAdapter:
+            raise ValueError("render_bridge_billing_adapter_unverified")
+        assert_current()
+        existing = self.lookup_render_bridge_registration(binding)
+        if existing["status"] == "registered":
+            return existing
+        record = self.get_job_record(binding.job_id)
+        if record is None or record.planning_result is None or record.generation_result is not None:
+            raise ValueError("render_bridge_native_target_conflict")
+        plan = copy.deepcopy(record.planning_result)
+
+        def one(items):
+            matches = [item for item in items if item.asset_id == binding.asset_id]
+            if len(matches) != 1:
+                raise ValueError("render_bridge_frozen_plan_incomplete")
+            return matches[0]
+
+        generation_plan = one(plan.generation_plans)
+        request = build_provider_generation_request(
+            asset_spec=one(plan.series_plan.assets),
+            layout_plan=one(plan.layout_plans),
+            prompt_compilation=one(plan.prompt_compilations),
+            condition_plan=one(plan.condition_plans),
+            generation_plan=generation_plan,
+            job_id=binding.job_id,
+        )
+        response = RenderBridgeReceiptProvider(
+            output_store=self.output_store,
+            binding=binding,
+            artifact_bytes=artifact_bytes,
+            assert_current=assert_current,
+        ).generate(request)
+        if len(response.candidates) != 1:
+            raise ValueError("render_bridge_single_candidate_required")
+        candidate = response.candidates[0]
+        candidate.is_mock = True  # This stage supports only the fake-image profile.
+        output = self.output_store.get_output(binding.output_id)
+        if (
+            output is None
+            or output.job_id != binding.job_id
+            or output.asset_id != binding.asset_id
+            or output.candidate_id != candidate.candidate_id
+        ):
+            raise ValueError("render_bridge_native_checkpoint_missing")
+        assert_current()
+        result = self._project_frozen_provider_candidate(
+            record, plan, generation_plan, response, candidate, output, consumer="render_bridge"
+        )
+        result.metadata = {**dict(result.metadata), "render_bridge_registration": binding.safe_metadata()}
+        record.generation_result = result
+        record.status = ProductJobStatusValue.FINALIZING
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        # Review-only forbids visual auto-retries; native registration alone is
+        # not selection, memory promotion or formal delivery.
+        self._resume_finalizing_generation_review(
+            record, GenerateJobRequest(), review_only=True, assert_current=assert_current
+        )
+        return self.lookup_render_bridge_registration(binding)
 
     def _sync_mcp_review_resume_projection(
         self,
@@ -12847,6 +13111,26 @@ class V3ProductApiService:
         manual review as a successful retry.
         """
 
+        bridge_registration = result.metadata.get("render_bridge_registration")
+        if (
+            isinstance(bridge_registration, dict)
+            and bridge_registration.get("execution_profile_id") == "fake-image"
+        ):
+            # A fixture can exercise native persistence and shared review but
+            # can never become a formal selected/exported/memory asset.
+            return (
+                {
+                    "final_delivery_status": "withheld_test_fixture",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": False,
+                    "reviewed_output_count": 0,
+                    "final_delivery_output_count": 0,
+                    "withheld_output_count": len(result.asset_pack.assets),
+                    "delivery_gate_applies": True,
+                },
+                set(),
+                set(),
+            )
         package = result.metadata.get("post_generation_review_package")
         raw_inspections = package.get("inspections") if isinstance(package, dict) else []
         inspections = [dict(item) for item in raw_inspections if isinstance(item, dict)] if isinstance(raw_inspections, list) else []
@@ -13349,6 +13633,7 @@ class V3ProductApiService:
             "provider_deliverability_closure_receipt",
             "ambiguous_provider_request_hold_receipt",
             "provider_image_options",
+            "render_bridge_native_plan",
             "doc270_project_source_library",
             "doc270_source_library_binding_receipts",
             "doc270_general_source_activation_receipts",
@@ -16879,6 +17164,7 @@ class V3ProductApiService:
             "doc270_ecommerce_view_activation_receipts",
             "doc270_ecommerce_view_activation_selection",
             "provider_image_options",
+            "render_bridge_native_plan",
             "doc73_batch_plan_digest",
             "doc73_auto_identity_anchor_receipt",
             "doc73_auto_identity_anchor_reference",

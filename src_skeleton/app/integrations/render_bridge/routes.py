@@ -20,7 +20,8 @@ STATIC = Path(__file__).parent / "static"
 HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
 
 
-def install_render_bridge(app, *, session_user, auth_enabled, project_snapshot, config=None, client=None):
+def install_render_bridge(app, *, session_user, auth_enabled, project_snapshot, config=None, client=None,
+                          native_gateway_factory=None):
     config = config or BridgeSettings.from_env()
     if config.mode == "disabled":
         return None
@@ -145,4 +146,8 @@ def install_render_bridge(app, *, session_user, auth_enabled, project_snapshot, 
 
     app.include_router(router)
     app.state.render_bridge_preview = runtime
+    if config.native_enabled:
+        from .native_routes import install_native_routes
+        install_native_routes(app, config=config, actor=actor, require_write=require_write,
+                              project_snapshot=project_snapshot, gateway_factory=native_gateway_factory)
     return runtime

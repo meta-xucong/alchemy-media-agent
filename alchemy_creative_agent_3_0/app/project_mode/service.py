@@ -4715,6 +4715,51 @@ class V3ProjectModeService:
             result.append({**entry, "analysis_bytes": content, "mime_type": mime_type})
         return result or None
 
+    def create_render_bridge_plan(
+        self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+    ) -> ProductJobStatus:
+        """Explicit Standard/no-reference plan; never invokes Generate.
+
+        The native gateway owns the stable command key and unknown-outcome
+        handling. This method only delegates planning and owns project linkage.
+        """
+
+        project = self._require_project(project_id)
+        if (
+            type(owner_user_id) is not int
+            or owner_user_id <= 0
+            or project.metadata.get("veyra_user_id") != owner_user_id
+            or str(project.status) != "active"
+        ):
+            raise ValueError("render_bridge_target_not_found")
+        if project.primary_template_id != GENERAL_TEMPLATE_ID:
+            raise ValueError("render_bridge_standard_project_required")
+        self._ensure_active_template(GENERAL_TEMPLATE_ID)
+        revision = project.updated_at
+        status = self.product_service.create_render_bridge_plan(
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+        )
+        # A slow Brain call cannot overwrite a concurrently archived/edited
+        # project. Its durable orphan plan remains queryable, never generated.
+        project = self._require_project(project_id)
+        if (
+            project.metadata.get("veyra_user_id") != owner_user_id
+            or str(project.status) != "active"
+            or project.updated_at != revision
+        ):
+            raise ValueError("render_bridge_project_revision_changed")
+        if status.job_id not in project.job_ids:
+            self._link_job(project, status.job_id, self._build_context(project))
+            self._append_timeline(
+                project_id,
+                TimelineItemType.JOB_CREATED,
+                "Render Bridge test plan",
+                "Explicit single-image plan; native fixture registration only.",
+                job_id=status.job_id,
+                metadata={"render_bridge_test_fixture": True},
+            )
+        return status
+
     def create_project_job(
         self,
         project_id: str,
