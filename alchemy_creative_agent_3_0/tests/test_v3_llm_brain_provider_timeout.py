@@ -7,10 +7,12 @@ import types
 import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain.contracts import (
+    BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS,
     BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
     BrainRunRequest,
 )
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    _ACTIVE_CANDIDATE_DEADLINE,
     _ACTIVE_EXECUTION_BUDGET,
     _ACTIVE_TRANSPORT_TRACE,
     _BrainExecutionBudget,
@@ -75,6 +77,39 @@ def test_brain_provider_timeout_is_bounded_per_model_attempt(monkeypatch) -> Non
         "json_parse_completed": False,
     }
     assert 900 <= failure.value.elapsed_ms <= 1600
+
+
+def test_expanded_brain_budget_preserves_300_second_json_recovery_window(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "300")
+    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "2200")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    provider = V3LLMBrainProvider()
+    assert provider.timeout == 300.0
+    assert provider.execution_budget_seconds == BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS == 2200.0
+    assert BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS == 220.0
+
+    now = time.perf_counter()
+    budget_token = _ACTIVE_EXECUTION_BUDGET.set(
+        _BrainExecutionBudget(total_seconds=2200.0, started_at=now)
+    )
+    # One candidate receives 660 seconds. After a 300-second initial attempt,
+    # 360 seconds remain: 300 for JSON recovery plus the 30-second grace reserve.
+    candidate_token = _ACTIVE_CANDIDATE_DEADLINE.set(now + 360.0)
+    request = BrainRunRequest(
+        user_input="Prepare a bounded Brain request.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+    try:
+        effective_timeout, _ = provider._effective_timeout_and_deadline(request)
+    finally:
+        _ACTIVE_CANDIDATE_DEADLINE.reset(candidate_token)
+        _ACTIVE_EXECUTION_BUDGET.reset(budget_token)
+
+    assert effective_timeout == 300.0
 
 
 def test_transport_timeout_phase_distinguishes_complete_response_and_json_parse() -> None:

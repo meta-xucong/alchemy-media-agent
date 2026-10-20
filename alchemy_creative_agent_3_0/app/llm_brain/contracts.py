@@ -32,7 +32,10 @@ from .prompt_policy import (
 BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS = 1.0
 BRAIN_TRANSPORT_TIMEOUT_DEFAULT_SECONDS = 300.0
 BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS = 360.0
-BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS = 520.0
+# Three model candidates each receive enough room for two bounded 300-second
+# calls plus their 30-second streaming-progress grace, with 220 seconds held
+# for the canonical renderer sign-off: 3 * 660 + 220 = 2200 seconds.
+BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS = 2200.0
 BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS = 220.0
 BRAIN_TRANSPORT_TIMEOUT_PHASES = frozenset(
     {

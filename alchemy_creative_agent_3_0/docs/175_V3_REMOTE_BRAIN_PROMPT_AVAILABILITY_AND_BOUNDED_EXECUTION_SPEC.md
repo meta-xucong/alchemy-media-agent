@@ -66,9 +66,16 @@ not a generic age/person retry path.
 `V3_LLM_BRAIN_TIMEOUT_SECONDS` remains a per-remote-call maximum.
 `V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS` is a single deadline shared by all
 remote decisions in one ScenarioRuntime preparation. The current defaults are
-300 seconds per call and 520 seconds for the whole preparation; explicit
+300 seconds per call and 2200 seconds for the whole preparation; explicit
 per-call values are bounded to 360 seconds. Doc288 records the supersession of
 the historical 210-second cap and the reason the shared budget remains finite.
+The 2200-second default reserves 220 seconds for canonical prompt sign-off and
+allocates 660 seconds to each of the three model candidates. Each candidate
+window can therefore contain two 300-second transport attempts, each with its
+bounded 30-second streaming-progress grace; the second attempt covers the
+existing same-model JSON serialization recovery. The real-image background
+watchdog adds this Brain budget to the planned image-provider budget so it
+cannot terminate the job while the Brain is still within its deadline.
 
 Each transport call uses the smaller of its ordinary per-call timeout and the
 remaining logical budget. When no time remains, the runtime returns

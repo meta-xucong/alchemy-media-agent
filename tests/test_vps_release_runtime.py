@@ -128,16 +128,20 @@ def test_v3_brain_route_is_explicit_in_all_runtime_bootstraps() -> None:
     expected = {
         "V3_LLM_BRAIN_ENABLED": "true",
         "V3_LLM_BRAIN_REMOTE_ENABLED": "true",
-        "V3_LLM_BRAIN_PROVIDER": "openai",
-        "V3_LLM_BRAIN_MODEL": "gpt-5.6-terra",
+        "V3_LLM_BRAIN_PROVIDER": "anthropic",
+        "V3_LLM_BRAIN_MODEL": "claude-sonnet-5-5",
+        "V3_LLM_BRAIN_BACKUP_MODEL": "kimi-k3",
         "V3_LLM_BRAIN_TRANSPORT": "chat_nonstream",
         "V3_LLM_BRAIN_TIMEOUT_SECONDS": "300",
-        "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS": "550",
+        "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS": "2200",
         "V3_LLM_BRAIN_MAX_TOKENS": "20000",
     }
     for key, value in expected.items():
         assert example.count(f"{key}=") == 1
         assert f"{key}={value}" in example
         assert f'"{key}={value}"' in bootstrap
-        assert f"{key}=${{{key}:-{value}}}" in direct_deploy
+        if key in {"V3_LLM_BRAIN_PROVIDER", "V3_LLM_BRAIN_MODEL", "V3_LLM_BRAIN_BACKUP_MODEL"}:
+            assert f"{key}={value}" in direct_deploy
+        else:
+            assert f"{key}=${{{key}:-{value}}}" in direct_deploy
     assert "retired and performs no changes" in migration

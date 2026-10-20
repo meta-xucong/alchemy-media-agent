@@ -1267,19 +1267,24 @@ def test_v3_planned_auto_generation_handoff_recovers_on_project_poll(tmp_path, m
 def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(monkeypatch) -> None:
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", True)
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
+    monkeypatch.setattr(app_main.settings, "v3_llm_brain_execution_budget_seconds", 2200.0)
 
     assert app_main._v3_gateway_managed_background_timeout_seconds(
-        {"quality_mode": "standard", "metadata": {"requested_image_count": 2}}
-    ) == 2655.0
+        {"quality_mode": "standard", "metadata": {"requested_image_count": 2, "require_real_images": True}}
+    ) == 4855.0
     assert app_main._v3_gateway_managed_background_timeout_seconds(
         {
             "quality_mode": "standard",
-            "metadata": {"requested_image_count": 2, "disable_visual_auto_retry": True},
+            "metadata": {
+                "requested_image_count": 2,
+                "disable_visual_auto_retry": True,
+                "require_real_images": True,
+            },
         }
-    ) == 1335.0
+    ) == 3535.0
     assert app_main._v3_gateway_managed_background_timeout_seconds(
-        {"quality_mode": "strict", "metadata": {"requested_image_count": 3}}
-    ) == 5955.0
+        {"quality_mode": "strict", "metadata": {"requested_image_count": 3, "require_real_images": True}}
+    ) == 8155.0
 
 
 def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(monkeypatch) -> None:
@@ -1288,11 +1293,12 @@ def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(mo
     monkeypatch.setattr(app_main.settings, "openai_image_request_timeout_seconds", 240.0)
     monkeypatch.setattr(app_main.settings, "openai_image_edit_request_timeout_seconds", 420.0)
     monkeypatch.setattr(app_main.settings, "openai_image_high_resolution_timeout_seconds", 900.0)
+    monkeypatch.setattr(app_main.settings, "v3_llm_brain_execution_budget_seconds", 2200.0)
 
     assert app_main._v3_background_generation_timeout_plan(
         None,
         {"quality_mode": "standard", "metadata": {"require_real_images": True, "requested_image_count": 2}},
-    ) == (975.0, "direct_provider")
+    ) == (3175.0, "direct_provider")
     assert app_main._v3_background_generation_timeout_plan(
         None,
         {
@@ -1304,7 +1310,7 @@ def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(mo
                 "disable_visual_auto_retry": True,
             },
         },
-    ) == (855.0, "direct_provider")
+    ) == (3055.0, "direct_provider")
     assert app_main._v3_background_generation_timeout_plan(
         None,
         {
@@ -1315,7 +1321,7 @@ def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(mo
                 "requested_image_size": "2048x2048",
             },
         },
-    ) == (2715.0, "direct_provider")
+    ) == (4915.0, "direct_provider")
     assert app_main._v3_background_generation_timeout_plan(
         None,
         {"quality_mode": "standard", "metadata": {"requested_image_count": 1}},

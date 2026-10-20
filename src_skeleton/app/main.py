@@ -1247,10 +1247,25 @@ def _v3_gateway_managed_background_timeout_seconds(payload: dict | None = None) 
     retry_count = _v3_bounded_background_visual_retry_count(payload)
     provider_request_budget = render_count * (1 + retry_count)
     provider_timeout = float(settings.openai_image_gateway_managed_failover_timeout_seconds)
+    brain_budget = _v3_background_brain_budget_seconds(payload)
     # This watchdog is only a recovery boundary when the lower transport never
     # returns.  Keep a small one-time conversion margin rather than shortening
     # every individual gateway request.
-    return max(1.0, (provider_timeout * provider_request_budget) + 15.0)
+    return max(1.0, brain_budget + (provider_timeout * provider_request_budget) + 15.0)
+
+
+def _v3_background_brain_budget_seconds(payload: dict | None = None) -> float:
+    """Reserve the configured Brain deadline before the image-provider budget."""
+
+    metadata = dict((payload or {}).get("metadata") or {})
+    requires_real_images = bool(metadata.get("require_real_images") or metadata.get("real_image_generation"))
+    if not requires_real_images:
+        return 0.0
+    try:
+        configured = float(settings.v3_llm_brain_execution_budget_seconds)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, configured)
 
 
 def _v3_background_request_is_high_resolution(payload: dict | None = None) -> bool:
@@ -1339,7 +1354,8 @@ def _v3_background_generation_timeout_plan(
     else:
         provider_timeout = float(settings.openai_image_request_timeout_seconds)
     provider_request_budget = render_count * (1 + retry_count)
-    return max(1.0, (provider_timeout * provider_request_budget) + 15.0), "direct_provider"
+    brain_budget = _v3_background_brain_budget_seconds(payload)
+    return max(1.0, brain_budget + (provider_timeout * provider_request_budget) + 15.0), "direct_provider"
 
 
 def _timeout_v3_project_generation_background(
