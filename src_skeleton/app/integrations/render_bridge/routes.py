@@ -146,6 +146,8 @@ def install_render_bridge(app, *, session_user, auth_enabled, project_snapshot, 
 
     app.include_router(router)
     app.state.render_bridge_preview = runtime
+    from .diagnostics import install_diagnostics_routes
+    install_diagnostics_routes(app, config=config, actor=actor, require_write=require_write, get_service=service)
     if config.native_enabled:
         from .native_routes import install_native_routes
         install_native_routes(app, config=config, actor=actor, require_write=require_write,

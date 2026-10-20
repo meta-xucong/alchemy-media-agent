@@ -171,8 +171,10 @@ def test_preview_cancel_hides_image_and_original_link_navigates(preview) -> None
     assert fixture.canceled == ["ready-task"]
     page.click("#refresh")
     expect(image).to_have_count(0)
-    expect(page.locator("nav a")).to_have_attribute("href", "/creative-agent-v3")
-    page.locator("nav a").click()
+    original_link = page.locator("nav a[href='/creative-agent-v3']")
+    expect(original_link).to_be_visible()
+    expect(page.locator("nav a[href='/render-bridge-diagnostics']")).to_be_visible()
+    original_link.click()
     expect(page).to_have_url(f"{ORIGIN}/creative-agent-v3")
     page.go_back()
     expect(page).to_have_url(f"{ORIGIN}/render-bridge-preview")
@@ -234,6 +236,7 @@ def test_native_reference_order_size_replay_and_project_change(browser: Browser)
     page.on("pageerror", lambda error: errors.append(str(error)))
     try:
         page.goto(ORIGIN + "/render-bridge-native-test")
+        expect(page.locator("nav a[href='/render-bridge-diagnostics']")).to_be_visible()
         expect(page.locator("#project option[value='fixture-project']")).to_be_attached()
         expect(page.locator("#submit")).to_be_disabled()
         page.select_option("#project", "fixture-project")
@@ -266,3 +269,216 @@ def test_native_reference_order_size_replay_and_project_change(browser: Browser)
         assert errors == [] and fixture.unexpected == []
     finally:
         context.close()
+
+
+class DiagnosticsFixture:
+    """Every diagnostics read/import is synthetic; no task API is permitted."""
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str]] = []
+        self.imports: list[str] = []
+        self.unexpected: list[str] = []
+        self.server_reads = 0
+        self.report_error: str | None = None
+        self.server = {
+            "schema_version": "1",
+            "source": "configured_bridge_http",
+            "connection": "ok",
+            "code": None,
+            "profiles": [{
+                "execution_profile_id": "fake-image",
+                "execution_profile_revision": "fixture-v1",
+                "execution_mode": "automatic",
+                "validation": "synthetic_only",
+                "production_verified": False,
+                "parameter_contract": {
+                    "schema_version": "1",
+                    "accepted_parameters": ["width", "height", "seed"],
+                    "required_parameters": [],
+                    "dimension_semantics": "exact_output_match",
+                    "seed_semantics": "accepted_not_applied",
+                    "executor_control": "deterministic_fixture",
+                    "reference_semantics": "hash_checked_not_conditioning",
+                    "unsupported_parameters": ["quality", "output_format", "input_fidelity"],
+                },
+            }, {
+                "execution_profile_id": "legacy-profile",
+                "execution_profile_revision": "old",
+                "execution_mode": "unverified",
+                "validation": "unverified",
+                "production_verified": False,
+                # Older servers may omit parameter_contract entirely.
+            }],
+            "native_real_profile_support": False,
+            "local_cli": {"status": "not_checked"},
+            "real_generation_verified": False,
+        }
+
+    def route(self, route: Route) -> None:
+        request = route.request
+        url = urlsplit(request.url)
+        path, method = url.path, request.method
+        self.requests.append((method, path))
+        if f"{url.scheme}://{url.netloc}" != ORIGIN:
+            self.unexpected.append(f"{method} {request.url}")
+            route.abort()
+            return
+        assets = {
+            "/render-bridge-diagnostics": ("diagnostics.html", "text/html"),
+            "/render-bridge-diagnostics/assets/diagnostics.js": ("diagnostics.js", "application/javascript"),
+            "/render-bridge-preview/assets/preview.css": ("preview.css", "text/css"),
+        }
+        if method == "GET" and path in assets:
+            filename, content_type = assets[path]
+            route.fulfill(path=str(STATIC / filename), content_type=content_type)
+            return
+        if method == "GET" and path == "/favicon.ico":
+            route.fulfill(status=204)
+            return
+        assert request.headers.get("authorization") == f"Bearer {SESSION}"
+        if method == "GET" and path == API + "/diagnostics":
+            route.fulfill(json={
+                "schema_version": "1", "source": "alchemy_server_configuration",
+                "mode": "disabled", "configured_profiles": ["fake-image", "codex-image"],
+                "native_enabled": False, "native_profiles": ["fake-image"],
+                "native_real_profile_support": False,
+                "local_cli": {"status": "not_checked", "reason": "browser_cannot_probe_remote_agent"},
+                "real_generation_verified": False, "formal_delivery": False,
+                "configuration_error": None,
+            })
+        elif method == "GET" and path == API + "/diagnostics/server":
+            self.server_reads += 1
+            route.fulfill(json=self.server)
+        elif method == "POST" and path == API + "/diagnostics/report":
+            assert request.headers["x-alchemy-bridge-preview"] == "1"
+            assert request.headers["content-type"] == "application/json"
+            self.imports.append(request.post_data)
+            if self.report_error:
+                route.fulfill(status=422, json={"detail": {"code": self.report_error}})
+            else:
+                route.fulfill(json={
+                    "schema_version": "1", "source": "user_imported_local_report",
+                    "verified_by_server": False, "authorization_effect": "none",
+                    "report": request.post_data_json,
+                })
+        else:
+            self.unexpected.append(f"{method} {request.url}")
+            route.abort()
+
+
+@pytest.fixture
+def diagnostics(browser: Browser):
+    fixture = DiagnosticsFixture()
+    context = browser.new_context(service_workers="block")
+    context.route("**/*", fixture.route)
+    context.add_init_script(f"localStorage.setItem('alchemy_veyra_access_token', {json.dumps(SESSION)});")
+    page = context.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto(ORIGIN + "/render-bridge-diagnostics")
+        expect(page.locator("#configuration")).to_contain_text("codex-image")
+        yield page, fixture
+        assert errors == []
+        assert fixture.unexpected == []
+        assert all(method != "POST" or path == API + "/diagnostics/report"
+                   for method, path in fixture.requests)
+        assert not any("/tasks" in path for _, path in fixture.requests)
+    finally:
+        context.close()
+
+
+def local_doctor_report() -> dict:
+    return {
+        "schema_version": "1", "kind": "render_bridge_doctor",
+        "producer": {"name": "alchemy-render-bridge", "version": "0.1.0a1"},
+        "outcome": "attention", "profiles": ["fake-image", "codex-image"],
+        "checks": [{
+            "id": "codex-cli", "status": "attention", "evidence": "local_probe",
+            "code": "cli_not_found", "next_step": "Install the CLI on the actual agent machine.",
+        }],
+        "real_generation_verified": False, "login_verified": False,
+    }
+
+
+def submit_report_file(page: Page, contents: str | bytes) -> None:
+    page.locator("#report-file").set_input_files({
+        "name": "doctor-report.json", "mimeType": "application/json",
+        "buffer": contents.encode("utf-8") if isinstance(contents, str) else contents,
+    })
+    page.click("#import-report")
+
+
+def test_diagnostics_separates_config_from_explicit_http_probe(diagnostics) -> None:
+    page, fixture = diagnostics
+    expect(page.locator("#configuration")).to_contain_text("本地 CLI：未检查")
+    expect(page.locator("#configuration-heading + p")).to_contain_text("Alchemy 配置")
+    expect(page.locator("#server-status")).to_have_text("尚未检查。")
+    assert fixture.server_reads == 0
+    assert fixture.imports == []
+    page.click("#check-server")
+    expect(page.locator("#server-status")).to_contain_text("HTTP 连接正常")
+    expect(page.locator("#server-status")).to_contain_text("本地 CLI、登录与真实生成未验证")
+    expect(page.locator("#server-profiles")).to_contain_text("接受参数：width、height、seed")
+    expect(page.locator("#server-profiles")).to_contain_text("参考图语义：hash_checked_not_conditioning")
+    expect(page.locator("#server-profiles")).to_contain_text("参数合同不可用")
+    expect(page.locator("#server-profiles")).to_contain_text("这不代表没有能力")
+    expect(page.locator("#check-server")).to_be_enabled()
+    assert fixture.server_reads == 1
+    page.click("#check-server")
+    expect(page.locator("#check-server")).to_be_enabled()
+    assert fixture.server_reads == 2
+    expect(page.locator("#server-profiles .task")).to_have_count(2)
+
+
+@pytest.mark.parametrize("outcome", ["attention", "invalid"])
+def test_diagnostics_import_shows_untrusted_evidence_and_next_steps(diagnostics, outcome) -> None:
+    page, fixture = diagnostics
+    report = local_doctor_report()
+    report["outcome"] = outcome
+    report["checks"].append({
+        "id": "operator", "status": "not_checked", "evidence": "operator_declaration",
+        "code": "not_verified", "next_step": '<img src="https://invalid.test/tracker" onerror="alert(1)">',
+    })
+    original = json.dumps(report, indent=2) + "\n"
+    submit_report_file(page, original)
+    expect(page.locator("#report-status")).to_contain_text("已导入自述证据")
+    expect(page.locator("#report-status")).to_contain_text("未授权执行配置")
+    expect(page.locator("#report-result")).to_contain_text("Install the CLI on the actual agent machine.")
+    expect(page.locator("#report-result")).to_contain_text("无法确认来源或新鲜度")
+    expect(page.locator("#report-result")).to_contain_text('<img src="https://invalid.test/tracker"')
+    expect(page.locator("#report-result img")).to_have_count(0)
+    expect(page.locator("#report-file")).to_have_value("")
+    assert fixture.imports == [original]
+    assert fixture.server_reads == 0
+    assert page.evaluate("Object.keys(localStorage)") == ["alchemy_veyra_access_token"]
+    assert page.evaluate("Object.keys(sessionStorage)") == []
+
+
+@pytest.mark.parametrize(("contents", "expected"), [
+    ("{ broken json", "报告不是有效 JSON，未发送"),
+    (json.dumps({"schema_version": "99", "kind": "render_bridge_doctor"}), "不支持此报告版本"),
+    (" " * (64 * 1024 + 1), "报告超过 64 KiB，未发送"),
+], ids=["invalid-json", "unknown-version", "oversize"])
+def test_diagnostics_rejects_invalid_and_oversize_report_without_post(diagnostics, contents, expected) -> None:
+    page, fixture = diagnostics
+    submit_report_file(page, contents)
+    expect(page.locator("#report-status")).to_contain_text(expected)
+    expect(page.locator("#import-report")).to_be_enabled()
+    expect(page.locator("#report-file")).to_have_value("")
+    expect(page.locator("#report-result")).to_be_empty()
+    assert fixture.imports == []
+    assert fixture.server_reads == 0
+
+
+def test_diagnostics_reports_unavailable_server_and_rejected_import(diagnostics) -> None:
+    page, fixture = diagnostics
+    fixture.server.update(connection="unavailable", code="bridge_unavailable", profiles=[])
+    page.click("#check-server")
+    expect(page.locator("#server-status")).to_contain_text("HTTP 服务不可达（bridge_unavailable）")
+    expect(page.locator("#server-profiles")).to_contain_text("本次未取得执行配置能力")
+    fixture.report_error = "invalid_doctor_report"
+    submit_report_file(page, json.dumps(local_doctor_report()))
+    expect(page.locator("#report-status")).to_contain_text("invalid_doctor_report")
+    expect(page.locator("#report-result")).to_be_empty()
+    expect(page.locator("#import-report")).to_be_enabled()

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Render Bridge · 本地就绪诊断</title>
+  <link rel="stylesheet" href="/render-bridge-preview/assets/preview.css">
+  <script defer src="/render-bridge-diagnostics/assets/diagnostics.js"></script>
+</head>
+<body><main class="diagnostics">
+  <nav aria-label="测试模块导航"><a href="/render-bridge-preview">← 独立传输预览</a><a id="native-link" href="/render-bridge-native-test" hidden>原生开发测试</a><span>可选模块 · READ ONLY</span></nav>
+  <header><p class="eyebrow">ALCHEMY / LOCAL READINESS</p><h1>本地就绪诊断</h1><p>分别查看服务端配置、Bridge HTTP 能力和你导入的本地检查记录。</p></header>
+  <aside><strong>诊断不是登录、生成或交付验收</strong><p>此页面不创建任务、不启用配置、不授权执行配置，也不确认接受结果。Bridge HTTP 可达不代表另一台机器上的 CLI 可用；本地 CLI、登录与真实生成需要在对应机器上另行验证。原生开发入口仍仅支持 fake-image。</p></aside>
+  <div id="notice" role="status">正在读取 Alchemy 服务端配置，不连接 Bridge…</div>
+  <section class="layout">
+    <section aria-labelledby="configuration-heading"><h2 id="configuration-heading">1. Alchemy 服务端配置</h2><p class="muted">证据来源：Alchemy 配置。不是本地 CLI 探测。</p><div id="configuration" aria-live="polite"></div></section>
+    <section aria-labelledby="server-heading"><div class="section-heading"><h2 id="server-heading">2. Bridge HTTP 能力</h2><button id="check-server" type="button" class="secondary">检查 Bridge 服务</button></div><p class="muted">证据来源：已配置 Bridge 的 HTTP 响应。只有点击按钮才会连接；不会检查你的电脑或代理机器的 CLI。</p><p id="server-status" role="status">尚未检查。</p><div id="server-profiles"></div></section>
+    <section class="diagnostics-report" aria-labelledby="report-heading"><h2 id="report-heading">3. 导入本地 doctor 报告</h2><p>自述证据，不是服务端验证。报告不能授权任何执行配置；服务端无法确认报告来源或新鲜度，登录和真实生成仍未验证。</p><p class="muted">在已安装 Bridge 的实际 Agent 机器上运行以下命令，把示例路径换成实际启动使用的配置；将 JSON 输出保存后导入。默认不运行 Codex。如需额外检查无账号的版本/help，可显式追加 --probe-codex。</p><p class="muted"><code>python -m render_bridge.doctor --bridge-config config/bridge.example.json --agent-config config/agent.example.json --json &gt; doctor-report.json</code></p><form id="import-form"><label for="report-file">本地 JSON 报告（最大 64 KiB）<input id="report-file" type="file" accept="application/json,.json" required></label><p class="muted">点击后将原始 JSON 发送给当前 Alchemy 服务端做格式校验。不保存报告，不改变配置，不需要提供凭据。只选择 doctor 生成的报告。</p><button id="import-report" type="submit">校验并显示报告</button></form><p id="report-status" role="status">尚未导入。请在实际运行 Bridge agent 的机器上生成 doctor 报告。</p><div id="report-result" aria-live="polite"></div></section>
+  </section>
+</main></body>
+</html>
