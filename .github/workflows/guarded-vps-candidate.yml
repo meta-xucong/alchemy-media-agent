@@ -179,7 +179,7 @@ jobs:
 
           migrate_candidate_model_defaults() {
             local env_file="$1"
-            local key current_value vision_provider vision_protocol
+            local key current_value vision_provider vision_protocol brain_budget
             for key in BACKUP_LLM_MODEL OPENAI_LLM_MODEL V3_VISION_INSPECTION_MODEL; do
               current_value="$(env_value "$live_env" "$key")"
               if [ "$current_value" = "gpt-5.5" ]; then
@@ -194,11 +194,16 @@ jobs:
                 set_env_value "$env_file" V3_VISION_INSPECTION_PROTOCOL chat_completions
               fi
             fi
+
+            brain_budget="$(env_value "$live_env" V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)"
+            if [ "$brain_budget" = "550" ]; then
+              set_env_value "$env_file" V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS "2200"
+            fi
           }
 
           assert_candidate_model_defaults() {
             local env_file="$1"
-            local key live_value expected_value candidate_value vision_provider vision_protocol expected_protocol
+            local key live_value expected_value candidate_value vision_provider vision_protocol expected_protocol brain_budget
             for key in BACKUP_LLM_MODEL OPENAI_LLM_MODEL V3_VISION_INSPECTION_MODEL; do
               live_value="$(env_value "$live_env" "$key")"
               expected_value="$live_value"
@@ -219,6 +224,11 @@ jobs:
               fi
             fi
             [ "$(env_value "$env_file" V3_VISION_INSPECTION_PROTOCOL)" = "$expected_protocol" ] || stop candidate_vision_protocol_migration_invalid
+
+            brain_budget="$(env_value "$live_env" V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)"
+            expected_value="$brain_budget"
+            if [ "$brain_budget" = "550" ]; then expected_value="2200"; fi
+            [ "$(env_value "$env_file" V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)" = "$expected_value" ] || stop candidate_brain_budget_migration_invalid
           }
 
           configure_candidate_env() {

@@ -258,6 +258,14 @@ def test_candidate_image_is_locked_and_contains_expected_revision_label() -> Non
     assert "estimate-space" in activate
 
 
+def test_candidate_migrates_only_the_known_old_v3_brain_budget() -> None:
+    candidate = (ROOT / ".github" / "workflows" / "guarded-vps-candidate.yml").read_text(encoding="utf-8")
+
+    assert 'if [ "$brain_budget" = "550" ]; then' in candidate
+    assert 'set_env_value "$env_file" V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS "2200"' in candidate
+    assert "candidate_brain_budget_migration_invalid" in candidate
+
+
 def test_maintenance_flag_is_checked_before_any_https_route() -> None:
     nginx = (ROOT / "alchemy-media-agent.nginx.conf").read_text(encoding="utf-8")
     flag = "if (-f /etc/alchemy/alchemy-media-agent-maintenance)"
