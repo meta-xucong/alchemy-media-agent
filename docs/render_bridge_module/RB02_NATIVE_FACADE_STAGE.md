@@ -5,9 +5,12 @@ Baseline: `6556a6ba5120fd5e17c6009f1161bd2213d2f979`, 2026-10-20.
 ## Supported scope and exclusions
 
 This is an explicitly selected, default-off **developer integration** for one
-Standard `image.generate` output: `fake-image` profile revision `1`, 1024x1024,
-quality `auto`, PNG, no references, and no explicit fidelity, background,
-moderation or compression. Every other profile or option combination is rejected.
+Standard `image.generate` output: `fake-image` profile revision `1`, exact
+1024x1024 / 1024x768 / 768x1024, quality `auto`, PNG, and zero to two ordered
+current-project uploaded originals owned by the authenticated user. No explicit
+fidelity, background, moderation or compression is supported. Every other profile
+or option combination is rejected. Reference PNG/JPEG originals must be
+single-frame, at most 1 MiB and 1,048,576 pixels; no silent resize or transcoding.
 In particular `codex-image` is unverified and unsupported: text instructions to a
 Codex executor are not proof of image-tool option support.
 
@@ -17,6 +20,8 @@ queryable native registration. Tests mock Brain sign-off and external review;
 they do not claim real Brain, real renderer, real review quality or production
 availability. Fake results are marked mock and are always withheld from formal
 selection, export and memory promotion, even if a test review says pass.
+The reference extension verifies original transport/order/hash, not image editing
+or reference-fidelity effects. FakeExecutor does not condition pixels on images.
 
 No default route, provider selection, MCP local-only permission, selection or
 billing authority is replaced. The native module is optional. The integration
@@ -50,18 +55,26 @@ Translate `BridgeNativeFacadeError` to its safe `code` and `status_code`.
 Methods (all synchronous; `target` is `NativeFreezeTarget(project_id, job_id,
 asset_id)`):
 
-- `create_plan(actor_user_id, project_id, user_input, plan_key)` returns `planned`
+- `create_plan(actor_user_id, project_id, user_input, plan_key, *,
+  uploaded_asset_ids=None, size='1024x1024')` returns `planned`
   with `target` and `plan_key`, `plan_blocked`, or `plan_unknown` with
   `retry_safe=False`. The caller must persist its stable plan key before calling.
   Only an explicit user request may invoke planning. This is the only native
   starting point; arbitrary pre-existing jobs are not converted into Bridge jobs.
+  Ordered IDs and size participate in the stable identity; defaults preserve
+  earlier square/no-reference identities.
 - `plan_status(actor_user_id, project_id, plan_key)` returns `not_planned`,
   `planned`, `plan_blocked` or `plan_unknown`. Unknown plans are looked up by
   deterministic native job identity, never blindly planned again.
 - `prepare(actor_user_id, target, *, execution_profile_id='fake-image')` returns
   `submission_ready=True`, canonical `prompt`, `prompt_sha256`, `image_options`,
-  empty `references`, `target_revision`, `frozen_request_id`, profile/revision,
+  ordered `references`, `target_revision`, `frozen_request_id`, profile/revision,
   `test_fixture=True`, and `native_registration_connected=True`.
+- `list_references(actor_user_id, project_id)` returns eligible current-project
+  owned upload candidates and supported sizes without planning or mutation.
+- `read_reference(actor_user_id, target, *, frozen_request_id, reference_id)`
+  returns exact `content` bytes and `mime_type` after current frozen admission.
+  A browser path or raw bytes are never used as native reference authority.
 - `register_receipt(actor_user_id, target, *, import_key, frozen_request_id,
   receipt_id, original_sha256, artifact_bytes,
   execution_profile_id='fake-image')` returns `registered`, `import_unknown` or
@@ -106,6 +119,10 @@ recompute a reference plan. Freeze calls the unchanged
 `build_provider_generation_request` and
 `ProductionImageGenerationProvider.materialize_final_prompt`, requiring
 `remote_brain_canonical`. No free prompt is represented as Brain-processed.
+Reference admission reuses existing project active-upload membership and upload
+owner/readiness checks. The canonical materialized references must match selected
+IDs/order/hash. Canonical requirements such as high fidelity remain blocked when
+outside the supported subset rather than being dropped to fit the fixture.
 
 `ProductionImageGenerationProvider._native_output_checkpoint_id` defaults to
 `None`; normal providers therefore retain fresh output identity and the MCP

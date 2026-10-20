@@ -211,6 +211,7 @@ class RenderBridgeNativeFacade:
             references.append(
                 {
                     "reference_id": f"reference_{index}_{content_hash}",
+                    "asset_id": item.get("asset_id"),
                     "index": index,
                     "sha256": content_hash,
                     "size_bytes": len(content),

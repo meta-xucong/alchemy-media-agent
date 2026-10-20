@@ -204,6 +204,22 @@ def _journal_records(fixture):
     ]
 
 
+def test_legacy_square_checkpoint_identity_and_journal_stay_compatible(native_fixture):
+    fixture = native_fixture
+    receipt = _receipt(fixture)
+    accepted = _register(fixture, **receipt)
+    path = fixture.gateway._journal_path(7, fixture.target)
+    journal = json.loads(path.read_text(encoding="utf-8"))
+    for field in ("uploaded_asset_ids", "reference_sha256", "size"):
+        journal["binding"].pop(field)
+    legacy_identity = json.dumps(journal["binding"], sort_keys=True, separators=(",", ":"))
+    assert accepted["native_registration_ref"] == "v3_output_" + hashlib.sha256(legacy_identity.encode()).hexdigest()[:20]
+    path.write_text(json.dumps(journal), encoding="utf-8")
+    assert fixture.gateway.registration_status(7, fixture.target, import_key=receipt["import_key"]) == accepted
+    assert _register(fixture, **receipt) == accepted
+    assert len(fixture.outputs.list_by_job(fixture.target.job_id)) == 1
+
+
 def test_default_off_gateway_does_not_read_or_write(native_fixture, monkeypatch):
     fixture = native_fixture
     monkeypatch.setattr(fixture.facade, "_get_job", _forbidden)

@@ -83,6 +83,14 @@ def install_native_routes(app, *, config, actor, require_write, project_snapshot
             raise HTTPException(404)
         return JSONResponse({"tasks": await call(service().list(current, project_id))}, headers=HEADERS)
 
+    @router.get(native_prefix + "/references")
+    async def references(request: Request, project_id: str):
+        current = await owner(request)
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", project_id):
+            raise HTTPException(404)
+        return JSONResponse(await call(service().references(current, project_id)), headers=HEADERS)
+
     @router.get(native_prefix + "/tasks/{job_id}")
     async def task(request: Request, job_id: str):
         current = await owner(request)

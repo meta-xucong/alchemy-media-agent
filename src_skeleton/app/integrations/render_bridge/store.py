@@ -111,6 +111,21 @@ class PreviewStore:
             return [(row["content"], json.loads(row["metadata"])) for row in db.execute(
                 "SELECT * FROM integration_inputs WHERE job_id=? ORDER BY position", (job_id,))]
 
+    def save_inputs(self, job_id, inputs):
+        """Append a native frozen-input snapshot; never replace original bytes."""
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = [(row["content"], json.loads(row["metadata"])) for row in db.execute(
+                "SELECT * FROM integration_inputs WHERE job_id=? ORDER BY position", (job_id,))]
+            if existing:
+                if existing != inputs:
+                    raise BridgeError("frozen_input_conflict", retryable=False)
+                return
+            self._budget(db, sum(len(content) for content, _ in inputs))
+            for position, (content, metadata) in enumerate(inputs):
+                db.execute("INSERT INTO integration_inputs VALUES(?,?,?,?)",
+                           (job_id, position, content, json.dumps(metadata)))
+
     def save_receipt(self, job_id, manifest, content):
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")

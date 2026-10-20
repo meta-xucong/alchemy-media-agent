@@ -18,10 +18,11 @@ from test_render_bridge_preview import MockBridge, settings, run, due
 
 
 class NativeMockBridge(MockBridge):
-    def __init__(self):
+    def __init__(self, size=(1024, 1024)):
         super().__init__()
+        self.dimensions = {"width": size[0], "height": size[1]}
         output = BytesIO()
-        Image.new("RGB", (1024, 1024), "green").save(output, format="PNG")
+        Image.new("RGB", size, "green").save(output, format="PNG")
         self.content = output.getvalue()
         self.lose_ack = False
 
@@ -29,7 +30,7 @@ class NativeMockBridge(MockBridge):
         response = await super().__call__(request)
         if "/receipts/" in request.url.path and not request.url.path.endswith("/ack"):
             payload = response.json()
-            payload["dimensions"] = {"width": 1024, "height": 1024}
+            payload["dimensions"] = self.dimensions
             return httpx.Response(200, json=payload)
         if request.url.path.endswith("/ack") and self.lose_ack:
             self.lose_ack = False
@@ -46,9 +47,18 @@ class NativeGatewayDouble:
         self.unknown_register = False
         self.canceled = False
         self.revision = "freeze_1"
+        self.size = "1024x1024"
+        self.selected = []
+        self.originals = {}
+        self.reference_reads = []
+        for name, color in (("reference_a", "blue"), ("reference_b", "red")):
+            output = BytesIO()
+            Image.new("RGB", (32, 24), color).save(output, format="PNG")
+            self.originals[name] = output.getvalue()
 
-    def create_plan(self, actor, project, user_input, plan_key):
+    def create_plan(self, actor, project, user_input, plan_key, *, uploaded_asset_ids=None, size="1024x1024"):
         self.create_calls += 1
+        self.size, self.selected = size, list(uploaded_asset_ids or [])
         result = {"status": "planned", "target": {"project_id": project, "job_id": "native_job_1", "asset_id": "asset_1"}, "plan_key": plan_key}
         self.plans[plan_key] = result
         if self.lose_plan:
@@ -65,8 +75,22 @@ class NativeGatewayDouble:
             raise ValueError("canceled")
         return {"frozen_request_id": self.revision, "target_revision": "target_r1",
                 "prompt": "Exact approved canonical prompt", "prompt_sha256": "1"*64,
-                "references": [], "image_options": {"size": "1024x1024", "quality": "auto", "output_format": "png"},
+                "references": [{"reference_id": name, "sha256": hashlib.sha256(self.originals[name]).hexdigest(),
+                                "size_bytes": len(self.originals[name]), "mime_type": "image/png"}
+                               for name in self.selected],
+                "image_options": {"size": self.size, "quality": "auto", "output_format": "png"},
                 "execution_profile_id": "fake-image", "execution_profile_revision": "1", "test_fixture": True, "submission_ready": True}
+
+    def list_references(self, actor, project):
+        assert actor == 101 and project == "project_1"
+        return {"references": [{"asset_id": name, "label": name, "mime_type": "image/png", "size_bytes": len(content)}
+                               for name, content in self.originals.items()],
+                "sizes": ["1024x1024", "1024x768", "768x1024"]}
+
+    def read_reference(self, actor, target, *, frozen_request_id, reference_id):
+        assert frozen_request_id == self.revision and reference_id in self.selected
+        self.reference_reads.append(reference_id)
+        return {"content": self.originals[reference_id], "mime_type": "image/png"}
 
     def registration_status(self, actor, target, *, import_key):
         if self.unknown_register:
@@ -244,8 +268,12 @@ def test_native_route_rejects_browser_owner_profile_and_options(tmp_path):
     with TestClient(app) as client:
         headers = {"X-Alchemy-Bridge-Preview": "1"}
         body = request().model_dump()
-        for invalid in ({"owner": 202}, {"profile_id": "codex-image"}, {"image_options": {}}, {"prompt": "bypass Brain"}):
+        for invalid in ({"owner": 202}, {"profile_id": "codex-image"}, {"image_options": {}}, {"prompt": "bypass Brain"},
+                        {"size": "1536x1024"}, {"uploaded_asset_ids": ["a", "a"]}, {"uploaded_asset_ids": ["a", "b", "c"]}):
             assert client.post(PREFIX+"/native/tasks", json={**body, **invalid}, headers=headers).status_code == 422
+        references = client.get(PREFIX + "/native/references", params={"project_id": "project_1"})
+        assert references.status_code == 200
+        assert [item["asset_id"] for item in references.json()["references"]] == ["reference_a", "reference_b"]
         response = client.post(PREFIX+"/native/tasks", json=body, headers=headers)
         assert response.status_code == 202, response.text
         assert response.json()["native_registration"] == "pending"
@@ -265,6 +293,93 @@ def test_native_rejection_is_terminal_and_never_accepted(tmp_path):
             assert [ack["decision"] for ack in bridge.acks] == ["rejected"]
             await svc.tick()
             assert len(bridge.acks) == 1
+        finally:
+            await svc.close()
+    run(case())
+
+
+@pytest.mark.parametrize("size", ["1024x768", "768x1024"])
+def test_ordered_frozen_originals_and_non_square_native_registration(tmp_path, size):
+    async def case():
+        dimensions = tuple(map(int, size.split("x")))
+        svc, gateway, bridge = make_service(tmp_path, bridge=NativeMockBridge(dimensions))
+        try:
+            selected = ["reference_b", "reference_a"]
+            job = await svc.create("101", request(size=size, uploaded_asset_ids=selected))
+            await svc.tick()
+            final = await svc.local(svc.store.get, job["id"])
+            assert final["state"] == "registered", final
+            assert gateway.reference_reads == selected
+            frozen_inputs = await svc.local(svc.store.inputs, job["id"])
+            assert [content for content, _ in frozen_inputs] == [gateway.originals[name] for name in selected]
+            wire = next(iter(bridge.tasks.values()))["request"]
+            assert wire["parameters"] == {"width": dimensions[0], "height": dimensions[1], "seed": 0}
+            assert [item["hash"] for item in wire["references"]] == [
+                hashlib.sha256(gateway.originals[name]).hexdigest() for name in selected]
+            assert len(bridge.inputs) == 2 and len(bridge.acks) == 1
+            assert svc.public(final)["reference_count"] == 2
+            assert svc.public(final)["reference_effect_verified"] is False
+            for changed in (request(size="1024x1024", uploaded_asset_ids=selected),
+                            request(size=size, uploaded_asset_ids=list(reversed(selected)))):
+                with pytest.raises(BridgeError, match="idempotency_conflict"):
+                    await svc.create("101", changed)
+            assert gateway.create_calls == gateway.register_calls == 1
+        finally:
+            await svc.close()
+    run(case())
+
+
+def test_lost_reference_create_response_resumes_same_frozen_inputs(tmp_path):
+    async def case():
+        svc, gateway, bridge = make_service(tmp_path, bridge=NativeMockBridge((768, 1024)))
+        bridge.lose_input = True
+        job = await svc.create("101", request(size="768x1024", uploaded_asset_ids=["reference_a", "reference_b"]))
+        await svc.tick()
+        assert (await svc.local(svc.store.get, job["id"]))["state"] == "remote_unavailable"
+        assert gateway.reference_reads == ["reference_a", "reference_b"]
+        await svc.close()
+        svc, _, _ = make_service(tmp_path, gateway, bridge)
+        try:
+            final = await due(svc, job)
+            assert final["state"] == "registered", final
+            assert len(bridge.inputs) == 2 and len(bridge.tasks) == len(bridge.acks) == 1
+            assert gateway.reference_reads == ["reference_a", "reference_b"]
+            assert gateway.create_calls == gateway.register_calls == 1
+        finally:
+            await svc.close()
+    run(case())
+
+
+def test_reference_hash_change_before_read_never_uploads_or_registers(tmp_path):
+    async def case():
+        svc, gateway, bridge = make_service(tmp_path)
+        original = gateway.read_reference
+        def changed(*args, **kwargs):
+            result = original(*args, **kwargs)
+            return {**result, "content": gateway.originals["reference_b"]}
+        gateway.read_reference = changed
+        try:
+            job = await svc.create("101", request(uploaded_asset_ids=["reference_a"]))
+            await svc.tick()
+            final = await svc.local(svc.store.get, job["id"])
+            assert final["state"] == "protocol_error"
+            assert final["last_error"] == "media_integrity_mismatch"
+            assert not bridge.inputs and not bridge.tasks and not bridge.acks and gateway.register_calls == 0
+        finally:
+            await svc.close()
+    run(case())
+
+
+def test_native_receipt_must_match_selected_non_square_size(tmp_path):
+    async def case():
+        svc, gateway, bridge = make_service(tmp_path)  # Deliberately returns a square.
+        try:
+            job = await svc.create("101", request(size="768x1024"))
+            await svc.tick()
+            final = await svc.local(svc.store.get, job["id"])
+            assert final["state"] == "protocol_error"
+            assert final["last_error"] == "native_fixture_dimensions_required"
+            assert gateway.register_calls == 0 and not bridge.acks
         finally:
             await svc.close()
     run(case())

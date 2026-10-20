@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
+import json
+from io import BytesIO
+from pathlib import Path
+import random
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from PIL import Image
 
 from test_render_bridge_native_registration import (
     _forbidden,
     _receipt,
     _register,
+    _png_bytes,
     native_fixture,  # noqa: F401
     target_fixture,  # noqa: F401
 )
@@ -27,6 +34,7 @@ from alchemy_creative_agent_3_0.app.product_api.render_bridge_facade import (
 )
 from alchemy_creative_agent_3_0.app.product_api.render_bridge_native import NativeRenderBridgeGateway
 from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
+from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectReferenceAsset
 from alchemy_creative_agent_3_0.app.reference_input_plan import PLAN_KEY, ReferenceInputPlan
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 
@@ -71,12 +79,13 @@ def planning_fixture(native_fixture, monkeypatch):
     return fixture
 
 
-def _create(fixture, *, user_input="A blue ceramic vase on a plain wooden table.", plan_key="native-plan-key"):
+def _create(fixture, *, user_input="A blue ceramic vase on a plain wooden table.", plan_key="native-plan-key", **inputs):
     return fixture.gateway.create_plan(
         7,
         fixture.project.project_id,
         user_input=user_input,
         plan_key=plan_key,
+        **inputs,
     )
 
 
@@ -327,3 +336,187 @@ def test_default_off_plan_entry_performs_no_reads_or_writes(planning_fixture, mo
             action()
     assert fixture.planning_calls == []
     assert not fixture.journal_root.exists()
+
+
+def _upload_reference(
+    fixture, *, color="blue", owner=7, bind=True, size=(256, 256), role="style_reference", image_format="PNG",
+    content=None,
+):
+    if content is None:
+        buffer = BytesIO()
+        Image.new("RGB", size, color).save(buffer, format=image_format)
+        content = buffer.getvalue()
+    mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}[image_format]
+    upload = fixture.service.create_uploaded_asset(
+        {"filename": f"{color}.{image_format.lower()}", "mime_type": mime, "size_bytes": len(content), "role": role},
+        owner_user_id=owner,
+    )
+    fixture.service.store_uploaded_asset_content(
+        upload.asset_id, {"content_base64": base64.b64encode(content).decode("ascii")},
+    )
+    upload = fixture.service.complete_uploaded_asset(upload.asset_id)
+    if bind:
+        fixture.project.reference_assets.append(ProjectReferenceAsset(
+            reference_id="ref_" + upload.asset_id, project_id=fixture.project.project_id,
+            source_type="uploaded", asset_ref_id=upload.asset_id, use_policy="style",
+            created_at="2026-10-20T12:00:00Z",
+        ))
+        fixture.projects.save_project(fixture.project)
+    return upload
+
+
+@pytest.mark.parametrize("size", ["1024x1024", "1024x768", "768x1024"])
+def test_two_ordered_originals_flow_through_plan_freeze_and_review_only_registration(planning_fixture, size):
+    fixture = planning_fixture
+    refs = [_upload_reference(fixture, color=color) for color in ("red", "blue")]
+    ids = [item.asset_id for item in refs]
+    choices = fixture.gateway.list_references(7, fixture.project.project_id)
+    assert [item["asset_id"] for item in choices["references"]] == ids
+    assert choices["sizes"] == ["1024x1024", "1024x768", "768x1024"]
+    planned = _create(fixture, uploaded_asset_ids=ids, size=size)
+    bound = _new_target(fixture, planned)
+    assert _create(fixture, uploaded_asset_ids=ids, size=size) == planned
+    assert fixture.gateway.plan_status(7, fixture.project.project_id, "native-plan-key") == planned
+    record = fixture.jobs.get(bound.target.job_id)
+    assert record.request.uploaded_asset_ids == ids
+    assert record.request.metadata["render_bridge_native_plan"]["uploaded_asset_ids"] == ids
+    frozen = fixture.gateway.prepare(7, bound.target)
+    assert frozen["operation"] == "image_edit"  # Diagnostic, not a wire edit capability.
+    assert frozen["image_options"]["size"] == size
+    assert [item["asset_id"] for item in frozen["references"]] == ids
+    assert [item["sha256"] for item in frozen["references"]] == [item.content_sha256 for item in refs]
+    for reference, original in zip(frozen["references"], refs, strict=True):
+        read = fixture.gateway.read_reference(
+            7, bound.target, frozen_request_id=frozen["frozen_request_id"], reference_id=reference["reference_id"],
+        )
+        assert read == {"content": Path(original.file_path).read_bytes(), "mime_type": "image/png"}
+    content = _png_bytes(size=tuple(map(int, size.split("x"))))
+    receipt = _receipt(bound, frozen, content=content)
+    accepted = _register(bound, **receipt)
+    assert accepted["status"] == "registered"
+    assert _register(bound, **receipt) == accepted
+    output = fixture.outputs.get_output(accepted["native_registration_ref"])
+    assert (output.width, output.height) == tuple(map(int, size.split("x")))
+    assert len(fixture.planning_calls) == 1
+    assert len(fixture.outputs.list_by_job(bound.target.job_id)) == 1
+    assert len(fixture.reviews) == 1
+    assert fixture.review_only_calls == [True]
+    assert fixture.jobs.get(bound.target.job_id).selected_result is None
+    fixture.debit.assert_not_called()
+    fixture.usage.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["order", "reference", "size"])
+def test_plan_key_binds_ordered_reference_ids_and_size(planning_fixture, change):
+    fixture = planning_fixture
+    ids = [_upload_reference(fixture, color=color).asset_id for color in ("blue", "red")]
+    _create(fixture, uploaded_asset_ids=ids, size="1024x768")
+    changed = list(reversed(ids)) if change == "order" else ids[:1] if change == "reference" else ids
+    with pytest.raises(BridgeNativeFacadeError, match="plan_key_conflict"):
+        _create(fixture, uploaded_asset_ids=changed, size="768x1024" if change == "size" else "1024x768")
+    assert len(fixture.planning_calls) == 1
+
+
+@pytest.mark.parametrize("fault", ["owner", "unbound", "inactive", "pixels", "duplicate", "count", "size"])
+def test_reference_admission_rejects_before_brain(planning_fixture, fault):
+    fixture = planning_fixture
+    upload = _upload_reference(
+        fixture, owner=8 if fault == "owner" else 7, bind=fault != "unbound",
+        size=(1025, 1024) if fault == "pixels" else (256, 256),
+    )
+    if fault == "inactive":
+        fixture.project.reference_assets[0].status = "inactive"
+    ids = [upload.asset_id] * (2 if fault == "duplicate" else 3 if fault == "count" else 1)
+    with pytest.raises(BridgeNativeFacadeError, match="reference_unavailable|inputs_invalid"):
+        _create(fixture, uploaded_asset_ids=ids, size="2048x2048" if fault == "size" else "1024x1024")
+    assert fixture.planning_calls == []
+
+
+@pytest.mark.parametrize("change", ["bytes", "owner", "membership"])
+def test_changed_reference_after_freeze_cannot_be_read_or_registered(planning_fixture, change):
+    fixture = planning_fixture
+    upload = _upload_reference(fixture)
+    bound = _new_target(fixture, _create(fixture, uploaded_asset_ids=[upload.asset_id], size="768x1024"))
+    frozen = fixture.gateway.prepare(7, bound.target)
+    receipt = _receipt(bound, frozen, content=_png_bytes(size=(768, 1024)))
+    if change == "bytes":
+        Path(upload.file_path).write_bytes(_png_bytes("red", (256, 256)))
+    elif change == "owner":
+        fixture.service.asset_store._save_record(upload.model_copy(update={"veyra_user_id": 8}))
+    else:
+        fixture.project.reference_assets.clear()
+    with pytest.raises(BridgeNativeFacadeError, match="reference_unavailable|changed"):
+        fixture.gateway.read_reference(
+            7, bound.target, frozen_request_id=frozen["frozen_request_id"],
+            reference_id=frozen["references"][0]["reference_id"],
+        )
+    with pytest.raises(BridgeNativeFacadeError, match="reference_unavailable|changed"):
+        _register(bound, **receipt)
+    assert fixture.outputs.list_by_job(bound.target.job_id) == []
+    assert fixture.reviews == []
+
+
+def test_non_square_plan_rejects_square_artifact(planning_fixture):
+    fixture = planning_fixture
+    bound = _new_target(fixture, _create(fixture, size="1024x768"))
+    with pytest.raises(BridgeNativeFacadeError, match="artifact_invalid"):
+        _register(bound, **_receipt(bound))
+    assert fixture.outputs.list_by_job(bound.target.job_id) == []
+
+
+def test_legacy_square_plan_journal_without_input_fields_recovers(planning_fixture):
+    fixture = planning_fixture
+    planned = _create(fixture)
+    path = fixture.gateway._plan_path(7, fixture.project.project_id, "native-plan-key")
+    journal = json.loads(path.read_text())
+    journal.pop("uploaded_asset_ids")
+    journal.pop("size")
+    path.write_text(json.dumps(journal))
+    assert _create(fixture) == planned
+    assert fixture.gateway.plan_status(7, fixture.project.project_id, "native-plan-key") == planned
+    assert len(fixture.planning_calls) == 1
+
+
+def test_jpeg_original_is_read_without_transcoding(planning_fixture):
+    fixture = planning_fixture
+    upload = _upload_reference(fixture, image_format="JPEG")
+    bound = _new_target(fixture, _create(fixture, uploaded_asset_ids=[upload.asset_id], size="768x1024"))
+    frozen = fixture.gateway.prepare(7, bound.target)
+    read = fixture.gateway.read_reference(
+        7, bound.target, frozen_request_id=frozen["frozen_request_id"],
+        reference_id=frozen["references"][0]["reference_id"],
+    )
+    assert read == {"content": Path(upload.file_path).read_bytes(), "mime_type": "image/jpeg"}
+
+
+@pytest.mark.parametrize("fault", ["bytes", "webp"])
+def test_reference_candidates_exclude_unsupported_originals(planning_fixture, fault):
+    fixture = planning_fixture
+    content = None
+    if fault == "bytes":
+        buffer = BytesIO()
+        Image.frombytes("RGB", (600, 600), random.Random(7).randbytes(600 * 600 * 3)).save(buffer, format="PNG")
+        content = buffer.getvalue()
+        assert len(content) > 1_048_576
+    upload = _upload_reference(fixture, image_format="WEBP" if fault == "webp" else "PNG", content=content)
+    assert fixture.gateway.list_references(7, fixture.project.project_id)["references"] == []
+    with pytest.raises(BridgeNativeFacadeError, match="reference_unavailable"):
+        _create(fixture, uploaded_asset_ids=[upload.asset_id])
+    assert fixture.planning_calls == []
+
+
+def test_canonical_high_fidelity_is_not_silently_dropped(planning_fixture, monkeypatch):
+    fixture = planning_fixture
+    upload = _upload_reference(fixture)
+    bound = _new_target(fixture, _create(fixture, uploaded_asset_ids=[upload.asset_id]))
+    original = fixture.facade.freeze
+
+    def high_fidelity(*args, **kwargs):
+        frozen = original(*args, **kwargs)
+        frozen["image_options"]["input_fidelity"] = "high"
+        return frozen
+
+    monkeypatch.setattr(fixture.facade, "freeze", high_fidelity)
+    with pytest.raises(BridgeNativeFacadeError, match="native_subset_unsupported"):
+        fixture.gateway.prepare(7, bound.target)
+    assert fixture.outputs.list_by_job(bound.target.job_id) == []

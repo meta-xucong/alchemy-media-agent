@@ -15,8 +15,8 @@ import re
 import time
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Annotated, Literal
 
 from .client import BridgeError
 from .models import validate_image
@@ -28,7 +28,16 @@ class NativeTaskCreate(BaseModel):
     client_request_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
     project_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
     user_input: str = Field(min_length=1, max_length=16000)
+    uploaded_asset_ids: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")]] = Field(default_factory=list, max_length=2)
+    size: Literal["1024x1024", "1024x768", "768x1024"] = "1024x1024"
     acknowledge_synthetic_native_test: Literal[True]
+
+    @field_validator("uploaded_asset_ids")
+    @classmethod
+    def distinct_references(cls, values):
+        if len(set(values)) != len(values):
+            raise ValueError("Duplicate references are not supported")
+        return values
 
 
 class NativeBridgeService(PreviewService):
@@ -81,8 +90,12 @@ class NativeBridgeService(PreviewService):
             raise BridgeError("native_authenticated_owner_required", status=403, retryable=False)
         if not await self.snapshot(owner, request.project_id):
             raise BridgeError("project_not_found", status=404, retryable=False)
+        width, height = map(int, request.size.split("x"))
         summary = {"project_id": request.project_id, "user_input": request.user_input,
-                   "profile_id": "fake-image", "width": 1024, "height": 1024, "seed": 0}
+                   "profile_id": "fake-image", "width": width, "height": height, "seed": 0}
+        # Preserve the original no-reference/square idempotency digest.
+        if request.uploaded_asset_ids:
+            summary["uploaded_asset_ids"] = request.uploaded_asset_ids
         job_id = "brn_" + uuid4().hex
         record = {"id": job_id, "owner": owner, "workspace": self.settings.workspace,
             "endpoint_fingerprint": digest(self.settings.base_url), "project_id": request.project_id,
@@ -96,6 +109,11 @@ class NativeBridgeService(PreviewService):
             "remote_task_id": None, "native_phase": "planning", "native_outcome": None,
             "delivery_ack": "pending"}
         return await self.local(self.store.create, record, [])
+
+    async def references(self, owner, project_id):
+        if not await self.snapshot(owner, project_id):
+            raise BridgeError("project_not_found", status=404, retryable=False)
+        return await self.authority(self.gateway.list_references, int(owner), project_id)
 
     async def visible(self, owner, job_id):
         record = await self.local(self.store.get, job_id)
@@ -126,6 +144,9 @@ class NativeBridgeService(PreviewService):
             "native_registration_ref": native.get("native_registration_ref"),
             "review_status": native.get("review_status"), "formal_delivery": False,
             "billing": native.get("billing", {"mode": "v3_zero_credit_stub", "charged": False}),
+            "size": f"{record['request']['width']}x{record['request']['height']}",
+            "reference_count": len(record["request"].get("uploaded_asset_ids", [])),
+            "reference_effect_verified": False,
             "target": record.get("target")}
 
     async def _advance(self, record):
@@ -149,7 +170,9 @@ class NativeBridgeService(PreviewService):
             else:
                 await self._patch(record, plan_attempted=True)
                 plan = await self.authority(self.gateway.create_plan, owner, record["project_id"],
-                                            record["request"]["user_input"], record["plan_key"])
+                                            record["request"]["user_input"], record["plan_key"],
+                                            uploaded_asset_ids=record["request"].get("uploaded_asset_ids", []),
+                                            size=f"{record['request']['width']}x{record['request']['height']}")
             if plan["status"] != "planned":
                 await self._finish(record, state="plan_blocked" if plan["status"] == "plan_blocked" else "plan_unknown",
                                    last_error=plan.get("code", "native_plan_not_ready"))
@@ -168,16 +191,27 @@ class NativeBridgeService(PreviewService):
             return
         if not record["frozen"]:
             await self._patch(record, frozen=frozen)
+        dimensions = self._frozen_dimensions(record)
         if record["wire_request"] is None:
             capabilities = await self.client.capabilities()
             profile = next((p for p in capabilities.get("profiles", []) if p.get("execution_profile_id") == "fake-image"
                             and p.get("execution_profile_revision") == "1" and p.get("operation") == "image.generate"), None)
             if capabilities.get("schema_version") != "1" or not profile:
                 raise BridgeError("native_fixture_profile_unavailable", retryable=False)
+            await self._freeze_inputs(record)
+            references = []
+            for index, (content, metadata) in enumerate(await self.local(self.store.inputs, record["id"])):
+                payload = {key: metadata[key] for key in ("original_sha256", "size", "mime_type")}
+                payload["input_key"] = f"{record['origin_key']}_{index}"
+                result = await self.client.create_input(payload)
+                if any(result.get(key) != value for key, value in payload.items()):
+                    raise BridgeError("input_binding_mismatch", retryable=False)
+                await self.client.upload_input(result["input_id"], content, metadata["mime_type"])
+                references.append({"input_ref": result["input_id"], "role": "reference", "hash": metadata["original_sha256"]})
             wire = {"schema_version": "1", "origin_key": record["origin_key"], "binding_id": record["binding_id"],
                 "operation": "image.generate", "execution_profile_id": "fake-image", "execution_profile_revision": "1",
-                "prompt": frozen["prompt"], "parameters": {"width": 1024, "height": 1024, "seed": 0},
-                "references": [], "output_slot": {"slot_id": "primary", "count": 1},
+                "prompt": frozen["prompt"], "parameters": {**dimensions, "seed": 0},
+                "references": references, "output_slot": {"slot_id": "primary", "count": 1},
                 "deadline": (datetime.now(timezone.utc)+timedelta(hours=1)).isoformat().replace("+00:00", "Z"), "routing": "bridge_only"}
             await self._patch(record, wire_request=wire, profile_snapshot=profile)
         if not record["remote_task_id"]:
@@ -214,7 +248,7 @@ class NativeBridgeService(PreviewService):
             raise BridgeError("native_fixture_png_required", retryable=False)
         metadata = await self.local(validate_image, content, "image/png", expected_hash=receipt["original_sha256"],
                                    expected_size=receipt["size"], max_pixels=1048576)
-        if metadata["dimensions"] != {"width": 1024, "height": 1024} or receipt["dimensions"] != metadata["dimensions"]:
+        if metadata["dimensions"] != dimensions or receipt["dimensions"] != metadata["dimensions"]:
             raise BridgeError("native_fixture_dimensions_required", retryable=False)
         latest = await self.local(self.store.get, record["id"])
         if latest["cancel_requested"]:
@@ -223,6 +257,34 @@ class NativeBridgeService(PreviewService):
         await self.local(self.store.save_receipt, record["id"], receipt, content)
         await self._patch(record, native_phase="registering", receipt_id=receipt["receipt_id"])
         await self._register_or_confirm(record)
+
+    @staticmethod
+    def _frozen_dimensions(record):
+        size = record["frozen"].get("image_options", {}).get("size")
+        if size not in {"1024x1024", "1024x768", "768x1024"}:
+            raise BridgeError("native_fixture_dimensions_required", retryable=False)
+        width, height = map(int, size.split("x"))
+        if (width, height) != (record["request"]["width"], record["request"]["height"]):
+            raise BridgeError("native_frozen_size_mismatch", retryable=False)
+        return {"width": width, "height": height}
+
+    async def _freeze_inputs(self, record):
+        if record.get("inputs_frozen"):
+            return
+        references = record["frozen"].get("references", [])
+        if not isinstance(references, list) or len(references) > 2:
+            raise BridgeError("native_reference_count_invalid", retryable=False)
+        inputs = []
+        for reference in references:
+            value = await self.authority(self.gateway.read_reference, int(record["owner"]), self.target(record),
+                frozen_request_id=record["frozen"]["frozen_request_id"], reference_id=reference["reference_id"])
+            content, mime = value["content"], value["mime_type"]
+            metadata = await self.local(validate_image, content, mime, expected_hash=reference["sha256"],
+                                       expected_size=reference["size_bytes"], max_pixels=1048576)
+            inputs.append((content, metadata))
+        # Atomic and idempotent snapshot, before the first remote input effect.
+        await self.local(self.store.save_inputs, record["id"], inputs)
+        await self._patch(record, inputs_frozen=True)
 
     async def _register_or_confirm(self, record):
         owner, target = int(record["owner"]), self.target(record)

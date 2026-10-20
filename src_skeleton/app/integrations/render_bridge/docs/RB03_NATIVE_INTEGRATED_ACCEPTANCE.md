@@ -4,6 +4,9 @@ Date: 2026-10-20. Alchemy baseline: `6556a6ba`.
 Integrated code tested: `186ab0cce93609c2050fee5ba43def97c0aec3e5`.
 Bridge HTTP server: `be9fe313155f5ddd18815a1d083da7b1b887dbf0`.
 
+This is the retained first native-stage receipt. RB04 records the later
+reference/three-size extension; the narrower scope below describes this run.
+
 ## What is complete
 
 The default-off host module now has two deliberately separate entry points:

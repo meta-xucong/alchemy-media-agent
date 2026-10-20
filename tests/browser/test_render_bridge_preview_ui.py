@@ -182,3 +182,87 @@ def test_preview_cancel_hides_image_and_original_link_navigates(preview) -> None
     expect(page.locator(".task")).to_have_count(1)
     expect(image).to_have_count(0)
     assert fixture.preview_reads == reads_before_cancel
+
+
+class NativeReferenceFixture(PreviewFixture):
+    def route(self, route: Route) -> None:
+        request = route.request
+        path = urlsplit(request.url).path
+        native_api = API + "/native"
+        if request.method == "GET" and path in {
+            "/render-bridge-native-test", "/render-bridge-native-test/assets/native.js"
+        }:
+            filename = "native.js" if path.endswith(".js") else "native.html"
+            route.fulfill(path=str(STATIC / filename), content_type="application/javascript" if filename.endswith(".js") else "text/html")
+            return
+        if path.startswith(native_api) or path == "/api/v3/creative-agent/projects":
+            assert request.headers.get("authorization") == f"Bearer {SESSION}"
+            if path == native_api + "/status":
+                route.fulfill(json={"available": True, "mode": "enabled"})
+            elif path == "/api/v3/creative-agent/projects":
+                route.fulfill(json={"projects": [{"project_id": "fixture-project", "title": "References"},
+                                                 {"project_id": "empty-project", "title": "No references"}]})
+            elif path == native_api + "/references":
+                empty = "empty-project" in request.url
+                route.fulfill(json={"references": [] if empty else [
+                    {"asset_id": "source-a", "label": "Blue original", "size_bytes": 1000},
+                    {"asset_id": "source-b", "label": "Red original", "size_bytes": 2000}]})
+            elif path == native_api + "/tasks" and request.method == "GET":
+                route.fulfill(json={"tasks": list(self.tasks.values())})
+            elif path == native_api + "/tasks" and request.method == "POST":
+                assert request.headers["x-alchemy-bridge-preview"] == "1"
+                payload = request.post_data_json
+                self.creates.append(payload)
+                key = payload["client_request_id"]
+                task = self.tasks.setdefault(key, {**self.task(key), "size": payload["size"],
+                    "reference_count": len(payload["uploaded_asset_ids"]), "native_registration": "pending"})
+                route.fulfill(status=202, json=task)
+            else:
+                self.unexpected.append(f"{request.method} {path}")
+                route.abort()
+            return
+        super().route(route)
+
+
+def test_native_reference_order_size_replay_and_project_change(browser: Browser) -> None:
+    fixture = NativeReferenceFixture()
+    context = browser.new_context(service_workers="block")
+    context.route("**/*", fixture.route)
+    context.add_init_script(f"localStorage.setItem('alchemy_veyra_access_token', {json.dumps(SESSION)});")
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto(ORIGIN + "/render-bridge-native-test")
+        expect(page.locator("#project option[value='fixture-project']")).to_be_attached()
+        expect(page.locator("#submit")).to_be_disabled()
+        page.select_option("#project", "fixture-project")
+        expect(page.locator("#reference-1 option[value='source-a']")).to_be_attached()
+        expect(page.locator("#submit")).to_be_enabled()
+        page.select_option("#reference-1", "source-b")
+        page.select_option("#reference-2", "source-a")
+        page.select_option("#size", "1024x768")
+        page.fill("#user-input", "Synthetic input transport test.")
+        page.check("#acknowledge")
+        for _ in range(2):
+            with page.expect_response(lambda response: response.url == ORIGIN + API + "/native/tasks"
+                                      and response.request.method == "POST"):
+                page.click("#submit")
+            expect(page.locator("#submit")).to_be_enabled()
+        assert fixture.creates[0] == fixture.creates[1]
+        assert fixture.creates[0]["uploaded_asset_ids"] == ["source-b", "source-a"]
+        assert fixture.creates[0]["size"] == "1024x768"
+        page.select_option("#size", "768x1024")
+        with page.expect_response(lambda response: response.url == ORIGIN + API + "/native/tasks"
+                                  and response.request.method == "POST"):
+            page.click("#submit")
+        assert fixture.creates[-1]["client_request_id"] != fixture.creates[0]["client_request_id"]
+        assert fixture.creates[-1]["size"] == "768x1024"
+        page.select_option("#project", "empty-project")
+        expect(page.locator("#reference-1 option")).to_have_count(1)
+        expect(page.locator("#reference-2 option")).to_have_count(1)
+        expect(page.locator("#reference-1")).to_have_value("")
+        expect(page.locator("#reference-2")).to_have_value("")
+        assert errors == [] and fixture.unexpected == []
+    finally:
+        context.close()

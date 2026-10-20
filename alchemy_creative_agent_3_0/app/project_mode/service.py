@@ -4715,15 +4715,7 @@ class V3ProjectModeService:
             result.append({**entry, "analysis_bytes": content, "mime_type": mime_type})
         return result or None
 
-    def create_render_bridge_plan(
-        self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
-    ) -> ProductJobStatus:
-        """Explicit Standard/no-reference plan; never invokes Generate.
-
-        The native gateway owns the stable command key and unknown-outcome
-        handling. This method only delegates planning and owns project linkage.
-        """
-
+    def _render_bridge_project(self, project_id: str, owner_user_id: int) -> ProjectRecord:
         project = self._require_project(project_id)
         if (
             type(owner_user_id) is not int
@@ -4732,12 +4724,86 @@ class V3ProjectModeService:
             or str(project.status) != "active"
         ):
             raise ValueError("render_bridge_target_not_found")
-        if project.primary_template_id != GENERAL_TEMPLATE_ID:
+        if project.primary_template_id != GENERAL_TEMPLATE_ID or self._project_workspace(project) != "standard":
             raise ValueError("render_bridge_standard_project_required")
+        return project
+
+    def render_bridge_references(
+        self, *, project_id: str, owner_user_id: int, uploaded_asset_ids: list[str] | None = None,
+    ) -> list[V3UploadedAssetRecord]:
+        """Read current owned, active project originals without promoting sources.
+
+        Listing applies the same existing upload-owner, reference-membership,
+        and upload-readiness authorities as explicit admission. None lists all
+        candidates; a supplied list is validated in exactly that order.
+        """
+        from io import BytesIO
+        from PIL import Image
+        from ..generation_router.render_bridge_provider import render_bridge_inputs
+
+        project = self._render_bridge_project(project_id, owner_user_id)
+        tombstones = self._standard_project_source_tombstones(project)
+        bound = {
+            reference.asset_ref_id
+            for reference in project.reference_assets
+            if reference.project_id == project_id
+            and reference.status == ProjectReferenceStatus.ACTIVE
+            and reference.source_type == ProjectReferenceSourceType.UPLOADED
+            and reference.asset_ref_id not in tombstones
+            and self._reference_visible_to_owner(reference, owner_user_id)
+        }
+        selected = uploaded_asset_ids is not None
+        ids = render_bridge_inputs(uploaded_asset_ids)[0] if selected else list(dict.fromkeys(
+            reference.asset_ref_id for reference in project.reference_assets if reference.asset_ref_id in bound
+        ))
+        result = []
+        for asset_id in ids:
+            try:
+                if asset_id not in bound:
+                    raise ValueError("not bound")
+                upload = self._require_ready_uploaded_reference(asset_id, ProjectReferenceUsePolicy.GENERAL)
+                path = Path(str(upload.file_path or ""))
+                if upload.mime_type not in {"image/png", "image/jpeg"} or not 0 < path.stat().st_size <= 1_048_576:
+                    raise ValueError("unsupported reference")
+                with path.open("rb") as handle:
+                    content = handle.read(1_048_577)
+                if (
+                    not content or len(content) > 1_048_576
+                    or hashlib.sha256(content).hexdigest() != upload.content_sha256
+                ):
+                    raise ValueError("changed reference")
+                with Image.open(BytesIO(content)) as image:
+                    if (
+                        image.format not in {"PNG", "JPEG"}
+                        or Image.MIME[image.format] != upload.mime_type
+                        or image.width * image.height > 1_048_576
+                        or getattr(image, "n_frames", 1) != 1
+                    ):
+                        raise ValueError("unsupported reference")
+                    image.verify()
+                result.append(upload)
+            except (OSError, ValueError, Image.DecompressionBombError):
+                if selected:
+                    raise ValueError("render_bridge_reference_unavailable") from None
+        return result
+
+    def create_render_bridge_plan(
+        self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+        uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
+    ) -> ProductJobStatus:
+        """Explicit Standard plan-only entry; no implicit reference selection."""
+        from ..generation_router.render_bridge_provider import render_bridge_inputs
+
+        uploaded_asset_ids, size = render_bridge_inputs(uploaded_asset_ids, size)
+        project = self._render_bridge_project(project_id, owner_user_id)
+        self.render_bridge_references(
+            project_id=project_id, owner_user_id=owner_user_id, uploaded_asset_ids=uploaded_asset_ids,
+        )
         self._ensure_active_template(GENERAL_TEMPLATE_ID)
         revision = project.updated_at
         status = self.product_service.create_render_bridge_plan(
-            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
+            uploaded_asset_ids=uploaded_asset_ids, size=size,
         )
         # A slow Brain call cannot overwrite a concurrently archived/edited
         # project. Its durable orphan plan remains queryable, never generated.

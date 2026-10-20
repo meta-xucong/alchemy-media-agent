@@ -6,10 +6,40 @@ import base64
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
 from .providers import GenerationRequest, ProductionImageGenerationProvider
+
+
+RENDER_BRIDGE_SIZES = ("1024x1024", "1024x768", "768x1024")
+
+
+def render_bridge_inputs(uploaded_asset_ids=None, size="1024x1024") -> tuple[list[str], str]:
+    """Validate, never normalize, reorder, or silently trim a caller's inputs."""
+    ids = [] if uploaded_asset_ids is None else uploaded_asset_ids
+    if (
+        not isinstance(ids, (list, tuple))
+        or len(ids) > 2
+        or any(not isinstance(value, str) or not value.strip() or value != value.strip() for value in ids)
+        or len(set(ids)) != len(ids)
+        or size not in RENDER_BRIDGE_SIZES
+    ):
+        raise ValueError("render_bridge_native_inputs_invalid")
+    return list(ids), size
+
+
+def _compatible_identity(value) -> dict[str, Any]:
+    """Keep old square/no-reference journal and checkpoint identities stable."""
+    result = asdict(value)
+    for field, default in (("uploaded_asset_ids", ()), ("reference_sha256", ()), ("size", "1024x1024")):
+        if field in result:
+            if result[field] == default or (default == () and not result[field]):
+                result.pop(field)
+            elif isinstance(result[field], tuple):
+                result[field] = list(result[field])
+    return result
 
 
 @dataclass(frozen=True)
@@ -18,15 +48,17 @@ class RenderBridgePlanIdentity:
     owner_user_id: int
     plan_key: str
     user_input_sha256: str
+    uploaded_asset_ids: tuple[str, ...] = ()
+    size: str = "1024x1024"
 
     @property
     def instance_id(self) -> str:
         return hashlib.sha256(
-            json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            json.dumps(_compatible_identity(self), sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
 
     def safe_metadata(self) -> dict[str, Any]:
-        return {"schema_version": "render_bridge_native_plan_v1", **asdict(self)}
+        return {"schema_version": "render_bridge_native_plan_v1", **_compatible_identity(self)}
 
 
 @dataclass(frozen=True)
@@ -44,15 +76,18 @@ class RenderBridgeRegistration:
     original_sha256: str
     execution_profile_id: str = "fake-image"
     execution_profile_revision: str = "1"
+    uploaded_asset_ids: tuple[str, ...] = ()
+    reference_sha256: tuple[str, ...] = ()
+    size: str = "1024x1024"
 
     @property
     def output_id(self) -> str:
-        identity = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+        identity = json.dumps(_compatible_identity(self), sort_keys=True, separators=(",", ":"))
         return "v3_output_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
 
     def safe_metadata(self) -> dict[str, Any]:
         return {
-            **asdict(self),
+            **_compatible_identity(self),
             "output_id": self.output_id,
             "billing": "unchanged_v3_zero_credit_stub",
             "test_fixture": self.execution_profile_id == "fake-image",
@@ -60,7 +95,11 @@ class RenderBridgeRegistration:
 
 
 class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
-    """Feed verified pixels through the normal provider's persistence path."""
+    """Feed verified pixels through the normal provider's persistence path.
+
+    Reference transport/binding is tested, not visual conditioning: fake-image
+    remains an unconditioned synthetic fixture, never a real renderer call.
+    """
 
     provider_name = "render_bridge_receipt_provider"
     provider_version = "render_bridge_receipt_v1"
@@ -83,18 +122,25 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
         self.assert_current = assert_current
 
     def _select_provider(self, reference_assets: list[dict[str, Any]]) -> str:
-        if reference_assets:
-            raise ValueError("render_bridge_references_unsupported")
+        self._validate_references(reference_assets)
         return "render_bridge"
+
+    def _validate_references(self, reference_assets) -> None:
+        if (
+            [item.get("asset_id") for item in reference_assets] != list(self.binding.uploaded_asset_ids)
+            or [hashlib.sha256(Path(item["file_path"]).read_bytes()).hexdigest() for item in reference_assets]
+            != list(self.binding.reference_sha256)
+        ):
+            raise ValueError("render_bridge_frozen_references_mismatch")
 
     def _run_app_provider_with_timeout_retry(
         self, provider_name, app_request, reference_assets, *, reference_input_execution, output_index
     ):
         plan = app_request.prompt_plan
+        self._validate_references(reference_assets)
         if (
-            reference_assets
-            or plan.variables.get("provider_prompt_sha256") != self.binding.prompt_sha256
-            or plan.size != "1024x1024"
+            plan.variables.get("provider_prompt_sha256") != self.binding.prompt_sha256
+            or plan.size != self.binding.size
             or plan.quality != "auto"
             or plan.output_format != "png"
             or any(getattr(plan, field, None) is not None for field in ("background", "moderation", "output_compression"))
@@ -118,8 +164,8 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
                     "b64_json": base64.b64encode(self.artifact_bytes).decode("ascii"),
                     "mime_type": "image/png",
                     "format": "png",
-                    "width": 1024,
-                    "height": 1024,
+                    "width": int(self.binding.size.split("x")[0]),
+                    "height": int(self.binding.size.split("x")[1]),
                     "api_operation": "image.generate",
                 }
             ],

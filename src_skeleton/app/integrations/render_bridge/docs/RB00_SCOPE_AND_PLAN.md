@@ -54,9 +54,13 @@ native tests use separate temporary stores and synthetic pixels.
 
 The approved extension now supplies plan-only, canonical freeze and queryable
 idempotent native registration. It supports only `fake-image` revision 1,
-1024x1024/auto/png/no references. It reuses native candidate persistence and
+auto/png, sizes 1024x1024, 1024x768 or 768x1024, and zero to two authorized
+current-project uploaded originals. See RB04 for the reference milestone.
+It reuses native candidate persistence and
 review-only continuation, without rendering again, selecting, exporting or
 promoting fake results. A receipt alone is not native acceptance.
+Reference bytes/order/hash are verified; fake pixels are not visually conditioned
+on references. Unsupported canonical fidelity/options are not silently removed.
 
 100 identical receipts and concurrent replay produce one native output and one
 execution audit. This audit is not billing usage. Current V3 has a zero-credit

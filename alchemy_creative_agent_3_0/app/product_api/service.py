@@ -1629,8 +1629,9 @@ class V3ProductApiService:
 
     def _render_bridge_plan_request(
         self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+        uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
     ):
-        from ..generation_router.render_bridge_provider import RenderBridgePlanIdentity
+        from ..generation_router.render_bridge_provider import RenderBridgePlanIdentity, render_bridge_inputs
         from .contracts import ImageOutputOptions
 
         if type(owner_user_id) is not int or owner_user_id <= 0:
@@ -1639,22 +1640,29 @@ class V3ProductApiService:
             raise ValueError("render_bridge_plan_invalid")
         if len(plan_key) > 128:
             raise ValueError("render_bridge_plan_invalid")
+        uploaded_asset_ids, size = render_bridge_inputs(uploaded_asset_ids, size)
+        for asset_id in uploaded_asset_ids:
+            upload = self.get_uploaded_asset(asset_id)
+            if upload is None or upload.veyra_user_id != owner_user_id or str(upload.status) != "ready":
+                raise ValueError("render_bridge_reference_not_found")
         identity = RenderBridgePlanIdentity(
             project_id=project_id,
             owner_user_id=owner_user_id,
             plan_key=plan_key,
             user_input_sha256=hashlib.sha256(user_input.encode("utf-8")).hexdigest(),
+            uploaded_asset_ids=tuple(uploaded_asset_ids), size=size,
         )
         request = CreateCreativeJobRequest(
             user_input=user_input,
+            uploaded_asset_ids=uploaded_asset_ids,
             scenario_selection={"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
-            image_options=ImageOutputOptions(size="1024x1024", quality="auto", output_format="png"),
+            image_options=ImageOutputOptions(size=size, quality="auto", output_format="png"),
             metadata={
                 "project_id": project_id,
                 "veyra_user_id": owner_user_id,
                 "template_id": "general_template",
                 "requested_image_count": 1,
-                "requested_image_size": "1024x1024",
+                "requested_image_size": size,
                 "require_real_images": True,
             },
         )
@@ -1662,9 +1670,11 @@ class V3ProductApiService:
 
     def lookup_render_bridge_plan(
         self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+        uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
     ) -> ProductJobStatus | None:
         request, identity = self._render_bridge_plan_request(
-            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
+            uploaded_asset_ids=uploaded_asset_ids, size=size,
         )
         request.metadata["v3_job_instance_id"] = identity.instance_id
         job_id = self._planned_job_id_for_request(request)
@@ -1677,16 +1687,19 @@ class V3ProductApiService:
 
     def create_render_bridge_plan(
         self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
+        uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
     ) -> ProductJobStatus:
         """Explicit plan-only entry. No generator or ordinary Generate call."""
 
         existing = self.lookup_render_bridge_plan(
-            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
+            uploaded_asset_ids=uploaded_asset_ids, size=size,
         )
         if existing is not None:
             return existing
         request, identity = self._render_bridge_plan_request(
-            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key
+            project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
+            uploaded_asset_ids=uploaded_asset_ids, size=size,
         )
         return self._create_creative_job(request, _render_bridge_plan_identity=identity)
 
@@ -1848,6 +1861,8 @@ class V3ProductApiService:
                 or _render_bridge_plan_identity.owner_user_id != create_request.metadata.get("veyra_user_id")
                 or _render_bridge_plan_identity.user_input_sha256
                 != hashlib.sha256(create_request.user_input.encode("utf-8")).hexdigest()
+                or list(_render_bridge_plan_identity.uploaded_asset_ids) != create_request.uploaded_asset_ids
+                or _render_bridge_plan_identity.size != create_request.image_options.size
             ):
                 raise ValueError("render_bridge_plan_identity_untrusted")
         if generation_channel == "mcp" and not (
@@ -2277,8 +2292,10 @@ class V3ProductApiService:
                 job_id=job_id,
                 project_id=_render_bridge_plan_identity.project_id,
             )
-            if frozen_references.references(verify_bytes=False):
-                raise ValueError("render_bridge_native_references_unsupported")
+            if [item["asset_id"] for item in frozen_references.references(verify_bytes=False)] != list(
+                _render_bridge_plan_identity.uploaded_asset_ids
+            ):
+                raise ValueError("render_bridge_native_reference_binding_mismatch")
             authority = {
                 PLAN_KEY: frozen_references.as_dict(),
                 "project_id": _render_bridge_plan_identity.project_id,
