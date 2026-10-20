@@ -11037,6 +11037,11 @@ body.v3-page-loading-active {
   margin-top: 12px;
 }
 
+.v3-closure-list[hidden],
+.v3-warning-list[hidden] {
+  display: none !important;
+}
+
 .v3-closure-row {
   display: grid;
   gap: 3px;

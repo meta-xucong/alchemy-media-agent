@@ -12130,11 +12130,16 @@ function renderV3Warnings(warnings) {
   const items = v3IsActiveEcommerceTerminalReceipt()
     ? []
     : (Array.isArray(warnings) ? warnings.filter((item) => !v3IsInternalWarning(item)) : []);
-  els.v3WarningList.hidden = items.length === 0;
+  const messages = items
+    .slice(0, 4)
+    .map((item) => v3PlainWarningText(item))
+    .map((message) => String(message || "").trim())
+    .filter(Boolean);
+  els.v3WarningList.hidden = messages.length === 0;
   els.v3WarningList.innerHTML = "";
-  items.slice(0, 4).forEach((item) => {
+  messages.forEach((message) => {
     const line = document.createElement("div");
-    line.textContent = v3PlainWarningText(item);
+    line.textContent = message;
     els.v3WarningList.appendChild(line);
   });
 }
