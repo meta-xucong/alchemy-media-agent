@@ -158,14 +158,14 @@ class OpenAICompatibleBodyCrossViewReviewProvider:
         base_url: str | None,
         model: str | None,
         output_store: V3GeneratedOutputStore,
-        timeout_seconds: float = 90.0,
+        timeout_seconds: float = 300.0,
         transport: BodyCrossViewReviewTransport | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.output_store = output_store
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = max(0.05, min(300.0, float(timeout_seconds)))
         self.response_schema = build_body_cross_view_review_response_schema()
         self.instructions = _build_body_cross_view_review_instructions(self.response_schema)
         self.transport = transport or (

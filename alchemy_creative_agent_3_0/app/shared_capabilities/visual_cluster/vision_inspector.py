@@ -339,8 +339,7 @@ def _inspect_with_timeout(
     def runner() -> None:
         try:
             # Use the same bounded window for the SDK request and this worker
-            # join. The settle window below handles the small race where the
-            # SDK is returning at its deadline; it is not provider cancellation.
+            # join. The request must never inherit a shorter hidden SDK limit.
             inner_timeout = min(300.0, timeout_seconds)
             result["payload"] = provider.inspect(
                 resolution,
@@ -354,7 +353,9 @@ def _inspect_with_timeout(
             _vision_inspection_semaphore.release()
 
     # Acquire semaphore to limit concurrent vision inspections
-    queue_timeout = min(5.0, max(0.1, timeout_seconds))
+    # Waiting for the single-review concurrency slot is outside the upstream
+    # request itself, but must not fail after an unrelated five-second cap.
+    queue_timeout = min(300.0, max(0.05, timeout_seconds))
     acquired = _vision_inspection_semaphore.acquire(blocking=True, timeout=queue_timeout)
     if not acquired:
         raise VisionInspectionTimeoutError(
@@ -372,10 +373,8 @@ def _inspect_with_timeout(
 
     thread.join(timeout=timeout_seconds)
     if thread.is_alive():
-        # Allow a short settle window, but leave the semaphore owned by the
-        # worker if it is still running, regardless of SDK timeout support.
-        settle_seconds = min(5.0, max(0.1, timeout_seconds * 0.1))
-        thread.join(timeout=settle_seconds)
+        # Keep the per-request wall-clock wait within the configured budget.
+        # The worker retains its semaphore until its SDK call actually exits.
         raise VisionInspectionTimeoutError(
             f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
             worker_stopped=not thread.is_alive(),

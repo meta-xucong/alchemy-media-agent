@@ -52,6 +52,43 @@ def test_inspector_passes_full_300_second_per_request_budget():
     assert observed["_inner_timeout_seconds"] == 300
 
 
+def test_300_second_review_budget_has_no_short_queue_or_settle_cap(monkeypatch):
+    observed = {"queue_timeout": None, "join_timeouts": []}
+
+    class _Semaphore:
+        def acquire(self, *, blocking, timeout):
+            assert blocking is True
+            observed["queue_timeout"] = timeout
+            return True
+
+        def release(self):
+            pass
+
+    class _StillRunningThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            observed["join_timeouts"].append(timeout)
+
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(vision_inspector, "_vision_inspection_semaphore", _Semaphore())
+    monkeypatch.setattr(vision_inspector.threading, "Thread", _StillRunningThread)
+
+    with pytest.raises(vision_inspector.VisionInspectionTimeoutError):
+        vision_inspector._inspect_with_timeout(
+            SimpleNamespace(), SimpleNamespace(), metadata={}, timeout_seconds=300,
+        )
+
+    assert observed["queue_timeout"] == 300
+    assert observed["join_timeouts"] == [300]
+
+
 def test_provider_preserves_sdk_timeout_as_timeout_error(tmp_path, monkeypatch):
     image_path = tmp_path / "review.png"
     image_path.write_bytes(b"not-decoded-by-the-fake-provider")
