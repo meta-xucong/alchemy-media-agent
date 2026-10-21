@@ -10,6 +10,7 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
@@ -25,6 +26,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_pr
     OpenAIVisionInspectionProvider,
     VisionInspectionProviderError,
     VisionInspectionProviderMalformedJSON,
+    VisionInspectionProviderPolicyRefusal,
     VisionInspectionProviderUnavailable,
     _inspection_prompt,
     _is_timeout_error,
@@ -115,44 +117,20 @@ def _ready_resolution(tmp_path: Path) -> GeneratedOutputResolution:
     )
 
 
-def test_vision_provider_transport_disables_sdk_level_retries(tmp_path, monkeypatch) -> None:
-    """One shared review attempt must make one upstream transport attempt."""
+def test_vision_provider_uses_shared_claude_kimi_gpt_route_and_disables_retries(tmp_path, monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.model_routing import build_v3_model_candidates, v3_gateway_credentials
 
+    calls: list[str] = []
     captured: dict[str, object] = {}
 
-    class FakeResponses:
-        def create(self, **kwargs):  # noqa: ANN003
-            return SimpleNamespace(output_text='{"status":"pass","confidence":0.95,"issue_codes":[]}')
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            captured.update(kwargs)
-            self.responses = FakeResponses()
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
-    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_BASE_URL", "https://vision.example/v1")
-    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
-
-    payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
-
-    assert payload["status"] == "pass"
-    assert captured["max_retries"] == 0
-
-
-def test_vision_provider_can_select_chat_completions_without_responses_probe(tmp_path, monkeypatch) -> None:
-    captured: dict[str, object] = {}
-    reference_path = tmp_path / "reference.png"
-    reference_path.write_bytes(base64.b64decode(_png_base64(width=32, height=32)))
-
-    class FakeResponses:
-        def create(self, **kwargs):  # noqa: ANN003
-            raise AssertionError("explicit Chat Completions mode must not call Responses")
+    def claude_failure(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        raise RuntimeError("Claude gateway unavailable")
 
     class FakeChatCompletions:
         def create(self, **kwargs):  # noqa: ANN003
-            captured.update(kwargs)
+            calls.append(kwargs["model"])
+            captured["request"] = kwargs
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"pass","confidence":0.95}'))]
             )
@@ -163,179 +141,269 @@ def test_vision_provider_can_select_chat_completions_without_responses_probe(tmp
     class FakeOpenAI:
         def __init__(self, **kwargs):  # noqa: ANN003
             captured["client"] = kwargs
-            self.responses = FakeResponses()
             self.chat = FakeChat()
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
     monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_MODEL", "gpt-5.6-terra")
-    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "chat_completions")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BACKUP_MODEL", raising=False)
+    monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_anthropic_messages", claude_failure)
 
-    payload = OpenAIVisionInspectionProvider(timeout_seconds=23).inspect(
-        _ready_resolution(tmp_path),
-        metadata={"reference_assets": [{"file_path": str(reference_path)}]},
+    provider = OpenAIVisionInspectionProvider(timeout_seconds=23)
+    payload = provider.inspect(_ready_resolution(tmp_path))
+    brain = V3LLMBrainProvider()
+    assert provider.model_candidates == build_v3_model_candidates(brain.model, brain.backup_model)
+    assert brain._credentials() == v3_gateway_credentials() == ("test-key", "https://vision.example/v1")
+    assert calls == ["claude-sonnet-5-5", "kimi-k3"]
+    assert payload["status"] == "pass"
+    assert payload["_vision_route_receipt"]["selected_model"] == "kimi-k3"
+    assert payload["_vision_route_receipt"]["fallback_used"] is True
+    assert captured["client"]["max_retries"] == 0
+    assert captured["request"]["timeout"] == 23
+    assert "temperature" not in captured["request"]
+    assert captured["request"]["response_format"] == {"type": "json_object"}
+
+
+def test_vision_provider_falls_back_after_malformed_claude_json(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    def claude_malformed(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        return '{"status":"pass"'
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs["model"])
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"pass","confidence":0.95}'))]
+            )
+
+    class FakeChat:
+        completions = FakeChatCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = FakeChat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_anthropic_messages", claude_malformed)
+
+    payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert calls == ["claude-sonnet-5-5", "kimi-k3"]
+    assert payload["_vision_route_receipt"]["selected_model"] == "kimi-k3"
+    assert payload["_vision_route_receipt"]["model_attempts"][0]["failure_class"] == "malformed_json"
+
+
+def test_vision_provider_reaches_gpt_only_after_claude_and_kimi_fail(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fail_model(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        raise RuntimeError("model unavailable")
+
+    def chat_model(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "kimi-k3":
+            raise RuntimeError("Kimi route unavailable")
+        return '{"status":"pass","confidence":0.95}'
+
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_anthropic_messages", fail_model)
+    monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_chat_completions", chat_model)
+    provider = OpenAIVisionInspectionProvider()
+
+    payload = provider.inspect(_ready_resolution(tmp_path))
+
+    assert calls == ["claude-sonnet-5-5", "kimi-k3", "gpt-6.1-sol"]
+    assert payload["_vision_route_receipt"]["selected_model"] == "gpt-6.1-sol"
+    assert payload["_vision_route_receipt"]["fallback_used"] is True
+
+
+def test_claude_vision_request_uses_native_messages_without_temperature(tmp_path, monkeypatch) -> None:
+    import httpx
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):  # noqa: ANN201
+            return {"content": [{"type": "text", "text": '{"status":"pass","confidence":0.95}'}]}
+
+    class FakeClient:
+        def __init__(self, *, timeout):  # noqa: ANN001
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):  # noqa: ANN002
+            return None
+
+        def post(self, url, *, headers, json):  # noqa: ANN001
+            captured.update({"url": url, "headers": headers, "request": json})
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "sk-shared")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example/v1")
+    monkeypatch.delenv("V3_VISION_INSPECTION_API_KEY", raising=False)
+    monkeypatch.delenv("V3_VISION_INSPECTION_BASE_URL", raising=False)
+
+    payload = OpenAIVisionInspectionProvider(timeout_seconds=300).inspect(_ready_resolution(tmp_path))
+
+    request = captured["request"]
+    assert payload["status"] == "pass"
+    assert captured["url"] == "https://gateway.example/v1/messages"
+    assert captured["headers"]["x-api-key"] == "sk-shared"
+    assert captured["timeout"].connect == 300
+    assert captured["timeout"].read == 300
+    assert request["model"] == "claude-sonnet-5-5"
+    assert "temperature" not in request
+    assert request["messages"][0]["content"][1]["type"] == "image"
+
+
+def test_vision_provider_refusal_does_not_fallback(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    def claude_refusal(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        raise VisionInspectionProviderPolicyRefusal("refused")
+
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_anthropic_messages", claude_refusal)
+
+    with pytest.raises(VisionInspectionProviderPolicyRefusal):
+        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert calls == ["claude-sonnet-5-5"]
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_vision_provider_auth_error_does_not_fallback(tmp_path, monkeypatch, status_code: int) -> None:
+    import httpx
+
+    calls: list[str] = []
+
+    def claude_auth_failure(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        request = httpx.Request("POST", "https://gateway.example/v1/messages")
+        response = httpx.Response(status_code, request=request)
+        raise httpx.HTTPStatusError("gateway auth failure", request=request, response=response)
+
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setattr(
+        OpenAIVisionInspectionProvider,
+        "_inspect_with_anthropic_messages",
+        claude_auth_failure,
     )
 
-    assert payload["status"] == "pass"
-    assert captured["model"] == "gpt-5.6-terra"
-    assert captured["timeout"] == 23
-    assert captured["client"]["max_retries"] == 0
-    assert captured["response_format"] == {"type": "json_object"}
-    assert captured["max_tokens"] == 3200
-    message_content = captured["messages"][0]["content"]
-    assert [item["type"] for item in message_content] == ["text", "image_url", "image_url"]
-    assert message_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert message_content[2]["image_url"]["url"].startswith("data:image/")
-    assert message_content[2]["image_url"]["url"] != message_content[1]["image_url"]["url"]
+    with pytest.raises(VisionInspectionProviderError, match="rejected authentication or permission") as exc_info:
+        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert calls == ["claude-sonnet-5-5"]
+    receipt = exc_info.value.vision_route_receipt
+    assert receipt["selected_model"] == "claude-sonnet-5-5"
+    assert receipt["model_attempts"][0]["failure_class"] == f"http_{status_code}"
+    assert "gateway.example" not in str(exc_info.value)
 
 
-def test_responses_protocol_can_be_pinned_without_chat_fallback(tmp_path, monkeypatch) -> None:
+def test_vision_provider_model_scoped_403_falls_back_like_brain(tmp_path, monkeypatch) -> None:
+    import httpx
+
     calls: list[str] = []
 
-    class FakeResponses:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("responses")
-            raise RuntimeError("Responses endpoint unavailable")
+    def claude_model_forbidden(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        request = httpx.Request("POST", "https://gateway.example/v1/messages")
+        response = httpx.Response(
+            403,
+            request=request,
+            json={"error": {"code": "model_access_denied", "scope": "model"}},
+        )
+        raise httpx.HTTPStatusError("model access denied", request=request, response=response)
 
-    class FakeChatCompletions:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("chat")
-            raise AssertionError("explicit Responses mode must not switch protocols")
+    def kimi_success(self, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs["model"])
+        return '{"status":"pass","confidence":0.95}'
 
-    class FakeChat:
-        completions = FakeChatCompletions()
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.responses = FakeResponses()
-            self.chat = FakeChat()
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
     monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "responses")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setattr(
+        OpenAIVisionInspectionProvider,
+        "_inspect_with_anthropic_messages",
+        claude_model_forbidden,
+    )
+    monkeypatch.setattr(
+        OpenAIVisionInspectionProvider,
+        "_inspect_with_chat_completions",
+        kimi_success,
+    )
 
-    with pytest.raises(VisionInspectionProviderError, match="Responses endpoint unavailable"):
-        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+    payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
 
-    assert calls == ["responses"]
-
-
-def test_responses_timeout_does_not_retry_same_review_through_chat(tmp_path, monkeypatch) -> None:
-    calls: list[str] = []
-
-    class FakeResponses:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("responses")
-            raise TimeoutError("Request timed out")
-
-    class FakeChatCompletions:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("chat")
-            raise AssertionError("a timed-out review must not be sent again through another route")
-
-    class FakeChat:
-        completions = FakeChatCompletions()
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.responses = FakeResponses()
-            self.chat = FakeChat()
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
-    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
-
-    with pytest.raises(TimeoutError, match="request timed out"):
-        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
-
-    assert calls == ["responses"]
+    assert calls == ["claude-sonnet-5-5", "kimi-k3"]
+    assert payload["_vision_route_receipt"]["selected_model"] == "kimi-k3"
+    assert payload["_vision_route_receipt"]["model_attempts"][0]["failure_class"] == "http_403"
 
 
-def test_vision_provider_rejects_unknown_protocol_before_upstream_request(tmp_path, monkeypatch) -> None:
-    calls: list[str] = []
+def test_visual_review_uses_300_seconds_per_model_for_the_shared_fallback_chain(tmp_path, monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import vision_inspector
 
-    class FakeResponses:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("responses")
-            raise AssertionError("unsupported protocol must fail before transport")
+    observed: dict[str, float] = {}
+    original_inspect_with_timeout = vision_inspector._inspect_with_timeout
 
-    class FakeChatCompletions:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("chat")
-            raise AssertionError("unsupported protocol must fail before transport")
+    class ThreeModelProvider:
+        provider_name = "shared_route_test"
+        max_request_attempts = 3
 
-    class FakeChat:
-        completions = FakeChatCompletions()
+        def available(self, *, force: bool = False) -> bool:
+            return True
 
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.responses = FakeResponses()
-            self.chat = FakeChat()
+        def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
+            observed["inner"] = float(metadata["_inner_timeout_seconds"])
+            return {
+                "status": "pass",
+                "confidence": 0.95,
+                "issue_codes": [],
+                "_vision_route_receipt": {"selected_model": "claude-sonnet-5-5"},
+            }
 
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
-    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "unsupported")
+    def capture_budgets(provider, resolution, *, metadata, timeout_seconds, provider_request_timeout_seconds=None):
+        observed["chain"] = float(timeout_seconds)
+        observed["request"] = float(provider_request_timeout_seconds)
+        return original_inspect_with_timeout(
+            provider,
+            resolution,
+            metadata=metadata,
+            timeout_seconds=timeout_seconds,
+            provider_request_timeout_seconds=provider_request_timeout_seconds,
+        )
 
-    with pytest.raises(VisionInspectionProviderUnavailable, match="unsupported vision inspection protocol"):
-        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+    monkeypatch.setattr(vision_inspector, "_inspect_with_timeout", capture_budgets)
+    report = VisionOutputInspector(vision_provider=ThreeModelProvider()).inspect(
+        _ready_resolution(tmp_path),
+        metadata={"vision_inspection_mode": "vision_model", "vision_inspection_timeout_seconds": 300},
+    )
 
-    assert calls == []
-
-
-def test_vision_provider_does_not_fallback_to_a_second_route_for_invalid_json(tmp_path, monkeypatch) -> None:
-    calls: list[str] = []
-
-    class FakeResponses:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("responses")
-            return SimpleNamespace(output_text='{"status":"pass"')
-
-    class FakeChatCompletions:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append("chat")
-            raise AssertionError("malformed JSON must not resubmit the image through Chat")
-
-    class FakeChat:
-        completions = FakeChatCompletions()
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.responses = FakeResponses()
-            self.chat = FakeChat()
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
-    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    # The local runtime .env pins Chat for production; this test explicitly
-    # exercises the automatic Responses -> Chat compatibility fallback.
-    monkeypatch.delenv("V3_VISION_INSPECTION_PROTOCOL", raising=False)
-
-    with pytest.raises(VisionInspectionProviderMalformedJSON, match="malformed JSON"):
-        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
-
-    assert calls == ["responses"]
-
-
-def test_vision_provider_classifies_incomplete_json_without_local_repair(tmp_path, monkeypatch) -> None:
-    class FakeResponses:
-        def create(self, **kwargs):  # noqa: ANN003
-            return SimpleNamespace(output_text='{"status":"pass",')
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.responses = FakeResponses()
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
-    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "responses")
-
-    with pytest.raises(VisionInspectionProviderMalformedJSON, match="malformed JSON"):
-        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+    assert report.status == "pass"
+    assert observed == {"chain": 900.0, "request": 300.0, "inner": 300.0}
+    assert report.evidence["vision_route_receipt"]["selected_model"] == "claude-sonnet-5-5"
 
 
 def test_vision_inspector_does_not_repeat_image_review_after_malformed_json(tmp_path, monkeypatch) -> None:
@@ -428,12 +496,7 @@ def test_provider_review_failure_does_not_auto_resume_same_image_review(issue_co
     assert V3ProductApiService._post_generation_review_package_requires_resume(package) is False
 
 
-def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Shared Vision must not default to the general Brain/LLM route."""
-
+def test_vision_provider_uses_shared_gateway_even_when_lab_route_is_configured(tmp_path, monkeypatch) -> None:
     from app.config import settings
 
     captured: dict[str, object] = {}
@@ -443,39 +506,41 @@ def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
         "lab_doubao_vision_api_key": settings.lab_doubao_vision_api_key,
         "lab_doubao_vision_base_url": settings.lab_doubao_vision_base_url,
         "lab_doubao_vision_model": settings.lab_doubao_vision_model,
-        "openai_api_key": settings.openai_api_key,
-        "openai_base_url": settings.openai_base_url,
-        "openai_llm_model": settings.openai_llm_model,
     }
 
-    class FakeResponses:
+    def claude_failure(self, **kwargs):  # noqa: ANN001, ANN003
+        raise RuntimeError("Claude route unavailable")
+
+    class FakeChatCompletions:
         def create(self, **kwargs):  # noqa: ANN003
             captured["request"] = kwargs
-            return SimpleNamespace(output_text='{"status":"pass","confidence":0.95,"issue_codes":[]}')
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"pass","confidence":0.95}'))]
+            )
+
+    class FakeChat:
+        completions = FakeChatCompletions()
 
     class FakeOpenAI:
         def __init__(self, **kwargs):  # noqa: ANN003
             captured["client"] = kwargs
-            self.responses = FakeResponses()
+            self.chat = FakeChat()
 
     try:
-        monkeypatch.delenv("V3_VISION_INSPECTION_ENABLED", raising=False)
         monkeypatch.delenv("V3_VISION_INSPECTION_API_KEY", raising=False)
         monkeypatch.delenv("V3_VISION_INSPECTION_BASE_URL", raising=False)
-        monkeypatch.delenv("V3_VISION_INSPECTION_MODEL", raising=False)
-        monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
+        monkeypatch.setenv("LLM_GATEWAY_API_KEY", "sk-shared-gateway")
+        monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
+        monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
         monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+        monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_anthropic_messages", claude_failure)
         settings.lab_vision_enabled = True
         settings.lab_vision_provider = "doubao"
         settings.lab_doubao_vision_api_key = "sk-lab-vision"
         settings.lab_doubao_vision_base_url = "https://vision.example.test/v1"
         settings.lab_doubao_vision_model = "doubao-vision-test"
-        settings.openai_api_key = "sk-general-openai"
-        settings.openai_base_url = "https://general.example.test/v1"
-        settings.openai_llm_model = "gpt-5.5-general"
 
         provider = OpenAIVisionInspectionProvider()
-
         assert provider.available(force=True) is True
         payload = provider.inspect(_ready_resolution(tmp_path))
     finally:
@@ -483,58 +548,68 @@ def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
             setattr(settings, key, value)
 
     assert payload["status"] == "pass"
-    assert captured["client"]["api_key"] == "sk-lab-vision"
-    assert str(captured["client"]["base_url"]) == "https://vision.example.test/v1"
-    assert captured["request"]["model"] == "doubao-vision-test"
+    assert payload["_vision_route_receipt"]["selected_model"] == "kimi-k3"
+    assert captured["client"]["api_key"] == "sk-shared-gateway"
+    assert str(captured["client"]["base_url"]) == "https://gateway.example.test/v1"
+    assert captured["request"]["model"] == "kimi-k3"
 
 
-def test_openai_lab_vision_route_uses_lab_credentials_and_openai_model(tmp_path, monkeypatch) -> None:
+def test_openai_lab_settings_do_not_override_shared_brain_route(tmp_path, monkeypatch) -> None:
     from app.config import settings
 
     captured: dict[str, object] = {}
-    setting_names = (
-        "lab_vision_enabled",
-        "lab_vision_provider",
-        "lab_openai_api_key",
-        "lab_openai_base_url",
-        "openai_api_key",
-        "openai_base_url",
-        "openai_llm_model",
-    )
-    original = {name: getattr(settings, name) for name in setting_names}
+    original_key = settings.lab_openai_api_key
+    original_url = settings.lab_openai_base_url
 
-    class FakeResponses:
+    def claude_failure(self, **kwargs):  # noqa: ANN001, ANN003
+        raise RuntimeError("Claude route unavailable")
+
+    class FakeChatCompletions:
         def create(self, **kwargs):  # noqa: ANN003
             captured["request"] = kwargs
-            return SimpleNamespace(output_text='{"status":"pass","confidence":0.95,"issue_codes":[]}')
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"pass","confidence":0.95}'))]
+            )
+
+    class FakeChat:
+        completions = FakeChatCompletions()
 
     class FakeOpenAI:
         def __init__(self, **kwargs):  # noqa: ANN003
             captured["client"] = kwargs
-            self.responses = FakeResponses()
+            self.chat = FakeChat()
 
     try:
-        for name in ("V3_VISION_INSPECTION_API_KEY", "V3_VISION_INSPECTION_BASE_URL", "V3_VISION_INSPECTION_MODEL"):
-            monkeypatch.delenv(name, raising=False)
-        monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "responses")
+        monkeypatch.setenv("LLM_GATEWAY_API_KEY", "sk-shared-gateway")
+        monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
+        monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
         monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
-        settings.lab_vision_enabled = True
-        settings.lab_vision_provider = "openai"
+        monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_anthropic_messages", claude_failure)
         settings.lab_openai_api_key = "sk-lab-openai"
         settings.lab_openai_base_url = "https://lab-openai.example.test/v1"
-        settings.openai_api_key = "sk-generic-openai"
-        settings.openai_base_url = "https://generic-openai.example.test/v1"
-        settings.openai_llm_model = "gpt-5.6-terra"
 
         payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
     finally:
-        for name, value in original.items():
-            setattr(settings, name, value)
+        settings.lab_openai_api_key = original_key
+        settings.lab_openai_base_url = original_url
 
     assert payload["status"] == "pass"
-    assert captured["client"]["api_key"] == "sk-lab-openai"
-    assert str(captured["client"]["base_url"]) == "https://lab-openai.example.test/v1"
-    assert captured["request"]["model"] == "gpt-5.6-terra"
+    assert captured["client"]["api_key"] == "sk-shared-gateway"
+    assert str(captured["client"]["base_url"]) == "https://gateway.example.test/v1"
+    assert captured["request"]["model"] == "kimi-k3"
+
+
+def test_legacy_vision_credentials_do_not_bypass_the_shared_gateway(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("LLM_GATEWAY_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_GATEWAY_BASE_URL", raising=False)
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "legacy-key")
+    monkeypatch.setenv("V3_VISION_INSPECTION_BASE_URL", "https://legacy.example/v1")
+
+    provider = OpenAIVisionInspectionProvider()
+
+    assert provider.available(force=True) is False
+    with pytest.raises(VisionInspectionProviderUnavailable, match="unified vision gateway credentials"):
+        provider.inspect(_ready_resolution(tmp_path))
 
 
 def _openai_resolution_with_aigc_metadata(tmp_path: Path) -> GeneratedOutputResolution:

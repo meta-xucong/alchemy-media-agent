@@ -80,20 +80,32 @@ def test_openai_vision_provider_uses_review_timeout_for_upstream_request(
 
     captured: dict[str, object] = {}
 
-    class _Responses:
+    def _claude_unavailable(self, **kwargs):  # noqa: ANN001, ANN003
+        raise RuntimeError("Claude model unavailable")
+
+    class _Completions:
         def create(self, **kwargs):  # noqa: ANN003
             captured.update(kwargs)
-            return SimpleNamespace(output_text='{"status":"pass","confidence":0.95,"issue_codes":[]}')
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"status":"pass","confidence":0.95,"issue_codes":[]}')
+                    )
+                ]
+            )
+
+    class _Chat:
+        completions = _Completions()
 
     class _OpenAI:
         def __init__(self, **kwargs):  # noqa: ANN003
-            self.responses = _Responses()
+            self.chat = _Chat()
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
     monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_BASE_URL", "https://vision.example/v1")
-    monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setattr(OpenAIVisionInspectionProvider, "_inspect_with_anthropic_messages", _claude_unavailable)
 
     provider = OpenAIVisionInspectionProvider()
     payload = provider.inspect(
@@ -115,3 +127,4 @@ def test_openai_vision_provider_uses_review_timeout_for_upstream_request(
 
     assert payload["status"] == "pass"
     assert captured["timeout"] == 180
+    assert captured["model"] == "kimi-k3"

@@ -321,9 +321,16 @@ def _vision_provider_timeout_seconds(metadata: dict[str, Any]) -> float:
 class VisionInspectionTimeoutError(TimeoutError):
     """Timeout outcome that records whether its provider worker has stopped."""
 
-    def __init__(self, message: str, *, worker_stopped: bool) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        worker_stopped: bool,
+        route_receipt: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.worker_stopped = bool(worker_stopped)
+        self.vision_route_receipt = dict(route_receipt or {})
 
 
 def _inspect_with_timeout(
@@ -332,15 +339,25 @@ def _inspect_with_timeout(
     *,
     metadata: dict[str, Any],
     timeout_seconds: float,
+    provider_request_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
     timeout_seconds = max(0.05, float(timeout_seconds))
+    request_timeout_seconds = max(
+        0.05,
+        min(
+            300.0,
+            float(provider_request_timeout_seconds)
+            if provider_request_timeout_seconds is not None
+            else timeout_seconds,
+        ),
+    )
 
     def runner() -> None:
         try:
             # Use the same bounded window for the SDK request and this worker
             # join. The request must never inherit a shorter hidden SDK limit.
-            inner_timeout = min(300.0, timeout_seconds)
+            inner_timeout = request_timeout_seconds
             result["payload"] = provider.inspect(
                 resolution,
                 metadata={**metadata, "_inner_timeout_seconds": inner_timeout},
@@ -355,7 +372,7 @@ def _inspect_with_timeout(
     # Acquire semaphore to limit concurrent vision inspections
     # Waiting for the single-review concurrency slot is outside the upstream
     # request itself, but must not fail after an unrelated five-second cap.
-    queue_timeout = min(300.0, max(0.05, timeout_seconds))
+    queue_timeout = min(300.0, max(0.05, request_timeout_seconds))
     acquired = _vision_inspection_semaphore.acquire(blocking=True, timeout=queue_timeout)
     if not acquired:
         raise VisionInspectionTimeoutError(
@@ -385,10 +402,16 @@ def _inspect_with_timeout(
             raise VisionInspectionTimeoutError(
                 str(error) or f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
                 worker_stopped=True,
+                route_receipt=getattr(error, "vision_route_receipt", None),
             ) from error
         raise error
     payload = result.get("payload")
     return payload if isinstance(payload, dict) else {}
+
+
+def _vision_route_evidence(error: Exception) -> dict[str, Any]:
+    receipt = getattr(error, "vision_route_receipt", None)
+    return {"vision_route_receipt": dict(receipt)} if isinstance(receipt, dict) and receipt else {}
 
 
 class VisionOutputInspector:
@@ -508,6 +531,9 @@ class VisionOutputInspector:
         if provider is None or not provider.available(force=True):
             return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
         timeout_seconds = _vision_provider_timeout_seconds(metadata)
+        provider_request_timeout_seconds = timeout_seconds
+        provider_attempts = max(1, int(getattr(provider, "max_request_attempts", 1) or 1))
+        chain_timeout_seconds = min(300.0 * provider_attempts, timeout_seconds * provider_attempts)
         try:
             # One provider call per inspection. A malformed response or
             # timeout is an unavailable review result, not a reason to submit
@@ -516,7 +542,8 @@ class VisionOutputInspector:
                 provider,
                 resolution,
                 metadata=dict(metadata),
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=chain_timeout_seconds,
+                provider_request_timeout_seconds=provider_request_timeout_seconds,
             )
         except TimeoutError as exc:
             return self._manual_report(
@@ -527,14 +554,22 @@ class VisionOutputInspector:
                 evidence_extra={
                     "provider_error": str(exc)[:240],
                     "provider_review_attempts": 1,
-                    "provider_timeout_seconds": timeout_seconds,
+                    "provider_timeout_seconds": chain_timeout_seconds,
+                    "provider_request_timeout_seconds": provider_request_timeout_seconds,
+                    **_vision_route_evidence(exc),
                     "provider_timeout_recovery_attempted": False,
                     "provider_timeout_recovery_succeeded": False,
                     "provider_worker_stopped": getattr(exc, "worker_stopped", False) is True,
                 },
             )
-        except VisionInspectionProviderUnavailable:
-            return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
+        except VisionInspectionProviderUnavailable as exc:
+            return self._manual_report(
+                resolution,
+                "vision_provider_unavailable",
+                metadata,
+                mode=mode,
+                evidence_extra=_vision_route_evidence(exc),
+            )
         except VisionInspectionProviderMalformedJSON as exc:
             return self._manual_report(
                 resolution,
@@ -545,6 +580,7 @@ class VisionOutputInspector:
                     "provider_error": str(exc)[:240],
                     "provider_review_attempts": 1,
                     "provider_error_class": "malformed_json",
+                    **_vision_route_evidence(exc),
                     "provider_json_recovery_attempted": False,
                     "provider_json_recovery_succeeded": False,
                 },
@@ -559,6 +595,7 @@ class VisionOutputInspector:
                     "provider_error": str(exc)[:240],
                     "provider_review_attempts": 1,
                     "provider_error_class": "provider_error",
+                    **_vision_route_evidence(exc),
                     "provider_json_recovery_attempted": False,
                     "provider_json_recovery_succeeded": False,
                 },
@@ -570,6 +607,11 @@ class VisionOutputInspector:
             provider_name=getattr(provider, "provider_name", "vision_provider"),
             metadata=metadata,
             provider_review_attempts=1,
+            vision_route_receipt=(
+                payload.get("_vision_route_receipt")
+                if isinstance(payload.get("_vision_route_receipt"), dict)
+                else None
+            ),
         )
 
     def _from_provider_payload(
@@ -581,6 +623,7 @@ class VisionOutputInspector:
         provider_name: str,
         metadata: dict[str, Any],
         provider_review_attempts: int = 1,
+        vision_route_receipt: dict[str, Any] | None = None,
         provider_timeout_recovery_attempted: bool = False,
         provider_timeout_recovery_succeeded: bool = False,
         provider_json_recovery_attempted: bool = False,
@@ -710,6 +753,7 @@ class VisionOutputInspector:
                 "provider_status": payload.get("status"),
                 "provider_pixel_result_certified": True,
                 "provider_review_attempts": max(1, int(provider_review_attempts)),
+                **({"vision_route_receipt": dict(vision_route_receipt)} if vision_route_receipt else {}),
                 "provider_json_recovery_attempted": bool(provider_json_recovery_attempted),
                 "provider_json_recovery_succeeded": bool(provider_json_recovery_succeeded),
                 "provider_timeout_recovery_attempted": bool(provider_timeout_recovery_attempted),

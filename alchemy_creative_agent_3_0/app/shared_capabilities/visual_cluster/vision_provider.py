@@ -7,8 +7,10 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Protocol
 
+from ...model_routing import build_v3_model_candidates, v3_gateway_credentials
 from ..apparel_construction import apparel_construction_review_contract
 from .absolute_portrait_realism import REQUIRED_REALISM_DIMENSIONS
 from .contracts import GeneratedOutputResolution
@@ -127,6 +129,10 @@ class VisionInspectionProviderMalformedJSON(VisionInspectionProviderError):
     failure_kind = "malformed_json"
 
 
+class VisionInspectionProviderPolicyRefusal(VisionInspectionProviderError):
+    """Raised when the selected model explicitly refuses the review request."""
+
+
 class VisionInspectionProvider(Protocol):
     provider_name: str
 
@@ -143,27 +149,29 @@ class VisionInspectionProvider(Protocol):
 
 
 class OpenAIVisionInspectionProvider:
-    """OpenAI-compatible multimodal adapter used only by the visual cluster."""
+    """Unified-gateway multimodal reviewer with ordered model failover."""
 
-    provider_name = "openai_compatible_vision"
+    provider_name = "unified_gateway_vision"
+    max_request_attempts = 3
 
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        base_url: str | None = None,
         model: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
-        self.api_key = api_key
-        self.base_url = base_url
-        self.model = model
+        primary_model = str(model or "").strip() or _env("V3_LLM_BRAIN_MODEL") or "claude-sonnet-5-5"
+        backup_model = _env("V3_LLM_BRAIN_BACKUP_MODEL") or "kimi-k3"
+        self.model_candidates = build_v3_model_candidates(primary_model, backup_model)
+        self.model_chain = tuple(model_name for _, model_name in self.model_candidates)
+        self.max_request_attempts = len(self.model_candidates)
+        self.model = primary_model
         self.timeout_seconds = timeout_seconds
 
     def available(self, *, force: bool = False) -> bool:
         if not force and not _env_bool("V3_VISION_INSPECTION_ENABLED", default=False):
             return False
-        return bool(self._api_key())
+        return bool(self._api_key() and self._base_url())
 
     def inspect(
         self,
@@ -177,89 +185,172 @@ class OpenAIVisionInspectionProvider:
         if not path.exists() or not path.is_file():
             raise VisionInspectionProviderUnavailable("generated output file is missing")
         api_key = self._api_key()
-        if not api_key:
-            raise VisionInspectionProviderUnavailable("vision inspection API key is not configured")
+        base_url = self._base_url()
+        if not api_key or not base_url:
+            raise VisionInspectionProviderUnavailable("unified vision gateway credentials are not configured")
         metadata = dict(metadata or {})
-        try:
-            from openai import OpenAI
-
-            # Pixel inspection is part of the same bounded Job lifecycle as
-            # generation. The OpenAI SDK retries failed transport calls by
-            # default; disable them so one review maps to one provider request.
-            client = OpenAI(
-                **_openai_client_kwargs(
-                    api_key=api_key,
-                    base_url=self._base_url(),
-                    max_retries=0,
-                )
-            )
-            prompt = _inspection_prompt(metadata)
-            data_url = _image_data_url(path, resolution.mime_type)
-            response_payload = self._inspect_with_responses(client, prompt, data_url, metadata)
-            return _loads_json_object(response_payload)
-        except VisionInspectionProviderUnavailable:
-            raise
-        except VisionInspectionProviderError:
-            raise
-        except Exception as exc:
-            if _is_timeout_error(exc):
-                # Preserve timeout semantics for the shared inspector.  If
-                # wrapped as a generic provider error, diagnostics cannot
-                # distinguish a slow request from malformed/provider output.
-                raise TimeoutError(f"vision inspection request timed out: {str(exc)[:200]}") from exc
-            raise VisionInspectionProviderError(f"vision inspection provider failed: {str(exc)[:240]}") from exc
-
-    def _inspect_with_responses(self, client: Any, prompt: str, data_url: str, metadata: dict[str, Any]) -> str:
-        model = self._model(metadata)
-        timeout = self._timeout(metadata)
+        prompt = _inspection_prompt(metadata)
+        data_url = _image_data_url(path, resolution.mime_type)
         reference_data_urls = _inspection_reference_data_urls(metadata)
-        protocol = str(_env("V3_VISION_INSPECTION_PROTOCOL") or "auto").strip().lower()
-        if protocol not in {"auto", "responses", "chat_completions"}:
-            raise VisionInspectionProviderUnavailable("unsupported vision inspection protocol")
-        if protocol == "chat_completions":
-            return self._inspect_with_chat_completions(
-                client,
-                model=model,
-                prompt=prompt,
-                data_url=data_url,
-                reference_data_urls=reference_data_urls,
-                timeout=timeout,
-                metadata=metadata,
-            )
-        response_content = [
-            {"type": "input_text", "text": prompt},
-            {"type": "input_image", "image_url": data_url},
-            *[{"type": "input_image", "image_url": item} for item in reference_data_urls],
-        ]
-        response = client.responses.create(
-            model=model,
-            input=[
-                {
-                    "role": "user",
-                    "content": response_content,
+        timeout = self._timeout(metadata)
+        attempts: list[dict[str, Any]] = []
+        last_error: Exception | None = None
+        for index, (protocol, model) in enumerate(self.model_candidates):
+            started = time.perf_counter()
+            if protocol not in {"anthropic", "openai"}:
+                error = VisionInspectionProviderUnavailable(
+                    f"vision review model {model!r} has no supported gateway protocol route"
+                )
+                _attach_vision_route_receipt(error, self.model_chain[0], model, attempts)
+                raise error
+            try:
+                if protocol == "anthropic":
+                    response_text = self._inspect_with_anthropic_messages(
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model,
+                        prompt=prompt,
+                        data_url=data_url,
+                        reference_data_urls=reference_data_urls,
+                        timeout=timeout,
+                        metadata=metadata,
+                    )
+                else:
+                    response_text = self._inspect_with_chat_completions(
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model,
+                        prompt=prompt,
+                        data_url=data_url,
+                        reference_data_urls=reference_data_urls,
+                        timeout=timeout,
+                        metadata=metadata,
+                    )
+                payload = _loads_json_object(response_text)
+                attempts.append(
+                    {
+                        "model": model,
+                        "outcome": "accepted",
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    }
+                )
+                payload["_vision_route_receipt"] = {
+                    "primary_model": self.model_chain[0],
+                    "selected_model": model,
+                    "fallback_used": index > 0,
+                    "model_attempts": attempts,
                 }
-            ],
-            text={"format": {"type": "json_object"}},
-            timeout=timeout,
-            max_output_tokens=_vision_output_token_limit(metadata),
-        )
-        text = getattr(response, "output_text", None) or _response_text_from_openai(response)
-        if not text:
-            raise VisionInspectionProviderMalformedJSON("vision inspection returned empty output")
-        _loads_json_object(text)
-        return text
+                return payload
+            except VisionInspectionProviderPolicyRefusal as exc:
+                attempts.append(
+                    {
+                        "model": model,
+                        "outcome": "refused",
+                        "failure_class": "policy_refusal",
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    }
+                )
+                _attach_vision_route_receipt(exc, self.model_chain[0], model, attempts)
+                raise
+            except Exception as exc:
+                last_error = exc
+                attempts.append(
+                    {
+                        "model": model,
+                        "outcome": "failed",
+                        "failure_class": _vision_failure_class(exc),
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    }
+                )
+                if _is_terminal_vision_auth_error(exc):
+                    terminal = VisionInspectionProviderError(
+                        "vision inspection gateway rejected authentication or permission"
+                    )
+                    _attach_vision_route_receipt(terminal, self.model_chain[0], model, attempts)
+                    raise terminal from exc
+                if index + 1 >= len(self.model_chain):
+                    _attach_vision_route_receipt(exc, self.model_chain[0], model, attempts)
+                    if isinstance(exc, (TimeoutError, VisionInspectionProviderError)):
+                        raise
+                    if _is_timeout_error(exc):
+                        wrapped = TimeoutError(f"vision inspection request timed out: {str(exc)[:200]}")
+                    else:
+                        wrapped = VisionInspectionProviderError(
+                            f"vision inspection provider failed: {str(exc)[:240]}"
+                        )
+                    _attach_vision_route_receipt(wrapped, self.model_chain[0], model, attempts)
+                    raise wrapped from exc
+        if last_error is not None:
+            raise last_error
+        raise VisionInspectionProviderUnavailable("no vision review model candidates configured")
 
-    @staticmethod
-    def _inspect_with_chat_completions(
-        client: Any,
+    def _inspect_with_anthropic_messages(
+        self,
         *,
+        api_key: str,
+        base_url: str,
         model: str,
         prompt: str,
         data_url: str,
         reference_data_urls: list[str],
         timeout: float,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any],
     ) -> str:
+        import httpx
+
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for image_data_url in (data_url, *reference_data_urls):
+            media_type, encoded = _split_image_data_url(image_data_url)
+            content.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": encoded},
+                }
+            )
+        headers = {
+            "content-type": "application/json",
+            "x-api-key": api_key,
+            "authorization": f"Bearer {api_key}",
+            "anthropic-version": "2023-06-01",
+        }
+        payload = {
+            "model": model,
+            "max_tokens": _vision_output_token_limit(metadata),
+            "system": "Perform the requested visual review and return one JSON object only.",
+            "messages": [{"role": "user", "content": content}],
+        }
+        with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
+            response = client.post(_anthropic_messages_url(base_url), headers=headers, json=payload)
+            response.raise_for_status()
+        response_payload = response.json()
+        if _anthropic_response_is_refusal(response_payload):
+            raise VisionInspectionProviderPolicyRefusal("vision inspection model refused the request")
+        text = _anthropic_text(response_payload)
+        if not text:
+            raise VisionInspectionProviderMalformedJSON("vision inspection returned empty output")
+        return text
+
+    def _inspect_with_chat_completions(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        prompt: str,
+        data_url: str,
+        reference_data_urls: list[str],
+        timeout: float,
+        metadata: dict[str, Any],
+    ) -> str:
+        from openai import OpenAI
+
+        client = OpenAI(
+            **_openai_client_kwargs(
+                api_key=api_key,
+                base_url=base_url,
+                max_retries=0,
+            )
+        )
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -279,36 +370,24 @@ class OpenAIVisionInspectionProvider:
             timeout=timeout,
             max_tokens=_vision_output_token_limit(metadata),
         )
-        return str(response.choices[0].message.content or "")
+        choice = response.choices[0]
+        message = choice.message
+        if getattr(message, "refusal", None) or str(getattr(choice, "finish_reason", "") or "") == "content_filter":
+            raise VisionInspectionProviderPolicyRefusal("vision inspection model refused the request")
+        content = getattr(message, "content", "")
+        if isinstance(content, list):
+            return "".join(str(item.get("text") or "") for item in content if isinstance(item, dict))
+        return str(content or "")
 
     def _api_key(self) -> str | None:
-        return (
-            self.api_key
-            or _env("V3_VISION_INSPECTION_API_KEY")
-            or _lab_vision_setting("api_key")
-            or _settings_value("openai_api_key")
-            or _settings_value("lab_openai_api_key")
-        )
+        return v3_gateway_credentials()[0]
 
     def _base_url(self) -> str | None:
-        return (
-            self.base_url
-            or _env("V3_VISION_INSPECTION_BASE_URL")
-            or _lab_vision_setting("base_url")
-            or _settings_value("openai_base_url")
-            or _settings_value("lab_openai_base_url")
-        )
+        return v3_gateway_credentials()[1]
 
     def _model(self, metadata: dict[str, Any]) -> str:
-        return str(
-            metadata.get("vision_model")
-            or self.model
-            or _env("V3_VISION_INSPECTION_MODEL")
-            or _lab_vision_setting("model")
-            or _settings_value("openai_llm_model")
-            or _settings_value("default_llm_model")
-            or "gpt-5.6-terra"
-        )
+        del metadata
+        return self.model_chain[0]
 
     def _timeout(self, metadata: dict[str, Any] | None = None) -> float:
         metadata = metadata or {}
@@ -331,6 +410,113 @@ def _is_timeout_error(exc: Exception) -> bool:
     name = type(exc).__name__.lower()
     text = str(exc).strip().lower()
     return "timeout" in name or "timed out" in text or "time-out" in text
+
+
+def _is_terminal_vision_auth_error(exc: Exception) -> bool:
+    """Do not retry a gateway-wide credential/permission failure on another model."""
+
+    response = getattr(exc, "response", None)
+    try:
+        status = int(getattr(response, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if status == 401:
+        return True
+    if status != 403:
+        return False
+    try:
+        body = response.json() if response is not None else getattr(exc, "body", None)
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return True
+    detail = body.get("error") if isinstance(body.get("error"), dict) else body
+    code = str(detail.get("code") or detail.get("type") or "").strip().lower()
+    scope = str(detail.get("scope") or detail.get("category") or "").strip().lower()
+    model_scoped = code in {
+        "model_not_found",
+        "model_not_available",
+        "model_access_denied",
+        "model_permission",
+    } and scope in {"model", "candidate"}
+    return not model_scoped
+
+
+def _vision_failure_class(exc: Exception) -> str:
+    if isinstance(exc, VisionInspectionProviderPolicyRefusal):
+        return "policy_refusal"
+    if _is_timeout_error(exc):
+        return "timeout"
+    if isinstance(exc, VisionInspectionProviderMalformedJSON):
+        return "malformed_json"
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None) or getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return f"http_{status}"
+    return "provider_error"
+
+
+def _attach_vision_route_receipt(
+    error: Exception,
+    primary_model: str,
+    selected_model: str,
+    attempts: list[dict[str, Any]],
+) -> None:
+    try:
+        setattr(
+            error,
+            "vision_route_receipt",
+            {
+                "primary_model": primary_model,
+                "selected_model": selected_model,
+                "fallback_used": selected_model != primary_model,
+                "model_attempts": list(attempts),
+            },
+        )
+    except Exception:
+        pass
+
+
+def _anthropic_messages_url(base_url: str) -> str:
+    base = str(base_url or "").rstrip("/")
+    if base.endswith("/v1/messages"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/messages"
+    return f"{base}/v1/messages"
+
+
+def _split_image_data_url(value: str) -> tuple[str, str]:
+    header, separator, encoded = str(value or "").partition(",")
+    if not separator or not header.startswith("data:") or ";base64" not in header:
+        raise VisionInspectionProviderError("vision inspection image encoding is invalid")
+    media_type = header[5:].split(";", 1)[0].strip()
+    if not media_type or not encoded:
+        raise VisionInspectionProviderError("vision inspection image encoding is invalid")
+    return media_type, encoded
+
+
+def _anthropic_text(payload: Any) -> str:
+    content = payload.get("content") if isinstance(payload, dict) else None
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        str(block.get("text") or "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _anthropic_response_is_refusal(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if str(payload.get("stop_reason") or "").strip().lower() in {"refusal", "safety"}:
+        return True
+    content = payload.get("content")
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "refusal"
+        for block in content
+    )
 
 
 def _vision_output_token_limit(metadata: dict[str, Any] | None = None) -> int:
@@ -365,14 +551,10 @@ def _lab_vision_enabled() -> bool:
 
 
 def _lab_vision_setting(field: str) -> Any:
-    """Return the configured V3-owned vision route, not the general LLM route."""
+    """Return the configured Lab-owned route for the specialized cross-view adapter."""
 
     if not _lab_vision_enabled():
         return None
-    # The application setting is the route authority.  It is populated from
-    # LAB_VISION_PROVIDER and keeps runtime tests/config overrides coherent;
-    # the optional V3 variable is only a fallback for minimal deployments
-    # where the Lab setting is absent.
     provider = str(
         _settings_value("lab_vision_provider")
         or _env("V3_VISION_INSPECTION_PROVIDER")
@@ -1808,6 +1990,11 @@ def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -
         return kwargs
 
 
+def _env(name: str) -> str | None:
+    value = os.getenv(name)
+    return value.strip() if value and value.strip() else None
+
+
 def _settings_value(name: str) -> Any:
     try:
         from app.config import settings
@@ -1815,11 +2002,6 @@ def _settings_value(name: str) -> Any:
         return getattr(settings, name, None)
     except Exception:
         return None
-
-
-def _env(name: str) -> str | None:
-    value = os.getenv(name)
-    return value.strip() if value and value.strip() else None
 
 
 def _env_bool(name: str, *, default: bool) -> bool:

@@ -14,6 +14,7 @@ import threading
 import time
 from typing import Any
 
+from ..model_routing import build_v3_model_candidates, model_protocol, v3_gateway_credentials
 from .contracts import (
     BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS,
     BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
@@ -536,16 +537,7 @@ class V3LLMBrainProvider:
         }
 
     def run(self, request: BrainRunRequest) -> dict[str, Any]:
-        fallback_models = ["kimi-k3", self.backup_model, "gpt-6.1-sol"]
-        fallback_candidates = []
-        seen_models = {self.model.strip().lower()}
-        for model in fallback_models:
-            normalized = model.strip().lower()
-            if not normalized or normalized in seen_models:
-                continue
-            seen_models.add(normalized)
-            fallback_candidates.append((_model_protocol(model) or "unsupported", model))
-        candidates = [(self.provider, self.model), *fallback_candidates]
+        candidates = list(build_v3_model_candidates(self.model, self.backup_model))
         attempts: list[dict[str, Any]] = []
         last_error: BrainProviderError | None = None
         for index, (provider_name, model_name) in enumerate(candidates):
@@ -1297,9 +1289,7 @@ class V3LLMBrainProvider:
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
     def _credentials(self) -> tuple[str, str | None]:
-        api_key = _env("LLM_GATEWAY_API_KEY")
-        base_url = _env("LLM_GATEWAY_BASE_URL")
-        api_key = _normalize_provider_api_key(api_key)
+        api_key, base_url = v3_gateway_credentials()
         if not api_key:
             raise BrainProviderUnavailable("remote brain API key is not configured")
         if not base_url or not str(base_url).strip():
@@ -2515,21 +2505,6 @@ def _env(name: str) -> str | None:
     return value.strip() if value and value.strip() else None
 
 
-def _normalize_provider_api_key(value: Any) -> str | None:
-    """Remove a UTF-8 BOM accidentally persisted at the start of a secret.
-
-    Some environment-file writers preserve a leading BOM as part of the value
-    after the equals sign.  HTTP Authorization headers are ASCII, so the OpenAI
-    SDK rejects that key locally before any request is sent.  Normalize only
-    the boundary BOM and surrounding whitespace; never alter key contents.
-    """
-
-    if value is None:
-        return None
-    normalized = str(value).strip().lstrip("\ufeff").strip()
-    return normalized or None
-
-
 def _remote_enabled(*, force: bool = False) -> bool:
     raw = os.getenv("V3_LLM_BRAIN_REMOTE_ENABLED")
     if raw is not None:
@@ -2612,12 +2587,7 @@ def _responses_model_parameters(model: str | None, reasoning_effort: str | None)
 
 
 def _model_protocol(model: str | None) -> str | None:
-    normalized = str(model or "").strip().lower()
-    if normalized.startswith("claude-"):
-        return "anthropic"
-    if normalized.startswith(("gpt-", "o1", "o3", "o4", "deepseek-", "kimi-", "doubao-")):
-        return "openai"
-    return None
+    return model_protocol(model)
 
 
 def _configured_reasoning_effort(provider: str) -> str | None:

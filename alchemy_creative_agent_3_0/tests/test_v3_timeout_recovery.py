@@ -104,8 +104,8 @@ def test_provider_preserves_sdk_timeout_as_timeout_error(tmp_path, monkeypatch):
 
     monkeypatch.setitem(__import__("sys").modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
     monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
-    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
-    monkeypatch.setenv("V3_VISION_INSPECTION_BASE_URL", "https://vision.example/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
     monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "chat_completions")
 
     provider = OpenAIVisionInspectionProvider()
