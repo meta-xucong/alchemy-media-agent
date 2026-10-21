@@ -161,6 +161,93 @@ class NativeRenderBridgeGateway:
     def _journal_path(self, actor_user_id: int, target: NativeFreezeTarget) -> Path:
         return self.journal_root / (_digest({"actor": actor_user_id, **asdict(target)}) + ".json")
 
+    def _cloud_current(self, actor_user_id, target, binding):
+        record, project, revision = self.facade._target(
+            actor_user_id, target, require_eligible=False, ignore_review_projection=True)
+        if (revision != binding.frozen["target_revision"] or str(project.status) != "active"
+            or any(record.request.metadata.get(key) for key in ("cancel_requested", "canceled", "cancelled", "deleted_at"))):
+            raise BridgeNativeFacadeError("render_bridge_target_revision_changed")
+        if record.generation_result is not None:
+            if record.generation_result.metadata.get("render_bridge_cloud_continuation") != binding.safe_metadata():
+                raise BridgeNativeFacadeError("render_bridge_native_target_conflict")
+        elif str(record.status) != "planned":
+            raise BridgeNativeFacadeError("render_bridge_target_not_eligible")
+        admitted = self._admit_references(actor_user_id, target.project_id,
+            [item["asset_id"] for item in binding.frozen["references"]])
+        if [item.content_sha256 for item in admitted] != [item["sha256"] for item in binding.frozen["references"]]:
+            raise BridgeNativeFacadeError("render_bridge_reference_changed")
+
+    def cloud_admission(self, actor_user_id, target, *, frozen_request_id, execution_profile_id="fake-image"):
+        from ..generation_router.render_bridge_provider import RenderBridgeCloudContinuation
+        try:
+            frozen = self.prepare(actor_user_id, target, execution_profile_id=execution_profile_id)
+            if frozen["frozen_request_id"] != frozen_request_id:
+                raise BridgeNativeFacadeError("render_bridge_frozen_request_changed")
+            binding = RenderBridgeCloudContinuation("preflight", frozen)
+            return self.service.admit_render_bridge_cloud(binding,
+                assert_current=lambda: self._cloud_current(actor_user_id, target, binding))
+        except BridgeNativeFacadeError as exc:
+            return {"status": "blocked", "reason_code": exc.code}
+        except Exception:
+            return {"status": "blocked", "reason_code": "render_bridge_cloud_preflight_blocked"}
+
+    def _cloud_continue(self, actor_user_id, target, *, frozen_request_id, execution_key,
+                        execution_profile_id, execute):
+        from ..generation_router.render_bridge_provider import RenderBridgeCloudContinuation
+        self._enabled()
+        self._options(execution_profile_id)
+        self.facade._target(actor_user_id, target, require_eligible=False)
+        if not isinstance(execution_key, str) or not execution_key.strip() or len(execution_key) > 256:
+            raise BridgeNativeFacadeError("render_bridge_cloud_execution_key_invalid", 400)
+        path = self._journal_path(actor_user_id, target)
+        cloud_path = path.with_suffix(".cloud.json")
+        with self._lock(path):
+            # Receipt import and cloud continuation contend on the SAME target.
+            if self._read(path) is not None:
+                raise BridgeNativeFacadeError("render_bridge_native_target_conflict")
+            journal = self._read(cloud_path)
+            first = journal is None
+            if first:
+                if not execute:
+                    return {"status": "not_started", "retry_safe": False}
+                frozen = self.prepare(actor_user_id, target, execution_profile_id=execution_profile_id)
+                if frozen["frozen_request_id"] != frozen_request_id:
+                    raise BridgeNativeFacadeError("render_bridge_frozen_request_changed")
+                binding = RenderBridgeCloudContinuation(execution_key, frozen)
+                self.service.admit_render_bridge_cloud(binding,
+                    assert_current=lambda: self._cloud_current(actor_user_id, target, binding))
+                journal = {"binding": asdict(binding), "execution_attempted": True}
+                # Persist before any upstream call; a crash here is deliberately
+                # uncertain and never authorizes another renderer invocation.
+                self._write(cloud_path, journal)
+            else:
+                binding = RenderBridgeCloudContinuation(**journal["binding"])
+                if (binding.execution_key != execution_key or binding.frozen["frozen_request_id"] != frozen_request_id
+                    or binding.frozen["execution_profile_id"] != execution_profile_id):
+                    raise BridgeNativeFacadeError("render_bridge_cloud_binding_conflict")
+            try:
+                result = self.service.continue_render_bridge_cloud(binding,
+                    assert_current=lambda: self._cloud_current(actor_user_id, target, binding), execute=first and execute)
+            except BridgeNativeFacadeError:
+                if first:
+                    raise
+                # Cancellation/revision changes stop review, but still permit
+                # authenticated read-only reconciliation of the exact output.
+                result = self.service.continue_render_bridge_cloud(binding,
+                    assert_current=lambda: None, execute=False, read_only=True)
+            except Exception:
+                result = {"status": "cloud_unknown", "reason_code": "native_cloud_outcome_unknown", "retry_safe": False}
+            self._write(cloud_path, {**journal, "outcome": result})
+            return result
+
+    def cloud_execute(self, actor_user_id, target, *, frozen_request_id, execution_key, execution_profile_id="fake-image"):
+        return self._cloud_continue(actor_user_id, target, frozen_request_id=frozen_request_id,
+            execution_key=execution_key, execution_profile_id=execution_profile_id, execute=True)
+
+    def cloud_status(self, actor_user_id, target, *, frozen_request_id, execution_key, execution_profile_id="fake-image"):
+        return self._cloud_continue(actor_user_id, target, frozen_request_id=frozen_request_id,
+            execution_key=execution_key, execution_profile_id=execution_profile_id, execute=False)
+
     def _plan_project(self, actor_user_id: int, project_id: str):
         self._enabled()
         if self.project_service is None:
@@ -330,8 +417,17 @@ class NativeRenderBridgeGateway:
     def _write(path: Path, value: dict[str, Any]) -> None:
         temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
         try:
-            temporary.write_text(json.dumps(value, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+            with temporary.open("w", encoding="utf-8") as handle:
+                handle.write(json.dumps(value, sort_keys=True, ensure_ascii=False))
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temporary, path)
+            if os.name != "nt":
+                directory = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -432,6 +528,8 @@ class NativeRenderBridgeGateway:
             raise BridgeNativeFacadeError("render_bridge_receipt_identity_invalid", 400)
         path = self._journal_path(actor_user_id, target)
         with self._lock(path):
+            if self._read(path.with_suffix(".cloud.json")) is not None:
+                raise BridgeNativeFacadeError("render_bridge_native_target_conflict")
             journal = self._read(path)
             if journal is None:
                 frozen = self.prepare(actor_user_id, target, execution_profile_id=execution_profile_id)

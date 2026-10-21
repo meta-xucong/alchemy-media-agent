@@ -315,6 +315,7 @@ function initializeBridgeAdmin() {
     fields.disabled = busy || !authorized;
     for (const [mode, button] of Object.entries(actions)) button.disabled = busy || !authorized || saved?.mode === mode;
     get("Probe").disabled = busy || !authorized;
+    get("Fallback").disabled = busy || !authorized;
   }
   function ready(value) { return Boolean(value.base_url && value.workspace && value.credential_configured); }
   function basicStatus(value) {
@@ -329,6 +330,8 @@ function initializeBridgeAdmin() {
     url.value = value.base_url || "";
     workspace.value = value.workspace || "";
     native.checked = Boolean(value.native_enabled);
+    get("Fallback").checked = value.auto_fallback_enabled === true;
+    get("QueueWait").value = value.queue_wait_seconds ?? 30;
     for (const button of toolButtons) button.setAttribute("aria-pressed", String((value.profiles || []).includes(button.dataset.profile)));
     for (const option of nativeProfiles.options) option.selected = (value.native_profiles || []).includes(option.value);
     get("Credential").textContent = value.credential_configured ? "已配置 · 不显示密钥" : "尚未配置，请找管理员完成";
@@ -356,7 +359,8 @@ function initializeBridgeAdmin() {
   }
   function payload(value) {
     return { mode: value.mode, base_url: value.base_url, workspace: value.workspace,
-      profiles: value.profiles, native_enabled: value.native_enabled, native_profiles: value.native_profiles };
+      profiles: value.profiles, native_enabled: value.native_enabled, native_profiles: value.native_profiles,
+      auto_fallback_enabled: value.auto_fallback_enabled === true, queue_wait_seconds: value.queue_wait_seconds ?? 30 };
   }
   async function save(body, message) {
     if (busy || !authorized) return;
@@ -366,9 +370,13 @@ function initializeBridgeAdmin() {
       render(value);
       result.textContent = "设置已改变，请重新检查连接。";
       if (message && !value.configuration_error && !value.native_runtime_error) hint.textContent = message;
-    } catch (error) { fail(error); }
+    } catch (error) { get("Fallback").checked = saved?.auto_fallback_enabled === true; fail(error); }
     finally { busy = false; controls(); }
   }
+  get("Fallback").addEventListener("change", () => {
+    if (!saved || busy || !authorized) return;
+    save({ ...payload(saved), auto_fallback_enabled: get("Fallback").checked }, "自动云端选项已保存。只影响明确选择此方式的新任务，不会更改已有任务。");
+  });
   for (const [mode, button] of Object.entries(actions)) button.addEventListener("click", () => {
     if (!saved || busy) return;
     if (mode !== "disabled" && !ready(saved)) { basicStatus(saved); return; }
@@ -383,6 +391,7 @@ function initializeBridgeAdmin() {
     if (!saved) return;
     save({ mode: saved.mode, base_url: url.value, workspace: workspace.value,
       profiles: toolButtons.filter((button) => button.getAttribute("aria-pressed") === "true").map((button) => button.dataset.profile),
+      auto_fallback_enabled: saved.auto_fallback_enabled === true, queue_wait_seconds: Number(get("QueueWait").value),
       native_enabled: native.checked, native_profiles: Array.from(nativeProfiles.selectedOptions, (option) => option.value) }, "高级设置已保存。需要确认连接时，点击检查连接。");
   });
   get("Probe").addEventListener("click", async () => {

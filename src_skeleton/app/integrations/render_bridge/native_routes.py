@@ -57,6 +57,7 @@ def install_native_routes(app, *, config, actor, require_write, project_snapshot
         return JSONResponse({"available": runtime["service"] is not None, "mode": config.mode,
             "error": runtime["error"], "profile_id": "fake-image",
             "profiles": list(config.native_profiles), "test_fixture": True,
+            "auto_fallback_enabled": config.auto_fallback_enabled, "queue_wait_seconds": config.queue_wait_seconds,
             "output_formats": ["png", "jpeg"], "format_semantics": "original_artifact_postcondition",
             "quality": "auto", "quality_semantics": "unspecified_only", "input_fidelity": None,
             "real_tool_verified": False, "formal_delivery": False,

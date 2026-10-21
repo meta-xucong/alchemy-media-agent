@@ -205,3 +205,75 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
             raise ValueError("render_bridge_checkpoint_binding_mismatch")
         self.assert_current()
         return self.binding.output_id
+
+
+@dataclass(frozen=True)
+class RenderBridgeCloudContinuation:
+    """Server-owned identity for exactly one frozen cloud continuation."""
+
+    execution_key: str
+    frozen: dict[str, Any]
+
+    @property
+    def output_id(self) -> str:
+        identity = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+        return "v3_output_" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+
+    def safe_metadata(self) -> dict[str, Any]:
+        return {
+            "execution_key": self.execution_key,
+            "frozen_request_id": self.frozen["frozen_request_id"],
+            "target": self.frozen["target"],
+            "output_id": self.output_id,
+            "development_only": True,
+            "formal_delivery": False,
+            "upstream_may_charge": True,
+        }
+
+
+class RenderBridgeCloudProvider(ProductionImageGenerationProvider):
+    """Configured production transport; no alternate planning or retry policy."""
+
+    def __init__(self, *, output_store, binding, assert_current):
+        super().__init__(output_store=output_store)
+        if not isinstance(binding, RenderBridgeCloudContinuation):
+            raise ValueError("render_bridge_cloud_binding_untrusted")
+        self.binding = binding
+        self.assert_current = assert_current
+
+    def _build_app_request(self, request):
+        app_request, provider, references = super()._build_app_request(request)
+        frozen = self.binding.frozen
+        plan = app_request.prompt_plan
+        options = frozen["image_options"]
+        if (
+            plan.variables.get("generation_prompt") != frozen["prompt"]
+            or plan.variables.get("provider_prompt_sha256") != frozen["prompt_sha256"]
+            or plan.variables.get("provider_prompt_source") != "remote_brain_canonical"
+            or any(getattr(plan, field, None) != options[field] for field in options if field != "input_fidelity")
+            or plan.variables.get("input_fidelity") != options["input_fidelity"]
+            or [item.get("asset_id") for item in references] != [item["asset_id"] for item in frozen["references"]]
+            or [hashlib.sha256(Path(item["file_path"]).read_bytes()).hexdigest() for item in references]
+            != [item["sha256"] for item in frozen["references"]]
+        ):
+            raise ValueError("render_bridge_cloud_frozen_contract_mismatch")
+        self.assert_current()
+        return app_request, provider, references
+
+    def _run_app_provider_with_timeout_retry(self, *args, **kwargs):
+        self.assert_current()
+        result = super()._run_app_provider_with_timeout_retry(*args, **kwargs)
+        result.raw_response_summary = {
+            **dict(result.raw_response_summary or {}),
+            "render_bridge_cloud_continuation": self.binding.safe_metadata(),
+        }
+        return result
+
+    def _native_output_checkpoint_id(self, request, *, output_index):
+        target = self.binding.frozen["target"]
+        if (output_index != 0 or request.metadata.get("job_id") != target["job_id"]
+            or request.metadata.get("project_id") != target["project_id"]
+            or request.generation_plan.asset_id != target["asset_id"]):
+            raise ValueError("render_bridge_cloud_checkpoint_binding_mismatch")
+        self.assert_current()
+        return self.binding.output_id

@@ -99,6 +99,72 @@ class PreviewStore:
                         0 if release else row["lease_until"], job_id))
             return record
 
+    def compare_patch(self, job_id, expected, values):
+        """Durable route/dispatch CAS independent of expiring worker leases."""
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT record FROM integration_jobs WHERE id=?", (job_id,)).fetchone()
+            record = json.loads(row[0])
+            if record.get("cancel_requested") or any(record.get(key) != value for key, value in expected.items()):
+                return None
+            record.update(values)
+            db.execute("UPDATE integration_jobs SET record=?,state=?,next_poll=? WHERE id=?",
+                       (json.dumps(record), record["state"], record.get("next_poll_at", 0), job_id))
+            return record
+
+    def routing_observation(self, key, capabilities=None, profile_id=None, now=None):
+        from .routing_policy import observe_availability
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE IF NOT EXISTS routing_observations (key TEXT PRIMARY KEY, record TEXT NOT NULL)")
+            row = db.execute("SELECT record FROM routing_observations WHERE key=?", (key,)).fetchone()
+            cached = json.loads(row[0]) if row else {}
+            if capabilities is not None:
+                observation, supported = observe_availability(cached.get("observation"), capabilities, profile_id, now, time.monotonic())
+                if supported:
+                    revision = capabilities["routing_availability_v1"]["revision"]
+                    if revision >= cached.get("observation", {}).get("revision", -1):
+                        cached = {"observation": observation, "capabilities": capabilities}
+                        db.execute("INSERT OR REPLACE INTO routing_observations VALUES (?,?)", (key, json.dumps(cached)))
+                else:
+                    # A server that no longer advertises support must not inherit it.
+                    cached = {"observation": {}, "capabilities": capabilities}
+                    db.execute("INSERT OR REPLACE INTO routing_observations VALUES (?,?)", (key, json.dumps(cached)))
+            return cached
+
+    def routing_fault(self, key):
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE IF NOT EXISTS routing_observations (key TEXT PRIMARY KEY, record TEXT NOT NULL)")
+            row = db.execute("SELECT record FROM routing_observations WHERE key=?", (key,)).fetchone()
+            cached = json.loads(row[0]) if row else {}
+            if cached.get("observation"):
+                cached["observation"].update(health="unknown", impaired=True, healthy_since=None, healthy_since_monotonic=None, healthy_reports=0)
+                db.execute("UPDATE routing_observations SET record=? WHERE key=?", (json.dumps(cached), key))
+            return cached
+
+    def health_poll(self, key, now, *, defer_until=None):
+        """One bounded background refresh, with durable upstream Retry-After."""
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE IF NOT EXISTS routing_observations (key TEXT PRIMARY KEY, record TEXT NOT NULL)")
+            row = db.execute("SELECT record FROM routing_observations WHERE key=?", (key,)).fetchone()
+            previous = json.loads(row[0]) if row else {}
+            if defer_until is not None:
+                previous["retry_not_before"] = max(previous.get("retry_not_before", 0), defer_until)
+            elif max(previous.get("next_poll", 0), previous.get("retry_not_before", 0)) > now:
+                return False
+            else:
+                previous["next_poll"] = now + 5
+            db.execute("INSERT OR REPLACE INTO routing_observations VALUES (?,?)", (key, json.dumps(previous)))
+            return True
+
+    def health_retry_deadline(self, key):
+        with self.connection() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS routing_observations (key TEXT PRIMARY KEY, record TEXT NOT NULL)")
+            row = db.execute("SELECT record FROM routing_observations WHERE key=?", (key,)).fetchone()
+            return json.loads(row[0]).get("retry_not_before", 0) if row else 0
+
     def claim_due(self, limit, now=None):
         now = time.time() if now is None else now
         with self.connection() as db:

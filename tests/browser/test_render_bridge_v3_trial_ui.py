@@ -650,3 +650,64 @@ def test_controller_navigation_or_account_change_closes_and_clears_private_view(
         expect(field(page, "references")).to_be_empty()
         expect(field(page, "tasks")).to_be_empty()
         assert fixture.creates == []
+
+
+def test_controller_fallback_is_explicit_cost_and_material_consent(browser: Browser) -> None:
+    with trial_page(browser) as (page, fixture):
+        fixture.status['auto_fallback_enabled'] = True
+        open_controller(page)
+        ready(page)
+        expect(field(page, 'routing')).to_be_visible()
+        expect(field(page, 'cloud-consent')).to_be_hidden()
+        submit(page)
+        assert 'routing_strategy' not in fixture.creates[-1]
+        local_key = fixture.creates[-1]['client_request_id']
+        page.locator(f'{DIALOG} input[name="bridge-routing"][value="prefer_bridge"]').check()
+        expect(field(page, 'cloud-consent-row')).to_contain_text('可能产生费用')
+        field(page, 'start').click()
+        assert len(fixture.creates) == 1
+        field(page, 'cloud-consent').check()
+        submit(page)
+        body = fixture.creates[-1]
+        assert body['routing_strategy'] == 'prefer_bridge'
+        assert body['local_only'] is False and body['acknowledge_cloud_fallback'] is True
+        assert body['client_request_id'] != local_key
+        # Reopening never inherits the user's prior per-request cloud permission.
+        field(page, 'close').click()
+        open_controller(page)
+        expect(field(page, 'start')).to_be_enabled()
+        expect(field(page, 'cloud-consent')).not_to_be_checked()
+        expect(page.locator(f'{DIALOG} input[name="bridge-routing"][value="bridge_only"]')).to_be_checked()
+
+
+def test_controller_existing_cloud_task_is_not_relabelled_after_bridge_recovers(browser: Browser) -> None:
+    with trial_page(browser) as (page, fixture):
+        fixture.status['auto_fallback_enabled'] = False
+        fixture.tasks['cloud-task'] = fixture.task('cloud-task', selected_route='cloud',
+            routing_strategy='prefer_bridge', cloud_execution_status='possible_execution',
+            profile_id='fake-image', test_fixture=True, routing_reason='local_unavailable')
+        open_controller(page)
+        expect(field(page, 'tasks')).to_contain_text('云端正在处理')
+        expect(field(page, 'tasks')).to_contain_text('本地恢复不会重新生成')
+        expect(field(page, 'tasks')).to_contain_text('本地暂不可用，已临时使用云端')
+        expect(field(page, 'tasks')).not_to_contain_text('合成测试图')
+        expect(field(page, 'tasks')).not_to_contain_text('生成测试图')
+        expect(field(page, 'routing')).to_be_hidden()
+        assert not fixture.creates
+
+
+def test_controller_admin_disabling_fallback_clears_pending_consent(browser: Browser) -> None:
+    with trial_page(browser) as (page, fixture):
+        fixture.status['auto_fallback_enabled'] = True
+        open_controller(page)
+        ready(page)
+        page.locator(f'{DIALOG} input[name="bridge-routing"][value="prefer_bridge"]').check()
+        field(page, 'cloud-consent').check()
+        fixture.status['auto_fallback_enabled'] = False
+        field(page, 'refresh').click()
+        expect(field(page, 'routing')).to_be_hidden()
+        expect(field(page, 'start')).to_be_enabled()
+        expect(field(page, 'cloud-consent')).not_to_be_checked()
+        submit(page)
+        assert 'routing_strategy' not in fixture.creates[-1]
+        assert 'acknowledge_cloud_fallback' not in fixture.creates[-1]

@@ -23,6 +23,7 @@ from .client import BridgeError
 from .models import validate_image
 from .options import FORMAT_MIMES, native_profile
 from .service import PreviewService, digest
+from .routing_policy import routing_decision
 
 
 class NativeTaskCreate(BaseModel):
@@ -35,11 +36,16 @@ class NativeTaskCreate(BaseModel):
     profile_id: Literal["fake-image", "codex-image", "midjourney-manual"] = "fake-image"
     quality: Literal["auto"] = "auto"
     output_format: Literal["png", "jpeg"] = "png"
+    routing_strategy: Literal["bridge_only", "prefer_bridge"] = "bridge_only"
+    local_only: bool = False
+    acknowledge_cloud_fallback: bool = False
     acknowledge_synthetic_native_test: bool = False
     acknowledge_native_development: bool = False
 
     @model_validator(mode="after")
     def require_explicit_development_ack(self):
+        if self.routing_strategy == "prefer_bridge" and not self.acknowledge_cloud_fallback:
+            raise ValueError("Cloud cost and material transmission acknowledgement required")
         if self.profile_id == "fake-image":
             if not (self.acknowledge_synthetic_native_test or self.acknowledge_native_development):
                 raise ValueError("Synthetic/native development acknowledgement required")
@@ -66,6 +72,40 @@ class NativeBridgeService(PreviewService):
     async def close(self):
         await super().close()
         self.gateway_executor.shutdown(wait=True, cancel_futures=True)
+
+    def _health_key(self):
+        return "health_" + digest([digest(self.settings.base_url), self.settings.workspace])
+
+    async def tick(self):
+        # Recovery must progress between user requests, not depend on repeated
+        # Generate clicks. One bounded authenticated capabilities fetch per 5s,
+        # only while the administrator enabled this explicit default-off policy.
+        if self.settings.mode == "enabled" and self.settings.auto_fallback_enabled and not self.tick_lock.locked():
+            key = self._health_key()
+            if await self.local(self.store.health_poll, key, time.time()):
+                try:
+                    async with asyncio.timeout(5):
+                        caps = await self.client.capabilities()
+                    for profile_id in self.settings.native_profiles:
+                        cache_key = digest([digest(self.settings.base_url), self.settings.workspace, profile_id])
+                        await self.local(self.store.routing_observation, cache_key, caps, profile_id, time.time())
+                except BridgeError as exc:
+                    if exc.retry_not_before:
+                        await self.local(self.store.health_poll, key, time.time(), defer_until=exc.retry_not_before)
+                    await self._health_fault(clear=not exc.retryable or exc.status in {401, 403})
+                except TimeoutError:
+                    await self._health_fault()
+        await super().tick()
+
+    async def _health_fault(self, *, clear=False):
+        # Interrupt recovery evidence, not task execution. Known authorization
+        # denial invalidates cached negotiation until a successful live read.
+        for profile_id in self.settings.native_profiles:
+            key = digest([digest(self.settings.base_url), self.settings.workspace, profile_id])
+            if clear:
+                await self.local(self.store.routing_observation, key, {}, profile_id, time.time())
+            else:
+                await self.local(self.store.routing_fault, key)
 
     def target(self, record):
         if self.target_factory:
@@ -109,6 +149,8 @@ class NativeBridgeService(PreviewService):
             raise BridgeError("native_profile_not_enabled", status=422, retryable=False)
         if request.profile_id == "midjourney-manual" and request.uploaded_asset_ids:
             raise BridgeError("native_profile_references_unsupported", status=422, retryable=False)
+        if request.routing_strategy == "prefer_bridge" and not self.settings.auto_fallback_enabled:
+            raise BridgeError("auto_fallback_disabled", status=409, retryable=False)
         width, height = map(int, request.size.split("x"))
         summary = {"project_id": request.project_id, "user_input": request.user_input,
                    "profile_id": request.profile_id, "width": width, "height": height, "seed": 0}
@@ -117,6 +159,9 @@ class NativeBridgeService(PreviewService):
             summary["uploaded_asset_ids"] = request.uploaded_asset_ids
         if request.output_format != "png":
             summary["output_format"] = request.output_format
+        if request.routing_strategy != "bridge_only" or request.local_only:
+            summary.update(routing_strategy=request.routing_strategy, local_only=request.local_only,
+                           acknowledge_cloud_fallback=request.acknowledge_cloud_fallback)
         job_id = "brn_" + uuid4().hex
         record = {"id": job_id, "owner": owner, "workspace": self.settings.workspace,
             "endpoint_fingerprint": digest(self.settings.base_url), "project_id": request.project_id,
@@ -128,7 +173,10 @@ class NativeBridgeService(PreviewService):
             "next_poll_at": 0, "errors": 0, "last_error": None, "cancel_requested": False,
             "plan_attempted": False, "target": None, "frozen": None, "wire_request": None,
             "remote_task_id": None, "native_phase": "planning", "native_outcome": None,
-            "delivery_ack": "pending"}
+            "delivery_ack": "pending", "selected_route": None, "route_generation": 0,
+            "bridge_create_attempted": False, "cloud_execution_attempted": False,
+            "cloud_execution_key": "cloud_" + uuid4().hex, "queue_elapsed": 0.0,
+            "queue_wait_seconds": self.settings.queue_wait_seconds}
         return await self.local(self.store.create, record, [])
 
     async def references(self, owner, project_id):
@@ -174,7 +222,7 @@ class NativeBridgeService(PreviewService):
             "state": record["state"], "created_at": record["created_at"], "last_error": record.get("last_error"),
             "profile_id": record["request"]["profile_id"],
             "action_required_detail": attention_projection(record),
-            "test_fixture": record["request"]["profile_id"] == "fake-image", "real_tool_verified": False,
+            "test_fixture": record["request"]["profile_id"] == "fake-image" and record.get("selected_route") != "cloud", "real_tool_verified": False,
             "native_registration": native.get("status", "pending"), "delivery_ack": record.get("delivery_ack", "pending"),
             "native_registration_ref": native.get("native_registration_ref"),
             "review_status": native.get("current_review_status", native.get("review_status")),
@@ -186,7 +234,11 @@ class NativeBridgeService(PreviewService):
             "quality": "auto", "quality_semantics": "unspecified_only", "input_fidelity": None,
             "reference_count": len(record["request"].get("uploaded_asset_ids", [])),
             "reference_effect_verified": False,
-            "target": record.get("target")}
+            "target": record.get("target"),
+            "routing_strategy": record["request"].get("routing_strategy", "bridge_only"),
+            "selected_route": record.get("selected_route"), "routing_reason": record.get("routing_reason"),
+            "cloud_execution_status": record.get("cloud_execution_status"),
+            "cloud_upstream_cost_possible": record.get("selected_route") == "cloud"}
 
     async def _advance(self, record):
         owner = int(record["owner"])
@@ -200,13 +252,24 @@ class NativeBridgeService(PreviewService):
         if record["cancel_requested"]:
             await self._cancel_native(record)
             return
+        if record.get("selected_route") == "cloud":
+            await self._cloud(record)
+            return
+        routing_context = None
+        if self._prefers_bridge(record):
+            routing_context = await self._routing_context(record)
+            action, reason = self._route_decision(record, routing_context, submitted=bool(record.get("bridge_create_attempted")))
+            if action == "wait" and not record.get("bridge_create_attempted") and not record.get("remote_task_id"):
+                await self._finish(record, state="routing_wait", routing_reason=reason)
+                return
         # Negotiate before any Brain planning effect. The old fake/PNG v1
         # contract remains usable without the additive descriptor. Persisted
         # wire requests are never reinterpreted or upgraded during recovery.
         if not record.get("wire_request") and not record.get("profile_snapshot"):
             if profile_id not in self.settings.native_profiles or profile_id not in self.settings.profiles:
                 raise BridgeError("native_profile_not_enabled", retryable=False)
-            profile = native_profile(await self.client.capabilities(), profile_id=profile_id,
+            capabilities = routing_context.get("capabilities", {}) if routing_context is not None else await self.client.capabilities()
+            profile = native_profile(capabilities, profile_id=profile_id,
                 output_format=record["request"].get("output_format", "png"),
                 reference_count=len(record["request"].get("uploaded_asset_ids", [])),
                 width=record["request"]["width"], height=record["request"]["height"])
@@ -243,12 +306,18 @@ class NativeBridgeService(PreviewService):
             await self._finish(record, state="blocked_revision")
             return
         if not record["frozen"]:
-            await self._patch(record, frozen=frozen)
+            await self._patch(record, frozen=frozen, native_intent_digest=digest(frozen))
         options = record["frozen"].get("image_options", {})
         if (options.get("quality") != "auto" or options.get("input_fidelity") is not None
                 or options.get("output_format") != record["request"].get("output_format", "png")):
             raise BridgeError("native_frozen_image_options_unsupported", retryable=False)
         dimensions = self._frozen_dimensions(record)
+        if record.get("withdrawal_request") and not record.get("fallback_fenced"):
+            if await self._consider_cloud(record, routing_context, submitted=True):
+                return
+        if self._prefers_bridge(record) and not record.get("bridge_create_attempted"):
+            if await self._consider_cloud(record, routing_context, submitted=False):
+                return
         if record["wire_request"] is None:
             profile = record["profile_snapshot"]
             await self._freeze_inputs(record)
@@ -285,12 +354,39 @@ class NativeBridgeService(PreviewService):
                 if current["frozen_request_id"] != record["frozen"]["frozen_request_id"]:
                     await self._finish(record, state="blocked_revision")
                     return
+                if self._prefers_bridge(record):
+                    if record.get("bridge_create_attempted"):
+                        await self._finish(record, state="creating_unknown", routing_reason="bridge_create_requires_reconciliation")
+                        return
+                    won = await self.local(self.store.compare_patch, record["id"],
+                        {"route_generation": record["route_generation"], "selected_route": record.get("selected_route"),
+                         "bridge_create_attempted": False},
+                        {"selected_route": "bridge", "route_generation": record["route_generation"] + 1,
+                         "bridge_create_attempted": True})
+                    if won is None:
+                        return
+                    record.update(won)
                 remote = await self.client.create_task(record["wire_request"])
             self._validate_task(record, remote)
             await self._patch(record, remote_task_id=remote["remote_task_id"])
         remote = await self.client.task(record["remote_task_id"])
         self._validate_task(record, remote)
         await self._patch(record, remote_state=remote["state"], action_required_detail=attention_projection(remote))
+        if self._prefers_bridge(record) and remote["state"] in {"queued", "awaiting_user"} and not remote.get("receipt_id"):
+            now = time.monotonic()
+            epoch = time.time() - now
+            # System monotonic time survives process restarts (including Windows).
+            # A reboot/clock discontinuity starts a new sample, never guesses a
+            # budget from a potentially jumped wall clock; accrued budget remains.
+            same_clock = abs(epoch - record.get("queue_clock_epoch", epoch)) < 5
+            previous = (record.get("queue_observed_monotonic") or now) if same_clock else now
+            await self._patch(record, queue_elapsed=record.get("queue_elapsed", 0) + max(0, now - previous),
+                              queue_observed_monotonic=now, queue_clock_epoch=epoch)
+            if await self._consider_cloud(record, routing_context, submitted=True, remote=remote):
+                return
+        else:
+            await self._patch(record, queue_observed_monotonic=None)
+
         if remote["state"] in {"failed", "canceled", "expired"}:
             await self._finish(record, state=remote["state"])
             return
@@ -316,6 +412,138 @@ class NativeBridgeService(PreviewService):
         await self.local(self.store.save_receipt, record["id"], receipt, content)
         await self._patch(record, native_phase="registering", receipt_id=receipt["receipt_id"])
         await self._register_or_confirm(record)
+
+    @staticmethod
+    def _prefers_bridge(record):
+        return (record["request"].get("routing_strategy") == "prefer_bridge"
+                and not record["request"].get("local_only", False)
+                and record["request"].get("acknowledge_cloud_fallback") is True)
+
+    async def _routing_context(self, record):
+        key = digest([record["endpoint_fingerprint"], record["workspace"], record["request"]["profile_id"]])
+        deadline = await self.local(self.store.health_retry_deadline, self._health_key())
+        if deadline > time.time():
+            raise BridgeError("bridge_retry_deferred", status=503, retry_not_before=deadline)
+        try:
+            capabilities = await self.client.capabilities()
+        except BridgeError as exc:
+            if exc.retry_not_before:
+                await self.local(self.store.health_poll, self._health_key(), time.time(), defer_until=exc.retry_not_before)
+            # Authorization failures and administrator rejections are not faults
+            # that permit bypassing policy. Only transport/server outage can use
+            # a previously authenticated, negotiated compatible profile cache.
+            if not exc.retryable or exc.status in {401, 403}:
+                cached = await self.local(self.store.routing_observation, key, {}, record["request"]["profile_id"], time.time())
+            else:
+                cached = await self.local(self.store.routing_fault, key)
+            if not exc.retryable or exc.status < 500 or exc.retry_not_before:
+                raise
+            if not cached.get("observation"):
+                raise
+            return cached
+        return await self.local(self.store.routing_observation, key, capabilities,
+                                record["request"]["profile_id"], time.time())
+
+    def _route_decision(self, record, context, *, submitted):
+        return routing_decision(observation=context.get("observation"),
+            capabilities=context.get("capabilities", {}), enabled=self._prefers_bridge(record),
+            local_only=record["request"].get("local_only", False), submitted=submitted,
+            queue_elapsed=record.get("queue_elapsed") if submitted else None,
+            queue_wait_seconds=record.get("queue_wait_seconds", self.settings.queue_wait_seconds),
+            now=time.time(), monotonic_now=time.monotonic())
+
+    async def _consider_cloud(self, record, context, *, submitted, remote=None):
+        if record.get("fallback_fenced"):
+            return False
+        action, reason = self._route_decision(record, context, submitted=submitted)
+        if action == "wait" and record.get("withdrawal_request"):
+            await self._finish(record, state="routing_wait", routing_reason=reason)
+            return True
+        if not record.get("withdrawal_request") and action not in {"cloud", "withdraw"}:
+            return False
+        if not hasattr(self.gateway, "cloud_admission"):
+            await self._finish(record, state="routing_wait", routing_reason="cloud_continuation_unavailable")
+            return True
+        admission = await self.authority(self.gateway.cloud_admission, int(record["owner"]), self.target(record),
+            frozen_request_id=record["frozen"]["frozen_request_id"], execution_profile_id=record["request"]["profile_id"])
+        if admission.get("status") != "ready":
+            await self._finish(record, state="routing_wait", routing_reason=admission.get("reason_code", "cloud_admission_blocked"))
+            return True
+        proof = record.get("withdrawal_proof")
+        if submitted and not proof:
+            payload = record.get("withdrawal_request")
+            if not payload:
+                if (remote is None or remote.get("task_digest") != digest(record["wire_request"])
+                        or not isinstance(remote.get("attempt_id"), str)):
+                    raise BridgeError("withdrawal_task_binding_missing", retryable=False)
+                payload = {"schema_version": "1", "withdrawal_key": "withdraw_" + record["id"],
+                    "origin_key": record["origin_key"], "attempt_id": remote["attempt_id"],
+                    "task_digest": remote["task_digest"]}
+                await self._patch(record, withdrawal_request=payload, withdrawal_reason=reason)
+            try:
+                proof = await self.client.withdrawal(record["remote_task_id"], payload["withdrawal_key"])
+            except BridgeError as exc:
+                if exc.status != 404:
+                    raise
+                try:
+                    proof = await self.client.withdraw_before_start(record["remote_task_id"], payload)
+                except BridgeError as rejected:
+                    if rejected.status == 409 and rejected.code == "withdrawal_not_safe":
+                        # This task now belongs exclusively to Bridge. A later
+                        # health report cannot reset its execution authority.
+                        await self._patch(record, withdrawal_request=None, fallback_fenced=True,
+                                          routing_reason="bridge_execution_not_withdrawable")
+                        return False
+                    raise
+            expected = {**payload, "status": "withdrawn_before_start", "task_id": record["remote_task_id"]}
+            if (any(proof.get(k) != v for k, v in expected.items())
+                    or not isinstance(proof.get("withdrawal_ref"), str) or not proof["withdrawal_ref"]):
+                raise BridgeError("withdrawal_proof_binding_mismatch", retryable=False)
+            await self._patch(record, withdrawal_proof=proof)
+        if submitted and not proof:
+            return False
+        if record.get("bridge_create_attempted") and not proof:
+            raise BridgeError("cloud_route_requires_withdrawal", retryable=False)
+        won = await self.local(self.store.compare_patch, record["id"],
+            {"route_generation": record["route_generation"], "selected_route": record.get("selected_route"),
+             "cloud_execution_attempted": False},
+            {"selected_route": "cloud", "route_generation": record["route_generation"] + 1,
+             "routing_reason": record.get("withdrawal_reason", reason), "cloud_execution_status": "pending", "native_phase": "cloud"})
+        if won is None:
+            return True
+        record.update(won)
+        await self._cloud(record)
+        return True
+
+    async def _cloud(self, record, *, status_only=False):
+        kwargs = {"frozen_request_id": record["frozen"]["frozen_request_id"],
+                  "execution_key": record["cloud_execution_key"],
+                  "execution_profile_id": record["request"]["profile_id"]}
+        args = (int(record["owner"]), self.target(record))
+        outcome = await self.authority(self.gateway.cloud_status, *args, **kwargs)
+        if outcome.get("status") == "not_started" and not record.get("cloud_execution_attempted") and not status_only:
+            # Commit possible execution BEFORE calling the configured provider.
+            # Neither an exception nor a missing checkpoint ever clears this.
+            won = await self.local(self.store.compare_patch, record["id"],
+                {"selected_route": "cloud", "route_generation": record["route_generation"],
+                 "cloud_execution_attempted": False},
+                {"cloud_execution_attempted": True, "cloud_execution_status": "possible_execution"})
+            if won is None:
+                return
+            record.update(won)
+            outcome = await self.authority(self.gateway.cloud_execute, *args, **kwargs)
+        registered = outcome.get("status") == "registered"
+        blocked = outcome.get("status") == "blocked"
+        if registered and record.get("cancel_requested"):
+            await self._patch(record, cancel_requested=False)
+        pending = registered and outcome.get("review_pending", False)
+        await self._finish(record,
+            state=("review_pending" if pending else "registered") if registered else ("routing_wait" if blocked else "cloud_unknown"),
+            native_phase="cloud" if pending or not registered else "complete",
+            native_outcome=outcome, cloud_execution_status="registered" if registered else ("blocked" if blocked else "cloud_unknown"),
+            delivery_ack="not_applicable", routing_reason=record.get("routing_reason"),
+            last_error=None if registered else outcome.get("reason_code", "cloud_execution_requires_reconciliation"),
+            next_poll_at=time.time() + max(30, self.settings.poll_seconds))
 
     @staticmethod
     def _frozen_dimensions(record):
@@ -389,6 +617,13 @@ class NativeBridgeService(PreviewService):
                                                      else self.settings.poll_seconds))
 
     async def _cancel_native(self, record):
+        if record.get("selected_route") == "cloud" and record.get("cloud_execution_attempted"):
+            # Mark the native target canceled before reconciliation so a checkpoint
+            # may be reported read-only, but cannot resume review after cancellation.
+            await self.authority(self.gateway.cancel_target, int(record["owner"]), self.target(record))
+            # Cancellation cannot revoke an already possible provider execution.
+            await self._cloud(record, status_only=True)
+            return
         if not record["target"] and record["plan_attempted"]:
             plan = await self.authority(self.gateway.plan_status, int(record["owner"]),
                                         record["project_id"], record["plan_key"])

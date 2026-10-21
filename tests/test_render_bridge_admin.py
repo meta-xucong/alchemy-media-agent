@@ -245,3 +245,36 @@ def test_invalid_environment_url_does_not_expose_embedded_credentials(tmp_path):
         response = client.get(BASE + "/settings", headers=HEADERS)
         assert response.json()["base_url"] == "" and "private" not in response.text
     assert not constructed
+
+
+def test_fallback_defaults_and_persistence_are_opt_in(tmp_path):
+    app, controller, calls, _ = fixture(tmp_path)
+    with TestClient(app) as client:
+        value = client.get(BASE + '/settings', headers=HEADERS).json()
+        assert value['auto_fallback_enabled'] is False
+        assert value['queue_wait_seconds'] == 30
+        response = client.post(BASE + '/settings', headers=HEADERS,
+            json=settings(mode='disabled', auto_fallback_enabled=True, queue_wait_seconds=45))
+        assert response.status_code == 200
+        assert response.json()['auto_fallback_enabled'] is True
+        assert response.json()['queue_wait_seconds'] == 45
+    app, controller, _, _ = fixture(tmp_path)
+    with TestClient(app) as client:
+        value = client.get(BASE + '/settings', headers=HEADERS).json()
+        assert value['auto_fallback_enabled'] is True and value['queue_wait_seconds'] == 45
+        # Older callers cannot opt requests into cloud generation by omission.
+        value = client.post(BASE + '/settings', headers=HEADERS, json=settings(mode='disabled')).json()
+        assert value['auto_fallback_enabled'] is False and value['queue_wait_seconds'] == 30
+    assert not calls
+
+
+@pytest.mark.parametrize('changes', [
+    {'queue_wait_seconds': 0}, {'queue_wait_seconds': 3601}, {'queue_wait_seconds': 2.5},
+    {'queue_wait_seconds': True}, {'queue_wait_seconds': '30'}, {'auto_fallback_enabled': 'true'},
+])
+def test_fallback_settings_strictly_validate(tmp_path, changes):
+    app, controller, calls, _ = fixture(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(BASE + '/settings', headers=HEADERS, json=settings(**changes))
+        assert response.status_code == 422
+    assert not controller.path.exists() and not calls

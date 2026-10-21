@@ -17,6 +17,8 @@ class BridgeSettings:
     native_enabled: bool = False
     profiles: tuple[str, ...] = ("fake-image",)
     native_profiles: tuple[str, ...] = ("fake-image",)
+    auto_fallback_enabled: bool = False
+    queue_wait_seconds: int = 30
     poll_seconds: float = 2.0
     batch_size: int = 2
     max_jobs: int = 100
@@ -61,8 +63,16 @@ class BridgeSettings:
                 or any(p not in {"fake-image", "codex-image", "midjourney-manual"} for p in native_profiles)
                 or (native_enabled and any(p not in profiles for p in native_profiles))):
             error = "invalid_native_profiles"
+        try:
+            queue_wait = int(os.getenv("ALCHEMY_RENDER_BRIDGE_QUEUE_WAIT_SECONDS", "30"))
+            if not 1 <= queue_wait <= 3600:
+                raise ValueError()
+        except ValueError:
+            queue_wait, error = 30, "invalid_queue_wait_seconds"
         return cls(mode=mode, base_url=base, token=token, workspace=workspace,
                    storage=Path(os.getenv("ALCHEMY_RENDER_BRIDGE_STORAGE", ".render_bridge_preview")),
                    allow_local_preview=os.getenv("ALCHEMY_RENDER_BRIDGE_LOCAL_PREVIEW") == "true",
                    native_enabled=native_enabled,
+                   auto_fallback_enabled=os.getenv("ALCHEMY_RENDER_BRIDGE_AUTO_FALLBACK_ENABLED") == "true",
+                   queue_wait_seconds=queue_wait,
                    profiles=profiles, native_profiles=native_profiles, config_error=error)

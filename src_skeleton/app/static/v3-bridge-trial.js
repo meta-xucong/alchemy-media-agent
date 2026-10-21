@@ -9,6 +9,7 @@
     canceled: '已取消', rejected: '图片未通过登记检查', failed: '本次未完成', expired: '任务已过期',
     blocked_scope: '项目权限或连接已变化', blocked_revision: '项目已变化，请重新确认',
     remote_unavailable: '连接暂不可用，后台会继续核对同一任务', protocol_error: '返回内容不符合要求',
+    routing_wait: '正在等待可用的制作方式', creating_unknown: '提交结果待核对，请勿重复新建',
     action_required: '需要在本机处理' };
   const reviews = { finalizing: '处理中', blocked: '待处理', generated: '已完成审核流程', failed: '未完成',
     selected: '已登记', ready: '已登记', passed: '通过', rejected: '未通过' };
@@ -53,6 +54,10 @@
     $('settings').disabled = !ready || sending;
     $('start').textContent = sending ? '正在提交…' : '开始试用';
     const profile = dialog.querySelector('[name="bridge-profile"]:checked')?.value;
+    const cloud = context?.autoFallback && dialog.querySelector('[name="bridge-routing"]:checked')?.value === 'prefer_bridge';
+    $('cloud-consent-row').hidden = !cloud;
+    $('cloud-consent').required = Boolean(cloud);
+    if (!cloud) $('cloud-consent').checked = false;
     $('profile-note').textContent = profile === 'fake-image' ? '只验证流程，测试图不会按文字或参考图内容制作。'
       : profile === 'midjourney-manual' ? '需要在执行端人工制作并交回原图，不会自动出图。'
       : profile === 'codex-image' ? '由已配置的工具制作；需要本机确认时，会在记录中提示。' : '';
@@ -71,6 +76,11 @@
       <form data-bridge="form"><fieldset data-bridge="settings" disabled>
         <label class="bridge-field">想做什么图<textarea data-bridge="prompt" rows="3" maxlength="16000" required></textarea></label>
         <fieldset class="bridge-choices"><legend>怎么制作</legend><div data-bridge="profiles"></div><p data-bridge="profile-note" class="bridge-hint"></p></fieldset>
+        <fieldset class="bridge-choices" data-bridge="routing" hidden><legend>本地忙碌或不可用时</legend><div>
+          <label><input type="radio" name="bridge-routing" value="bridge_only" checked>只用所选工具</label>
+          <label><input type="radio" name="bridge-routing" value="prefer_bridge">本地优先，必要时云端</label>
+        </div><p class="bridge-hint">本地恢复后，新任务优先本地；已经在云端制作的任务继续完成。云端效果可能不同，仍仅供审核。</p></fieldset>
+        <label class="bridge-ack" data-bridge="cloud-consent-row" hidden><input type="checkbox" data-bridge="cloud-consent">我同意本次必要时使用已配置的 Sub2API 云端，可能产生费用，并向该云端发送本次文字和所选参考图。仍须符合原账号权限、预算和素材外发限制，不是免费生图。</label>
         <fieldset class="bridge-choices"><legend>图片形状（每次一张）</legend><div>
           <label><input type="radio" name="bridge-size" value="1024x1024" checked>方图</label>
           <label><input type="radio" name="bridge-size" value="1024x768">横图</label>
@@ -92,6 +102,7 @@
     dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
     $('form').addEventListener('submit', submit);
     $('profiles').addEventListener('change', update);
+    $('routing').addEventListener('change', update);
     $('refresh').onclick = () => initialize(epoch);
     // Record explicit order without inferring reference selection from the host.
     $('references').addEventListener('change', event => {
@@ -110,6 +121,12 @@
     try {
       const status = await request(`${api}/status`);
       if (!current(id)) return;
+      context.autoFallback = status.auto_fallback_enabled === true;
+      $('routing').hidden = !context.autoFallback;
+      if (!context.autoFallback) {
+        dialog.querySelector('[name="bridge-routing"][value="bridge_only"]').checked = true;
+        $('cloud-consent').checked = false;
+      }
       const previous = dialog.querySelector('[name="bridge-profile"]:checked')?.value;
       $('profiles').replaceChildren();
       for (const [profile, label] of Object.entries(profiles)) {
@@ -186,8 +203,17 @@
       for (const task of value.tasks || []) {
         if (task.project_id !== context.projectId) continue;
         const box = node('article', '', 'bridge-task');
-        box.append(node('strong', task.review_pending ? states.review_pending : (states[task.state] || '正在核对状态')));
-        box.append(node('p', `${profiles[task.profile_id] || '桥接试用'} · ${task.size || ''} · ${task.test_fixture ? '合成测试图' : '真实工具尚未验收'}`, 'bridge-hint'));
+        const cloudLabels = { pending: '正在准备云端制作', possible_execution: '云端正在处理，请勿重复提交',
+          cloud_unknown: '云端结果待核对，请勿重复新建', blocked: '云端暂不可用，请检查账号权限、预算或素材要求' };
+        const cloudLabel = task.selected_route === 'cloud' ? cloudLabels[task.cloud_execution_status] : null;
+        box.append(node('strong', task.review_pending ? states.review_pending : (cloudLabel || states[task.state] || '正在核对状态')));
+        if (task.selected_route === 'cloud') {
+          const reason = task.routing_reason === 'queue_wait_exceeded' ? '本地等待过久，已临时使用云端。'
+            : task.routing_reason === 'local_unavailable' ? '本地暂不可用，已临时使用云端。' : '本次已选择云端。';
+          box.append(node('p', reason + '本地恢复不会重新生成。云端可能收费，结果仍仅供审核。', 'bridge-hint'));
+        }
+        else if (task.routing_strategy === 'prefer_bridge' && task.selected_route === 'bridge') box.append(node('p', '本次使用本地工具。', 'bridge-hint'));
+        box.append(node('p', `${task.selected_route === 'cloud' ? '云端制作' : (profiles[task.profile_id] || '桥接试用')} · ${task.size || ''} · ${task.selected_route !== 'cloud' && task.test_fixture ? '合成测试图' : '真实工具尚未验收'}`, 'bridge-hint'));
         if (task.action_required_detail?.message) box.append(node('p', task.action_required_detail.message));
         if (task.review_status) box.append(node('p', `审核：${reviews[task.review_status] || '正在核对'}。仅供审核，不代表正式交付。`));
         if (task.native_registration === 'registered') box.append(node('p', '图片已登记；不会自动选中、导出或设为后续参考。', 'bridge-hint'));
@@ -234,6 +260,10 @@
     if (!$('prompt').value.trim()) { notice('请先写一句文字需求。'); return; }
     const body = { project_id: context.projectId, user_input: $('prompt').value, uploaded_asset_ids: [...context.references],
       profile_id: profile, size, output_format: format, acknowledge_native_development: true };
+    if (context.autoFallback && dialog.querySelector('[name="bridge-routing"]:checked')?.value === 'prefer_bridge') {
+      if (!$('cloud-consent').checked) { notice('请先确认本次云端费用和素材发送说明。'); return; }
+      Object.assign(body, { routing_strategy: 'prefer_bridge', local_only: false, acknowledge_cloud_fallback: true });
+    }
     sending = true; update();
     try {
       // Save a stable, session/account-bound key before the network effect. No

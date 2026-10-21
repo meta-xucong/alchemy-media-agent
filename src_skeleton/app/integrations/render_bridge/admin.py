@@ -29,6 +29,8 @@ class AdminSettingsUpdate(BaseModel):
     base_url: str = Field(max_length=2048)
     workspace: str = Field(max_length=128)
     profiles: list[Literal["fake-image", "codex-image", "midjourney-manual"]] = Field(min_length=1, max_length=3)
+    auto_fallback_enabled: bool = False
+    queue_wait_seconds: int = Field(default=30, ge=1, le=3600)
     native_enabled: bool = False
     native_profiles: list[Literal["fake-image", "codex-image", "midjourney-manual"]] = Field(default=["fake-image"], min_length=1, max_length=3)
 
@@ -77,7 +79,8 @@ class BridgeAdminController:
             raise ValueError(error)
         return replace(self.baseline, mode=body.mode, base_url=base, workspace=workspace,
                        profiles=tuple(body.profiles), native_profiles=tuple(body.native_profiles),
-                       native_enabled=body.native_enabled, config_error=error)
+                       native_enabled=body.native_enabled, auto_fallback_enabled=body.auto_fallback_enabled,
+                       queue_wait_seconds=body.queue_wait_seconds, config_error=error)
 
     def read_saved(self):
         if not self.path.exists():
@@ -151,6 +154,7 @@ class BridgeAdminController:
                 "native_runtime_active": bool(native_runtime and native_runtime["service"]),
                 "native_runtime_error": native_runtime["error"] if native_runtime else None, "workspace": config.workspace,
                 "profiles": list(config.profiles), "native_enabled": config.native_enabled,
+                "auto_fallback_enabled": config.auto_fallback_enabled, "queue_wait_seconds": config.queue_wait_seconds,
                 "native_profiles": list(config.native_profiles), "credential_configured": bool(config.token),
                 "credential_source": "server_environment", "persisted": self.persisted,
                 "updated_at": self.updated_at, "configuration_error": self.error or config.config_error,

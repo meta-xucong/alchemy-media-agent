@@ -205,3 +205,46 @@ def test_pending_action_disables_duplicate_clicks(browser):
     expect(page.locator("#bridgeAdminState")).to_have_text("已开启，待检查")
     expect(page.get_by_role("button", name="暂停", exact=True)).to_be_enabled()
     page.close()
+
+
+def test_fallback_toggle_preserves_saved_settings_and_threshold_is_advanced(browser):
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    fixture = AdminFixture()
+    page.route('**/*', fixture.route)
+    page.goto(ORIGIN + '/admin/billing')
+    expect(page.locator('#bridgeAdminFallback')).to_be_enabled()
+    expect(page.locator('#bridgeAdminFallback')).not_to_be_checked()
+    expect(page.locator('#bridgeAdminQueueWait')).to_be_hidden()
+    expect(page.locator('.render-bridge-console')).to_contain_text('可能收费')
+    page.locator('#bridgeAdminAdvanced summary').click()
+    page.locator('#bridgeAdminQueueWait').fill('60')
+    page.get_by_role('button', name='Codex 绘图', exact=True).click()
+    page.locator('#bridgeAdminFallback').check()
+    expect(page.locator('#bridgeAdminHint')).to_contain_text('只影响明确选择此方式的新任务')
+    assert fixture.saves[-1]['auto_fallback_enabled'] is True
+    assert fixture.saves[-1]['queue_wait_seconds'] == 30
+    assert fixture.saves[-1]['profiles'] == ['fake-image']
+    assert fixture.saves[-1]['mode'] == 'disabled'
+    page.locator('#bridgeAdminQueueWait').fill('60')
+    page.get_by_role('button', name='保存高级设置', exact=True).click()
+    expect(page.locator('#bridgeAdminHint')).to_contain_text('高级设置已保存')
+    assert fixture.saves[-1]['auto_fallback_enabled'] is True
+    assert fixture.saves[-1]['queue_wait_seconds'] == 60
+    assert_independent_cards(page, 18)
+    assert not fixture.probes and not fixture.unexpected
+    page.close()
+
+
+def test_failed_fallback_save_restores_saved_opt_in(browser):
+    page = browser.new_page()
+    fixture = AdminFixture()
+    page.route('**/*', fixture.route)
+    page.goto(ORIGIN + '/admin/billing')
+    expect(page.locator('#bridgeAdminFallback')).to_be_enabled()
+    fixture.status = 403
+    page.locator('#bridgeAdminFallback').check()
+    expect(page.locator('#bridgeAdminState')).to_have_text('需要管理员权限')
+    expect(page.locator('#bridgeAdminFallback')).not_to_be_checked()
+    expect(page.locator('#bridgeAdminFallback')).to_be_disabled()
+    assert not fixture.saves
+    page.close()

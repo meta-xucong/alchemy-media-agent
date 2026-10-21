@@ -5295,6 +5295,95 @@ class V3ProductApiService:
         self.job_store.save(record)
         return self._status_from_record(record)
 
+    def _render_bridge_cloud_request(self, binding):
+        from ..generation_router.render_bridge_provider import RenderBridgeCloudContinuation
+        if not isinstance(binding, RenderBridgeCloudContinuation):
+            raise ValueError("render_bridge_cloud_binding_untrusted")
+        record = self.get_job_record(binding.frozen["target"]["job_id"])
+        if record is None or record.planning_result is None:
+            raise ValueError("render_bridge_native_target_conflict")
+        plan = copy.deepcopy(record.planning_result)
+        def one(items):
+            matches = [item for item in items if item.asset_id == binding.frozen["target"]["asset_id"]]
+            if len(matches) != 1:
+                raise ValueError("render_bridge_frozen_plan_incomplete")
+            return matches[0]
+        generation_plan = one(plan.generation_plans)
+        request = build_provider_generation_request(
+            asset_spec=one(plan.series_plan.assets), layout_plan=one(plan.layout_plans),
+            prompt_compilation=one(plan.prompt_compilations), condition_plan=one(plan.condition_plans),
+            generation_plan=generation_plan, job_id=record.job_id,
+        )
+        return record, plan, generation_plan, request
+
+    def admit_render_bridge_cloud(self, binding, *, assert_current):
+        from ..generation_router.render_bridge_provider import RenderBridgeCloudProvider
+        record, _plan, _generation_plan, request = self._render_bridge_cloud_request(binding)
+        assert_current()
+        if type(self.balance_adapter) is not V3BalanceAdapter:
+            raise ValueError("render_bridge_billing_adapter_unverified")
+        if not self.balance_adapter.has_available_credits(record.balance_estimate.get("credits_required", 0)):
+            raise ValueError("render_bridge_cloud_insufficient_credits")
+        if record.scenario_resolution is not None and not record.scenario_resolution.can_create_jobs:
+            raise ValueError("render_bridge_cloud_scenario_blocked")
+        self._validate_current_job_capability_plan(record)
+        # Builds the actual configured request and checks exact frozen options;
+        # this does not call the provider or perform a paid capability probe.
+        RenderBridgeCloudProvider(output_store=self.output_store, binding=binding,
+            assert_current=assert_current)._build_app_request(request)
+        return {"status": "ready", "upstream_may_charge": True, "formal_delivery": False}
+
+    def continue_render_bridge_cloud(self, binding, *, assert_current, execute=False, read_only=False):
+        from types import SimpleNamespace
+        from ..schemas import CandidateResult
+        from ..generation_router.render_bridge_provider import RenderBridgeCloudProvider
+        record, plan, generation_plan, request = self._render_bridge_cloud_request(binding)
+        assert_current()
+        output = self.output_store.get_output(binding.output_id)
+        if output is None and execute:
+            self.admit_render_bridge_cloud(binding, assert_current=assert_current)
+            if record.generation_result is not None:
+                raise ValueError("render_bridge_native_target_conflict")
+            RenderBridgeCloudProvider(output_store=self.output_store, binding=binding,
+                assert_current=assert_current).generate(request)
+            output = self.output_store.get_output(binding.output_id)
+        if output is None:
+            return {"status": "cloud_unknown", "reason_code": "native_cloud_checkpoint_missing", "retry_safe": False}
+        if (output.job_id != record.job_id or output.asset_id != binding.frozen["target"]["asset_id"]
+            or output.metadata.get("provider_raw_summary", {}).get("render_bridge_cloud_continuation") != binding.safe_metadata()):
+            raise ValueError("render_bridge_cloud_checkpoint_conflict")
+        if not Path(output.file_path).is_file():
+            raise ValueError("render_bridge_cloud_checkpoint_missing")
+        if read_only and record.generation_result is None:
+            return {"status": "cloud_unknown", "reason_code": "native_cloud_projection_pending", "retry_safe": False}
+        if record.generation_result is None:
+            candidate = CandidateResult(
+                candidate_id=output.candidate_id, asset_id=output.asset_id,
+                file_path=output.file_path, uri=output.thumbnail_url, provider=output.provider,
+                prompt_compilation_id=request.prompt_compilation.prompt_compilation_id,
+                condition_plan_id=request.condition_plan.condition_plan_id, is_mock=False,
+                metadata={**dict(output.metadata), "output_id": output.output_id},
+            )
+            response = SimpleNamespace(candidates=[candidate], provider_metadata=dict(output.metadata))
+            result = self._project_frozen_provider_candidate(record, plan, generation_plan,
+                response, candidate, output, consumer="render_bridge_cloud")
+            result.metadata = {**dict(result.metadata), "render_bridge_cloud_continuation": binding.safe_metadata()}
+            assert_current()
+            record.generation_result = result
+            record.status = ProductJobStatusValue.FINALIZING
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+        elif record.generation_result.metadata.get("render_bridge_cloud_continuation") != binding.safe_metadata():
+            raise ValueError("render_bridge_cloud_checkpoint_conflict")
+        if not read_only and self._render_bridge_review_pending(record):
+            self._resume_finalizing_generation_review(record, GenerateJobRequest(), review_only=True,
+                assert_current=assert_current)
+        record = self.get_job_record(record.job_id)
+        return {"status": "registered", "native_registration_ref": output.output_id,
+            "review_status": str(record.status), "review_pending": self._render_bridge_review_pending(record),
+            "formal_delivery": False, "development_only": True, "retry_safe": False,
+            "billing": {"mode": "v3_zero_credit_stub", "charged": False, "upstream_may_charge": True}}
+
     def lookup_render_bridge_registration(self, binding) -> dict[str, Any]:
         """Read the service-owned native checkpoint, not an integration claim."""
 
@@ -13166,6 +13255,11 @@ class V3ProductApiService:
         manual review as a successful retry.
         """
 
+        if isinstance(result.metadata.get("render_bridge_cloud_continuation"), dict):
+            return ({"final_delivery_status": "withheld_bridge_development",
+                "automatic_delivery_available": False, "manual_confirmation_required": False,
+                "reviewed_output_count": 0, "final_delivery_output_count": 0,
+                "withheld_output_count": len(result.asset_pack.assets), "delivery_gate_applies": True}, set(), set())
         bridge_registration = result.metadata.get("render_bridge_registration")
         if (
             isinstance(bridge_registration, dict)

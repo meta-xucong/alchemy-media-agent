@@ -112,6 +112,12 @@ class BridgeClient:
     async def cancel(self, task_id):
         return await self._json("POST", f"tasks/{self._key(task_id)}/cancel")
 
+    async def withdraw_before_start(self, task_id, payload):
+        return await self._json("POST", f"tasks/{self._key(task_id)}/withdraw-before-start", json=payload)
+
+    async def withdrawal(self, task_id, withdrawal_key):
+        return await self._json("GET", f"tasks/{self._key(task_id)}/withdraw-before-start/{self._key(withdrawal_key)}")
+
     async def receipt(self, receipt_id):
         return await self._json("GET", f"receipts/{self._key(receipt_id)}")
 
