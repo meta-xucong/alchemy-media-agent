@@ -1,7 +1,7 @@
-"""Bounded, explicitly selected native receipt registration for fake-image.
+"""Bounded, explicitly selected native receipt registration for development.
 
 The journal is an import deduplication/execution audit, NOT a billing ledger.
-Real renderer profiles remain unavailable until their option contract is proven.
+Configured real profiles remain unverified and ineligible for formal delivery.
 """
 
 from __future__ import annotations
@@ -21,7 +21,8 @@ from uuid import uuid4
 from PIL import Image
 
 from ..generation_router.render_bridge_provider import (
-    RENDER_BRIDGE_SIZES, RenderBridgeRegistration, render_bridge_inputs,
+    RENDER_BRIDGE_PROFILES, RENDER_BRIDGE_SIZES, RenderBridgeRegistration,
+    render_bridge_inputs, render_bridge_options,
 )
 from .render_bridge_facade import BridgeNativeFacadeError, NativeFreezeTarget, RenderBridgeNativeFacade, _digest
 
@@ -35,23 +36,35 @@ class NativeRenderBridgeGateway:
         journal_root: Path,
         enabled: bool = False,
         project_service: Any | None = None,
+        allowed_profiles: tuple[str, ...] = ("fake-image",),
     ) -> None:
+        if not isinstance(allowed_profiles, tuple) or any(profile not in RENDER_BRIDGE_PROFILES for profile in allowed_profiles):
+            raise ValueError("render_bridge_allowed_profiles_invalid")
         self.facade = facade
         self.service = service
         self.journal_root = Path(journal_root)
         self.enabled = enabled
         self.project_service = project_service
+        self.allowed_profiles = allowed_profiles
 
     def _enabled(self) -> None:
         if not self.enabled:
             raise BridgeNativeFacadeError("render_bridge_native_disabled", 404)
 
+    def _options(self, execution_profile_id, output_format="png", *, uploaded_asset_ids=()):
+        self._enabled()
+        try:
+            options = render_bridge_options(execution_profile_id, output_format, uploaded_asset_ids=uploaded_asset_ids)
+        except ValueError as exc:
+            raise BridgeNativeFacadeError(str(exc), 400) from None
+        if execution_profile_id not in self.allowed_profiles:
+            raise BridgeNativeFacadeError("render_bridge_profile_not_allowed")
+        return options
+
     def prepare(
         self, actor_user_id: int, target: NativeFreezeTarget, *, execution_profile_id: str = "fake-image"
     ) -> dict[str, Any]:
-        self._enabled()
-        if execution_profile_id != "fake-image":
-            raise BridgeNativeFacadeError("render_bridge_profile_unverified")
+        self._options(execution_profile_id)
         record, _project, _revision = self.facade._target(actor_user_id, target)
         marker = dict(record.request.metadata or {}).get("render_bridge_native_plan")
         if (
@@ -61,7 +74,12 @@ class NativeRenderBridgeGateway:
             or marker.get("project_id") != target.project_id
         ):
             raise BridgeNativeFacadeError("render_bridge_native_plan_required")
+        if marker.get("execution_profile_id", "fake-image") != execution_profile_id:
+            raise BridgeNativeFacadeError("render_bridge_profile_binding_mismatch")
         uploaded_asset_ids, size = self._inputs(marker.get("uploaded_asset_ids"), marker.get("size", "1024x1024"))
+        _, output_format = self._options(
+            execution_profile_id, marker.get("output_format", "png"), uploaded_asset_ids=uploaded_asset_ids,
+        )
         if list(record.request.uploaded_asset_ids) != uploaded_asset_ids:
             raise BridgeNativeFacadeError("render_bridge_native_reference_binding_mismatch")
         admitted = self._admit_references(actor_user_id, target.project_id, uploaded_asset_ids)
@@ -73,7 +91,7 @@ class NativeRenderBridgeGateway:
             or options != {
                 "size": size,
                 "quality": "auto",
-                "output_format": "png",
+                "output_format": output_format,
                 "input_fidelity": None,
                 "background": None,
                 "moderation": None,
@@ -85,9 +103,11 @@ class NativeRenderBridgeGateway:
             **frozen,
             "native_registration_connected": True,
             "submission_ready": True,
-            "execution_profile_id": "fake-image",
+            "execution_profile_id": execution_profile_id,
             "execution_profile_revision": "1",
-            "test_fixture": True,
+            "test_fixture": execution_profile_id == "fake-image",
+            **({"development_only": True, "real_tool_verified": False}
+               if execution_profile_id != "fake-image" else {}),
             "blockers": [],
         }
 
@@ -128,8 +148,9 @@ class NativeRenderBridgeGateway:
 
     def read_reference(
         self, actor_user_id: int, target: NativeFreezeTarget, *, frozen_request_id: str, reference_id: str,
+        execution_profile_id: str = "fake-image",
     ) -> dict[str, Any]:
-        frozen = self.prepare(actor_user_id, target)
+        frozen = self.prepare(actor_user_id, target, execution_profile_id=execution_profile_id)
         if frozen["frozen_request_id"] != frozen_request_id:
             raise BridgeNativeFacadeError("render_bridge_frozen_request_changed")
         content, mime_type = self.facade.read_reference(
@@ -162,10 +183,16 @@ class NativeRenderBridgeGateway:
 
     def _lookup_plan(self, actor_user_id: int, project_id: str, journal: dict[str, Any]) -> dict[str, Any]:
         project = self._plan_project(actor_user_id, project_id)
+        self._options(
+            journal.get("execution_profile_id", "fake-image"), journal.get("output_format", "png"),
+            uploaded_asset_ids=journal.get("uploaded_asset_ids", []),
+        )
         status = self.service.lookup_render_bridge_plan(
             project_id=project_id, owner_user_id=actor_user_id,
             user_input=journal["user_input"], plan_key=journal["plan_key"],
             uploaded_asset_ids=journal.get("uploaded_asset_ids", []), size=journal.get("size", "1024x1024"),
+            execution_profile_id=journal.get("execution_profile_id", "fake-image"),
+            output_format=journal.get("output_format", "png"),
         )
         if status is None:
             return {"status": "plan_unknown", "plan_key": journal["plan_key"], "retry_safe": False}
@@ -181,6 +208,8 @@ class NativeRenderBridgeGateway:
                 project_id=project_id, owner_user_id=actor_user_id,
                 user_input=journal["user_input"], plan_key=journal["plan_key"],
                 uploaded_asset_ids=journal.get("uploaded_asset_ids", []), size=journal.get("size", "1024x1024"),
+                execution_profile_id=journal.get("execution_profile_id", "fake-image"),
+                output_format=journal.get("output_format", "png"),
             )
         plan = record.planning_result
         if plan is None or len(plan.series_plan.assets) != 1 or record.request.metadata.get("cancel_requested"):
@@ -194,11 +223,13 @@ class NativeRenderBridgeGateway:
     def create_plan(
         self, actor_user_id: int, project_id: str, user_input: str, plan_key: str,
         *, uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
+        execution_profile_id: str = "fake-image", output_format: str = "png",
     ) -> dict[str, Any]:
         project = self._plan_project(actor_user_id, project_id)
         if not isinstance(user_input, str) or not user_input.strip() or len(user_input) > 16_000:
             raise BridgeNativeFacadeError("render_bridge_plan_input_invalid", 400)
         uploaded_asset_ids, size = self._inputs(uploaded_asset_ids, size)
+        self._options(execution_profile_id, output_format, uploaded_asset_ids=uploaded_asset_ids)
         path = self._plan_path(actor_user_id, project_id, plan_key)
         with self._lock(path):
             journal = self._read(path)
@@ -207,6 +238,8 @@ class NativeRenderBridgeGateway:
                     journal["user_input"] != user_input
                     or journal.get("uploaded_asset_ids", []) != uploaded_asset_ids
                     or journal.get("size", "1024x1024") != size
+                    or journal.get("execution_profile_id", "fake-image") != execution_profile_id
+                    or journal.get("output_format", "png") != output_format
                 ):
                     raise BridgeNativeFacadeError("render_bridge_plan_key_conflict")
                 # Missing native outcome after a prior attempt is never an
@@ -217,12 +250,15 @@ class NativeRenderBridgeGateway:
                 "status": "plan_intent", "plan_key": plan_key, "user_input": user_input,
                 "project_revision": project.updated_at, "actor_user_id": actor_user_id, "project_id": project_id,
                 "uploaded_asset_ids": uploaded_asset_ids, "size": size,
+                **({"execution_profile_id": execution_profile_id} if execution_profile_id != "fake-image" else {}),
+                **({"output_format": output_format} if output_format != "png" else {}),
             }
             self._write(path, journal)
             try:
                 self.project_service.create_render_bridge_plan(
                     project_id=project_id, owner_user_id=actor_user_id, user_input=user_input, plan_key=plan_key,
                     uploaded_asset_ids=uploaded_asset_ids, size=size,
+                    execution_profile_id=execution_profile_id, output_format=output_format,
                 )
             except Exception:
                 self._write(path, {**journal, "status": "plan_unknown"})
@@ -322,10 +358,13 @@ class NativeRenderBridgeGateway:
                 raise BridgeNativeFacadeError("render_bridge_target_not_eligible")
 
     @staticmethod
-    def _validate_artifact(artifact_bytes: bytes, original_sha256: str, *, size: str = "1024x1024") -> None:
+    def _validate_artifact(
+        artifact_bytes: bytes, original_sha256: str, *, size: str = "1024x1024",
+        execution_profile_id: str = "fake-image", output_format: str = "png",
+    ) -> None:
         if (
             not isinstance(artifact_bytes, bytes)
-            or not 0 < len(artifact_bytes) <= 1_048_576
+            or not 0 < len(artifact_bytes) <= (1_048_576 if execution_profile_id == "fake-image" else 16_777_216)
             or not isinstance(original_sha256, str)
             or not re.fullmatch(r"[0-9a-f]{64}", original_sha256)
             or hashlib.sha256(artifact_bytes).hexdigest() != original_sha256
@@ -333,9 +372,16 @@ class NativeRenderBridgeGateway:
             raise BridgeNativeFacadeError("render_bridge_artifact_hash_mismatch")
         try:
             with Image.open(BytesIO(artifact_bytes)) as image:
-                if image.format != "PNG" or image.size != tuple(map(int, size.split("x"))) or getattr(image, "n_frames", 1) != 1:
+                if (
+                    image.format != output_format.upper()
+                    or size not in RENDER_BRIDGE_SIZES
+                    or image.size != tuple(map(int, size.split("x")))
+                    or getattr(image, "n_frames", 1) != 1
+                ):
                     raise ValueError("unsupported image")
                 image.verify()
+            with Image.open(BytesIO(artifact_bytes)) as image:
+                image.load()
         except Exception:
             raise BridgeNativeFacadeError("render_bridge_artifact_invalid") from None
 
@@ -371,8 +417,7 @@ class NativeRenderBridgeGateway:
     ) -> dict[str, Any]:
         self._enabled()
         self.facade._target(actor_user_id, target, require_eligible=False)
-        if execution_profile_id != "fake-image":
-            raise BridgeNativeFacadeError("render_bridge_profile_unverified")
+        self._options(execution_profile_id)
         if any(not isinstance(value, str) or not value.strip() or len(value) > 256 for value in (import_key, receipt_id)):
             raise BridgeNativeFacadeError("render_bridge_receipt_identity_invalid", 400)
         path = self._journal_path(actor_user_id, target)
@@ -382,7 +427,10 @@ class NativeRenderBridgeGateway:
                 frozen = self.prepare(actor_user_id, target, execution_profile_id=execution_profile_id)
                 if frozen["frozen_request_id"] != frozen_request_id:
                     raise BridgeNativeFacadeError("render_bridge_frozen_request_changed")
-                self._validate_artifact(artifact_bytes, original_sha256, size=frozen["image_options"]["size"])
+                self._validate_artifact(
+                    artifact_bytes, original_sha256, size=frozen["image_options"]["size"],
+                    execution_profile_id=execution_profile_id, output_format=frozen["image_options"]["output_format"],
+                )
                 binding = RenderBridgeRegistration(
                     registration_key=_digest({"actor": actor_user_id, **asdict(target), "import_key": import_key}),
                     **asdict(target),
@@ -395,12 +443,19 @@ class NativeRenderBridgeGateway:
                     uploaded_asset_ids=tuple(item["asset_id"] for item in frozen["references"]),
                     reference_sha256=tuple(item["sha256"] for item in frozen["references"]),
                     size=frozen["image_options"]["size"],
+                    output_format=frozen["image_options"]["output_format"],
                 )
-                journal = {"status": "intent", "import_key": import_key, "binding": asdict(binding)}
+                journal_binding = asdict(binding)
+                if binding.output_format == "png":
+                    journal_binding.pop("output_format")
+                journal = {"status": "intent", "import_key": import_key, "binding": journal_binding}
                 self._write(path, journal)
             else:
                 binding = RenderBridgeRegistration(**journal["binding"])
-                self._validate_artifact(artifact_bytes, original_sha256, size=binding.size)
+                self._validate_artifact(
+                    artifact_bytes, original_sha256, size=binding.size,
+                    execution_profile_id=binding.execution_profile_id, output_format=binding.output_format,
+                )
                 if (
                     journal["import_key"] != import_key
                     or binding.frozen_request_id != frozen_request_id
@@ -454,6 +509,7 @@ class NativeRenderBridgeGateway:
             if journal["status"] == "rejected":
                 return dict(journal["outcome"])
             binding = RenderBridgeRegistration(**journal["binding"])
+            self._options(binding.execution_profile_id, binding.output_format, uploaded_asset_ids=binding.uploaded_asset_ids)
             outcome = self.service.lookup_render_bridge_registration(binding)
             if outcome["status"] == "registered":
                 return self._registered(path, journal, outcome)

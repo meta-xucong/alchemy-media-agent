@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .client import BridgeError
+from .options import image_options_projection
 
 
 ProfileId = Literal["fake-image", "codex-image", "midjourney-manual"]
@@ -94,6 +95,7 @@ def capabilities_projection(value):
             except ValidationError:
                 # Preserve usable v1 server admission data, not inferred support.
                 state = "unsupported_or_invalid"
+        image_contract = image_options_projection(profile.get("image_options_contract"))
         mode = profile.get("execution_mode")
         validation = profile.get("validation")
         result.append({
@@ -102,6 +104,9 @@ def capabilities_projection(value):
             "validation": validation if isinstance(validation, str) and validation in {"isolated_fake_only", "local_validation_pending"} else "unknown",
             "production_verified": False, "parameter_contract": contract,
             "parameter_contract_state": state,
+            "image_options_contract": image_contract,
+            "image_options_contract_state": ("available" if image_contract else
+                "unsupported_or_invalid" if "image_options_contract" in profile else "unavailable"),
         })
     return result
 
@@ -112,7 +117,8 @@ def install_diagnostics_routes(app, *, config, actor, require_write, get_service
     router = APIRouter()
     base = {
         "schema_version": "1", "real_generation_verified": False,
-        "native_real_profile_support": False,
+        "native_real_profile_support": True,
+        "native_real_profile_scope": "development_review_only",
         "local_cli": {"status": "not_checked", "reason": "browser_cannot_probe_remote_agent"},
     }
 
@@ -121,7 +127,7 @@ def install_diagnostics_routes(app, *, config, actor, require_write, get_service
         await actor(request)
         return JSONResponse({**base, "source": "alchemy_server_configuration", "mode": config.mode,
             "configured_profiles": list(config.profiles), "native_enabled": config.native_enabled,
-            "native_profiles": ["fake-image"], "formal_delivery": False,
+            "native_profiles": list(config.native_profiles), "formal_delivery": False,
             "configuration_error": config.config_error}, headers=HEADERS)
 
     @router.get(PREFIX + "/diagnostics/server")

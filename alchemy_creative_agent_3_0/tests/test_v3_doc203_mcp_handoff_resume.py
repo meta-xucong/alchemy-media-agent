@@ -3221,6 +3221,7 @@ def test_doc263_submitted_consumer_projects_persisted_output_record_before_share
                     SimpleNamespace(
                         candidate_id="candidate_doc263_output_projection",
                         provider="mcp_materialization",
+                        is_mock=False,
                         file_path=None,
                         uri=None,
                         prompt_compilation_id="prompt_doc263_output_projection",
@@ -3288,6 +3289,7 @@ def test_doc263_submitted_consumer_projects_persisted_output_record_before_share
     assert generated.file_path == persisted.file_path
     assert generated.uri == persisted.thumbnail_url
     assert generated.metadata["output_id"] == persisted.output_id
+    assert generated.metadata["selected_candidate_is_mock"] is False
     assert generated.metadata["candidate_metadata"]["output_id"] == persisted.output_id
     assert generated.metadata["candidate_metadata"]["file_path"] == persisted.file_path
     assert generated.metadata["candidate_metadata"]["uri"] == persisted.thumbnail_url
@@ -4195,6 +4197,7 @@ def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_proj
                         file_path=output.file_path,
                         uri=output.download_url,
                         provider="codex_builtin_imagegen",
+                        is_mock=False,
                         prompt_compilation_id=request.prompt_compilation.prompt_compilation_id,
                         metadata={
                             "output_id": output.output_id,
@@ -4247,6 +4250,7 @@ def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_proj
     assert updated.request.metadata["mcp_operation_id"] == operation_id
     assert updated.generation_result is not None
     assert "post_generation_review_package" in updated.generation_result.metadata
+    assert updated.generation_result.asset_pack.assets[0].metadata["selected_candidate_is_mock"] is False
     resumed_handoff = handoff_store.get(pending["handoff_id"])
     assert resumed_handoff is not None
     assert resumed_handoff["status"] == "job_checkpointed"
@@ -6825,6 +6829,7 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
                     SimpleNamespace(
                         candidate_id="candidate_doc263_reference_assisted_rear3",
                         provider="mcp_materialization",
+                        is_mock=False,
                         file_path=str(artifact_path),
                         uri=str(artifact_path),
                         prompt_compilation_id="prompt_doc263_reference_assisted_rear3",
@@ -6880,3 +6885,4 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
     updated = job_store.get(job_id)
     assert updated is not None
     assert updated.generation_result is not None
+    assert updated.generation_result.asset_pack.assets[0].metadata["selected_candidate_is_mock"] is False

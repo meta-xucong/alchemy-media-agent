@@ -10,7 +10,7 @@
 <body><main class="diagnostics">
   <nav aria-label="测试模块导航"><a href="/render-bridge-preview">← 独立传输预览</a><a id="native-link" href="/render-bridge-native-test" hidden>原生开发测试</a><span>可选模块 · READ ONLY</span></nav>
   <header><p class="eyebrow">ALCHEMY / LOCAL READINESS</p><h1>本地就绪诊断</h1><p>分别查看服务端配置、Bridge HTTP 能力和你导入的本地检查记录。</p></header>
-  <aside><strong>诊断不是登录、生成或交付验收</strong><p>此页面不创建任务、不启用配置、不授权执行配置，也不确认接受结果。Bridge HTTP 可达不代表另一台机器上的 CLI 可用；本地 CLI、登录与真实生成需要在对应机器上另行验证。原生开发入口仍仅支持 fake-image。</p></aside>
+  <aside><strong>诊断不是登录、生成或交付验收</strong><p>此页面不创建任务、不启用配置、不授权执行配置，也不确认接受结果。Bridge HTTP 可达不代表另一台机器上的 CLI 可用；本地 CLI、登录与真实生成需要在对应机器上另行验证。原生开发入口默认仅启用 fake-image；真实配置代码支持受限开发接入，须管理员显式启用并通过能力协商，不代表真实工具已验收。</p></aside>
   <div id="notice" role="status">正在读取 Alchemy 服务端配置，不连接 Bridge…</div>
   <section class="layout">
     <section aria-labelledby="configuration-heading"><h2 id="configuration-heading">1. Alchemy 服务端配置</h2><p class="muted">证据来源：Alchemy 配置。不是本地 CLI 探测。</p><div id="configuration" aria-live="polite"></div></section>

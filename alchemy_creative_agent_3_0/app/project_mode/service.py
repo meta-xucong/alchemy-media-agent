@@ -4790,11 +4790,13 @@ class V3ProjectModeService:
     def create_render_bridge_plan(
         self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
         uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
+        execution_profile_id: str = "fake-image", output_format: str = "png",
     ) -> ProductJobStatus:
         """Explicit Standard plan-only entry; no implicit reference selection."""
-        from ..generation_router.render_bridge_provider import render_bridge_inputs
+        from ..generation_router.render_bridge_provider import render_bridge_inputs, render_bridge_options
 
         uploaded_asset_ids, size = render_bridge_inputs(uploaded_asset_ids, size)
+        render_bridge_options(execution_profile_id, output_format, uploaded_asset_ids=uploaded_asset_ids)
         project = self._render_bridge_project(project_id, owner_user_id)
         self.render_bridge_references(
             project_id=project_id, owner_user_id=owner_user_id, uploaded_asset_ids=uploaded_asset_ids,
@@ -4804,6 +4806,7 @@ class V3ProjectModeService:
         status = self.product_service.create_render_bridge_plan(
             project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
             uploaded_asset_ids=uploaded_asset_ids, size=size,
+            execution_profile_id=execution_profile_id, output_format=output_format,
         )
         # A slow Brain call cannot overwrite a concurrently archived/edited
         # project. Its durable orphan plan remains queryable, never generated.
@@ -4819,10 +4822,12 @@ class V3ProjectModeService:
             self._append_timeline(
                 project_id,
                 TimelineItemType.JOB_CREATED,
-                "Render Bridge test plan",
-                "Explicit single-image plan; native fixture registration only.",
+                "Render Bridge test plan" if execution_profile_id == "fake-image" else "Render Bridge development plan",
+                "Explicit single-image plan; native fixture registration only." if execution_profile_id == "fake-image"
+                else "Explicit single-image development plan; real-tool acceptance unverified.",
                 job_id=status.job_id,
-                metadata={"render_bridge_test_fixture": True},
+                metadata={"render_bridge_test_fixture": True} if execution_profile_id == "fake-image"
+                else {"render_bridge_development_only": True, "real_tool_verified": False},
             )
         return status
 

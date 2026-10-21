@@ -1630,8 +1630,9 @@ class V3ProductApiService:
     def _render_bridge_plan_request(
         self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
         uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
+        execution_profile_id: str = "fake-image", output_format: str = "png",
     ):
-        from ..generation_router.render_bridge_provider import RenderBridgePlanIdentity, render_bridge_inputs
+        from ..generation_router.render_bridge_provider import RenderBridgePlanIdentity, render_bridge_inputs, render_bridge_options
         from .contracts import ImageOutputOptions
 
         if type(owner_user_id) is not int or owner_user_id <= 0:
@@ -1641,6 +1642,7 @@ class V3ProductApiService:
         if len(plan_key) > 128:
             raise ValueError("render_bridge_plan_invalid")
         uploaded_asset_ids, size = render_bridge_inputs(uploaded_asset_ids, size)
+        render_bridge_options(execution_profile_id, output_format, uploaded_asset_ids=uploaded_asset_ids)
         for asset_id in uploaded_asset_ids:
             upload = self.get_uploaded_asset(asset_id)
             if upload is None or upload.veyra_user_id != owner_user_id or str(upload.status) != "ready":
@@ -1651,12 +1653,13 @@ class V3ProductApiService:
             plan_key=plan_key,
             user_input_sha256=hashlib.sha256(user_input.encode("utf-8")).hexdigest(),
             uploaded_asset_ids=tuple(uploaded_asset_ids), size=size,
+            execution_profile_id=execution_profile_id, output_format=output_format,
         )
         request = CreateCreativeJobRequest(
             user_input=user_input,
             uploaded_asset_ids=uploaded_asset_ids,
             scenario_selection={"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
-            image_options=ImageOutputOptions(size=size, quality="auto", output_format="png"),
+            image_options=ImageOutputOptions(size=size, quality="auto", output_format=output_format),
             metadata={
                 "project_id": project_id,
                 "veyra_user_id": owner_user_id,
@@ -1671,10 +1674,12 @@ class V3ProductApiService:
     def lookup_render_bridge_plan(
         self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
         uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
+        execution_profile_id: str = "fake-image", output_format: str = "png",
     ) -> ProductJobStatus | None:
         request, identity = self._render_bridge_plan_request(
             project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
             uploaded_asset_ids=uploaded_asset_ids, size=size,
+            execution_profile_id=execution_profile_id, output_format=output_format,
         )
         request.metadata["v3_job_instance_id"] = identity.instance_id
         job_id = self._planned_job_id_for_request(request)
@@ -1688,18 +1693,21 @@ class V3ProductApiService:
     def create_render_bridge_plan(
         self, *, project_id: str, owner_user_id: int, user_input: str, plan_key: str,
         uploaded_asset_ids: list[str] | None = None, size: str = "1024x1024",
+        execution_profile_id: str = "fake-image", output_format: str = "png",
     ) -> ProductJobStatus:
         """Explicit plan-only entry. No generator or ordinary Generate call."""
 
         existing = self.lookup_render_bridge_plan(
             project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
             uploaded_asset_ids=uploaded_asset_ids, size=size,
+            execution_profile_id=execution_profile_id, output_format=output_format,
         )
         if existing is not None:
             return existing
         request, identity = self._render_bridge_plan_request(
             project_id=project_id, owner_user_id=owner_user_id, user_input=user_input, plan_key=plan_key,
             uploaded_asset_ids=uploaded_asset_ids, size=size,
+            execution_profile_id=execution_profile_id, output_format=output_format,
         )
         return self._create_creative_job(request, _render_bridge_plan_identity=identity)
 
@@ -1863,6 +1871,7 @@ class V3ProductApiService:
                 != hashlib.sha256(create_request.user_input.encode("utf-8")).hexdigest()
                 or list(_render_bridge_plan_identity.uploaded_asset_ids) != create_request.uploaded_asset_ids
                 or _render_bridge_plan_identity.size != create_request.image_options.size
+                or _render_bridge_plan_identity.output_format != create_request.image_options.output_format
             ):
                 raise ValueError("render_bridge_plan_identity_untrusted")
         if generation_channel == "mcp" and not (
@@ -5319,9 +5328,11 @@ class V3ProductApiService:
             "original_sha256": binding.original_sha256,
             "normalized_sha256": str(output.metadata.get("content_sha256") or ""),
             "review_status": str(record.status),
-            "formal_delivery": False if binding.execution_profile_id == "fake-image" else "review_owned",
+            "formal_delivery": False,
             "billing": {"mode": "v3_zero_credit_stub", "charged": False},
             "test_fixture": binding.execution_profile_id == "fake-image",
+            **({"development_only": True, "real_tool_verified": False}
+               if binding.execution_profile_id != "fake-image" else {}),
         }
 
     def register_render_bridge_result(
@@ -5337,10 +5348,12 @@ class V3ProductApiService:
         from ..generation_router.render_bridge_provider import (
             RenderBridgeReceiptProvider,
             RenderBridgeRegistration,
+            render_bridge_options,
         )
 
-        if not isinstance(binding, RenderBridgeRegistration) or binding.execution_profile_id != "fake-image":
-            raise ValueError("render_bridge_profile_unverified")
+        if not isinstance(binding, RenderBridgeRegistration):
+            raise ValueError("render_bridge_registration_untrusted")
+        render_bridge_options(binding.execution_profile_id, binding.output_format, uploaded_asset_ids=binding.uploaded_asset_ids)
         if type(self.balance_adapter) is not V3BalanceAdapter:
             raise ValueError("render_bridge_billing_adapter_unverified")
         assert_current()
@@ -5376,7 +5389,7 @@ class V3ProductApiService:
         if len(response.candidates) != 1:
             raise ValueError("render_bridge_single_candidate_required")
         candidate = response.candidates[0]
-        candidate.is_mock = True  # This stage supports only the fake-image profile.
+        candidate.is_mock = binding.execution_profile_id == "fake-image"
         output = self.output_store.get_output(binding.output_id)
         if (
             output is None
@@ -13131,13 +13144,22 @@ class V3ProductApiService:
         bridge_registration = result.metadata.get("render_bridge_registration")
         if (
             isinstance(bridge_registration, dict)
-            and bridge_registration.get("execution_profile_id") == "fake-image"
+            and (
+                bridge_registration.get("execution_profile_id") == "fake-image"
+                or (
+                    bridge_registration.get("execution_profile_id") in {"codex-image", "midjourney-manual"}
+                    and bridge_registration.get("development_only") is True
+                )
+            )
         ):
-            # A fixture can exercise native persistence and shared review but
-            # can never become a formal selected/exported/memory asset.
+            # Bridge development registration exercises native persistence and
+            # shared review, never formal selection/export/memory promotion.
             return (
                 {
-                    "final_delivery_status": "withheld_test_fixture",
+                    "final_delivery_status": (
+                        "withheld_test_fixture" if bridge_registration.get("execution_profile_id") == "fake-image"
+                        else "withheld_bridge_development"
+                    ),
                     "automatic_delivery_available": False,
                     "manual_confirmation_required": False,
                     "reviewed_output_count": 0,

@@ -1423,12 +1423,6 @@ def test_gemini_image_provider_generates_from_inline_data(monkeypatch):
 
 def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
     captured = {}
-    original_key = settings.openai_api_key
-    original_base_url = settings.openai_base_url
-    original_model = settings.default_llm_model
-    original_provider = settings.default_llm_provider
-    original_openai_llm_model = settings.openai_llm_model
-    original_enabled = settings.llm_prompt_planning_enabled
 
     class FakeResponses:
         async def create(self, **kwargs):
@@ -1451,37 +1445,32 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
 
     class FakeClient:
         def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
             self.responses = FakeResponses()
 
-    try:
-        settings.openai_api_key = "sk-test-planner"
-        settings.openai_base_url = "https://example.test/v1"
-        settings.default_llm_provider = "openai"
-        settings.default_llm_model = "gpt-5.5-test"
-        settings.openai_llm_model = "gpt-5.5-test"
-        settings.llm_prompt_planning_enabled = True
-        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "sk-test-planner")
+    monkeypatch.setattr(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_model", "gpt-5.5-test")
+    monkeypatch.setattr(settings, "backup_llm_model", "kimi-k3")
+    monkeypatch.setattr(settings, "llm_prompt_planning_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
 
-        plan, summary = asyncio.run(
-            apply_work_intensity(
-                ImagePromptPlan(main_subject="生成 1 张精品咖啡海报", count=1),
-                original_prompt="生成 1 张精品咖啡海报",
-                work_intensity="atelier",
-                provider_preference="openai_gpt_image",
-                asset_context={
-                    "provider_input_plan": {"operation": "image_edit_with_reference_images", "reference_image_count": 1},
-                    "assets": [{"asset_id": "asset_ref", "role": "style_reference", "vision_profile": {"summary": "暖色咖啡风格参考"}}],
-                },
-            )
+    plan, summary = asyncio.run(
+        apply_work_intensity(
+            ImagePromptPlan(main_subject="生成 1 张精品咖啡海报", count=1),
+            original_prompt="生成 1 张精品咖啡海报",
+            work_intensity="atelier",
+            provider_preference="openai_gpt_image",
+            asset_context={
+                "provider_input_plan": {"operation": "image_edit_with_reference_images", "reference_image_count": 1},
+                "assets": [{"asset_id": "asset_ref", "role": "style_reference", "vision_profile": {"summary": "暖色咖啡风格参考"}}],
+            },
         )
-    finally:
-        settings.openai_api_key = original_key
-        settings.openai_base_url = original_base_url
-        settings.default_llm_model = original_model
-        settings.default_llm_provider = original_provider
-        settings.openai_llm_model = original_openai_llm_model
-        settings.llm_prompt_planning_enabled = original_enabled
+    )
 
+    assert captured["client_kwargs"]["api_key"] == "sk-test-planner"
+    assert captured["client_kwargs"]["base_url"] == "https://gateway.example.test/v1"
     assert captured["reasoning"]["effort"] == "high"
     assert captured["model"] == "gpt-5.5-test"
     planner_payload = json.loads(captured["input"][1]["content"])
@@ -1495,12 +1484,6 @@ def test_work_intensity_llm_planner_passes_reasoning_effort(monkeypatch):
 
 
 def test_work_intensity_guard_removes_unrequested_no_text_for_reference(monkeypatch):
-    original_key = settings.openai_api_key
-    original_base_url = settings.openai_base_url
-    original_provider = settings.default_llm_provider
-    original_openai_llm_model = settings.openai_llm_model
-    original_enabled = settings.llm_prompt_planning_enabled
-
     class FakeResponses:
         async def create(self, **kwargs):
             return SimpleNamespace(
@@ -1523,32 +1506,26 @@ def test_work_intensity_guard_removes_unrequested_no_text_for_reference(monkeypa
         def __init__(self, **kwargs):
             self.responses = FakeResponses()
 
-    try:
-        settings.openai_api_key = "sk-test-planner"
-        settings.openai_base_url = "https://example.test/v1"
-        settings.default_llm_provider = "openai"
-        settings.openai_llm_model = "gpt-5.5-test"
-        settings.llm_prompt_planning_enabled = True
-        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "sk-test-planner")
+    monkeypatch.setattr(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_model", "gpt-5.5-test")
+    monkeypatch.setattr(settings, "backup_llm_model", "kimi-k3")
+    monkeypatch.setattr(settings, "llm_prompt_planning_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
 
-        plan, summary = asyncio.run(
-            apply_work_intensity(
-                ImagePromptPlan(main_subject="以这张图为原型，生成一张极具商业化风格的海报", count=1),
-                original_prompt="以这张图为原型，生成一张极具商业化风格的海报",
-                work_intensity="balanced",
-                provider_preference="openai_gpt_image",
-                asset_context={
-                    "provider_input_plan": {"operation": "image_edit_with_reference_images", "reference_image_count": 1, "requires_image_reference": True},
-                    "assets": [{"role": "composition_reference", "provider_input_mode": "reference_image"}],
-                },
-            )
+    plan, summary = asyncio.run(
+        apply_work_intensity(
+            ImagePromptPlan(main_subject="以这张图为原型，生成一张极具商业化风格的海报", count=1),
+            original_prompt="以这张图为原型，生成一张极具商业化风格的海报",
+            work_intensity="balanced",
+            provider_preference="openai_gpt_image",
+            asset_context={
+                "provider_input_plan": {"operation": "image_edit_with_reference_images", "reference_image_count": 1, "requires_image_reference": True},
+                "assets": [{"role": "composition_reference", "provider_input_mode": "reference_image"}],
+            },
         )
-    finally:
-        settings.openai_api_key = original_key
-        settings.openai_base_url = original_base_url
-        settings.default_llm_provider = original_provider
-        settings.openai_llm_model = original_openai_llm_model
-        settings.llm_prompt_planning_enabled = original_enabled
+    )
 
     prompt = plan.variables["generation_prompt"]
     assert summary["planner"] == "llm"
@@ -1560,137 +1537,70 @@ def test_work_intensity_guard_removes_unrequested_no_text_for_reference(monkeypa
 
 
 def test_work_intensity_uses_backup_llm_when_primary_fails(monkeypatch):
-    captured = {}
-    original_key = settings.openai_api_key
-    original_base_url = settings.openai_base_url
-    original_model = settings.default_llm_model
-    original_provider = settings.default_llm_provider
-    original_backup_provider = settings.backup_llm_provider
-    original_backup_model = settings.backup_llm_model
-    original_openai_llm_model = settings.openai_llm_model
-    original_kimi_llm_model = settings.kimi_llm_model
-    original_deepseek_llm_api_key = settings.deepseek_llm_api_key
-    original_deepseek_llm_base_url = settings.deepseek_llm_base_url
-    original_deepseek_llm_model = settings.deepseek_llm_model
-    original_lab_doubao_vision_api_key = settings.lab_doubao_vision_api_key
-    original_lab_doubao_vision_base_url = settings.lab_doubao_vision_base_url
-    original_lab_doubao_vision_model = settings.lab_doubao_vision_model
-    original_anthropic_base_url = settings.anthropic_base_url
-    original_anthropic_api_key = settings.anthropic_api_key
-    original_anthropic_auth_token = settings.anthropic_auth_token
-    original_enabled = settings.llm_prompt_planning_enabled
+    captured = {"client_kwargs": [], "models": []}
 
-    class FailingResponses:
+    class FakeResponses:
         async def create(self, **kwargs):
-            raise RuntimeError("primary planner unavailable")
-
-    class FailingClient:
-        def __init__(self, **kwargs):
-            self.responses = FailingResponses()
-
-    class FakeHTTPResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "content": [
+            captured["models"].append(kwargs["model"])
+            if kwargs["model"] == "gpt-5.5-test":
+                # Route timeouts permit failover; a generic RuntimeError is a
+                # local defect and must not silently select another model.
+                raise TimeoutError("primary planner unavailable")
+            assert kwargs["model"] == "kimi-k3"
+            return SimpleNamespace(
+                output_text=json.dumps(
                     {
-                        "type": "text",
-                        "text": json.dumps(
-                            {
-                                "main_subject": "备用规划咖啡海报",
-                                "scene": "明亮咖啡吧台",
-                                "style": "日系清爽商业摄影",
-                                "composition": "手机竖屏主视觉",
-                                "brand_constraints": ["fresh tone"],
-                                "negative_constraints": ["avoid clutter"],
-                                "text": {"required": False, "language": "zh-CN"},
-                                "generation_prompt": "Kimi backup refined coffee poster prompt",
-                                "planning_notes": ["backup checked composition"],
-                            }
-                        ),
+                        "main_subject": "备用规划咖啡海报",
+                        "scene": "明亮咖啡吧台",
+                        "style": "日系清爽商业摄影",
+                        "composition": "手机竖屏主视觉",
+                        "brand_constraints": ["fresh tone"],
+                        "negative_constraints": ["avoid clutter"],
+                        "text": {"required": False, "language": "zh-CN"},
+                        "generation_prompt": "Kimi backup refined coffee poster prompt",
+                        "planning_notes": ["backup checked composition"],
                     }
-                ]
-            }
-
-    class FakeAsyncClient:
-        def __init__(self, **kwargs):
-            captured["client_kwargs"] = kwargs
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, url, *, headers, json):
-            captured["url"] = url
-            captured["header_names"] = sorted(headers)
-            captured["payload"] = json
-            return FakeHTTPResponse()
-
-    try:
-        settings.openai_api_key = "sk-primary-test"
-        settings.openai_base_url = "https://primary.example.test/v1"
-        settings.default_llm_provider = "openai"
-        settings.default_llm_model = "gpt-5.5-test"
-        settings.openai_llm_model = "gpt-5.5-test"
-        settings.backup_llm_provider = "anthropic"
-        settings.backup_llm_model = "kimi-for-coding-test"
-        settings.kimi_llm_model = "kimi-for-coding-test"
-        settings.deepseek_llm_api_key = None
-        settings.deepseek_llm_base_url = None
-        settings.deepseek_llm_model = "deepseek-test-disabled"
-        settings.lab_doubao_vision_api_key = None
-        settings.lab_doubao_vision_base_url = None
-        settings.lab_doubao_vision_model = "doubao-test-disabled"
-        settings.anthropic_base_url = "https://backup.example.test"
-        settings.anthropic_api_key = None
-        settings.anthropic_auth_token = "sk-backup-test"
-        settings.llm_prompt_planning_enabled = True
-        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FailingClient))
-        monkeypatch.setattr("app.services.work_intensity.httpx.AsyncClient", FakeAsyncClient)
-
-        plan, summary = asyncio.run(
-            apply_work_intensity(
-                ImagePromptPlan(main_subject="生成 1 张精品咖啡海报", count=1),
-                original_prompt="生成 1 张精品咖啡海报",
-                work_intensity="studio",
-                provider_preference="openai_gpt_image",
+                )
             )
-        )
-    finally:
-        settings.openai_api_key = original_key
-        settings.openai_base_url = original_base_url
-        settings.default_llm_model = original_model
-        settings.default_llm_provider = original_provider
-        settings.backup_llm_provider = original_backup_provider
-        settings.backup_llm_model = original_backup_model
-        settings.openai_llm_model = original_openai_llm_model
-        settings.kimi_llm_model = original_kimi_llm_model
-        settings.deepseek_llm_api_key = original_deepseek_llm_api_key
-        settings.deepseek_llm_base_url = original_deepseek_llm_base_url
-        settings.deepseek_llm_model = original_deepseek_llm_model
-        settings.lab_doubao_vision_api_key = original_lab_doubao_vision_api_key
-        settings.lab_doubao_vision_base_url = original_lab_doubao_vision_base_url
-        settings.lab_doubao_vision_model = original_lab_doubao_vision_model
-        settings.anthropic_base_url = original_anthropic_base_url
-        settings.anthropic_api_key = original_anthropic_api_key
-        settings.anthropic_auth_token = original_anthropic_auth_token
-        settings.llm_prompt_planning_enabled = original_enabled
 
-    assert captured["url"] == "https://backup.example.test/v1/messages"
-    assert captured["payload"]["model"] == "kimi-for-coding-test"
-    assert "authorization" in captured["header_names"]
-    assert "x-api-key" in captured["header_names"]
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"].append(kwargs)
+            self.responses = FakeResponses()
+
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "sk-test-planner")
+    monkeypatch.setattr(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_model", "gpt-5.5-test")
+    monkeypatch.setattr(settings, "backup_llm_model", "kimi-k3")
+    monkeypatch.setattr(settings, "llm_prompt_planning_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
+
+    plan, summary = asyncio.run(
+        apply_work_intensity(
+            ImagePromptPlan(main_subject="生成 1 张精品咖啡海报", count=1),
+            original_prompt="生成 1 张精品咖啡海报",
+            work_intensity="studio",
+            provider_preference="openai_gpt_image",
+        )
+    )
+
+    assert captured["models"] == ["gpt-5.5-test", "kimi-k3"]
+    for client_kwargs in captured["client_kwargs"]:
+        assert client_kwargs["api_key"] == "sk-test-planner"
+        assert client_kwargs["base_url"] == "https://gateway.example.test/v1"
     assert summary["planner"] == "llm"
     assert summary["llm_used"] is True
-    assert summary["llm_provider"] == "anthropic"
-    assert summary["llm_model"] == "kimi-for-coding-test"
+    assert summary["llm_provider"] == "openai"
+    assert summary["llm_model"] == "kimi-k3"
     assert summary["fallback_used"] is True
-    assert plan.variables["llm_provider"] == "anthropic"
-    assert plan.variables["llm_model"] == "kimi-for-coding-test"
+    assert [(attempt["model"], attempt["outcome"]) for attempt in summary["model_attempts"]] == [
+        ("gpt-5.5-test", "failed"),
+        ("kimi-k3", "accepted"),
+    ]
+    assert summary["model_attempts"][0]["failure_class"] == "timeout"
+    assert plan.variables["llm_provider"] == "openai"
+    assert plan.variables["llm_model"] == "kimi-k3"
     assert plan.variables["generation_prompt"] == "Kimi backup refined coffee poster prompt"
 
 

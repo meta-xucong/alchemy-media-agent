@@ -4,7 +4,7 @@
 阶段：迁移可行性与协议冻结；不是生产迁移或切换许可。
 历史 PR：#28。2026-10-11 本轮历史读取优化基线为合并后的 `5a33c05e3f54dbef786eb179973ec1407511b4e4`；Git 合并不等于生产切换。
 
-> 本文线上预检和 RAM 状态判断来自 2026-10-10 的冻结资料，不是当前 VPS 实时事实。本轮只读扩展性治理没有重新访问生产环境；当前运行版本、导出与切换完成情况须另行核验。下方原始 38 文件矩阵保持历史不变，候选补充矩阵随当前源码显式更新。
+> 本文线上预检和 RAM 状态判断来自 2026-10-10 的冻结资料，不是当前 VPS 实时事实。本轮只读扩展性治理没有重新访问生产环境；当前运行版本、导出与切换完成情况须另行核验。下方原始 38 文件矩阵和候选补充矩阵均是冻结历史证据，不是持续锁定当前主线源码的清单。
 
 首次导入标记与旧库对账准备的实现边界见[开发计划](PR28-import-marker-reconciliation-development-plan.md)；该计划与本切换协议互补，不授权修改生产数据。
 
@@ -74,13 +74,17 @@
 
 新增列也不提供混合新旧二进制的安全性：旧 queue 的 complete/fail/retry 仍可只按 `task_id` 写入，旧 standalone 启动还会按 worker label bulk-release，因此新 token/claim generation 无法约束仍在运行的旧写入者。只有先解决当前 RAM 导出/业务处置阻断，再让所有旧 API inline worker、standalone worker 及其他 queue writer 停止写入，逐进程确认替代者使用同一已验证 fencing 协议/候选代码后，才可恢复 dispatch。不得滚动共用同一 queue DB，让旧无栅栏写入者与新候选并存；此要求不是现在重启旧进程的许可。
 
-下面的候选补充矩阵在集成完成后按最终文件内容冻结；未列出的原始 38 文件沿用上表目标 blob。新增来源和修改来源均单列，`ABSENT` 表示对应提交中没有该文件。候选 blob 是按下述文本规范计算的 Git blob SHA-1，审计提交的 SHA 由 PR/提交记录绑定，不把尚未生成的自引用 commit SHA 写成既成事实。任一列明来源再次变更，都需更新补充矩阵并重跑源保真检查和相关回归；本轮文档修正不是生产切换验收。
+下面的候选补充矩阵在集成完成后按最终文件内容冻结；未列出的原始 38 文件沿用上表目标 blob。新增来源和修改来源均单列，`ABSENT` 表示对应提交中没有该文件。候选 blob 是按下述文本规范计算的 Git blob SHA-1，现绑定下方明确的历史审计提交。后续主线开发不改写这份历史矩阵；若要把新版本用于迁移验收，必须另建绑定新候选 revision 的清单并重跑源保真检查和相关回归，不能将旧快照当作新版本的迁移证明。本轮文档修正不是生产切换验收。
 
-源路径均相对于仓库根；V1 前缀为 `src_skeleton/`，V2 前缀为 `custom_media_agent_2_0/`。下文 V2 进程表中缩写的 `app/...` 均沿用 V2 前缀，不指 V1 的同名 package。候选清单只声明 `.py`、`.service`、`.env.example` 为文本来源：读取当前工作树文件字节，仅把 `CRLF` 替换为 `LF`，然后计算 `SHA-1(b"blob " + ASCII(规范字节长度) + NUL + 规范字节)`。这与当前 LF Git 源 blob 一致，允许 Windows 的 CRLF checkout；不删除 BOM、不转换独立 CR、不修剪空白、不改变编码或内容。检查不使用可能落后于工作树的 index，也不依赖 Git 可执行文件或历史对象；真实内容编辑仍必须失败。该规则不是任意 Git clean filter 的模拟：若新增二进制来源、`-text`、`working-tree-encoding` 或其他改变来源字节的 filter，必须重新审计并显式扩展规范，不能直接沿用此文本清单。原始 38 文件历史矩阵及其摘要保持不变。
+源路径均相对于仓库根；V1 前缀为 `src_skeleton/`，V2 前缀为 `custom_media_agent_2_0/`。下文 V2 进程表中缩写的 `app/...` 均沿用 V2 前缀，不指 V1 的同名 package。候选清单只声明 `.py`、`.service`、`.env.example` 为文本来源：读取绑定的历史 revision 源字节，仅把 `CRLF` 替换为 `LF`，然后计算 `SHA-1(b"blob " + ASCII(规范字节长度) + NUL + 规范字节)`。这与审计时 LF Git 源 blob 一致，保留 Windows CRLF checkout 的等价性测试；不删除 BOM、不转换独立 CR、不修剪空白、不改变编码或内容。检查不使用可能落后于工作树的 index，也不把当前主线字节冒充历史候选；历史源与矩阵不符必须失败。浅克隆缺少该 revision 时，先执行下方单一提交 fetch，不能跳过实际源校验。该规则不是任意 Git clean filter 的模拟：若新增二进制来源、`-text`、`working-tree-encoding` 或其他改变来源字节的 filter，必须重新审计并显式扩展规范，不能直接沿用此文本清单。原始 38 文件历史矩阵及其摘要保持不变。
 
 <!-- PR28_CANDIDATE_SOURCE_MATRIX -->
 
-2026-10-11 候选补充：在 `5a33c05e` 的已合并历史基线上治理 V1/V2/Lab 历史读取。原始 38 文件矩阵与旧版/原始目标列不变；本表的候选列绑定本轮实际源码。新增派生索引、只读调度和受控维护来源显式列入；其设计、回归、权限与文件库存边界见 `docs/history-read-scalability/`。此更新不是生产迁移完成证明。
+2026-10-11 候选补充：在 `5a33c05e` 的已合并历史基线上治理 V1/V2/Lab 历史读取。原始 38 文件矩阵与旧版/原始目标列不变；本表的候选列绑定下述历史 revision 的实际源码。新增派生索引、只读调度和受控维护来源显式列入；其设计、回归、权限与文件库存边界见 `docs/history-read-scalability/`。此更新不是生产迁移完成证明。
+
+- Audited candidate source revision: `8c6dca317ece2538004bb0921f28ec8f188146cd` (tree `8ef9179ba1e377fe984a51351cfdcc990b030b90`).
+- Shallow checkout prerequisite: `git fetch --no-tags --depth=1 origin 8c6dca317ece2538004bb0921f28ec8f188146cd`.
+- CI fetches only this public repository revision with no persisted credentials. A private mirror must provide read access through its checkout mechanism rather than skip the frozen-source check.
 
 - Candidate overlay: 38 files; SHA-256 `f3dcbdadfa2560c42e02c34366a5dd5b62aaa2963ea26333809a71f1a27072cf`.
 - Overlay digest: UTF-8 path order; `path NUL old_blob NUL original_target_blob NUL candidate_blob LF`.

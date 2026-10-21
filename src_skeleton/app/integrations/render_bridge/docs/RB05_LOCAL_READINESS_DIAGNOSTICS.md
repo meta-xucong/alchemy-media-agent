@@ -1,3 +1,5 @@
+> RB06 supersedes the native fake-only implementation limit below. Defaults remain fake-only; explicitly configured real profiles now negotiate typed options and stay development/review-only. See [RB06](RB06_REAL_PROFILE_OPTIONS.md).
+
 # RB05: local-readiness doctor and read-only diagnostics
 
 ## Scope and authority

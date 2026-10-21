@@ -66,7 +66,8 @@ def test_load_is_local_only_and_explicit_http_checks_never_authorize(tmp_path):
         assert value["source"] == "alchemy_server_configuration"
         assert value["native_profiles"] == ["fake-image"]
         assert value["local_cli"]["status"] == "not_checked"
-        assert not value["native_real_profile_support"] and not value["real_generation_verified"]
+        assert value["native_real_profile_support"] and not value["real_generation_verified"]
+        assert value["native_real_profile_scope"] == "development_review_only"
         assert calls == []
         for _ in range(3):
             response = client.get(PREFIX + "/diagnostics/server", params={"url": "https://ignored.test"})
@@ -74,7 +75,7 @@ def test_load_is_local_only_and_explicit_http_checks_never_authorize(tmp_path):
             result = response.json()
             assert result["connection"] == "ok" and result["source"] == "configured_bridge_http"
             assert result["profiles"][0]["parameter_contract"]["executor_control"] == "text_instruction_only"
-            assert not result["real_generation_verified"] and not result["native_real_profile_support"]
+            assert not result["real_generation_verified"] and result["native_real_profile_support"]
             assert result["local_cli"]["status"] == "not_checked"
             assert "test-private-token" not in response.text
         assert calls == [("GET", "/bridge/v1/capabilities")] * 3
@@ -219,3 +220,20 @@ def test_missing_config_remains_explainable_without_outbound_request(tmp_path):
         assert response.json()["connection"] == "unavailable"
         assert calls == []
         assert not config.storage.exists()
+
+
+def test_image_option_descriptor_is_projection_not_runtime_authorization(tmp_path):
+    from test_render_bridge_profile_options import descriptor
+    value = capabilities()
+    contract = descriptor()
+    contract['unknown_secret'] = 'never-reflect'
+    value['profiles'][0]['image_options_contract'] = contract
+    app, runtime, calls = application(tmp_path, upstream=value)
+    with TestClient(app) as client:
+        response = client.get(PREFIX + '/diagnostics/server')
+        item = response.json()['profiles'][0]
+        assert item['image_options_contract'] == descriptor()
+        assert item['image_options_contract_state'] == 'available'
+        assert 'never-reflect' not in response.text
+        assert runtime['service'].settings.native_profiles == ('fake-image',)
+        assert calls == [('GET','/bridge/v1/capabilities')]

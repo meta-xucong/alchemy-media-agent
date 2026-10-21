@@ -31,6 +31,8 @@ env:
   VEYRA_AUTH_ENABLED: "false"
   VEYRA_REQUIRE_UI_AUTH: "false"
   ALCHEMY_RENDER_BRIDGE_MODE: disabled
+  ALCHEMY_RENDER_BRIDGE_NATIVE_ENABLED: "false"
+  ALCHEMY_RENDER_BRIDGE_NATIVE_PROFILES: fake-image
   ALCHEMY_V3_LOCAL_RUNTIME_DISCOVERY_ENABLED: "false"
   CODEX_AUTH_FILE: /tmp/render-bridge-ci/no-codex-auth.json
   CLAUDE_SETTINGS_FILE: /tmp/render-bridge-ci/no-claude-settings.json
@@ -81,7 +83,7 @@ jobs:
       - name: Install pinned contract dependencies
         run: python -m pip install -r src_skeleton/requirements.txt pytest==8.3.3
       - name: Verify Bridge contracts and narrow original-path regressions
-        # The glob also includes native facade/registration/coordinator tests.
+        # The glob includes native/profile-options/diagnostics and legacy identities.
         # Browser tests live in tests/browser/, outside this top-level glob.
         run: |
           mkdir -p "$RUNNER_TEMP/render-bridge-home" /tmp/render-bridge-ci

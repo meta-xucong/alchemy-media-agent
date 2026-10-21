@@ -73,7 +73,7 @@ async function initialize() {
       paragraph(`已配置执行配置：${readable(data.configured_profiles)}`),
       paragraph(`原生开发入口：${data.native_enabled ? '已启用' : '未启用'}；支持：${readable(data.native_profiles)}`),
       paragraph('本地 CLI：未检查。浏览器无法探测另一台机器上的代理。', 'muted'),
-      paragraph('真实原生配置：不支持。真实生成：未验证。正式交付：否。', 'muted'),
+      paragraph(`真实原生配置代码：${data.native_real_profile_support ? '受限开发接入已实现，启用以配置和能力协商为准' : '不支持'}。真实生成：未验证。正式交付：否。`, 'muted'),
     );
     if (data.configuration_error) $('configuration').append(paragraph(`配置错误：${readable(data.configuration_error)}`, 'error'));
     status('notice', '已读取 Alchemy 配置。此次配置读取未连接 Bridge，也未运行本地 CLI。');
@@ -98,6 +98,11 @@ function renderProfile(profile) {
       ['参考图语义', 'reference_semantics'], ['不支持参数', 'unsupported_parameters'],
     ]) article.append(paragraph(`${label}：${readable(contract[key])}`));
   }
+  const options = profile.image_options_contract;
+  if (options?.schema_version === '1') {
+    article.append(paragraph(`图像选项：quality 仅 auto（不指定质量）；格式 ${readable(options.output_format?.values)} 为原始产物验证，不是原生参数控制；input_fidelity 必须省略。`));
+    article.append(paragraph(`参考图上限：${readable(options.references?.max_count)}；语义：${readable(options.references?.semantics)}`));
+  } else article.append(paragraph('版本化图像选项未提供或不兼容；不能据此启用真实原生接入。', 'muted'));
   return article;
 }
 

@@ -4246,6 +4246,7 @@ def _create_render_bridge_native_gateway(config):
     from alchemy_creative_agent_3_0.app.product_api.render_bridge_facade import RenderBridgeNativeFacade
     from alchemy_creative_agent_3_0.app.product_api.render_bridge_native import NativeRenderBridgeGateway
     return NativeRenderBridgeGateway(
+        allowed_profiles=config.native_profiles,
         facade=RenderBridgeNativeFacade(
             get_job_record=_v3_product_service.get_job_record,
             get_project_record=v3_route_handlers.project_service.project_store.get_project,

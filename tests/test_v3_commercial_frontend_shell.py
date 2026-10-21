@@ -357,8 +357,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-mobile-full-prompt-dialog" in mobile_styles.text
     mobile_script = client.get("/mobile-static/mobile.js")
     assert mobile_script.status_code == 200
-    assert "waitForMobileV3HomePreviewImages" in mobile_script.text
-    assert "markMobileV3HomePreviewImageFailed" in mobile_script.text
+    assert "waitForMobileV3HomePreviewImages" not in mobile_script.text
+    assert "markMobileV3HomePreviewStale" in mobile_script.text
     assert "limit=1000" not in mobile_script.text
     assert "mobileV3ProjectFetchLimit = mobileV3ProjectPageSize" in mobile_script.text
     assert "mobileV3ProjectPageSize = 4" in mobile_script.text
@@ -370,7 +370,13 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     # inspect the complete script rather than only the catalog loader body.
     assert "surface=home_preview" in mobile_script.text
     assert "await waitForMobileV3FirstHomePreviewImage()" not in mobile_shell_body
-    assert "await waitForMobileV3HomePreviewImages({ blockPage: true });" in mobile_shell_body
+    # The catalog makes cards navigable before previews settle. Slow image
+    # delivery/decoding must not keep the full-screen loading mask visible.
+    cards_ready = mobile_shell_body.index("renderMobileV3ProjectCards({ deferImages: true });")
+    loading_released = mobile_shell_body.index("setMobileV3LoadingLayer(false);", cards_ready)
+    preview_request = mobile_shell_body.index("await loadMobileV3HomePreviews(", cards_ready)
+    assert cards_ready < loading_released < preview_request
+    assert "markMobileV3HomePreviewStale(previewProjectIds);" in mobile_shell_body
     assert "project-outputs?limit=${requestedProjectIds.length}&compact=true&surface=home_preview" in mobile_script.text
     assert "project?.visible_output_count ?? project?.memory_summary?.visible_output_count" in mobile_script.text
     assert "mobileV3SummaryThumbOutputs(project)[0]" in mobile_script.text
@@ -508,7 +514,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "if (restored && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;" not in recover_body
     assert "outputProjectionChanged" in recover_body
     assert "loadV3ProjectOutputs" in recover_body
-    assert "await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });" in recover_body
+    assert "refreshV3CurrentProject(" not in recover_body
+    recovery_output_call = recover_body.split("await loadV3ProjectOutputs({", 1)[1].split("});", 1)[0]
+    for option in ("projectId,", "shouldContinue,", "sessionReceipt,", "throwOnError: true", "preserveOnError: true"):
+        assert option in recovery_output_call
     assert "syncV3CurrentJobFromProjectOutputs({ preferLatest: false })" in script.text
     assert "project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}" in script.text
     assert "imageHistory" in script.text

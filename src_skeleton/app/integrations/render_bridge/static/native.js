@@ -49,7 +49,7 @@ async function loadReferences() {
     }
   }
 }
-const labels = { plan_pending: '等待创建原生计划', plan_unknown: '计划结果待确认，不会重复调用 Brain', plan_blocked: '计划不满足受限合同', queued: 'Bridge 排队中', running: '合成渲染中', uploading: '传输结果中', import_unknown: '原生登记结果待确认，尚未 accepted', registered: '原生登记已确认 · 非正式交付', cancel_requested: '正在取消', canceled: '已取消', rejected: '原生登记拒绝', blocked_scope: '项目权限或连接配置已变化', blocked_revision: '冻结目标已变化', protocol_error: '合同校验失败', remote_unavailable: '远端暂不可达，等待同任务恢复' };
+const labels = { plan_pending: '等待创建原生计划', plan_unknown: '计划结果待确认，不会重复调用 Brain', plan_blocked: '计划不满足受限合同', queued: 'Bridge 排队中', running: '所选执行配置处理中', uploading: '传输结果中', import_unknown: '原生登记结果待确认，尚未 accepted', registered: '原生登记已确认 · 非正式交付', cancel_requested: '正在取消', canceled: '已取消', rejected: '原生登记拒绝', blocked_scope: '项目权限或连接配置已变化', blocked_revision: '冻结目标已变化', protocol_error: '合同校验失败', remote_unavailable: '远端暂不可达，等待同任务恢复' };
 async function refresh() {
   const project = $('project').value, current = ++generation, session = token();
   if (!project) { $('tasks').replaceChildren(); return; }
@@ -59,7 +59,7 @@ async function refresh() {
     const rows = result.tasks.map(task => {
       const box = document.createElement('article'); box.className = 'task';
       box.append(line(labels[task.state] || task.state, 'task-title'), line(new Date(task.created_at).toLocaleString(), 'muted'));
-      box.append(line(`${task.size || '1024x1024'} · ${task.reference_count || 0} 张参考原图 · 仅传输验证`, 'muted'));
+      box.append(line(`${task.size || '1024x1024'} · ${task.reference_count || 0} 张参考原图 · ${task.profile_id || 'fake-image'} · ${task.output_format || 'png'} · ${task.test_fixture === false ? '真实工具未验收' : '合成传输测试'}`, 'muted'));
       if (task.last_error) box.append(line(task.last_error, 'error'));
       box.append(line(`登记：${task.native_registration} · 确认：${task.delivery_ack}`));
       if (task.native_registration_ref) box.append(line(task.native_registration_ref, 'muted'));
@@ -82,15 +82,18 @@ $('create-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!enabled || sending || !referencesReady) return;
   const uploaded = [$('reference-1').value, $('reference-2').value].filter(Boolean);
   if (new Set(uploaded).size !== uploaded.length) { notice('请勿重复选择同一张参考原图。', true); return; }
+  if ($('profile').value === 'midjourney-manual' && uploaded.length) { notice('manual 配置不支持参考图，请显式取消参考图选择。', true); return; }
   sending = true; updateSubmit();
   try {
     const body = { project_id: $('project').value, user_input: $('user-input').value, uploaded_asset_ids: uploaded,
-      size: $('size').value, acknowledge_synthetic_native_test: $('acknowledge').checked };
+      size: $('size').value, profile_id: $('profile').value, output_format: $('format').value,
+      acknowledge_synthetic_native_test: $('profile').value === 'fake-image' && $('acknowledge').checked,
+      acknowledge_native_development: $('acknowledge').checked };
     const value = JSON.stringify(body);
     if (value !== lastPayload) { lastPayload = value; requestKey = crypto.randomUUID(); }
     body.client_request_id = requestKey;
     await request(`${api}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Alchemy-Bridge-Preview': '1' }, body: JSON.stringify(body) });
-    notice('显式测试请求已保存。原图按冻结顺序传输，合成输出不表示参考保真效果。'); await refresh();
+    notice('显式开发请求已保存。原图按冻结顺序传输；格式为产物验证，不表示原生参数控制或参考保真验收。'); await refresh();
   } catch (error) { notice(`提交未确认：${error.message}。相同输入可沿用原请求重试。`, true); }
   finally { sending = false; updateSubmit(); }
 });
@@ -99,7 +102,12 @@ $('refresh').addEventListener('click', refresh);
 async function initialize() {
   try {
     const status = await request(`${api}/status`); enabled = status.available && status.mode === 'enabled'; updateSubmit();
-    notice(status.error || '仅合成图开发测试，真实渲染工具、参考保真与真实计费未验收。', !!status.error);
+    for (const id of status.profiles || ['fake-image']) {
+      if (id === 'fake-image' || !['codex-image', 'midjourney-manual'].includes(id)) continue;
+      const option = document.createElement('option'); option.value = id; option.textContent = `${id} · 显式真实工具开发配置（未验收）`; $('profile').append(option);
+    }
+    if (!(status.profiles || ['fake-image']).includes('fake-image')) $('profile').querySelector('[value="fake-image"]').remove();
+    notice(status.error || '默认合成测试。真实配置须显式启用；真实工具、参考保真与计费尚未验收。', !!status.error);
     const projects = await request('/api/v3/creative-agent/projects?limit=100&view=summary');
     for (const project of projects.projects || []) { const option = document.createElement('option'); option.value = project.project_id; option.textContent = project.title || project.project_id; $('project').append(option); }
   } catch (error) { notice(`请使用已认证的项目所有者账号：${error.message}`, true); }

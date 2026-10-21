@@ -2094,6 +2094,8 @@ def test_checkpoint_orchestrator_stops_generation_after_initial_checkpoint_exhau
 
 def test_checkpoint_stage_uses_cli_schema_with_local_retry_control(monkeypatch, tmp_path: Path) -> None:
     fresh_client()
+    object.__setattr__(settings, "llm_gateway_api_key", "mock-unified-test-key")
+    object.__setattr__(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
     object.__setattr__(settings, "claude_orchestrator_fallback_model", "gpt-6.1-sol")
     object.__setattr__(settings, "claude_checkpoint_cli_schema_enabled", False)
     object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
@@ -2135,6 +2137,9 @@ def test_checkpoint_stage_uses_cli_schema_with_local_retry_control(monkeypatch, 
     assert "--fallback-model" not in captured["command_line"]
     assert captured["env"]["MAX_STRUCTURED_OUTPUT_RETRIES"] == "1"
     assert captured["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "4096"
+    assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "mock-unified-test-key"
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "mock-unified-test-key"
+    assert captured["env"]["ANTHROPIC_BASE_URL"] == "https://gateway.example.test"
     assert captured["timeout"] == 60.0
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("generation_decision") == 60.0
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_micro_retry_1") == 45.0
@@ -2218,6 +2223,8 @@ def test_claude_policy_refusal_is_classified_separately() -> None:
 
 def test_claude_checkpoint_timeout_salvages_valid_stdout(monkeypatch, tmp_path: Path) -> None:
     fresh_client()
+    object.__setattr__(settings, "llm_gateway_api_key", "mock-unified-test-key")
+    object.__setattr__(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
 
     payload = {
         "stage": "intent",
@@ -2266,6 +2273,8 @@ def test_claude_checkpoint_timeout_salvages_valid_stdout(monkeypatch, tmp_path: 
 
 def test_checkpoint_stage_accepts_safe_micro_alias_and_confidence_label(monkeypatch, tmp_path: Path) -> None:
     fresh_client()
+    object.__setattr__(settings, "llm_gateway_api_key", "mock-unified-test-key")
+    object.__setattr__(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
     (tmp_path / "fallback_decision.json").write_text(
         json.dumps({"mode": "smart_enhance"}, ensure_ascii=False),
         encoding="utf-8",
@@ -2305,6 +2314,8 @@ def test_checkpoint_stage_accepts_safe_micro_alias_and_confidence_label(monkeypa
 
 def test_checkpoint_stage_rejects_missing_required_fields(monkeypatch, tmp_path: Path) -> None:
     fresh_client()
+    object.__setattr__(settings, "llm_gateway_api_key", "mock-unified-test-key")
+    object.__setattr__(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
 
     def fake_run(command_line, **kwargs):
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": json.dumps({"stage": "intent"})}), stderr="")
@@ -6158,8 +6169,8 @@ def test_checkpoint_stage_required_multimodal_structured_exhaustion_allows_check
 ) -> None:
     fresh_client()
     object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
-    object.__setattr__(settings, "claude_orchestrator_fallback_base_url", "https://aiself.vip")
-    object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", "sk-test-fallback")
+    object.__setattr__(settings, "llm_gateway_api_key", "mock-unified-test-key")
+    object.__setattr__(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")
     object.__setattr__(settings, "claude_orchestrator_fallback_models", ("kimi-for-coding",))
     (tmp_path / "claude_source_selection.json").write_text(
         json.dumps(

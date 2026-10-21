@@ -200,7 +200,7 @@ class NativeReferenceFixture(PreviewFixture):
         if path.startswith(native_api) or path == "/api/v3/creative-agent/projects":
             assert request.headers.get("authorization") == f"Bearer {SESSION}"
             if path == native_api + "/status":
-                route.fulfill(json={"available": True, "mode": "enabled"})
+                route.fulfill(json={"available": True, "mode": "enabled", "profiles": getattr(self, "profiles", ["fake-image"])})
             elif path == "/api/v3/creative-agent/projects":
                 route.fulfill(json={"projects": [{"project_id": "fixture-project", "title": "References"},
                                                  {"project_id": "empty-project", "title": "No references"}]})
@@ -217,7 +217,9 @@ class NativeReferenceFixture(PreviewFixture):
                 self.creates.append(payload)
                 key = payload["client_request_id"]
                 task = self.tasks.setdefault(key, {**self.task(key), "size": payload["size"],
-                    "reference_count": len(payload["uploaded_asset_ids"]), "native_registration": "pending"})
+                    "reference_count": len(payload["uploaded_asset_ids"]), "native_registration": "pending",
+                    "profile_id": payload.get("profile_id", "fake-image"), "output_format": payload.get("output_format", "png"),
+                    "test_fixture": payload.get("profile_id", "fake-image") == "fake-image"})
                 route.fulfill(status=202, json=task)
             else:
                 self.unexpected.append(f"{request.method} {path}")
@@ -266,6 +268,44 @@ def test_native_reference_order_size_replay_and_project_change(browser: Browser)
         expect(page.locator("#reference-2 option")).to_have_count(1)
         expect(page.locator("#reference-1")).to_have_value("")
         expect(page.locator("#reference-2")).to_have_value("")
+        assert errors == [] and fixture.unexpected == []
+    finally:
+        context.close()
+
+
+def test_native_explicit_profile_format_and_manual_reference_refusal(browser: Browser) -> None:
+    fixture = NativeReferenceFixture()
+    fixture.profiles = ["fake-image", "codex-image", "midjourney-manual"]
+    context = browser.new_context(service_workers="block")
+    context.route("**/*", fixture.route)
+    context.add_init_script(f"localStorage.setItem('alchemy_veyra_access_token', {json.dumps(SESSION)});")
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto(ORIGIN + "/render-bridge-native-test")
+        expect(page.locator("#profile option")).to_have_count(3)
+        expect(page.locator("#profile")).to_have_value("fake-image")
+        expect(page.locator("body")).to_contain_text("产物验证，不是原生参数控制")
+        page.select_option("#project", "fixture-project")
+        expect(page.locator("#submit")).to_be_enabled()
+        page.select_option("#reference-1", "source-a")
+        page.select_option("#profile", "midjourney-manual")
+        page.fill("#user-input", "Explicit offline protocol fixture.")
+        page.check("#acknowledge")
+        page.click("#submit")
+        expect(page.locator("#notice")).to_contain_text("manual 配置不支持参考图")
+        assert fixture.creates == []
+        expect(page.locator("#reference-1")).to_have_value("source-a")
+        page.select_option("#profile", "codex-image")
+        page.select_option("#format", "jpeg")
+        with page.expect_response(lambda response: response.url == ORIGIN + API + "/native/tasks"
+                                  and response.request.method == "POST"):
+            page.click("#submit")
+        payload = fixture.creates[0]
+        assert payload["profile_id"] == "codex-image" and payload["output_format"] == "jpeg"
+        assert payload["acknowledge_native_development"] and not payload["acknowledge_synthetic_native_test"]
+        expect(page.locator("#tasks")).to_contain_text("真实工具未验收")
         assert errors == [] and fixture.unexpected == []
     finally:
         context.close()

@@ -16,6 +16,7 @@ class BridgeSettings:
     allow_local_preview: bool = False
     native_enabled: bool = False
     profiles: tuple[str, ...] = ("fake-image",)
+    native_profiles: tuple[str, ...] = ("fake-image",)
     poll_seconds: float = 2.0
     batch_size: int = 2
     max_jobs: int = 100
@@ -52,8 +53,15 @@ class BridgeSettings:
             "ALCHEMY_RENDER_BRIDGE_PROFILES", "fake-image").split(",") if v.strip())
         if not profiles or any(p not in {"fake-image", "codex-image", "midjourney-manual"} for p in profiles):
             error = "invalid_profiles"
+        native_profiles = tuple(v.strip() for v in os.getenv(
+            "ALCHEMY_RENDER_BRIDGE_NATIVE_PROFILES", "fake-image").split(",") if v.strip())
+        native_enabled = os.getenv("ALCHEMY_RENDER_BRIDGE_NATIVE_ENABLED") == "true"
+        if (not native_profiles or len(set(native_profiles)) != len(native_profiles)
+                or any(p not in {"fake-image", "codex-image", "midjourney-manual"} for p in native_profiles)
+                or (native_enabled and any(p not in profiles for p in native_profiles))):
+            error = "invalid_native_profiles"
         return cls(mode=mode, base_url=base, token=token, workspace=workspace,
                    storage=Path(os.getenv("ALCHEMY_RENDER_BRIDGE_STORAGE", ".render_bridge_preview")),
                    allow_local_preview=os.getenv("ALCHEMY_RENDER_BRIDGE_LOCAL_PREVIEW") == "true",
-                   native_enabled=os.getenv("ALCHEMY_RENDER_BRIDGE_NATIVE_ENABLED") == "true",
-                   profiles=profiles, config_error=error)
+                   native_enabled=native_enabled,
+                   profiles=profiles, native_profiles=native_profiles, config_error=error)

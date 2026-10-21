@@ -14,6 +14,19 @@ from .providers import GenerationRequest, ProductionImageGenerationProvider
 
 
 RENDER_BRIDGE_SIZES = ("1024x1024", "1024x768", "768x1024")
+RENDER_BRIDGE_PROFILES = ("fake-image", "codex-image", "midjourney-manual")
+RENDER_BRIDGE_FORMATS = ("png", "jpeg")
+
+
+def render_bridge_options(execution_profile_id="fake-image", output_format="png", *, uploaded_asset_ids=()):
+    """Bounded adapter contract, not a declaration of real-tool acceptance."""
+    if execution_profile_id not in RENDER_BRIDGE_PROFILES:
+        raise ValueError("render_bridge_profile_unknown")
+    if output_format not in RENDER_BRIDGE_FORMATS:
+        raise ValueError("render_bridge_output_format_unsupported")
+    if execution_profile_id == "midjourney-manual" and uploaded_asset_ids:
+        raise ValueError("render_bridge_profile_references_unsupported")
+    return execution_profile_id, output_format
 
 
 def render_bridge_inputs(uploaded_asset_ids=None, size="1024x1024") -> tuple[list[str], str]:
@@ -33,12 +46,16 @@ def render_bridge_inputs(uploaded_asset_ids=None, size="1024x1024") -> tuple[lis
 def _compatible_identity(value) -> dict[str, Any]:
     """Keep old square/no-reference journal and checkpoint identities stable."""
     result = asdict(value)
-    for field, default in (("uploaded_asset_ids", ()), ("reference_sha256", ()), ("size", "1024x1024")):
+    for field, default in (("uploaded_asset_ids", ()), ("reference_sha256", ()), ("size", "1024x1024"), ("output_format", "png")):
         if field in result:
             if result[field] == default or (default == () and not result[field]):
                 result.pop(field)
             elif isinstance(result[field], tuple):
                 result[field] = list(result[field])
+    # The original registration already included the fake profile. The original
+    # plan marker did not, so only plan identities omit that default field.
+    if isinstance(value, RenderBridgePlanIdentity) and value.execution_profile_id == "fake-image":
+        result.pop("execution_profile_id")
     return result
 
 
@@ -50,6 +67,8 @@ class RenderBridgePlanIdentity:
     user_input_sha256: str
     uploaded_asset_ids: tuple[str, ...] = ()
     size: str = "1024x1024"
+    execution_profile_id: str = "fake-image"
+    output_format: str = "png"
 
     @property
     def instance_id(self) -> str:
@@ -79,6 +98,7 @@ class RenderBridgeRegistration:
     uploaded_asset_ids: tuple[str, ...] = ()
     reference_sha256: tuple[str, ...] = ()
     size: str = "1024x1024"
+    output_format: str = "png"
 
     @property
     def output_id(self) -> str:
@@ -91,14 +111,16 @@ class RenderBridgeRegistration:
             "output_id": self.output_id,
             "billing": "unchanged_v3_zero_credit_stub",
             "test_fixture": self.execution_profile_id == "fake-image",
+            **({"development_only": True, "real_tool_verified": False}
+               if self.execution_profile_id != "fake-image" else {}),
         }
 
 
 class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
     """Feed verified pixels through the normal provider's persistence path.
 
-    Reference transport/binding is tested, not visual conditioning: fake-image
-    remains an unconditioned synthetic fixture, never a real renderer call.
+    This adapter never starts a renderer. Fake images remain synthetic; explicit
+    real-profile development receipts do not imply account/tool acceptance.
     """
 
     provider_name = "render_bridge_receipt_provider"
@@ -115,6 +137,7 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
         super().__init__(output_store=output_store)
         if not isinstance(binding, RenderBridgeRegistration):
             raise ValueError("render_bridge_registration_untrusted")
+        render_bridge_options(binding.execution_profile_id, binding.output_format, uploaded_asset_ids=binding.uploaded_asset_ids)
         if hashlib.sha256(artifact_bytes).hexdigest() != binding.original_sha256:
             raise ValueError("render_bridge_artifact_hash_mismatch")
         self.binding = binding
@@ -142,7 +165,7 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
             plan.variables.get("provider_prompt_sha256") != self.binding.prompt_sha256
             or plan.size != self.binding.size
             or plan.quality != "auto"
-            or plan.output_format != "png"
+            or plan.output_format != self.binding.output_format
             or any(getattr(plan, field, None) is not None for field in ("background", "moderation", "output_compression"))
             or plan.variables.get("input_fidelity") is not None
         ):
@@ -162,8 +185,8 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
             outputs=[
                 {
                     "b64_json": base64.b64encode(self.artifact_bytes).decode("ascii"),
-                    "mime_type": "image/png",
-                    "format": "png",
+                    "mime_type": f"image/{self.binding.output_format}",
+                    "format": self.binding.output_format,
                     "width": int(self.binding.size.split("x")[0]),
                     "height": int(self.binding.size.split("x")[1]),
                     "api_operation": "image.generate",

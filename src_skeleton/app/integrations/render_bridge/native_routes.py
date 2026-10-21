@@ -1,4 +1,4 @@
-"""Explicit synthetic native-development entry, enabled separately from preview."""
+"""Explicit bounded native-development entry, enabled separately from preview."""
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -55,7 +55,10 @@ def install_native_routes(app, *, config, actor, require_write, project_snapshot
     async def status(request: Request):
         await owner(request)
         return JSONResponse({"available": runtime["service"] is not None, "mode": config.mode,
-            "error": runtime["error"], "profile_id": "fake-image", "test_fixture": True,
+            "error": runtime["error"], "profile_id": "fake-image",
+            "profiles": list(config.native_profiles), "test_fixture": True,
+            "output_formats": ["png", "jpeg"], "format_semantics": "original_artifact_postcondition",
+            "quality": "auto", "quality_semantics": "unspecified_only", "input_fidelity": None,
             "real_tool_verified": False, "formal_delivery": False,
             "billing": {"mode": "v3_zero_credit_stub", "charged": False}}, headers=HEADERS)
 

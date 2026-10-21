@@ -1,12 +1,14 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Render Bridge · 原生接入开发测试</title><link rel="stylesheet" href="/render-bridge-preview/assets/preview.css"><script defer src="/render-bridge-native-test/assets/native.js"></script></head><body><main>
 <nav><a href="/creative-agent-v3">← 返回 Alchemy V3</a><a href="/render-bridge-preview">独立传输预览</a><a href="/render-bridge-diagnostics">本地就绪诊断</a></nav>
-<header><p class="eyebrow">ALCHEMY / NATIVE BRIDGE TEST</p><h1>原生接入开发测试</h1><p>显式计划 → 冻结合同 → 合成图 → 原生登记 → 原有审核。</p></header>
-<aside><strong>仅 fake-image · 不调用真实渲染工具</strong><p>支持方图、横图、竖图及最多两张当前项目已授权原图；auto / PNG / 单图。参考图仅验证原始字节传输、顺序和哈希，合成图不按参考内容生成，不代表图像编辑或参考保真效果验收。点击提交才会请求已配置的 Brain 生成计划。测试结果不自动选中或正式交付。当前 V3 使用零积分占位规则，不扣费；执行审计不是账单用量。真实 Codex/Midjourney 与真实计费尚未验收。</p></aside>
+<header><p class="eyebrow">ALCHEMY / NATIVE BRIDGE TEST</p><h1>原生接入开发测试</h1><p>显式计划 → 冻结合同 → 显式执行配置 → 原生登记 → 原有审核。</p></header>
+<aside><strong>默认仅 fake-image · 真实执行须管理员另行启用</strong><p>支持方图、横图、竖图及最多两张当前项目已授权原图；auto / PNG 或 JPEG / 单图。PNG/JPEG 仅验证原始产物格式，不代表上游原生参数控制，不转码；不支持指定质量或参考保真参数。manual 配置不支持参考图。参考图仅验证原始字节传输、顺序和哈希，合成图不按参考内容生成，不代表图像编辑或参考保真效果验收。点击提交才会请求已配置的 Brain 生成计划。测试结果不自动选中或正式交付。当前 V3 使用零积分占位规则，不扣费；执行审计不是账单用量。真实 Codex/Midjourney 与真实计费尚未验收。</p></aside>
 <div id="notice" role="status">正在检查原生开发入口…</div>
 <section class="layout"><form id="create-form"><h2>提交显式测试计划</h2><label>所属项目<select id="project" required><option value="">请选择现有项目</option></select></label>
+<label>执行配置<select id="profile"><option value="fake-image">fake-image · 合成传输测试</option></select></label>
+<label>原始产物格式<select id="format"><option value="png">PNG</option><option value="jpeg">JPEG</option></select></label><p class="muted">产物验证，不是原生参数控制；不匹配时保留原产物并拒绝登记，不自动重生成。</p>
 <label>输出尺寸<select id="size"><option value="1024x1024">方图 · 1024 × 1024</option><option value="1024x768">横图 · 1024 × 768</option><option value="768x1024">竖图 · 768 × 1024</option></select></label>
 <label>参考原图 1（可选）<select id="reference-1" disabled><option value="">不使用</option></select></label>
 <label>参考原图 2（可选，按此顺序传输）<select id="reference-2" disabled><option value="">不使用</option></select></label>
 <p id="reference-status" class="muted">请先选择项目。仅列出当前用户已授权、已绑定本项目且符合限制的 PNG/JPEG 原图；每张不超过 1 MiB 和 1,048,576 像素，不会自动裁剪或压缩。</p>
-<label>交给原有 Brain 的需求<textarea id="user-input" rows="6" required maxlength="16000" placeholder="描述你的单张测试图需求。最终渲染提示词由 Alchemy 冻结，不由此页面拼接。"></textarea></label><label class="check"><input id="acknowledge" type="checkbox" required>我同意创建原生开发测试计划，使用合成图，不代表正式模型或交付验收。</label><button id="submit" disabled>创建原生测试计划</button><p class="muted">相同提交重试沿用同一请求。不会切换其他 Provider；未确认登记时不会发送 accepted。</p></form><section><div class="section-heading"><h2>开发测试任务</h2><button id="refresh" class="secondary" type="button">刷新</button></div><div id="tasks" aria-live="polite"></div></section></section>
+<label>交给原有 Brain 的需求<textarea id="user-input" rows="6" required maxlength="16000" placeholder="描述你的单张测试图需求。最终渲染提示词由 Alchemy 冻结，不由此页面拼接。"></textarea></label><label class="check"><input id="acknowledge" type="checkbox" required>我同意创建原生开发测试计划，使用所选执行配置，不代表真实工具验证或正式交付；非 fake 配置可能调用已配置的真实工具。</label><button id="submit" disabled>创建原生测试计划</button><p class="muted">相同提交重试沿用同一请求。不会切换其他 Provider；未确认登记时不会发送 accepted。</p></form><section><div class="section-heading"><h2>开发测试任务</h2><button id="refresh" class="secondary" type="button">刷新</button></div><div id="tasks" aria-live="polite"></div></section></section>
 </main></body></html>

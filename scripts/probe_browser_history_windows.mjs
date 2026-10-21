@@ -45,11 +45,14 @@ function initializeFixture({ moduleName }) {
       window.state = { historyItems: [], historyTotal: 0, historyRenderLimit: 24, historyFavoritesOnly: false };
       window.v2State = { history: [], historyTotal: 0, historyRenderLimit: 24, historyFavoritesOnly: false };
       window.veyraState = {};
-      // The desktop media binder owns deferred V3 bindings even on V1/V2 calls.
-      // Include its actual helper state rather than replacing cleanup with a no-op.
+      // Both shells' media binders own auth/deferred state even on V1/V2 calls.
+      // Include their actual helper state rather than replacing cleanup with a no-op.
       window.v3DeferredImageLoads = new Map();
       window.v3ImageBindingStates = new WeakMap();
+      window.authenticatedImageLoadControllers = new WeakMap();
       window.v3DeferredImageObserver = null;
+      window.deferredAuthenticatedImages = new Map();
+      window.deferredAuthenticatedImageObserver = null;
       window.activePanelName = () => moduleName === "v1" ? "image" : "v2";
       window.getVeyraToken = () => "synthetic-account";
       window.request = window.v2Request = async (url, options = {}) => (await fetch(url, { signal: options.signal })).json();
@@ -161,14 +164,20 @@ async function validateFixtureRuntime(sources) {
       await context.loadPreviousHistoryWindow(moduleName);
       assert.equal(context.sample().start, start - 72);
     }
-    // Execute the desktop deferred branch too; it shares cleanup state.
-    if (shell === "desktop") {
-      const image = fixtureNode("img");
-      context.bindImageWithFallback(image, ["/media.png"], { deferAuthenticated: true });
-      await new Promise((resolve) => setImmediate(resolve));
-      context.releaseImageObjectUrl(image);
-    }
+    // Execute both shells' deferred binders and real rebind cancellation.
+    const image = fixtureNode("img");
+    image.loading = "lazy";
+    context.bindImageWithFallback(image, ["/media.png"], { deferAuthenticated: true });
+    const previousController = context.authenticatedImageLoadControllers.get(image);
+    assert.ok(previousController);
+    context.bindImageWithFallback(image, ["/media.png"], { deferAuthenticated: true });
+    assert.equal(previousController.signal.aborted, true);
+    const currentController = context.authenticatedImageLoadControllers.get(image);
+    context.els[moduleName === "v1" ? "historyGallery" : "v2HistoryGrid"].append(image);
+    await new Promise((resolve) => setImmediate(resolve));
     context.clearHistoryDemandCaches();
+    assert.equal(currentController.signal.aborted, true);
+    assert.equal(context.authenticatedImageLoadControllers.has(image), false);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(context.sample().rows, 0);
     assert.equal(context.sample().objectUrls, 0);
@@ -184,7 +193,8 @@ for (const shell of ["desktop", "mobile"]) {
   const source = readFileSync(new URL(path, import.meta.url), "utf8");
   const constants = [...source.matchAll(/^const (\w+) = (\d+);$/gm)];
   assert.ok(constants.some((match) => match[1] === "historyWindowSize" && match[2] === "72"));
-  const helpers = ["cancelV3DeferredImageLoad", "deferV3ImageUntilVisible"]
+  const helpers = ["cancelV3DeferredImageLoad", "deferV3ImageUntilVisible",
+    "cancelDeferredAuthenticatedImage", "deferAuthenticatedImageUntilVisible"]
     .filter((name) => source.includes(`function ${name}(`));
   const selectedFunctions = [...functions, ...helpers];
   const program = constants.map((match) => `window.${match[1]} = ${match[2]};`).join("\n")
