@@ -9,6 +9,7 @@ from ..llm_brain.context_digest import compact_brand_visual_context
 from copy import deepcopy
 import hashlib
 import os
+import re
 from typing import Any, Callable
 
 from ..brand_memory.profile_service import BrandProfileService
@@ -574,6 +575,40 @@ def _safe_remote_contract_rejected_sections(value: Any) -> list[str]:
         if token in _SAFE_REMOTE_CONTRACT_REJECTED_SECTIONS:
             sections.append(token)
     return list(dict.fromkeys(sections))[:8]
+
+
+def _safe_remote_contract_validation_audit(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("schema_version") != "v3_remote_contract_validation_audit_v1":
+        return {}
+    raw_sections = value.get("sections")
+    if not isinstance(raw_sections, dict):
+        return {}
+    sections: dict[str, dict[str, Any]] = {}
+    allowed_sections = {"image_set_plan", "visual_task_profile", "capability_activation_intent"}
+    for section, raw in raw_sections.items():
+        if section not in allowed_sections or not isinstance(raw, dict):
+            continue
+        paths = raw.get("validation_error_paths")
+        types = raw.get("validation_error_types")
+        safe_paths = []
+        for path in paths if isinstance(paths, list) else []:
+            token = str(path or "")
+            if re.fullmatch(r"(?:image_set_plan|visual_task_profile|capability_activation_intent)(?:\.[a-z_]+|\.item)*", token):
+                safe_paths.append(token)
+        safe_types = [
+            re.sub(r"[^a-z0-9_.-]", "_", str(item or "").lower())[:64]
+            for item in (types if isinstance(types, list) else [])
+            if str(item or "").strip()
+        ][:8]
+        count = raw.get("validation_error_count")
+        sections[section] = {
+            "validation_error_count": count if isinstance(count, int) and not isinstance(count, bool) else len(safe_paths),
+            "validation_error_paths": list(dict.fromkeys(safe_paths))[:8],
+            "validation_error_types": list(dict.fromkeys(safe_types)),
+        }
+    if not sections:
+        return {}
+    return {"schema_version": "v3_remote_contract_validation_audit_v1", "sections": sections}
 
 
 def _safe_remote_image_set_cardinality_audit(value: Any) -> dict[str, Any]:
@@ -4224,6 +4259,7 @@ class ScenarioRuntime:
             outcome_class = "remote_provider_unavailable"
         elif reason_code in {
             "remote_creative_brain_image_set_plan_invalid",
+            "remote_creative_brain_task_profile_invalid",
             "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_request_contract_invalid",
         }:
@@ -4256,6 +4292,18 @@ class ScenarioRuntime:
             or audit.get("remote_semantic_contract_recovery_initial_rejected_sections")
             or []
         )
+        validation_audit = _safe_remote_contract_validation_audit(
+            audit.get("remote_contract_validation_audit")
+            or audit.get("remote_semantic_contract_recovery_final_validation_audit")
+            or audit.get("remote_semantic_contract_recovery_initial_validation_audit")
+        )
+        format_normalizations = audit.get("remote_visual_task_profile_format_normalizations")
+        safe_format_normalizations = [
+            str(item)
+            for item in format_normalizations
+            if isinstance(item, str)
+            and re.fullmatch(r"visual_task_profile(?:\.[a-z_]+|\.item)*", item)
+        ][:16] if isinstance(format_normalizations, list) else []
 
         safe_finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
             audit.get("remote_brain_finalizer_lifecycle")
@@ -4309,6 +4357,12 @@ class ScenarioRuntime:
             else {}
         ),
         "remote_contract_rejected_sections": rejected_sections,
+        **({"remote_contract_validation_audit": validation_audit} if validation_audit else {}),
+        **(
+            {"remote_visual_task_profile_format_normalizations": safe_format_normalizations}
+            if safe_format_normalizations
+            else {}
+        ),
         **(
             {
                 "remote_provider_availability_reason": str(

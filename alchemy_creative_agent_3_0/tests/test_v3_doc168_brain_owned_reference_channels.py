@@ -6,6 +6,7 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain.adapter import (
     _has_complete_remote_visual_task_profile,
+    _normalize_remote_visual_task_profile_format,
 )
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
     _compact_required_remote_creative_schema,
@@ -118,6 +119,54 @@ def test_doc168_remote_profile_is_incomplete_without_reference_ownership_intent(
 
     profile.pop("reference_channel_ownership_intent")
     assert _has_complete_remote_visual_task_profile(profile) is False
+
+
+def test_doc168_profile_format_normalization_is_lossless_and_schema_scoped() -> None:
+    profile = _complete_remote_profile()
+    profile["rendering_intent"]["rendering_mode"] = " photoreal "
+    profile["developmental_age_intent"] = " not_applicable "
+    profile["reference_channel_ownership_intent"]["reference_owned_channels"] = " identity_geometry "
+    profile["confidence"] = "0.95"
+    profile["visual_intent_tags"] = " photographic_observation "
+    profile["subject_entities"] = {
+        "entity_id": "entity_1",
+        "entity_type": "object",
+        "role": "primary_subject",
+        "source_asset_ids": "asset_1",
+        "visible_in_target": True,
+        "preservation_level": "high",
+        "confidence": "0.9",
+        "attributes": {"confidence": "0.7", "evidence": {"note": "keep"}},
+    }
+    profile["evidence"] = {
+        "evidence_id": "evidence_1",
+        "evidence_type": "visible_object",
+        "source": "remote_semantic_interpretation",
+        "value": True,
+        "confidence": 0.9,
+        "metadata": {"confidence": "0.6"},
+    }
+
+    normalized, paths = _normalize_remote_visual_task_profile_format(profile)
+
+    assert _has_complete_remote_visual_task_profile(normalized) is True
+    assert normalized["subject_entities"][0]["attributes"] == {
+        "confidence": "0.7",
+        "evidence": {"note": "keep"},
+    }
+    assert normalized["evidence"][0]["metadata"] == {"confidence": "0.6"}
+    assert "visual_task_profile.subject_entities" in paths
+    assert "visual_task_profile.subject_entities.item.source_asset_ids" in paths
+
+
+def test_doc168_profile_normalization_does_not_fill_missing_semantics() -> None:
+    profile = _complete_remote_profile()
+    profile.pop("developmental_age_intent")
+
+    normalized, _ = _normalize_remote_visual_task_profile_format(profile)
+
+    assert "developmental_age_intent" not in normalized
+    assert _has_complete_remote_visual_task_profile(normalized) is False
 
 
 def test_doc168_enforced_policy_uses_brain_meaning_not_same_word_proximity() -> None:
