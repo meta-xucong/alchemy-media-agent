@@ -172,6 +172,7 @@ class NativeBridgeService(PreviewService):
             "state": "plan_pending", "created_at": datetime.now(timezone.utc).isoformat(),
             "next_poll_at": 0, "errors": 0, "last_error": None, "cancel_requested": False,
             "plan_attempted": False, "target": None, "frozen": None, "wire_request": None,
+            "project_binding_version": "semantic_v2",
             "remote_task_id": None, "native_phase": "planning", "native_outcome": None,
             "delivery_ack": "pending", "selected_route": None, "route_generation": 0,
             "bridge_create_attempted": False, "cloud_execution_attempted": False,

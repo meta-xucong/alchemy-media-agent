@@ -44,6 +44,7 @@
     return value;
   }
   function failure(error) {
+    if (error.message === "legacy_native_project_tasks_pending") return "请先完成或核对此项目升级前的桥接任务，再开始新试用。";
     if ([401, 403].includes(error.status)) return '请先登录有权使用这个项目的账号，再重新打开试用。';
     if (error.status === 404) return '管理员可能尚未开启桥接试用，或当前项目已不可用。请联系管理员确认；原来的生成方式不受影响。';
     return '暂时无法连接。请稍后点“刷新”；不要重复新建任务。';

@@ -1932,6 +1932,7 @@ class V3ProductApiService:
                 **dict(create_request.metadata),
                 "v3_job_instance_id": _render_bridge_plan_identity.instance_id,
                 "render_bridge_native_plan": _render_bridge_plan_identity.safe_metadata(),
+                "render_bridge_project_binding": "semantic_v2",
             }
         if project_ecommerce_canonical_product_asset_ids is not None:
             canonical_ids = [
@@ -13792,6 +13793,7 @@ class V3ProductApiService:
             "ambiguous_provider_request_hold_receipt",
             "provider_image_options",
             "render_bridge_native_plan",
+            "render_bridge_project_binding",
             "doc270_project_source_library",
             "doc270_source_library_binding_receipts",
             "doc270_general_source_activation_receipts",
@@ -17323,6 +17325,7 @@ class V3ProductApiService:
             "doc270_ecommerce_view_activation_selection",
             "provider_image_options",
             "render_bridge_native_plan",
+            "render_bridge_project_binding",
             "doc73_batch_plan_digest",
             "doc73_auto_identity_anchor_receipt",
             "doc73_auto_identity_anchor_reference",

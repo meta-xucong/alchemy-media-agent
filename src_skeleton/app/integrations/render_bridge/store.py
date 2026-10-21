@@ -59,6 +59,20 @@ class PreviewStore:
                 if old["digest"] != record["digest"]:
                     raise BridgeError("idempotency_conflict", status=409, retryable=False)
                 return json.loads(old["record"])
+            # Upgrade guard only for new native intents. Preserve exact legacy
+            # same-key replay above; never rewrite an existing frozen identity.
+            # Check and insert share the same transaction. Preview is unaffected.
+            if record.get("project_binding_version") == "semantic_v2":
+                for row in db.execute("SELECT state,record FROM integration_jobs WHERE owner=? AND project=?",
+                                      (record["owner"], record["project_id"])):
+                    previous = json.loads(row["record"])
+                    outcome = previous.get("native_outcome") or {}
+                    legacy_review_pending = (row["state"] == "registered" and
+                        (outcome.get("review_pending") is True or
+                         ("review_pending" not in outcome and outcome.get("review_status") in {"finalizing", "blocked"})))
+                    if (previous.get("project_binding_version") != "semantic_v2"
+                            and (row["state"] not in TERMINAL or legacy_review_pending)):
+                        raise BridgeError("legacy_native_project_tasks_pending", status=409, retryable=False)
             if db.execute("SELECT COUNT(*) FROM integration_jobs").fetchone()[0] >= self.max_jobs:
                 raise BridgeError("preview_job_capacity", status=429, retryable=False)
             self._budget(db, sum(len(content) for content, _ in inputs))

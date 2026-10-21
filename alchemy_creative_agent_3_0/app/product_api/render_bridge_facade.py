@@ -111,16 +111,29 @@ class RenderBridgeNativeFacade:
             # review. Preserve every generation input and project revision field.
             for key in ("mcp_review", "mcp_review_status"):
                 request_snapshot["metadata"].pop(key, None)
+        # Existing frozen targets keep their original hash/receipt identity.
+        # New native plans opt into semantic project revisioning. Job linkage,
+        # timeline and cached context are derived bookkeeping, not a change to
+        # this target's frozen inputs. Membership was checked above separately.
+        project_revision = {
+            "project_updated_at": project.updated_at,
+            "project_status": str(project.status),
+            "project_owner": project_metadata["veyra_user_id"],
+            "project_job_ids": list(project.job_ids),
+        }
+        if metadata.get("render_bridge_project_binding") == "semantic_v2":
+            semantic = project.model_dump(mode="json", exclude={
+                "job_ids", "timeline_refs", "updated_at", "latest_context",
+                "last_context_built_at", "memory_summary", "schema_version",
+            })
+            project_revision = {"project_semantic_v2": semantic}
         revision = _digest(
             {
                 "target": asdict(target),
                 "actor": actor_user_id,
                 "request": request_snapshot,
                 "planning_result": record.planning_result.model_dump(mode="json"),
-                "project_updated_at": project.updated_at,
-                "project_status": str(project.status),
-                "project_owner": project_metadata["veyra_user_id"],
-                "project_job_ids": list(project.job_ids),
+                **project_revision,
             }
         )
         return record, project, revision
