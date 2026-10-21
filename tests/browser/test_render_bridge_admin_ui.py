@@ -23,6 +23,8 @@ class AdminFixture:
     def __init__(self, status=200):
         self.status = status
         self.probes = 0
+        self.hold_save = False
+        self.pending_save = None
         self.saves = []
         self.unexpected = []
         self.value = {"mode": "disabled", "base_url": "https://bridge.fixture", "workspace": "fixture-workspace",
@@ -54,6 +56,9 @@ class AdminFixture:
                 assert "token" not in body
                 self.saves.append(body)
                 self.value.update(body, runtime_active=body["mode"] != "disabled")
+                if self.hold_save:
+                    self.pending_save = route
+                    return
             route.fulfill(json=self.value)
         elif path == API + "/probe":
             assert request.method == "POST" and request.headers["x-alchemy-bridge-admin"] == "1"
@@ -76,47 +81,104 @@ def screenshot(page, name):
     page.screenshot(path=str(destination / name), full_page=True)
 
 
-def test_integrated_admin_save_probe_and_mobile_layout(browser):
+def test_simple_admin_buttons_advanced_settings_and_mobile_layout(browser):
     page = browser.new_page(viewport={"width": 1440, "height": 1100})
     fixture = AdminFixture()
     page.route("**/*", fixture.route)
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(ORIGIN + "/admin/billing")
-    expect(page.locator("#bridgeAdminState")).to_have_text("已停用")
-    expect(page.locator("#bridgeAdminProbe")).to_be_disabled()
-    expect(page.locator("#bridgeAdminCredential")).to_have_text("已配置 · 不显示密钥")
-    assert page.locator("#bridgeAdminForm input[type=password]").count() == 0
+    expect(page.locator("#bridgeAdminState")).to_have_text("已关闭")
+    expect(page.locator("#bridgeAdminUrl")).to_be_hidden()
+    expect(page.locator("#bridgeAdminResult")).to_be_hidden()
+    expect(page.locator("#bridgeAdminOpen")).to_be_hidden()
+    assert "fake-image" not in page.locator(".render-bridge-console").inner_text()
     assert fixture.probes == 0
-    page.get_by_label("运行模式").select_option("enabled")
-    page.get_by_role("button", name="保存桥接设置").click()
-    expect(page.locator("#bridgeAdminState")).to_have_text("已启用")
-    assert len(fixture.saves) == 1 and fixture.probes == 0
-    page.get_by_role("button", name="探测已保存的配置").click()
-    expect(page.locator("#bridgeAdminResult")).to_contain_text("HTTP 连接：可连接")
-    expect(page.locator("#bridgeAdminResult")).to_contain_text("执行节点：离线")
-    expect(page.locator("#bridgeAdminResult")).to_contain_text("真实生图尚未验证")
+    page.get_by_role("button", name="检查连接", exact=True).click()
+    expect(page.locator("#bridgeAdminHint")).to_contain_text("先点击开启")
+    assert fixture.probes == 0
+    page.get_by_role("button", name="开启", exact=True).click()
+    expect(page.locator("#bridgeAdminState")).to_have_text("已开启，待检查")
+    expect(page.locator("#bridgeAdminOpen")).to_have_attribute("href", "/render-bridge-preview")
+    expect(page.locator("#bridgeAdminOpen")).to_be_visible()
+    assert fixture.saves[0]["mode"] == "enabled" and fixture.saves[0]["profiles"] == ["fake-image"]
+    assert fixture.probes == 0
+    page.get_by_role("button", name="检查连接", exact=True).click()
+    expect(page.locator("#bridgeAdminState")).to_have_text("绘图电脑不在线")
+    expect(page.locator("#bridgeAdminHint")).to_contain_text("请打开绘图电脑上的桥接程序")
+    expect(page.locator("#bridgeAdminResult")).to_be_hidden()
     screenshot(page, "admin-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
     screenshot(page, "admin-mobile.png")
     assert page.locator(".render-bridge-console").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
-    page.get_by_label("运行模式").select_option("disabled")
-    page.get_by_role("button", name="保存桥接设置").click()
-    expect(page.locator("#bridgeAdminProbe")).to_be_disabled()
-    expect(page.locator("#bridgeAdminResult")).to_be_hidden()
+    page.locator("#bridgeAdminAdvanced summary").click()
+    expect(page.locator("#bridgeAdminUrl")).to_be_visible()
+    expect(page.locator("#bridgeAdminCredential")).to_have_text("已配置 · 不显示密钥")
+    assert page.locator("#bridgeAdminForm input[type=password]").count() == 0
+    page.get_by_role("button", name="Codex 绘图", exact=True).click()
+    expect(page.get_by_role("button", name="Codex 绘图", exact=True)).to_have_attribute("aria-pressed", "true")
+    # Unsaved advanced edits cannot silently add a real tool when pausing.
+    page.get_by_role("button", name="暂停", exact=True).click()
+    expect(page.locator("#bridgeAdminState")).to_have_text("已暂停")
+    assert fixture.saves[-1]["mode"] == "draining"
+    assert fixture.saves[-1]["profiles"] == ["fake-image"]
+    expect(page.locator("#bridgeAdminHint")).to_contain_text("已有任务会继续完成")
+    page.get_by_role("button", name="保存高级设置", exact=True).click()
+    expect(page.locator("#bridgeAdminHint")).to_contain_text("高级设置已保存")
+    page.locator("#bridgeAdminDiagnostics summary").click()
+    expect(page.locator("#bridgeAdminResult")).to_be_visible()
+    screenshot(page, "admin-advanced-mobile.png")
+    page.get_by_role("button", name="关闭", exact=True).click()
+    expect(page.locator("#bridgeAdminState")).to_have_text("已关闭")
+    expect(page.locator("#bridgeAdminOpen")).to_be_hidden()
+    assert fixture.saves[-1]["mode"] == "disabled"
     assert fixture.probes == 1
     assert not fixture.unexpected and not errors
     page.close()
 
 
-@pytest.mark.parametrize("status,label", [(401, "未登录"), (403, "非管理员")])
+def test_incomplete_setup_offers_plain_language_next_step(browser):
+    page = browser.new_page()
+    fixture = AdminFixture()
+    fixture.value.update(base_url="", workspace="", credential_configured=False)
+    page.route("**/*", fixture.route)
+    page.goto(ORIGIN + "/admin/billing")
+    expect(page.locator("#bridgeAdminState")).to_have_text("还没连接好")
+    page.get_by_role("button", name="开启", exact=True).click()
+    expect(page.locator("#bridgeAdminHint")).to_have_text("请找管理员完成首次连接，再点击开启。")
+    assert not fixture.saves and not fixture.probes
+    assert "HTTP" not in page.locator(".render-bridge-console").inner_text()
+    screenshot(page, "admin-setup-needed.png")
+    page.close()
+
+
+@pytest.mark.parametrize("status,label", [(401, "请先登录"), (403, "需要管理员权限")])
 def test_admin_permissions_leave_controls_disabled(browser, status, label):
     page = browser.new_page()
     fixture = AdminFixture(status)
     page.route("**/*", fixture.route)
     page.goto(ORIGIN + "/admin/billing")
     expect(page.locator("#bridgeAdminState")).to_have_text(label)
-    expect(page.locator("#bridgeAdminSave")).to_be_disabled()
+    expect(page.locator("#bridgeAdminEnable")).to_be_disabled()
     expect(page.locator("#bridgeAdminProbe")).to_be_disabled()
+    expect(page.locator("#bridgeAdminOpen")).to_be_hidden()
     assert not fixture.saves and not fixture.probes and not fixture.unexpected
+    page.close()
+
+
+def test_pending_action_disables_duplicate_clicks(browser):
+    page = browser.new_page()
+    fixture = AdminFixture()
+    fixture.hold_save = True
+    page.route("**/*", fixture.route)
+    page.goto(ORIGIN + "/admin/billing")
+    expect(page.locator("#bridgeAdminState")).to_have_text("已关闭")
+    page.get_by_role("button", name="开启", exact=True).click()
+    expect(page.locator("#bridgeAdminState")).to_have_text("正在保存…")
+    for name in ("开启", "暂停", "关闭", "检查连接"):
+        expect(page.get_by_role("button", name=name, exact=True)).to_be_disabled()
+    assert len(fixture.saves) == 1
+    fixture.pending_save.fulfill(json=fixture.value)
+    expect(page.locator("#bridgeAdminState")).to_have_text("已开启，待检查")
+    expect(page.get_by_role("button", name="暂停", exact=True)).to_be_enabled()
     page.close()

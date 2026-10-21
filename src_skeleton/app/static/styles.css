@@ -11352,3 +11352,7 @@ body.v3-page-loading-active {
 .bridge-admin-grid small { color: var(--muted, #716a62); font-size: 12px; }
 .bridge-admin-result { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.7; padding: 16px; margin-top: 16px; border: 1px solid var(--line, #d5d0c8); border-radius: 12px; }
 @media (max-width: 640px) { .bridge-admin-grid { grid-template-columns: minmax(0, 1fr); } .render-bridge-console .billing-actions { flex-wrap: wrap; } }
+.bridge-admin-details { margin-top: 16px; border-top: 1px solid var(--line, #d5d0c8); padding-top: 14px; }
+.bridge-admin-details > summary { cursor: pointer; color: var(--muted, #716a62); font-weight: 600; }
+#bridgeAdminProfiles { flex-wrap: wrap; }
+#bridgeAdminProfiles button[aria-pressed="true"] { border-color: var(--ink, #171411); background: var(--black-soft, #f3f0ea); box-shadow: inset 0 0 0 1px var(--ink, #171411); }

@@ -32,30 +32,42 @@
             <div><p class="eyebrow">Render Bridge</p><h3 id="bridgeAdminTitle">渲染桥接设置</h3></div>
             <span id="bridgeAdminState" class="state-pill" role="status">读取中</span>
           </div>
-          <p class="micro-copy">仅影响独立的 Render Bridge 开发入口，不改变原有 Alchemy 生图流程。启用不代表真实工具已就绪或正式交付已验收。</p>
-          <form id="bridgeAdminForm" aria-describedby="bridgeAdminHint">
-            <fieldset id="bridgeAdminFields" disabled>
-              <div class="bridge-admin-grid">
-                <label class="field"><span>运行模式</span><select id="bridgeAdminMode">
-                  <option value="disabled">停用：暂停恢复，不删除任务</option>
-                  <option value="enabled">启用：允许新任务与恢复</option>
-                  <option value="draining">排空：只恢复已有任务</option>
-                </select></label>
-                <label class="field"><span>Bridge 服务地址</span><input id="bridgeAdminUrl" type="url" maxlength="2048" placeholder="https://bridge.example.com" autocomplete="off" /></label>
-                <label class="field"><span>工作区标识</span><input id="bridgeAdminWorkspace" maxlength="128" autocomplete="off" /></label>
-                <div class="field"><span>连接凭据</span><p id="bridgeAdminCredential" class="micro-copy">检查中</p><small>凭据仅由服务器环境提供，不在网页中读取或保存。地址须与凭据配置的目标一致。</small></div>
-                <label class="field"><span>允许的执行配置（可多选）</span><select id="bridgeAdminProfiles" multiple size="3"><option value="fake-image">fake-image · 模拟验收</option><option value="codex-image">codex-image · 本地工具</option><option value="midjourney-manual">midjourney-manual · 人工操作</option></select></label>
-                <label class="field"><span>原生开发入口配置（可多选）</span><select id="bridgeAdminNativeProfiles" multiple size="3"><option value="fake-image">fake-image</option><option value="codex-image">codex-image</option><option value="midjourney-manual">midjourney-manual</option></select></label>
-              </div>
-              <label class="billing-toggle-row"><input id="bridgeAdminNative" type="checkbox" /><span>启用原生开发验证入口（不是生产切换）</span></label>
-              <div class="billing-actions">
-                <button id="bridgeAdminSave" class="button primary" type="submit">保存桥接设置</button>
-                <button id="bridgeAdminProbe" class="button secondary" type="button">探测已保存的配置</button>
-              </div>
-            </fieldset>
-          </form>
-          <p id="bridgeAdminHint" class="micro-copy" role="status">页面加载只读取本地配置，不发起远程探测。</p>
-          <div id="bridgeAdminResult" class="bridge-admin-result" role="status" aria-live="polite" hidden></div>
+          <p class="micro-copy">连接电脑上的绘图工具。开启后仍需检查工具状态，不代表已经完成真实生图验证。</p>
+          <p id="bridgeAdminToolSummary" class="micro-copy">正在读取当前工具…</p>
+          <div id="bridgeAdminActions" class="billing-actions" aria-label="桥接操作">
+            <button id="bridgeAdminEnable" class="button primary" type="button" disabled>开启</button>
+            <button id="bridgeAdminPause" class="button secondary" type="button" disabled>暂停</button>
+            <button id="bridgeAdminDisable" class="button secondary" type="button" disabled>关闭</button>
+            <button id="bridgeAdminProbe" class="button secondary" type="button" disabled>检查连接</button>
+          </div>
+          <p><a id="bridgeAdminOpen" class="surface-switch-link" href="/render-bridge-preview" hidden>打开桥接试用入口</a></p>
+          <p class="micro-copy">暂停：不接新任务，已有任务继续。关闭：完全停止桥接，已有任务保留。</p>
+          <p id="bridgeAdminHint" class="micro-copy" role="status">正在读取设置，请稍候。</p>
+          <details id="bridgeAdminAdvanced" class="bridge-admin-details">
+            <summary>高级设置</summary>
+            <p class="micro-copy">首次连接请找管理员完成。这里的修改需要单独保存；上方按钮只改变已保存连接的开关。</p>
+            <form id="bridgeAdminForm" aria-describedby="bridgeAdminHint">
+              <fieldset id="bridgeAdminFields" disabled>
+                <div class="bridge-admin-grid">
+                  <label class="field"><span>Bridge 服务地址</span><input id="bridgeAdminUrl" type="url" maxlength="2048" placeholder="https://bridge.example.com" autocomplete="off" /></label>
+                  <label class="field"><span>工作区标识</span><input id="bridgeAdminWorkspace" maxlength="128" autocomplete="off" /></label>
+                  <div class="field"><span>连接凭据</span><p id="bridgeAdminCredential" class="micro-copy">检查中</p><small>凭据由管理员在服务器上设置，网页不会显示或保存密钥。</small></div>
+                  <div class="field"><span id="bridgeAdminToolsLabel">允许使用的绘图工具</span><div id="bridgeAdminProfiles" class="billing-actions" role="group" aria-labelledby="bridgeAdminToolsLabel">
+                    <button class="button secondary" type="button" data-profile="fake-image" aria-pressed="false">模拟测试</button>
+                    <button class="button secondary" type="button" data-profile="codex-image" aria-pressed="false">Codex 绘图</button>
+                    <button class="button secondary" type="button" data-profile="midjourney-manual" aria-pressed="false">Midjourney 人工导入</button>
+                  </div><small>只修改允许使用的工具，不会安装、授权或自动调用真实工具。</small></div>
+                  <label class="field"><span>原生开发入口的工具（可多选）</span><select id="bridgeAdminNativeProfiles" multiple size="3"><option value="fake-image">模拟测试</option><option value="codex-image">Codex 绘图</option><option value="midjourney-manual">Midjourney 人工导入</option></select></label>
+                </div>
+                <label class="billing-toggle-row"><input id="bridgeAdminNative" type="checkbox" /><span>启用原生开发验证入口（不是生产切换）</span></label>
+                <div class="billing-actions"><button id="bridgeAdminSave" class="button primary" type="submit">保存高级设置</button></div>
+              </fieldset>
+            </form>
+          </details>
+          <details id="bridgeAdminDiagnostics" class="bridge-admin-details">
+            <summary>诊断详情</summary>
+            <div id="bridgeAdminResult" class="bridge-admin-result" aria-live="polite">尚未检查连接。页面不会自动探测。</div>
+          </details>
         </section>
         <section class="panel flow-section billing-console-panel">
           <div class="panel-head section-title">

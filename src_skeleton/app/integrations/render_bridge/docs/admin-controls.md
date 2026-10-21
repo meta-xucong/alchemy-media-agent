@@ -75,3 +75,27 @@ all three changed scripts. Three Playwright administrator tests collect, with
 synthetic intercepted requests only and desktop/mobile screenshots configured as
 CI artifacts. Browser execution remains for CI because this local executor's
 browser socket boundary was previously denied. No local workaround was attempted.
+
+## Novice-first presentation revision
+
+The initial integrated panel exposed configuration mechanics before a useful
+choice. The latest user direction supersedes that presentation: novices should
+click a few clear buttons and not learn the configuration model. The correction
+belongs only to the administrator interaction layer, not runtime or task authority.
+
+The default panel now exposes 开启 / 暂停 / 关闭 / 检查连接 and one plain-language
+status with a next action. Mode buttons persist immediately; every action disables
+concurrent duplicate clicks. Pause means no new tasks while existing tasks continue;
+close means no bridge activity, preserving tasks. Neither action changes the
+normal Alchemy provider, tool allowlist, credential or native development switch.
+Mode actions always use saved settings, so unsaved advanced edits cannot silently
+activate a real provider. The configured usable entry is linked as a trial entry;
+opening it is distinct from generating an image or production acceptance.
+
+Tool details, endpoint, workspace, environment credential status and native switches
+remain in a closed 高级设置 disclosure. Tool selection uses friendly buttons, with
+explicit advanced save. Raw protocol evidence stays in closed 诊断详情. Incomplete
+setup asks the user to find an administrator rather than exposing technical error
+codes. Browser fixtures cover immediate actions, collapsed details, unavailable
+nodes, setup guidance, permissions, preserved tool choices and duplicate-click
+blocking, with main-panel and expanded mobile screenshots for CI inspection.
