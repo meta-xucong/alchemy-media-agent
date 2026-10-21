@@ -109,3 +109,19 @@ caught three failures while preserving the intended visibility assertions. This
 is a presentation-layer CSS precedence mismatch, not an authorization or runtime
 state defect. A scoped hidden override inside the Render Bridge panel restores
 the browser contract without changing other page components or weakening tests.
+
+## Independent administrator card layout
+
+User feedback and the rendered desktop screenshot show all four top-level panels
+sharing touching edges, despite their individual borders. The owning layer is the
+administrator container layout: it had no inter-panel gap. The minimal correction
+is scoped to `.billing-admin-page` and its direct panel children: one-column grid,
+24px desktop / 18px mobile gaps, consistent 24px / 18px internal padding, restrained
+rounded borders and a subtle shadow using the current palette. Shared panels and
+other pages retain their styles; buttons and behavior are unchanged.
+
+Browser assertions now measure all four card bounding boxes on desktop and mobile,
+requiring positive specified spacing, consistent padding and no horizontal overflow.
+Full-page evidence captures scroll through every card before returning to the top,
+so screenshot inspection includes normally rendered lower cards, not blank deferred
+content. Existing interaction and permission assertions remain unchanged.

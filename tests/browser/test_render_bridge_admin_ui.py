@@ -78,8 +78,29 @@ class AdminFixture:
 def screenshot(page, name):
     destination = Path(os.getenv("BRIDGE_UI_SCREENSHOT_DIR", "/tmp/render-bridge-admin-screenshots"))
     destination.mkdir(parents=True, exist_ok=True)
+    # Exercise normal rendering of every independent card before full-page capture.
+    # This also handles browser rendering optimizations for offscreen content.
+    for card in page.locator(".billing-admin-page > .panel").all():
+        card.scroll_into_view_if_needed()
+        expect(card).to_be_visible()
+    page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(path=str(destination / name), full_page=True)
 
+
+
+def assert_independent_cards(page, minimum_gap):
+    cards = page.locator(".billing-admin-page > .panel")
+    expect(cards).to_have_count(4)
+    measurements = cards.evaluate_all("""elements => elements.map(el => {
+        const box = el.getBoundingClientRect(), style = getComputedStyle(el);
+        return { top: box.top, bottom: box.bottom, padding: parseFloat(style.paddingTop),
+                 radius: parseFloat(style.borderRadius), overflow: el.scrollWidth > el.clientWidth + 1 };
+    })""")
+    for previous, current in zip(measurements, measurements[1:]):
+        assert current["top"] - previous["bottom"] >= minimum_gap
+    assert len({card["padding"] for card in measurements}) == 1
+    assert all(card["radius"] >= 14 and not card["overflow"] for card in measurements)
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
 
 def test_simple_admin_buttons_advanced_settings_and_mobile_layout(browser):
     page = browser.new_page(viewport={"width": 1440, "height": 1100})
@@ -107,8 +128,10 @@ def test_simple_admin_buttons_advanced_settings_and_mobile_layout(browser):
     expect(page.locator("#bridgeAdminState")).to_have_text("绘图电脑不在线")
     expect(page.locator("#bridgeAdminHint")).to_contain_text("请打开绘图电脑上的桥接程序")
     expect(page.locator("#bridgeAdminResult")).to_be_hidden()
+    assert_independent_cards(page, 24)
     screenshot(page, "admin-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
+    assert_independent_cards(page, 18)
     screenshot(page, "admin-mobile.png")
     assert page.locator(".render-bridge-console").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
     page.locator("#bridgeAdminAdvanced summary").click()
