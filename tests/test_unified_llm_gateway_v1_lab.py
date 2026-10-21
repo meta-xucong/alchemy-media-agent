@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 
 import httpx
@@ -558,3 +559,231 @@ def test_empty_successful_lab_responses_are_classified_as_structured_output_fail
             assert alchemy_lab_llm._is_failover_eligible(exc)  # noqa: SLF001
         else:
             raise AssertionError("empty successful response must be eligible for the selected backup model")
+
+
+def test_v1_kimi_k3_uses_chat_json_mode_and_supported_effort(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
+    captured: dict[str, object] = {}
+
+    class FakeChatCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}', refusal=None), finish_reason="stop")])
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+    result = asyncio.run(work_intensity._ask_openai_for_json_plan(  # noqa: SLF001
+        system_prompt="Return JSON.", user_payload={"task": "plan"}, model="kimi-k3",
+        reasoning_effort="medium", temperature=0, timeout_seconds=3,
+    ))
+
+    assert result == {"ok": True}
+    assert captured["model"] == "kimi-k3"
+    assert captured["response_format"] == {"type": "json_object"}
+    assert captured["reasoning_effort"] == "high"
+    assert not {"temperature", "top_p", "top_k", "n", "presence_penalty", "frequency_penalty"} & set(captured)
+
+
+def test_v1_gpt6_responses_request_omits_sampling_fields(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
+    captured: dict[str, object] = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text='{"ok": true}', output=[], status="completed", incomplete_details=None)
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+    result = asyncio.run(work_intensity._ask_openai_for_json_plan(  # noqa: SLF001
+        system_prompt="Return JSON.", user_payload={"task": "plan"}, model="gpt-6.1-sol",
+        reasoning_effort="xhigh", temperature=0, timeout_seconds=3,
+    ))
+
+    assert result == {"ok": True}
+    assert captured["reasoning"] == {"effort": "xhigh"}
+    assert not {"temperature", "top_p", "top_logprobs"} & set(captured)
+
+
+def test_v1_claude_sonnet_55_sends_effort_and_omits_sampling_parameters(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"content": [{"type": "text", "text": '{"ok": true}'}]}
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, headers, json):
+            captured.update(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(work_intensity.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(work_intensity._ask_anthropic_for_json_plan(  # noqa: SLF001
+        provider="anthropic", system_prompt="Return JSON.", user_payload={"task": "plan"},
+        model="claude-sonnet-5-5", max_tokens=1000, reasoning_effort="medium",
+        temperature=0.2, timeout_seconds=3,
+    ))
+
+    assert result == {"ok": True}
+    assert captured["output_config"] == {"effort": "medium"}
+    assert not {"temperature", "top_p", "top_k"} & set(captured)
+
+
+def test_lab_kimi_k3_vision_keeps_lab_image_route_and_uses_compatible_chat_payload(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(settings, "lab_kimi_api_key", "lab-kimi-key")
+    monkeypatch.setattr(settings, "lab_kimi_base_url", "https://kimi.example.test/v1")
+    image = tmp_path / "reference.png"
+    image.write_bytes(b"fake-image-bytes")
+    captured: dict[str, object] = {}
+    client_config: dict[str, object] = {}
+
+    class FakeChatCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}', refusal=None), finish_reason="stop")])
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            client_config.update(kwargs)
+            self.chat = SimpleNamespace(completions=FakeChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+    result = asyncio.run(alchemy_lab_llm._ask_provider_for_json(  # noqa: SLF001
+        provider="kimi", model="kimi-k3", system_prompt="Describe the image.",
+        user_payload={"task": "inspect"}, reasoning_effort="low", max_tokens=512,
+        temperature=0.1, timeout_seconds=3, image_paths=[image],
+    ))
+
+    assert result == {"ok": True}
+    assert captured["reasoning_effort"] == "low"
+    assert captured["response_format"] == {"type": "json_object"}
+    assert captured["messages"][1]["content"][1]["type"] == "image_url"
+    assert "temperature" not in captured
+    assert client_config["api_key"] == "lab-kimi-key"
+    assert client_config["base_url"] == "https://kimi.example.test/v1"
+
+
+def test_lab_gpt6_responses_request_omits_sampling_fields(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
+    monkeypatch.setattr(settings, "lab_openai_api_key", "lab-openai-key")
+    monkeypatch.setattr(settings, "lab_openai_base_url", "https://lab-openai.example.test/v1")
+    captured: dict[str, object] = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text='{"ok": true}', output=[], status="completed", incomplete_details=None)
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+    result = asyncio.run(alchemy_lab_llm._ask_openai_json(  # noqa: SLF001
+        system_prompt="Return JSON.", user_payload={"task": "plan"}, model="gpt-6.1-sol",
+        reasoning_effort="high", temperature=0, timeout_seconds=3, image_paths=[],
+    ))
+
+    assert result == {"ok": True}
+    assert captured["reasoning"] == {"effort": "high"}
+    assert not {"temperature", "top_p", "top_logprobs"} & set(captured)
+
+
+@pytest.mark.parametrize(
+    ("model", "with_image", "expects_temperature"),
+    [
+        ("gpt-6.1-sol", False, False),
+        ("gpt-6.1-sol", True, False),
+        ("gpt-5.6-terra", False, True),
+        ("gpt-5.6-terra", True, True),
+    ],
+)
+def test_lab_responses_temperature_is_model_scoped_for_text_and_vision(
+    monkeypatch, tmp_path, model: str, with_image: bool, expects_temperature: bool
+) -> None:
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
+    monkeypatch.setattr(settings, "lab_openai_api_key", "lab-openai-key")
+    monkeypatch.setattr(settings, "lab_openai_base_url", "https://lab-openai.example.test/v1")
+    captured: dict[str, object] = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text='{"ok": true}', output=[], status="completed", incomplete_details=None)
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+    image_paths = []
+    if with_image:
+        image = tmp_path / f"{model}.png"
+        image.write_bytes(b"fixture-image")
+        image_paths = [image]
+
+    result = asyncio.run(alchemy_lab_llm._ask_openai_json(  # noqa: SLF001
+        system_prompt="Return JSON.", user_payload={"task": "plan"}, model=model,
+        reasoning_effort="medium", temperature=0.37, timeout_seconds=3, image_paths=image_paths,
+    ))
+
+    assert result == {"ok": True}
+    assert ("temperature" in captured) is expects_temperature
+    if expects_temperature:
+        assert captured["temperature"] == 0.37
+
+
+def test_lab_claude_sonnet_55_sends_effort_and_omits_sampling_fields(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"content": [{"type": "text", "text": '{"ok": true}'}]}
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, headers, json):
+            captured.update(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(alchemy_lab_llm.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(alchemy_lab_llm._ask_provider_for_json(  # noqa: SLF001
+        provider="anthropic", model="claude-sonnet-5-5", system_prompt="Return JSON.",
+        user_payload={"task": "plan"}, reasoning_effort="low", max_tokens=512,
+        temperature=0.1, timeout_seconds=3, image_paths=[],
+    ))
+
+    assert result == {"ok": True}
+    assert captured["output_config"] == {"effort": "low"}
+    assert not {"temperature", "top_p", "top_k"} & set(captured)

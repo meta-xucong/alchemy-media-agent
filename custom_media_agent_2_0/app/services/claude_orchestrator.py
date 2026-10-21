@@ -1491,12 +1491,22 @@ def _invoke_openai_compatible_stage_json(
 
 
 def _openai_reasoning_effort(model: str, configured_effort: str) -> str | None:
-    """Translate Claude's configured effort into the supported OpenAI field."""
+    """Translate semantic effort into the selected model's supported field values."""
 
     normalized_model = _text_value(model).lower()
+    normalized_effort = _text_value(configured_effort).lower()
+    if normalized_model.startswith("kimi-k3"):
+        return {
+            "low": "low",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max",
+            "max": "max",
+        }.get(normalized_effort, "low")
     if not normalized_model.startswith(("gpt-", "o1", "o3", "o4")):
         return None
-    normalized_effort = _text_value(configured_effort).lower()
+    if normalized_model.startswith("gpt-6.1-sol"):
+        return normalized_effort if normalized_effort in {"low", "medium", "high", "xhigh", "max"} else "low"
     if normalized_effort in {"xhigh", "max"}:
         return "high"
     if normalized_effort in {"low", "medium", "high"}:

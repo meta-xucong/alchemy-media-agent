@@ -5807,7 +5807,8 @@ def test_selected_openai_model_fallback_uses_openai_compatible_checkpoint_lane(m
     assert meta["model"] == "kimi-k3"
     assert captured["url"] == "https://aiself.example.test/v1/chat/completions"
     assert captured["payload"]["model"] == "kimi-k3"
-    assert "reasoning_effort" not in captured["payload"]
+    assert captured["payload"]["reasoning_effort"] == "high"
+    assert not {"temperature", "top_p", "top_k", "n", "presence_penalty", "frequency_penalty"} & set(captured["payload"])
     assert captured["payload"]["response_format"] == {"type": "json_object"}
     assert captured["headers"]["authorization"] == "Bearer one-unified-test-key"
     assert "one-unified-test-key" not in json.dumps(captured["payload"])
@@ -5815,7 +5816,10 @@ def test_selected_openai_model_fallback_uses_openai_compatible_checkpoint_lane(m
 
 def test_v2_effort_translation_omits_unsupported_openai_compatible_models() -> None:
     assert claude_orchestrator_service._openai_reasoning_effort("gpt-6.1-sol", "medium") == "medium"  # noqa: SLF001
-    assert claude_orchestrator_service._openai_reasoning_effort("gpt-6.1-sol", "max") == "high"  # noqa: SLF001
+    assert claude_orchestrator_service._openai_reasoning_effort("gpt-6.1-sol", "max") == "max"  # noqa: SLF001
+    assert claude_orchestrator_service._openai_reasoning_effort("gpt-6.1-sol", "xhigh") == "xhigh"  # noqa: SLF001
+    assert claude_orchestrator_service._openai_reasoning_effort("kimi-k3", "medium") == "high"  # noqa: SLF001
+    assert claude_orchestrator_service._openai_reasoning_effort("kimi-k3", "xhigh") == "max"  # noqa: SLF001
     assert claude_orchestrator_service._openai_reasoning_effort("deepseek-v4-pro", "high") is None  # noqa: SLF001
 
 

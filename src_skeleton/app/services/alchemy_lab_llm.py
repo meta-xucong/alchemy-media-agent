@@ -208,7 +208,7 @@ async def _ask_provider_for_json(
 ) -> dict[str, Any]:
     if provider not in {"openai", "anthropic"} and not image_paths:
         raise LabLLMError("The selected LAB text model has no supported gateway protocol route")
-    if provider == "openai":
+    if provider == "openai" or provider == "kimi":
         return await _ask_openai_json(
             system_prompt=system_prompt,
             user_payload=user_payload,
@@ -217,6 +217,7 @@ async def _ask_provider_for_json(
             temperature=temperature,
             timeout_seconds=timeout_seconds,
             image_paths=image_paths,
+            provider=provider,
         )
     return await _ask_anthropic_compatible_json(
         provider=provider,
@@ -224,6 +225,7 @@ async def _ask_provider_for_json(
         user_payload=user_payload,
         model=model,
         max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         image_paths=image_paths,
@@ -239,6 +241,7 @@ async def _ask_openai_json(
     temperature: float,
     timeout_seconds: float,
     image_paths: list[Path],
+    provider: str = "openai",
 ) -> dict[str, Any]:
     if not image_paths and (not settings.llm_gateway_api_key or not settings.llm_gateway_base_url):
         raise LabLLMError("Unified text LLM gateway key and base URL must both be configured")
@@ -246,22 +249,37 @@ async def _ask_openai_json(
         from openai import AsyncOpenAI
     except ModuleNotFoundError as exc:
         raise LabLLMError("openai package is not installed") from exc
-    token = settings.llm_gateway_api_key if not image_paths else _lab_token("openai")
+    token = settings.llm_gateway_api_key if not image_paths else _lab_token(provider)
     if not token:
         raise LabLLMError("Lab OpenAI API key is not configured")
     client = AsyncOpenAI(
         **openai_sdk_client_kwargs(
             api_key=token,
-            base_url=settings.llm_gateway_base_url if not image_paths else settings.lab_openai_base_url,
+            base_url=settings.llm_gateway_base_url if not image_paths else _lab_base_url(provider),
             timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds)),
             max_retries=0,
         )
     )
-    content: list[dict[str, Any]] = [{"type": "input_text", "text": json.dumps(user_payload, ensure_ascii=False)}]
+    if _is_kimi_k3(model):
+        content: list[dict[str, Any]] = [{"type": "text", "text": json.dumps(user_payload, ensure_ascii=False)}]
+        for path in image_paths[:4]:
+            content.append({"type": "image_url", "image_url": {"url": _image_data_url(path)}})
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
+            response_format={"type": "json_object"},
+            reasoning_effort=_kimi_reasoning_effort(reasoning_effort),
+        )
+        return _loads_json_object(_chat_completion_text(response))
+
+    content = [{"type": "input_text", "text": json.dumps(user_payload, ensure_ascii=False)}]
     for path in image_paths[:4]:
         content.append({"type": "input_image", "image_url": _image_data_url(path)})
     response_kwargs: dict[str, Any] = {}
-    if image_paths or not model.lower().startswith("gpt-6.1"):
+    if not _is_gpt_6_1_sol(model):
         response_kwargs["temperature"] = temperature
     response = await client.responses.create(
         model=model,
@@ -281,6 +299,7 @@ async def _ask_anthropic_compatible_json(
     user_payload: dict[str, Any],
     model: str,
     max_tokens: int,
+    reasoning_effort: str,
     temperature: float,
     timeout_seconds: float,
     image_paths: list[Path],
@@ -306,10 +325,13 @@ async def _ask_anthropic_compatible_json(
     payload = {
         "model": model,
         "max_tokens": _anthropic_max_tokens(provider, model, max_tokens),
-        **({} if "claude" in model.lower() else {"temperature": temperature}),
         "system": system_prompt,
         "messages": [{"role": "user", "content": content}],
     }
+    if _is_claude_sonnet_55(model) and reasoning_effort in {"low", "medium", "high", "xhigh", "max"}:
+        payload["output_config"] = {"effort": reasoning_effort}
+    elif "claude" not in model.lower():
+        payload["temperature"] = temperature
     headers = {
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -343,6 +365,29 @@ def _text_model_protocol(model: str) -> str:
     if normalized.startswith(("gpt-", "o1", "o3", "o4", "deepseek-", "kimi-", "doubao-")):
         return "openai"
     return "unsupported"
+
+
+def _is_claude_sonnet_55(model: str) -> bool:
+    return str(model or "").strip().lower().startswith("claude-sonnet-5-5")
+
+
+def _is_kimi_k3(model: str) -> bool:
+    return str(model or "").strip().lower().startswith("kimi-k3")
+
+
+def _is_gpt_6_1_sol(model: str) -> bool:
+    return str(model or "").strip().lower().startswith("gpt-6.1-sol")
+
+
+def _kimi_reasoning_effort(configured_effort: str | None) -> str:
+    normalized = str(configured_effort or "").strip().lower()
+    return {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max",
+    }.get(normalized, "low")
 
 
 def _lab_model(provider: str) -> str:
@@ -452,6 +497,23 @@ def _response_text(response: Any) -> str:
     if chunks:
         return "".join(chunks)
     raise LabStructuredOutputError("Lab LLM response did not include text")
+
+
+def _chat_completion_text(response: Any) -> str:
+    choices = getattr(response, "choices", None) or []
+    choice = choices[0] if choices else None
+    message = getattr(choice, "message", None)
+    refusal = getattr(message, "refusal", None)
+    if refusal or str(getattr(choice, "finish_reason", "") or "").lower() == "content_filter":
+        raise PermissionError("Kimi refused or filtered the request; fallback is not permitted")
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        text = "".join(str(getattr(item, "text", "") or "") for item in content)
+        if text.strip():
+            return text
+    raise LabStructuredOutputError("Kimi response did not include text")
 
 
 def _anthropic_response_text(payload: dict[str, Any]) -> str:
