@@ -141,12 +141,24 @@ class NativeBridgeService(PreviewService):
         if (not record or record["owner"] != owner or record["workspace"] != self.settings.workspace
                 or not await self.snapshot(owner, record["project_id"])):
             raise BridgeError("task_not_found", status=404, retryable=False)
+        record = await self._reopen_legacy_review(record)
         return record, True
+
+    async def _reopen_legacy_review(self, record):
+        outcome = record.get("native_outcome") or {}
+        if (self.settings.mode != "disabled" and record["state"] == "registered"
+                and "review_pending" not in outcome
+                and outcome.get("review_status") in {"finalizing", "blocked"}):
+            record = await self.local(self.store.patch, record["id"], {
+                "state": "review_pending", "native_phase": "ack_pending", "next_poll_at": 0,
+            })
+        return record
 
     async def list(self, owner, project_id):
         if not await self.snapshot(owner, project_id):
             raise BridgeError("project_not_found", status=404, retryable=False)
-        return [self.public(record) for record in await self.local(self.store.list, owner, project_id)
+        return [self.public(await self._reopen_legacy_review(record))
+                for record in await self.local(self.store.list, owner, project_id)
                 if record["workspace"] == self.settings.workspace]
 
     async def cancel(self, owner, job_id):
@@ -165,7 +177,8 @@ class NativeBridgeService(PreviewService):
             "test_fixture": record["request"]["profile_id"] == "fake-image", "real_tool_verified": False,
             "native_registration": native.get("status", "pending"), "delivery_ack": record.get("delivery_ack", "pending"),
             "native_registration_ref": native.get("native_registration_ref"),
-            "review_status": native.get("review_status"), "formal_delivery": False,
+            "review_status": native.get("current_review_status", native.get("review_status")),
+            "review_pending": native.get("review_pending", record["state"] == "review_pending"), "formal_delivery": False,
             "billing": native.get("billing", {"mode": "v3_zero_credit_stub", "charged": False}),
             "size": f"{record['request']['width']}x{record['request']['height']}",
             "output_format": record["request"].get("output_format", "png"),
@@ -365,10 +378,15 @@ class NativeBridgeService(PreviewService):
         if not stored or stored[0]["original_sha256"] != outcome["original_sha256"]:
             raise BridgeError("native_confirmation_hash_mismatch", retryable=False)
         await self._patch(record, native_phase="ack_pending")
-        await self.client.accept_registered_receipt(record["receipt_id"],
-            client_receipt_id=record["client_receipt_id"], original_hash=outcome["original_sha256"],
-            normalized_hash=outcome.get("normalized_sha256"), native_registration_ref=outcome["native_registration_ref"])
-        await self._finish(record, state="registered", native_phase="complete", delivery_ack="accepted")
+        if record.get("delivery_ack") != "accepted":
+            await self.client.accept_registered_receipt(record["receipt_id"],
+                client_receipt_id=record["client_receipt_id"], original_hash=outcome["original_sha256"],
+                normalized_hash=outcome.get("normalized_sha256"), native_registration_ref=outcome["native_registration_ref"])
+        pending = outcome.get("review_pending", False)
+        await self._finish(record, state="review_pending" if pending else "registered",
+                           native_phase="ack_pending" if pending else "complete", delivery_ack="accepted",
+                           next_poll_at=time.time() + (max(30, self.settings.poll_seconds) if pending
+                                                     else self.settings.poll_seconds))
 
     async def _cancel_native(self, record):
         if not record["target"] and record["plan_attempted"]:

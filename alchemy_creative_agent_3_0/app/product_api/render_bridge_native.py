@@ -336,14 +336,22 @@ class NativeRenderBridgeGateway:
             temporary.unlink(missing_ok=True)
 
     def _assert_current(
-        self, actor_user_id: int, target: NativeFreezeTarget, binding: RenderBridgeRegistration
+        self, actor_user_id: int, target: NativeFreezeTarget, binding: RenderBridgeRegistration,
+        *, review_only: bool = False,
     ) -> None:
-        record, project, revision = self.facade._target(actor_user_id, target, require_eligible=False)
+        record, project, revision = self.facade._target(
+            actor_user_id, target, require_eligible=False, ignore_review_projection=review_only
+        )
         metadata = dict(record.request.metadata or {})
         if str(project.status) != "active" or any(
             metadata.get(key) for key in ("cancel_requested", "canceled", "cancelled", "deleted_at")
         ):
             raise BridgeNativeFacadeError("render_bridge_target_not_eligible")
+        # A committed checkpoint authorizes review only. Ignore only the two
+        # native review projections, never changed generation inputs/project.
+        if review_only:
+            if self.service.lookup_render_bridge_registration(binding).get("status") != "registered":
+                raise BridgeNativeFacadeError("render_bridge_native_checkpoint_missing")
         if revision != binding.target_revision:
             raise BridgeNativeFacadeError("render_bridge_target_revision_changed")
         admitted = self._admit_references(actor_user_id, target.project_id, list(binding.uploaded_asset_ids))
@@ -399,7 +407,9 @@ class NativeRenderBridgeGateway:
         # Persist the first native outcome. Subsequent replays return this same
         # registration receipt; current review progress is queried separately.
         if journal.get("status") == "registered":
-            return dict(journal["outcome"])
+            return {**dict(journal["outcome"]),
+                    "current_review_status": result.get("current_review_status", result.get("review_status")),
+                    "review_pending": result.get("review_pending", False)}
         self._write(path, {**journal, "status": "registered", "outcome": public, "execution_audit": audit})
         return public
 
@@ -469,6 +479,9 @@ class NativeRenderBridgeGateway:
             # Every retry queries the actual native checkpoint before any write.
             outcome = self.service.lookup_render_bridge_registration(binding)
             if outcome["status"] == "registered":
+                outcome = self.service.resume_render_bridge_review(
+                    binding, assert_current=lambda: self._assert_current(actor_user_id, target, binding, review_only=True)
+                )
                 return self._registered(path, journal, outcome)
             self._assert_current(actor_user_id, target, binding)
             try:
@@ -512,6 +525,9 @@ class NativeRenderBridgeGateway:
             self._options(binding.execution_profile_id, binding.output_format, uploaded_asset_ids=binding.uploaded_asset_ids)
             outcome = self.service.lookup_render_bridge_registration(binding)
             if outcome["status"] == "registered":
+                outcome = self.service.resume_render_bridge_review(
+                    binding, assert_current=lambda: self._assert_current(actor_user_id, target, binding, review_only=True)
+                )
                 return self._registered(path, journal, outcome)
             self._assert_current(actor_user_id, target, binding)
             return {

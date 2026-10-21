@@ -49,7 +49,7 @@ async function loadReferences() {
     }
   }
 }
-const labels = { plan_pending: '等待创建原生计划', plan_unknown: '计划结果待确认，不会重复调用 Brain', plan_blocked: '计划不满足受限合同', queued: 'Bridge 排队中', running: '所选执行配置处理中', uploading: '传输结果中', import_unknown: '原生登记结果待确认，尚未 accepted', registered: '原生登记已确认 · 非正式交付', cancel_requested: '正在取消', canceled: '已取消', rejected: '原生登记拒绝', blocked_scope: '项目权限或连接配置已变化', blocked_revision: '冻结目标已变化', protocol_error: '合同校验失败', remote_unavailable: '远端暂不可达，等待同任务恢复' };
+const labels = { review_pending: '原生登记已确认，审核恢复中', plan_pending: '等待创建原生计划', plan_unknown: '计划结果待确认，不会重复调用 Brain', plan_blocked: '计划不满足受限合同', queued: 'Bridge 排队中', running: '所选执行配置处理中', uploading: '传输结果中', import_unknown: '原生登记结果待确认，尚未 accepted', registered: '原生登记已确认 · 非正式交付', cancel_requested: '正在取消', canceled: '已取消', rejected: '原生登记拒绝', blocked_scope: '项目权限或连接配置已变化', blocked_revision: '冻结目标已变化', protocol_error: '合同校验失败', remote_unavailable: '远端暂不可达，等待同任务恢复' };
 async function refresh() {
   const project = $('project').value, current = ++generation, session = token();
   if (!project) { $('tasks').replaceChildren(); return; }
@@ -65,7 +65,7 @@ async function refresh() {
       box.append(line(`登记：${task.native_registration} · 确认：${task.delivery_ack}`));
       if (task.native_registration_ref) box.append(line(task.native_registration_ref, 'muted'));
       if (task.review_status) box.append(line(`审核状态：${task.review_status}。不会自动选中或正式交付。`));
-      if (!['registered', 'canceled', 'failed', 'expired', 'rejected', 'plan_blocked'].includes(task.state)) {
+      if (task.native_registration !== 'registered' && !['registered', 'canceled', 'failed', 'expired', 'rejected', 'plan_blocked'].includes(task.state)) {
         const button = document.createElement('button'); button.className = 'secondary'; button.textContent = '取消';
         button.onclick = async () => {
           button.disabled = true;

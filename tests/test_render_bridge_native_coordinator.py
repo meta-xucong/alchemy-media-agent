@@ -383,3 +383,77 @@ def test_native_receipt_must_match_selected_non_square_size(tmp_path):
         finally:
             await svc.close()
     run(case())
+
+
+def test_pending_review_keeps_receipt_ack_and_resumes_without_reimport(tmp_path):
+    async def case():
+        svc, gateway, bridge = make_service(tmp_path)
+        original_register = gateway.register_receipt
+        def register(*args, **kwargs):
+            value = original_register(*args, **kwargs)
+            value.update(review_pending=True, current_review_status="blocked")
+            return value
+        gateway.register_receipt = register
+        try:
+            job = await svc.create("101", request())
+            await svc.tick()
+            record = await svc.local(svc.store.get, job["id"])
+            assert record["state"] == "review_pending"
+            assert record["delivery_ack"] == "accepted"
+            assert len(bridge.acks) == 1
+            await svc.local(svc.store.patch, job["id"], {"next_poll_at": 0})
+            await svc.tick()
+            assert len(bridge.acks) == 1
+            outcome = gateway.registrations[record["import_key"]]
+            outcome.update(review_pending=False, current_review_status="generated")
+            await svc.local(svc.store.patch, job["id"], {"next_poll_at": 0})
+            await svc.tick()
+            record = await svc.local(svc.store.get, job["id"])
+            assert record["state"] == "registered"
+            assert svc.public(record)["review_status"] == "generated"
+            assert gateway.register_calls == gateway.create_calls == 1
+            assert len(bridge.acks) == 1
+        finally:
+            await svc.close()
+    run(case())
+
+
+def test_owner_read_reopens_legacy_registered_review_only(tmp_path):
+    async def case():
+        svc, gateway, bridge = make_service(tmp_path)
+        try:
+            job = await svc.create("101", request())
+            await svc.tick()
+            record = await svc.local(svc.store.get, job["id"])
+            legacy = {**record["native_outcome"], "review_status": "finalizing"}
+            await svc.local(svc.store.patch, job["id"], {"native_outcome": legacy})
+            result = await svc.list("101", "project_1")
+            assert result[0]["state"] == "review_pending"
+            assert result[0]["delivery_ack"] == "accepted"
+            await svc.tick()
+            record = await svc.local(svc.store.get, job["id"])
+            assert record["state"] == "registered"
+            assert gateway.register_calls == 1
+            assert len(bridge.acks) == 1
+        finally:
+            await svc.close()
+    run(case())
+
+
+def test_disabled_service_does_not_reopen_legacy_review(tmp_path):
+    async def case():
+        svc, gateway, bridge = make_service(tmp_path)
+        try:
+            job = await svc.create("101", request())
+            await svc.tick()
+            record = await svc.local(svc.store.get, job["id"])
+            await svc.local(svc.store.patch, job["id"], {
+                "native_outcome": {**record["native_outcome"], "review_status": "finalizing"}
+            })
+            svc.settings = replace(svc.settings, mode="disabled")
+            assert (await svc.list("101", "project_1"))[0]["state"] == "registered"
+            await svc.tick()
+            assert len(bridge.acks) == 1 and gateway.register_calls == 1
+        finally:
+            await svc.close()
+    run(case())

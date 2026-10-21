@@ -562,3 +562,79 @@ def test_default_provider_checkpoint_hook_and_routes_remain_unchanged():
     assert inspect.signature(
         V3ProductApiService._resume_finalizing_generation_review
     ).parameters["assert_current"].default is None
+
+
+def test_interrupted_native_review_resumes_same_checkpoint(native_fixture, monkeypatch):
+    fixture = native_fixture
+    receipt = _receipt(fixture)
+    original = fixture.service._resume_finalizing_generation_review
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("Interrupted after durable candidate checkpoint")
+
+    monkeypatch.setattr(fixture.service, "_resume_finalizing_generation_review", interrupted)
+    assert _register(fixture, **receipt)["status"] == "import_unknown"
+    assert str(fixture.jobs.get(fixture.target.job_id).status) == "finalizing"
+    monkeypatch.setattr(fixture.service, "_resume_finalizing_generation_review", original)
+    outcome = fixture.gateway.registration_status(7, fixture.target, import_key=receipt["import_key"])
+    assert outcome["status"] == "registered"
+    assert outcome["current_review_status"] == "generated"
+    assert outcome["review_pending"] is False
+    assert len(fixture.reviews) == 1
+    assert fixture.review_only_calls == [True]
+    assert len(fixture.outputs.list_by_job(fixture.target.job_id)) == 1
+    assert _register(fixture, **receipt) == outcome
+    assert len(fixture.reviews) == 1
+    assert fixture.debit.call_count == fixture.usage.call_count == 0
+
+
+def test_pending_native_review_updates_projection_without_reimport(native_fixture, monkeypatch):
+    fixture = native_fixture
+    receipt = _receipt(fixture)
+    original = fixture.service._attach_post_generation_review
+
+    def pending(record, result, request):
+        return result.model_copy(update={"metadata": {
+            **result.metadata, "post_generation_review_package": {"status": "manual_review", "inspections": [
+                {"status": "manual_review", "evidence": {"provider_error": "review timed out"}}
+            ]}
+        }})
+
+    monkeypatch.setattr(fixture.service, "_attach_post_generation_review", pending)
+    outcome = _register(fixture, **receipt)
+    assert outcome["status"] == "registered"
+    assert outcome["review_pending"] is True
+    monkeypatch.setattr(fixture.service, "_attach_post_generation_review", original)
+    current = fixture.gateway.registration_status(7, fixture.target, import_key=receipt["import_key"])
+    assert current["native_registration_ref"] == outcome["native_registration_ref"]
+    assert current["review_status"] == outcome["review_status"]  # immutable first receipt
+    assert current["current_review_status"] == "generated"
+    assert current["review_pending"] is False
+    assert len(fixture.outputs.list_by_job(fixture.target.job_id)) == 1
+    assert len(fixture.reviews) == 1
+
+
+@pytest.mark.parametrize("change", ["prompt", "project", "cancel"])
+def test_review_recovery_does_not_revive_changed_target(native_fixture, monkeypatch, change):
+    fixture = native_fixture
+    receipt = _receipt(fixture)
+    original = fixture.service._resume_finalizing_generation_review
+    monkeypatch.setattr(fixture.service, "_resume_finalizing_generation_review",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("interrupted")))
+    assert _register(fixture, **receipt)["status"] == "import_unknown"
+    monkeypatch.setattr(fixture.service, "_resume_finalizing_generation_review", original)
+    if change == "project":
+        project = fixture.projects.get_project(fixture.target.project_id)
+        project.updated_at = "2026-10-21T12:00:00Z"
+        fixture.projects.save_project(project)
+    else:
+        record = fixture.jobs.get(fixture.target.job_id)
+        if change == "prompt":
+            record.request.user_input = "A different generation request"
+        else:
+            record.request.metadata["cancel_requested"] = True
+        fixture.jobs.save(record)
+    with pytest.raises(BridgeNativeFacadeError):
+        fixture.gateway.registration_status(7, fixture.target, import_key=receipt["import_key"])
+    assert fixture.reviews == []
+    assert len(fixture.outputs.list_by_job(fixture.target.job_id)) == 1

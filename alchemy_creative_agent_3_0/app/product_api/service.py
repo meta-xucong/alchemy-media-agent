@@ -5328,12 +5328,37 @@ class V3ProductApiService:
             "original_sha256": binding.original_sha256,
             "normalized_sha256": str(output.metadata.get("content_sha256") or ""),
             "review_status": str(record.status),
+            "current_review_status": str(record.status),
+            "review_pending": self._render_bridge_review_pending(record),
             "formal_delivery": False,
             "billing": {"mode": "v3_zero_credit_stub", "charged": False},
             "test_fixture": binding.execution_profile_id == "fake-image",
             **({"development_only": True, "real_tool_verified": False}
                if binding.execution_profile_id != "fake-image" else {}),
         }
+
+    def _render_bridge_review_pending(self, record: ProductJobRecord) -> bool:
+        if record.generation_result is None:
+            return False
+        metadata = record.generation_result.metadata
+        package = metadata.get("post_generation_review_package")
+        return bool(
+            str(record.status) == "finalizing"
+            or metadata.get("post_generation_review_recheck_required")
+            or (isinstance(package, dict) and self._post_generation_review_package_requires_resume(package))
+        )
+
+    def resume_render_bridge_review(self, binding, *, assert_current: Callable[[], None]) -> dict[str, Any]:
+        """Resume review of a proven receipt checkpoint, never its renderer."""
+        outcome = self.lookup_render_bridge_registration(binding)
+        if outcome.get("status") != "registered" or not outcome.get("review_pending"):
+            return outcome
+        assert_current()
+        record = self.get_job_record(binding.job_id)
+        self._resume_finalizing_generation_review(
+            record, GenerateJobRequest(), review_only=True, assert_current=assert_current
+        )
+        return self.lookup_render_bridge_registration(binding)
 
     def register_render_bridge_result(
         self, binding, artifact_bytes: bytes, *, assert_current: Callable[[], None],

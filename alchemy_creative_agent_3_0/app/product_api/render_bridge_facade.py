@@ -67,7 +67,8 @@ class RenderBridgeNativeFacade:
         self._max_reference_bytes = max_reference_bytes
 
     def _target(
-        self, actor_user_id: int, target: NativeFreezeTarget, *, require_eligible: bool = True
+        self, actor_user_id: int, target: NativeFreezeTarget, *, require_eligible: bool = True,
+        ignore_review_projection: bool = False,
     ) -> tuple[Any, Any, str]:
         if not self.enabled:
             raise BridgeNativeFacadeError("render_bridge_native_disabled", 404)
@@ -104,11 +105,17 @@ class RenderBridgeNativeFacade:
             raise BridgeNativeFacadeError("render_bridge_target_not_eligible")
         if record.planning_result is None:
             raise BridgeNativeFacadeError("render_bridge_frozen_plan_missing")
+        request_snapshot = record.request.model_dump(mode="json")
+        if ignore_review_projection:
+            # Only these two read-only projections are written by native shared
+            # review. Preserve every generation input and project revision field.
+            for key in ("mcp_review", "mcp_review_status"):
+                request_snapshot["metadata"].pop(key, None)
         revision = _digest(
             {
                 "target": asdict(target),
                 "actor": actor_user_id,
-                "request": record.request.model_dump(mode="json"),
+                "request": request_snapshot,
                 "planning_result": record.planning_result.model_dump(mode="json"),
                 "project_updated_at": project.updated_at,
                 "project_status": str(project.status),
