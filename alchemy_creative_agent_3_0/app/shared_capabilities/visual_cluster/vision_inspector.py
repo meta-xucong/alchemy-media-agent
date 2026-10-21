@@ -310,16 +310,16 @@ def _vision_provider_timeout_seconds(metadata: dict[str, Any]) -> float:
     if raw is None and str(metadata.get("professional_anchor_capture_scope") or "") == "character_card_face_identity":
         raw = os.getenv("V3_CHARACTER_CARD_VISION_TIMEOUT_SECONDS")
     if raw is None:
-        raw = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "120")
+        raw = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "300")
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        value = 120.0
+        value = 300.0
     return max(0.05, min(300.0, value))
 
 
 class VisionInspectionTimeoutError(TimeoutError):
-    """Timeout outcome that records whether a retry can be safely started."""
+    """Timeout outcome that records whether its provider worker has stopped."""
 
     def __init__(self, message: str, *, worker_stopped: bool) -> None:
         super().__init__(message)
@@ -338,13 +338,10 @@ def _inspect_with_timeout(
 
     def runner() -> None:
         try:
-            # Give supporting providers a bounded SDK request timeout while
-            # leaving a small settle window for the outer worker.  Vision
-            # review is a real multimodal call; the old 60-second cap was too
-            # short for a long but valid contract on OpenAI-compatible
-            # gateways. This is not cancellation or a guaranteed wall-clock
-            # worker deadline.
-            inner_timeout = min(90.0, timeout_seconds * 0.75)
+            # Use the same bounded window for the SDK request and this worker
+            # join. The settle window below handles the small race where the
+            # SDK is returning at its deadline; it is not provider cancellation.
+            inner_timeout = min(300.0, timeout_seconds)
             result["payload"] = provider.inspect(
                 resolution,
                 metadata={**metadata, "_inner_timeout_seconds": inner_timeout},
@@ -353,8 +350,7 @@ def _inspect_with_timeout(
             result["error"] = exc
         finally:
             # Keep the slot occupied until the provider call has actually
-            # returned. Releasing from the caller's timeout path would allow a
-            # retry to overlap a still-running upstream request.
+            # returned, even if the caller's bounded wait expires.
             _vision_inspection_semaphore.release()
 
     # Acquire semaphore to limit concurrent vision inspections
@@ -512,84 +508,59 @@ class VisionOutputInspector:
         provider = self._provider()
         if provider is None or not provider.available(force=True):
             return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
-        max_attempts = _vision_provider_attempt_limit(metadata)
-        payload: dict[str, Any] | None = None
-        provider_error: VisionInspectionProviderError | None = None
-        provider_timeout_recovery_attempted = False
-        provider_timeout_recovery_succeeded = False
-        provider_json_recovery_attempted = False
-        provider_json_recovery_succeeded = False
-        for attempt in range(1, max_attempts + 1):
-            try:
-                timeout_seconds = _vision_provider_timeout_seconds(metadata)
-                attempt_metadata = dict(metadata)
-                if provider_json_recovery_attempted:
-                    # Keep the image, frozen context and route identical. The
-                    # only change is an explicit serialization-recovery
-                    # instruction at the provider boundary.
-                    attempt_metadata["_vision_json_recovery_attempt"] = True
-                payload = _inspect_with_timeout(
-                    provider,
-                    resolution,
-                    metadata=attempt_metadata,
-                    timeout_seconds=timeout_seconds,
-                )
-                provider_timeout_recovery_succeeded = provider_timeout_recovery_attempted
-                provider_json_recovery_succeeded = provider_json_recovery_attempted
-                break
-            except TimeoutError as exc:
-                worker_stopped = getattr(exc, "worker_stopped", False) is True
-                # A free global slot does not mean this inspection's previous
-                # request stopped. Retry only after its worker has exited.
-                if attempt < max_attempts and worker_stopped:
-                    provider_timeout_recovery_attempted = True
-                    time.sleep(float(attempt * 2))
-                    continue
-                return self._manual_report(
-                    resolution,
-                    "provider_timeout",
-                    metadata,
-                    mode=mode,
-                    evidence_extra={
-                        "provider_error": str(exc)[:240],
-                        "provider_review_attempts": attempt,
-                        "provider_timeout_seconds": timeout_seconds,
-                        "provider_timeout_recovery_attempted": provider_timeout_recovery_attempted,
-                        "provider_timeout_recovery_succeeded": False,
-                        "provider_worker_stopped": worker_stopped,
-                    },
-                )
-            except VisionInspectionProviderUnavailable:
-                return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
-            except VisionInspectionProviderMalformedJSON as exc:
-                provider_error = exc
-                if attempt < max_attempts:
-                    provider_json_recovery_attempted = True
-                    time.sleep(float(attempt * 2))
-            except VisionInspectionProviderError as exc:
-                provider_error = exc
-                if attempt < max_attempts:
-                    time.sleep(float(attempt * 2))
-        if payload is None:
-            failure_code = (
-                "provider_malformed_json"
-                if isinstance(provider_error, VisionInspectionProviderMalformedJSON)
-                else "provider_error"
+        timeout_seconds = _vision_provider_timeout_seconds(metadata)
+        try:
+            # One provider call per inspection. A malformed response or
+            # timeout is an unavailable review result, not a reason to submit
+            # the same image for a second full multimodal evaluation.
+            payload = _inspect_with_timeout(
+                provider,
+                resolution,
+                metadata=dict(metadata),
+                timeout_seconds=timeout_seconds,
             )
+        except TimeoutError as exc:
             return self._manual_report(
                 resolution,
-                failure_code,
+                "provider_timeout",
                 metadata,
                 mode=mode,
                 evidence_extra={
-                    "provider_error": str(provider_error)[:240] if provider_error is not None else "unknown",
-                    "provider_review_attempts": max_attempts,
-                    "provider_error_class": (
-                        "malformed_json"
-                        if isinstance(provider_error, VisionInspectionProviderMalformedJSON)
-                        else "provider_error"
-                    ),
-                    "provider_json_recovery_attempted": provider_json_recovery_attempted,
+                    "provider_error": str(exc)[:240],
+                    "provider_review_attempts": 1,
+                    "provider_timeout_seconds": timeout_seconds,
+                    "provider_timeout_recovery_attempted": False,
+                    "provider_timeout_recovery_succeeded": False,
+                    "provider_worker_stopped": getattr(exc, "worker_stopped", False) is True,
+                },
+            )
+        except VisionInspectionProviderUnavailable:
+            return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
+        except VisionInspectionProviderMalformedJSON as exc:
+            return self._manual_report(
+                resolution,
+                "provider_malformed_json",
+                metadata,
+                mode=mode,
+                evidence_extra={
+                    "provider_error": str(exc)[:240],
+                    "provider_review_attempts": 1,
+                    "provider_error_class": "malformed_json",
+                    "provider_json_recovery_attempted": False,
+                    "provider_json_recovery_succeeded": False,
+                },
+            )
+        except VisionInspectionProviderError as exc:
+            return self._manual_report(
+                resolution,
+                "provider_error",
+                metadata,
+                mode=mode,
+                evidence_extra={
+                    "provider_error": str(exc)[:240],
+                    "provider_review_attempts": 1,
+                    "provider_error_class": "provider_error",
+                    "provider_json_recovery_attempted": False,
                     "provider_json_recovery_succeeded": False,
                 },
             )
@@ -599,11 +570,7 @@ class VisionOutputInspector:
             mode=mode,
             provider_name=getattr(provider, "provider_name", "vision_provider"),
             metadata=metadata,
-            provider_review_attempts=attempt,
-            provider_timeout_recovery_attempted=provider_timeout_recovery_attempted,
-            provider_timeout_recovery_succeeded=provider_timeout_recovery_succeeded,
-            provider_json_recovery_attempted=provider_json_recovery_attempted,
-            provider_json_recovery_succeeded=provider_json_recovery_succeeded,
+            provider_review_attempts=1,
         )
 
     def _from_provider_payload(
@@ -1142,14 +1109,7 @@ class VisionOutputInspector:
                 issue_codes.append("identity_metric_low")
             elif fused_score < 0.82:
                 issue_codes.append("identity_metric_below_commercial_target")
-        detected_issues = [
-            _issue_payload(
-                code,
-                0.4,
-                retryable=(code in {"provider_timeout", "provider_error", "provider_malformed_json"})
-            )
-            for code in _dedupe(issue_codes)
-        ]
+        detected_issues = [_issue_payload(code, 0.4, retryable=False) for code in _dedupe(issue_codes)]
         return VisualInspectionReport(
             inspection_id=stable_id("visual_inspection", resolution.job_id, resolution.candidate_id, resolution.output_id, reason_code),
             project_id=resolution.project_id,
@@ -1163,10 +1123,7 @@ class VisionOutputInspector:
             confidence=0.35,
             score_card=score_card,
             detected_issues=detected_issues,
-            retryable=any(
-                code in {"provider_timeout", "provider_error", "provider_malformed_json"}
-                for code in issue_codes
-            ),
+            retryable=False,
             evidence={
                 "resolution_status": resolution.status,
                 "warnings": list(resolution.warnings),
@@ -1175,7 +1132,11 @@ class VisionOutputInspector:
                 **_review_evidence_payload(metadata),
                 **dict(evidence_extra or {}),
             },
-            user_visible_summary=["This image needs manual confirmation before automatic retry."],
+            user_visible_summary=(
+                ["Automatic visual review did not complete; the image was preserved for manual confirmation."]
+                if issue_code in {"provider_timeout", "provider_error", "provider_malformed_json"}
+                else ["This image needs manual confirmation before automatic retry."]
+            ),
             metadata={"doc": "55", **_public_metadata(metadata)},
         )
 
@@ -2082,26 +2043,6 @@ def _body_side_full_identity_geometry_advisory(metadata: dict[str, Any]) -> bool
     professional = contract.get("professional_identity_quality")
     body_review = professional.get("body_silhouette_review") if isinstance(professional, dict) else None
     return bool(isinstance(body_review, dict) and body_review.get("applies"))
-
-
-def _vision_provider_attempt_limit(metadata: dict[str, Any]) -> int:
-    # A transient reviewer outage must not turn a hard frozen semantic
-    # contract into a manual-only result after one attempt.  This is a bounded
-    # retry of the same shared pixel inspection, never a second image
-    # generation or a template-specific review path.
-    # A malformed JSON response is a serialization failure, not an image
-    # verdict. Every real review gets one bounded recovery opportunity by
-    # default so an otherwise usable output is not stranded by formatting
-    # drift. Operators may still explicitly lower this with the existing
-    # environment/metadata override.
-    default = 2
-    raw = metadata.get("vision_inspection_max_attempts") or os.getenv("V3_VISION_INSPECTION_MAX_ATTEMPTS")
-    if raw is None:
-        return default
-    try:
-        return max(1, min(3, int(raw)))
-    except (TypeError, ValueError):
-        return default
 
 
 def _hard_semantic_pixel_contract_requested(metadata: dict[str, Any]) -> bool:

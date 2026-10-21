@@ -120,9 +120,8 @@ class VisionInspectionProviderMalformedJSON(VisionInspectionProviderError):
     """Raised when the provider returned text that is not a JSON object.
 
     This is deliberately distinct from transport, timeout, and availability
-    failures.  The shared inspector may issue one serialization-only recovery
-    request for this class, while still refusing to repair the model's text
-    locally or certify an image without a parsed provider verdict.
+    failures. The shared inspector fails closed without resubmitting the image
+    or certifying it without a parsed provider verdict.
     """
 
     failure_kind = "malformed_json"
@@ -185,10 +184,8 @@ class OpenAIVisionInspectionProvider:
             from openai import OpenAI
 
             # Pixel inspection is part of the same bounded Job lifecycle as
-            # generation.  The OpenAI SDK retries failed transport calls by
-            # default, which can silently turn one 90-second inspection into
-            # several network requests and strand a Job in ``finalizing``.
-            # Keep retries owned by the shared review lifecycle instead.
+            # generation. The OpenAI SDK retries failed transport calls by
+            # default; disable them so one review maps to one provider request.
             client = OpenAI(
                 **_openai_client_kwargs(
                     api_key=api_key,
@@ -205,6 +202,11 @@ class OpenAIVisionInspectionProvider:
         except VisionInspectionProviderError:
             raise
         except Exception as exc:
+            if _is_timeout_error(exc):
+                # Preserve timeout semantics for the shared inspector.  If
+                # wrapped as a generic provider error, diagnostics cannot
+                # distinguish a slow request from malformed/provider output.
+                raise TimeoutError(f"vision inspection request timed out: {str(exc)[:200]}") from exc
             raise VisionInspectionProviderError(f"vision inspection provider failed: {str(exc)[:240]}") from exc
 
     def _inspect_with_responses(self, client: Any, prompt: str, data_url: str, metadata: dict[str, Any]) -> str:
@@ -224,57 +226,28 @@ class OpenAIVisionInspectionProvider:
                 timeout=timeout,
                 metadata=metadata,
             )
-        allow_chat_fallback = protocol == "auto"
         response_content = [
             {"type": "input_text", "text": prompt},
             {"type": "input_image", "image_url": data_url},
             *[{"type": "input_image", "image_url": item} for item in reference_data_urls],
         ]
-        try:
-            response = client.responses.create(
-                model=model,
-                input=[
-                    {
-                        "role": "user",
-                        "content": response_content,
-                    }
-                ],
-                text={"format": {"type": "json_object"}},
-                timeout=timeout,
-                max_output_tokens=_vision_output_token_limit(metadata),
-            )
-            text = getattr(response, "output_text", None) or _response_text_from_openai(response)
-            if text:
-                try:
-                    _loads_json_object(text)
-                except VisionInspectionProviderError:
-                    if not allow_chat_fallback:
-                        raise
-                    # Some OpenAI-compatible gateways honor the Responses
-                    # route but ignore its JSON mode.  Use the existing Chat
-                    # compatibility route once for the same review contract;
-                    # never repair malformed text locally and never retry a
-                    # timed-out request here.
-                    pass
-                else:
-                    return text
-        except Exception as exc:
-            # A protocol fallback is useful for gateways that reject Responses,
-            # but retrying the same timed-out request through Chat doubles the
-            # blocking window without adding a new upstream route.
-            if _is_timeout_error(exc) or not allow_chat_fallback:
-                raise
-        if not allow_chat_fallback:
-            raise VisionInspectionProviderError("Responses API returned empty output")
-        return self._inspect_with_chat_completions(
-            client,
+        response = client.responses.create(
             model=model,
-            prompt=prompt,
-            data_url=data_url,
-            reference_data_urls=reference_data_urls,
+            input=[
+                {
+                    "role": "user",
+                    "content": response_content,
+                }
+            ],
+            text={"format": {"type": "json_object"}},
             timeout=timeout,
-            metadata=metadata,
+            max_output_tokens=_vision_output_token_limit(metadata),
         )
+        text = getattr(response, "output_text", None) or _response_text_from_openai(response)
+        if not text:
+            raise VisionInspectionProviderMalformedJSON("vision inspection returned empty output")
+        _loads_json_object(text)
+        return text
 
     @staticmethod
     def _inspect_with_chat_completions(
@@ -339,19 +312,18 @@ class OpenAIVisionInspectionProvider:
 
     def _timeout(self, metadata: dict[str, Any] | None = None) -> float:
         metadata = metadata or {}
-        # Honor the inspector's shorter SDK request budget. The inspector still
-        # owns the outer deadline and checks worker exit before retrying.
+        # Match the SDK request to the inspector's bounded per-request budget.
         raw_timeout = metadata.get("_inner_timeout_seconds")
         if raw_timeout is None:
             raw_timeout = metadata.get("vision_inspection_timeout_seconds")
         if raw_timeout is None:
             raw_timeout = self.timeout_seconds
         if raw_timeout is None:
-            raw_timeout = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "90")
+            raw_timeout = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "300")
         try:
             timeout = float(raw_timeout)
         except (TypeError, ValueError):
-            timeout = 90.0
+            timeout = 300.0
         return max(0.05, min(300.0, timeout))
 
 
@@ -608,15 +580,6 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             ]
         )
         prompt = _scope_inspection_prompt(prompt, metadata)
-    if metadata.get("_vision_json_recovery_attempt") is True:
-        prompt += (
-            "\nSERIALIZATION RECOVERY: The previous provider answer for this same image and frozen review "
-            "context was not parseable as a complete JSON object. Re-answer the same review now. Return exactly "
-            "one complete JSON object and nothing else: no markdown, code fences, prose, comments, trailing commas, "
-            "or partial output. Use only the keys, enum values, and issue codes in the frozen contract above. "
-            "Close every array and object before ending the response. Do not change the visual verdict merely to "
-            "make serialization easier."
-        )
     return prompt
 
 
@@ -1812,9 +1775,9 @@ def _loads_json_object(text: str) -> dict[str, Any]:
         try:
             parsed = json.loads(raw[start : end + 1])
         except json.JSONDecodeError as exc:
-            # Do not expose the provider body.  The parse location is safe
-            # diagnostic data and lets the bounded recovery path distinguish
-            # serialization failure from transport or policy failure.
+            # Do not expose the provider body. The parse location is safe
+            # diagnostic data and distinguishes serialization from transport
+            # or policy failure.
             raise VisionInspectionProviderMalformedJSON(
                 f"vision inspection returned malformed JSON at character {exc.pos}"
             ) from exc

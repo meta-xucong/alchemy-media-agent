@@ -581,6 +581,7 @@ DELIVERY_TEMPLATE_EVIDENCE_HARD_GATE_ISSUES = {
 VISUAL_AUTO_RETRY_NON_RETRYABLE_ISSUES = {
     "provider_error",
     "provider_timeout",
+    "provider_malformed_json",
     "rate_limit",
     "insufficient_balance",
     "missing_api_key",
@@ -594,8 +595,9 @@ VISUAL_AUTO_RETRY_NON_RETRYABLE_ISSUES = {
 }
 
 POST_GENERATION_REVIEW_RESUMABLE_PROVIDER_ISSUES = {
-    "provider_timeout",
-    "provider_error",
+    # Review transport/serialization failures are closed as manual review for
+    # the generated output. Automatic finalizing resume must not resubmit the
+    # same image to the vision provider.
     "vision_provider_unavailable",
     "vision_provider_not_configured",
 }
@@ -1428,7 +1430,6 @@ class V3ProductApiService:
             "vision_inspection_mode",
             "post_generation_inspection_mode",
             "vision_inspection_timeout_seconds",
-            "vision_inspection_max_attempts",
             "enable_real_vision_inspection",
             "disable_real_vision_inspection",
             "enable_local_aesthetic_heuristics",
@@ -5324,12 +5325,7 @@ class V3ProductApiService:
             if status not in {"manual_review", "fail_retryable"}:
                 continue
             issue_codes = V3ProductApiService._review_issue_codes(inspection) | package_issue_codes
-            evidence = inspection.get("evidence") if isinstance(inspection.get("evidence"), dict) else {}
-            provider_error = str(evidence.get("provider_error") or "").lower()
-            if (
-                issue_codes.intersection(POST_GENERATION_REVIEW_RESUMABLE_PROVIDER_ISSUES)
-                or "timed out" in provider_error
-            ):
+            if issue_codes.intersection(POST_GENERATION_REVIEW_RESUMABLE_PROVIDER_ISSUES):
                 return True
         return False
 

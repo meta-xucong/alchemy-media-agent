@@ -1,63 +1,61 @@
-# Doc325 — V3 Vision Review JSON Serialization Recovery
+# Doc325 — V3 Vision Review Single-Request Failure Policy
 
-## 目的
+## Current authority
 
-修复视觉审核 Provider 已收到图片、但返回不完整或格式错误 JSON，导致
-一张已成功生成的图片被误留在人工审核状态的问题。
+This revision supersedes the earlier two-call JSON serialization recovery policy.
+Each generated output gets one Vision provider request in one review execution.
 
-本修复只处理审核响应的传输与序列化边界，不改变图片质量标准、审核阈值、
-参考图规则、Provider 路由或自动交付门槛。
-
-## 根因
-
-原实现存在三个组合风险：
-
-1. 仅使用 OpenAI-compatible `json_object`，它不能保证所有网关和视觉模型
-   都返回字段完整、可解析的 JSON。
-2. 强制审核契约包含评分、证据、身份认证和摘要等字段，但 Chat/Responses
-   输出上限固定为 1600，存在输出被截断的风险。
-3. 第一次 JSON 解析失败后，第二次请求仍发送完全相同的提示词，没有告知模型
-   需要重新输出完整 JSON，因此可能重复得到同类格式错误。
-
-## 修复契约
-
-单张图片的一次审核遵循：
+## Contract
 
 ```text
-冻结图片 + 冻结审核上下文
-  -> Provider 第一次审核
-  -> 合法 JSON：进入既有像素审核与交付门禁
-  或
-  -> 空/非 JSON/语法错误
-  -> 同一图片、同一上下文、同一路由的一次 JSON 序列化恢复
-  -> 合法 JSON 或 fail-closed 人工审核
+one image + frozen review context
+  -> one provider request
+  -> valid JSON object: validate and apply the existing visual-review contract
+  -> timeout, provider error, or malformed JSON: preserve the image and mark
+     review incomplete / manual confirmation required
 ```
 
-硬边界：
+Hard rules:
 
-- 不在本地补逗号、补括号、猜字段或修复视觉结论。
-- 恢复请求只能增加序列化说明，不能改变用户提示词、参考图、审核契约或
-  视觉判定。
-- 两次都失败时，图片仍保留，状态为 `manual_review`，不能自动交付。
-- Provider 错误与图片质量失败分开记录；格式错误使用
-  `provider_error_class=malformed_json` 和公开问题码
-  `provider_malformed_json`，且 `universal_quality_failure=false`。
-- 每次真实视觉审核默认最多两次 Provider 调用；运维仍可通过现有配置显式
-  降低次数。
+- Never issue a second full multimodal request for the same image because the
+  first response timed out or could not be parsed.
+- `protocol=auto` uses the Responses route once. It must not resend the image via
+  Chat after a malformed response or route error; operators can explicitly pin
+  `chat_completions` when that is the supported gateway protocol.
+- A timeout or malformed response is an unavailable review result, not a visual
+  quality verdict. It must not create a quality failure or an automatic image
+  regeneration retry.
+- Keep the generated output visible and preserved; report the provider failure
+  separately so the user can review the image manually.
+- An explicit later user action may start a new review execution. Automatic
+  finalizing recovery must not silently resubmit the same image after a review
+  transport or serialization failure.
+- Retain the existing per-request timeout setting and its 300-second maximum.
+- Keep compatibility evidence fields for recovery attempts, but they must report
+  `false` for this single-request policy.
 
-## 输出预算
+## Why parsing can fail
 
-视觉审核输出默认上限由 1600 提高为 3200 tokens，并支持
-`V3_VISION_INSPECTION_MAX_OUTPUT_TOKENS` 覆盖，范围限制为 800–8000。
-这是为完成冻结审核结构预留序列化空间，不是放宽审核内容或让模型输出更多
-创意文本。
+The provider request already asks for `json_object`, but this is an
+OpenAI-compatible endpoint and its implementation may not honor that mode
+consistently. The parser accepts a JSON object and can strip surrounding prose;
+it still rejects empty output, non-JSON text, truncated JSON, invalid syntax,
+and non-object JSON values. Current request logs do not retain the provider body,
+finish reason, or output-token usage, so a specific malformed response cannot be
+attributed to truncation, gateway behavior, or model formatting after the fact.
 
-## 验收要求
+The response is parsed before semantic validation. Therefore this failure policy
+applies only to syntax/empty/non-object failures, not to a valid JSON object that
+is missing a required review field or has an invalid verdict. Those cases remain
+fail-closed under the existing review contract.
 
-至少覆盖：
+## Diagnostics boundary
 
-1. 不完整 JSON 被识别为 `malformed_json`，而不是被本地修复。
-2. 第一次格式错误、第二次合法时，第二次带序列化恢复标志并最终认证。
-3. 两次格式错误时，准确进入人工审核，不产生质量失败结论。
-4. Chat Completions 使用新的输出预算；既有 Responses/Chat 协议选择、超时
-   和 fail-closed 行为不回退。
+The current records retain the failure class and, for syntax errors, sometimes
+the JSON parse position. They do not retain `finish_reason` or output-token
+usage, so historical malformed responses cannot be attributed more narrowly.
+If future diagnosis needs those fields, add only sanitized metadata such as
+failure kind, parse position, `finish_reason`, and output-token usage. Never
+persist or expose full provider response bodies, prompts, credentials, or image
+data URLs. This can distinguish gateway formatting drift from output
+truncation without issuing a second image review.

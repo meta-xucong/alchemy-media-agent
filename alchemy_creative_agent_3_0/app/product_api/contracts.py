@@ -248,6 +248,8 @@ class GenerateContinuation(BaseModel):
         ge=0.05,
         le=300.0,
     )
+    # Accepted for request compatibility; V3 Vision now performs one provider
+    # request per review and ignores this legacy retry control.
     vision_inspection_max_attempts: StrictInt | None = Field(default=None, ge=1, le=5)
     enable_real_vision_inspection: StrictBool | None = None
     disable_real_vision_inspection: StrictBool | None = None

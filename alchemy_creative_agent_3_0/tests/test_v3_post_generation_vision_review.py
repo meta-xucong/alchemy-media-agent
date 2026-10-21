@@ -248,7 +248,7 @@ def test_responses_timeout_does_not_retry_same_review_through_chat(tmp_path, mon
     monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
     monkeypatch.setenv("V3_VISION_INSPECTION_PROTOCOL", "auto")
 
-    with pytest.raises(VisionInspectionProviderError, match="Request timed out"):
+    with pytest.raises(TimeoutError, match="request timed out"):
         OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
 
     assert calls == ["responses"]
@@ -286,7 +286,7 @@ def test_vision_provider_rejects_unknown_protocol_before_upstream_request(tmp_pa
     assert calls == []
 
 
-def test_vision_provider_uses_one_compatibility_route_for_invalid_json(tmp_path, monkeypatch) -> None:
+def test_vision_provider_does_not_fallback_to_a_second_route_for_invalid_json(tmp_path, monkeypatch) -> None:
     calls: list[str] = []
 
     class FakeResponses:
@@ -297,9 +297,7 @@ def test_vision_provider_uses_one_compatibility_route_for_invalid_json(tmp_path,
     class FakeChatCompletions:
         def create(self, **kwargs):  # noqa: ANN003
             calls.append("chat")
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"pass","confidence":0.9}'))]
-            )
+            raise AssertionError("malformed JSON must not resubmit the image through Chat")
 
     class FakeChat:
         completions = FakeChatCompletions()
@@ -316,10 +314,10 @@ def test_vision_provider_uses_one_compatibility_route_for_invalid_json(tmp_path,
     # exercises the automatic Responses -> Chat compatibility fallback.
     monkeypatch.delenv("V3_VISION_INSPECTION_PROTOCOL", raising=False)
 
-    payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+    with pytest.raises(VisionInspectionProviderMalformedJSON, match="malformed JSON"):
+        OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
 
-    assert payload["status"] == "pass"
-    assert calls == ["responses", "chat"]
+    assert calls == ["responses"]
 
 
 def test_vision_provider_classifies_incomplete_json_without_local_repair(tmp_path, monkeypatch) -> None:
@@ -340,9 +338,9 @@ def test_vision_provider_classifies_incomplete_json_without_local_repair(tmp_pat
         OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
 
 
-def test_vision_inspector_recovers_malformed_json_with_same_frozen_context(tmp_path, monkeypatch) -> None:
-    class RecoveringVisionProvider:
-        provider_name = "recovering_vision"
+def test_vision_inspector_does_not_repeat_image_review_after_malformed_json(tmp_path, monkeypatch) -> None:
+    class MalformedVisionProvider:
+        provider_name = "malformed_vision"
 
         def __init__(self) -> None:
             self.calls = 0
@@ -354,33 +352,33 @@ def test_vision_inspector_recovers_malformed_json_with_same_frozen_context(tmp_p
         def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
             self.calls += 1
             self.metadata_calls.append(dict(metadata or {}))
-            if self.calls == 1:
-                raise VisionInspectionProviderMalformedJSON(
-                    "vision inspection returned malformed JSON at character 1808"
-                )
-            assert self.metadata_calls[1]["_vision_json_recovery_attempt"] is True
-            return {"status": "pass", "confidence": 0.96, "issue_codes": []}
+            raise VisionInspectionProviderMalformedJSON(
+                "vision inspection returned malformed JSON at character 1808"
+            )
 
     monkeypatch.delenv("V3_VISION_INSPECTION_MAX_ATTEMPTS", raising=False)
     monkeypatch.setattr(
         "alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector.time.sleep",
         lambda _seconds: None,
     )
-    provider = RecoveringVisionProvider()
+    provider = MalformedVisionProvider()
     report = VisionOutputInspector(vision_provider=provider).inspect(
         _ready_resolution(tmp_path),
-        metadata={"vision_inspection_mode": "vision_model"},
+        metadata={"vision_inspection_mode": "vision_model", "vision_inspection_max_attempts": 5},
     )
 
-    assert provider.calls == 2
-    assert report.status == "pass"
-    assert report.verification_state == "verified"
-    assert report.evidence["provider_review_attempts"] == 2
-    assert report.evidence["provider_json_recovery_attempted"] is True
-    assert report.evidence["provider_json_recovery_succeeded"] is True
+    assert provider.calls == 1
+    assert "_vision_json_recovery_attempt" not in provider.metadata_calls[0]
+    assert report.status == "manual_review"
+    assert report.verification_state == "verification_failed"
+    assert report.retryable is False
+    assert report.detected_issues[0]["retryable"] is False
+    assert report.evidence["provider_review_attempts"] == 1
+    assert report.evidence["provider_json_recovery_attempted"] is False
+    assert report.evidence["provider_json_recovery_succeeded"] is False
 
 
-def test_vision_inspector_keeps_malformed_json_fail_closed_after_recovery(tmp_path, monkeypatch) -> None:
+def test_vision_inspector_keeps_malformed_json_fail_closed_without_retry(tmp_path, monkeypatch) -> None:
     class BrokenVisionProvider:
         provider_name = "broken_vision"
 
@@ -405,12 +403,29 @@ def test_vision_inspector_keeps_malformed_json_fail_closed_after_recovery(tmp_pa
         metadata={"vision_inspection_mode": "vision_model"},
     )
 
-    assert provider.calls == 2
+    assert provider.calls == 1
     assert report.status == "manual_review"
     assert report.verification_state == "verification_failed"
+    assert report.retryable is False
     assert report.evidence["provider_error_class"] == "malformed_json"
-    assert report.evidence["provider_json_recovery_attempted"] is True
+    assert report.evidence["provider_review_attempts"] == 1
+    assert report.evidence["provider_json_recovery_attempted"] is False
     assert report.evidence["provider_json_recovery_succeeded"] is False
+
+
+@pytest.mark.parametrize("issue_code", ["provider_timeout", "provider_error", "provider_malformed_json"])
+def test_provider_review_failure_does_not_auto_resume_same_image_review(issue_code: str) -> None:
+    package = {
+        "inspections": [
+            {
+                "status": "manual_review",
+                "verification_state": "verification_failed",
+                "detected_issues": [{"code": issue_code}],
+            }
+        ]
+    }
+
+    assert V3ProductApiService._post_generation_review_package_requires_resume(package) is False
 
 
 def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
@@ -617,7 +632,7 @@ def test_vision_provider_outer_timeout_returns_fail_closed_manual_report(tmp_pat
     assert provider.calls == 1
 
 
-def test_settled_vision_timeout_uses_the_frozen_bounded_retry(tmp_path) -> None:
+def test_settled_vision_timeout_fails_closed_without_second_request(tmp_path) -> None:
     provider = _SettledTimeoutThenPassVisionProvider()
     report = VisionOutputInspector(vision_provider=provider).inspect(
         _ready_resolution(tmp_path),
@@ -629,12 +644,13 @@ def test_settled_vision_timeout_uses_the_frozen_bounded_retry(tmp_path) -> None:
         },
     )
 
-    assert report.status == "pass"
-    assert report.verification_state == "verified"
-    assert provider.calls == 2
-    assert report.evidence["provider_review_attempts"] == 2
-    assert report.evidence["provider_timeout_recovery_attempted"] is True
-    assert report.evidence["provider_timeout_recovery_succeeded"] is True
+    assert report.status == "manual_review"
+    assert report.verification_state == "verification_failed"
+    assert report.retryable is False
+    assert provider.calls == 1
+    assert report.evidence["provider_review_attempts"] == 1
+    assert report.evidence["provider_timeout_recovery_attempted"] is False
+    assert report.evidence["provider_timeout_recovery_succeeded"] is False
 
 
 def test_unsettled_vision_timeout_does_not_overlap_a_second_review_call(tmp_path) -> None:
@@ -1185,12 +1201,12 @@ def test_identity_vision_provider_failures_use_bounded_default_attempts(tmp_path
         },
     )
 
-    assert provider.calls == 2
+    assert provider.calls == 1
     assert report.status == "manual_review"
-    assert report.evidence["provider_review_attempts"] == 2
+    assert report.evidence["provider_review_attempts"] == 1
 
 
-def test_hard_semantic_pixel_contract_retries_one_transient_reviewer_failure(tmp_path, monkeypatch) -> None:
+def test_hard_semantic_pixel_contract_does_not_retry_transient_reviewer_failure(tmp_path, monkeypatch) -> None:
     class FlakyVisionProvider:
         provider_name = "hard_semantic_flaky_vision"
 
@@ -1223,8 +1239,10 @@ def test_hard_semantic_pixel_contract_retries_one_transient_reviewer_failure(tmp
         },
     )
 
-    assert provider.calls == 2
-    assert report.status == "pass"
+    assert provider.calls == 1
+    assert report.status == "manual_review"
+    assert report.evidence["provider_review_attempts"] == 1
+    assert report.retryable is False
 
 
 def test_vision_timeout_detection_covers_sdk_and_gateway_messages() -> None:
