@@ -158,7 +158,9 @@ class PreviewService:
                     await self.local(self.store.patch, record["id"], {
                         "last_error": exc.code, "errors": count,
                         "state": "remote_unavailable" if exc.retryable else "protocol_error",
-                        "next_poll_at": time.time() + min(60, 2 ** min(count, 6)),
+                        "next_poll_at": max(time.time() + min(60, 2 ** min(count, 6)),
+                                            exc.retry_not_before or 0),
+                        "retry_not_before": exc.retry_not_before or 0,
                     }, release=True)
                 except Exception:
                     await self.local(self.store.patch, record["id"], {

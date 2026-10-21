@@ -2,14 +2,37 @@
 from __future__ import annotations
 
 import re
+import math
+import time
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 import httpx
 
 
 class BridgeError(Exception):
-    def __init__(self, code: str, *, status: int = 502, retryable: bool = True):
+    def __init__(self, code: str, *, status: int = 502, retryable: bool = True,
+                 retry_not_before: float | None = None):
         super().__init__(code)
         self.code, self.status, self.retryable = code, status, retryable
+        self.retry_not_before = retry_not_before
+
+
+def retry_after_deadline(value: str | None) -> float | None:
+    """Convert an HTTP retry hint into a durable deadline, never a worker sleep."""
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        if re.fullmatch(r"[0-9]+", value):
+            deadline = time.time() + int(value)
+        else:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return None
+            deadline = date.timestamp()
+        return deadline if math.isfinite(deadline) else None
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 class BridgeClient:
@@ -42,7 +65,9 @@ class BridgeClient:
                     except (ValueError, AttributeError, TypeError):
                         pass
                     raise BridgeError(code, status=response.status_code,
-                                      retryable=response.status_code in {408, 429} or response.status_code >= 500)
+                                      retryable=response.status_code in {408, 429} or response.status_code >= 500,
+                                      retry_not_before=(retry_after_deadline(response.headers.get("Retry-After"))
+                                                        if response.status_code in {429, 503} else None))
                 return bytes(body), response.headers
         except (httpx.HTTPError, OSError):
             # Never expose credentials, upstream URLs, paths, or response bodies.

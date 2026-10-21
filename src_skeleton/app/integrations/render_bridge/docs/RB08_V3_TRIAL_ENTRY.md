@@ -63,7 +63,13 @@ byte-for-byte against base `8089edbf` and are unchanged.
 
 Browser acceptance uses the shipped HTML, controller and actual host button hook
 with synthetic state/API fixtures. The unrelated legacy application bootstrap is
-paused in the fixture, so this is not full live-login/full-app acceptance. Browser
-execution and screenshot inspection are pending the GitHub browser workflow;
-local Chromium is not run because its environment is restricted. No real provider,
+paused in the fixture, so this is not full live-login/full-app acceptance. Browser execution subsequently passed **46 cases** (30 trial and 16 existing),
+with desktop/mobile/review-image screenshots inspected, in GitHub workflow
+[39555157577](https://github.com/meta-xucong/alchemy-media-agent/actions/runs/39555157577)
+at remote revision `7c00eb3b52bd87fc18ac9c7a57ec74f1a4f57fad`. The original
+capacity/retention workflow
+[39555165142](https://github.com/meta-xucong/alchemy-media-agent/actions/runs/39555165142)
+also passed all five jobs. Local Chromium was not run because its environment
+is restricted. These are revision-specific prior results, not acceptance of
+subsequent changes. No real provider,
 account, production deployment or formal-output acceptance is claimed.

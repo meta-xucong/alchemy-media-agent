@@ -6,9 +6,10 @@ Baseline: `6556a6ba5120fd5e17c6009f1161bd2213d2f979`, 2026-10-20.
 
 The total objective is an explicitly selected Bridge integration that reuses
 Alchemy-owned frozen inputs and native registration/review authorities.
-Two separate developer milestones are now implemented: an independent **test
-preview**, and an additional opt-in **synthetic native integration**. Neither is
-a production provider. Preview remains unconnected to native registration and
+Implemented surfaces now include independent **test preview**, opt-in native
+development integration for configured fake/Codex/manual profiles, administrator
+controls, and the optional current-project V3 trial dialog. None is a production
+provider. RB03–RB08 describe the later increments and their bounded acceptance. Preview remains unconnected to native registration and
 must never emit `accepted`; only the native coordinator may acknowledge a
 confirmed real native checkpoint. See RB03 for integrated acceptance and limits.
 
@@ -34,8 +35,9 @@ hooks, described in `docs/render_bridge_module/RB02_NATIVE_FACADE_STAGE.md`.
 No dependency changes. This adapter is V3-host-bound; the Bridge wire protocol remains version
 neutral and does not import Alchemy or Bridge runtime objects.
 
-`disabled` (default) mounts nothing, creates no client/store/reconciler, and ignores
-missing Bridge configuration. `enabled` permits explicit test tasks. `draining`
+`disabled` (default) leaves the administrator settings routes available, but
+creates no Bridge client/store/reconciler and leaves task routes inactive; missing
+Bridge configuration does not prevent host startup. See `admin-controls.md`. `enabled` permits explicit test tasks. `draining`
 only resumes module tasks and rejects creation. Invalid enabled configuration
 leaves the host running and reports a module-only error. Fully disabled pauses
 recovery and retains the module database; use draining before disable if needed.
@@ -53,9 +55,11 @@ native tests use separate temporary stores and synthetic pixels.
 ## Restricted native extension
 
 The approved extension now supplies plan-only, canonical freeze and queryable
-idempotent native registration. It supports only `fake-image` revision 1,
-auto/png, sizes 1024x1024, 1024x768 or 768x1024, and zero to two authorized
-current-project uploaded originals. See RB04 for the reference milestone.
+idempotent native registration. It defaults to `fake-image` revision 1; configured `codex-image` and
+`midjourney-manual` development profiles are also implemented (RB06). Native
+options remain auto quality, PNG/JPEG original-format validation, sizes
+1024x1024, 1024x768 or 768x1024, and zero to two authorized current-project
+uploaded originals. Manual profiles accept no references. See RB04/RB06.
 It reuses native candidate persistence and
 review-only continuation, without rendering again, selecting, exporting or
 promoting fake results. A receipt alone is not native acceptance.
@@ -84,8 +88,9 @@ real billing remains unverified. No new ledger or charge was invented.
 - For auth-disabled isolated loopback development only:
   `ALCHEMY_RENDER_BRIDGE_LOCAL_PREVIEW=true`. Nonloopback requests still fail.
 
-Open `/render-bridge-preview` directly. There is deliberately no change to the
-old generation pages or default navigation. It displays test-only status and a
+Open `/render-bridge-preview` directly. The ordinary V3 project page also offers
+a separate explicit trial action (RB08); ordinary Generate and its payload remain
+unchanged. Administrator controls live in the existing `/admin/billing` page. It displays test-only status and a
 return link. User input here is a manual test prompt, not a Brain-frozen contract.
 The separate `/render-bridge-native-test` requests a new native plan explicitly,
 then uses its canonical frozen contract. Startup/status never invoke Brain.

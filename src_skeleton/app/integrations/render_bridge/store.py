@@ -87,6 +87,10 @@ class PreviewStore:
             row = db.execute("SELECT record,lease_until FROM integration_jobs WHERE id=?", (job_id,)).fetchone()
             record = json.loads(row["record"])
             record.update(values)
+            # Cancellation/reopening may expedite local work, but cannot violate
+            # an upstream Retry-After deadline, including across process restarts.
+            record["next_poll_at"] = max(record.get("next_poll_at", 0),
+                                         record.get("retry_not_before", 0))
             # A worker cannot overwrite cancellation requested while HTTP was in flight.
             if record.get("cancel_requested") and record["state"] not in {"canceled", "blocked_scope", "blocked_revision"}:
                 record["state"] = "cancel_requested"
