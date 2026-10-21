@@ -3513,6 +3513,15 @@ def test_v1_old_history_owner_lookup_is_not_limited_to_recent_page_window(tmp_pa
                 "VALUES(?, ?, ?, ?, ?)",
                 rows,
             )
+        # Bulk fixture loading must settle the derived index explicitly, not
+        # race the bounded request-time refresh while testing owner lookup.
+        prepare_history_index(media_store)
+        assert connection.execute("SELECT COUNT(*) FROM v1_history_records").fetchone()[0] == 10_001
+        assert connection.execute(
+            "SELECT COUNT(*) FROM v1_history_records WHERE created_epoch > "
+            "(SELECT created_epoch FROM v1_history_records WHERE output_id=?)",
+            (target_output_id,),
+        ).fetchone()[0] == 10_000
     finally:
         connection.close()
 
