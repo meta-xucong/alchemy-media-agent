@@ -99,3 +99,13 @@ setup asks the user to find an administrator rather than exposing technical erro
 codes. Browser fixtures cover immediate actions, collapsed details, unavailable
 nodes, setup guidance, permissions, preserved tool choices and duplicate-click
 blocking, with main-panel and expanded mobile screenshots for CI inspection.
+
+### Hidden trial-entry correction from browser CI
+
+The entry link correctly received `hidden` when bridge mode was disabled or the
+viewer lacked administrator access, but the existing `.surface-switch-link`
+authored display rule overrode the browser's default hidden rendering. Browser CI
+caught three failures while preserving the intended visibility assertions. This
+is a presentation-layer CSS precedence mismatch, not an authorization or runtime
+state defect. A scoped hidden override inside the Render Bridge panel restores
+the browser contract without changing other page components or weakening tests.
