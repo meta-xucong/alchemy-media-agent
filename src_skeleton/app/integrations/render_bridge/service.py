@@ -8,6 +8,7 @@ import json
 import time
 from uuid import uuid4
 
+from .attention import attention_projection
 from .client import BridgeClient, BridgeError
 from .models import PreviewCreate, decode_inputs, validate_image
 from .store import PreviewStore
@@ -127,6 +128,7 @@ class PreviewService:
         return {"integration_job_id": record["id"], "project_id": record["project_id"],
                 "state": state, "created_at": record["created_at"],
                 "profile_id": record["request"]["profile_id"], "last_error": record.get("last_error"),
+                "action_required_detail": attention_projection(record),
                 "remote_state": record.get("remote_state"), "native_registration": "not_connected",
                 "delivery_ack": record.get("delivery_ack", "pending"), "test_only": True,
                 "preview_url": (f"/api/integrations/render-bridge/v1/tasks/{record['id']}/preview"
@@ -224,7 +226,7 @@ class PreviewService:
         else:
             remote = await self.client.task(record["remote_task_id"])
         self._validate_task(record, remote)
-        await self._patch(record, remote_state=remote["state"])
+        await self._patch(record, remote_state=remote["state"], action_required_detail=attention_projection(remote))
         if record["cancel_requested"]:
             if remote.get("receipt_id"):
                 receipt = await self.client.receipt(remote["receipt_id"])

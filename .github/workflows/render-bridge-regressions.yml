@@ -117,11 +117,14 @@ jobs:
         run: python -m playwright install --with-deps chromium
       - name: Verify shipped preview UI with synthetic intercepted API only
         run: >-
-          python -m pytest -q tests/browser/test_render_bridge_preview_ui.py
+          BRIDGE_UI_SCREENSHOT_DIR=${{ runner.temp }}/render-bridge-admin-screenshots
+          python -m pytest -q tests/browser/test_render_bridge_preview_ui.py tests/browser/test_render_bridge_admin_ui.py
           --junitxml=${{ runner.temp }}/render-bridge-browser.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: render-bridge-browser-${{ github.sha }}
-          path: ${{ runner.temp }}/render-bridge-browser.xml
+          path: |
+            ${{ runner.temp }}/render-bridge-browser.xml
+            ${{ runner.temp }}/render-bridge-admin-screenshots/*.png
           if-no-files-found: warn

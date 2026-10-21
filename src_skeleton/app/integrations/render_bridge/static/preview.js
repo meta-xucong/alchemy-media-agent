@@ -39,6 +39,7 @@ async function refresh() {
       article.append(paragraph(states[task.state] || task.state,'task-title'));
       article.append(paragraph(`${task.profile_id} · ${new Date(task.created_at).toLocaleString()}`,'muted'));
       if(task.last_error) article.append(paragraph(task.last_error,'error'));
+      if(task.action_required_detail?.message) article.append(paragraph(task.action_required_detail.message,'error'));
       if(task.preview_url){
         const img=document.createElement('img');img.alt='Bridge 测试图，原生登记未接通';article.append(img);
         authorizedFetch(task.preview_url).then(async response=>{

@@ -18,6 +18,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Annotated, Literal
 
+from .attention import attention_projection
 from .client import BridgeError
 from .models import validate_image
 from .options import FORMAT_MIMES, native_profile
@@ -160,6 +161,7 @@ class NativeBridgeService(PreviewService):
         return {"integration_job_id": record["id"], "project_id": record["project_id"],
             "state": record["state"], "created_at": record["created_at"], "last_error": record.get("last_error"),
             "profile_id": record["request"]["profile_id"],
+            "action_required_detail": attention_projection(record),
             "test_fixture": record["request"]["profile_id"] == "fake-image", "real_tool_verified": False,
             "native_registration": native.get("status", "pending"), "delivery_ack": record.get("delivery_ack", "pending"),
             "native_registration_ref": native.get("native_registration_ref"),
@@ -275,7 +277,7 @@ class NativeBridgeService(PreviewService):
             await self._patch(record, remote_task_id=remote["remote_task_id"])
         remote = await self.client.task(record["remote_task_id"])
         self._validate_task(record, remote)
-        await self._patch(record, remote_state=remote["state"])
+        await self._patch(record, remote_state=remote["state"], action_required_detail=attention_projection(remote))
         if remote["state"] in {"failed", "canceled", "expired"}:
             await self._finish(record, state=remote["state"])
             return

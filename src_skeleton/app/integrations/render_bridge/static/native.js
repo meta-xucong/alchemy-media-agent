@@ -61,6 +61,7 @@ async function refresh() {
       box.append(line(labels[task.state] || task.state, 'task-title'), line(new Date(task.created_at).toLocaleString(), 'muted'));
       box.append(line(`${task.size || '1024x1024'} · ${task.reference_count || 0} 张参考原图 · ${task.profile_id || 'fake-image'} · ${task.output_format || 'png'} · ${task.test_fixture === false ? '真实工具未验收' : '合成传输测试'}`, 'muted'));
       if (task.last_error) box.append(line(task.last_error, 'error'));
+      if (task.action_required_detail?.message) box.append(line(task.action_required_detail.message, 'error'));
       box.append(line(`登记：${task.native_registration} · 确认：${task.delivery_ack}`));
       if (task.native_registration_ref) box.append(line(task.native_registration_ref, 'muted'));
       if (task.review_status) box.append(line(`审核状态：${task.review_status}。不会自动选中或正式交付。`));

@@ -24,13 +24,14 @@ class BridgeSettings:
     config_error: str | None = None
 
     @classmethod
-    def from_env(cls) -> "BridgeSettings":
+    def from_env(cls, *, preserve_disabled: bool = False) -> "BridgeSettings":
         mode = os.getenv("ALCHEMY_RENDER_BRIDGE_MODE", "disabled").strip().lower()
-        # No other configuration is read/validated, and no directory/client is
-        # constructed, when disabled. Broken Bridge settings cannot break Alchemy.
-        if mode == "disabled":
+        # Legacy disabled mounting reads no other settings. The administrator
+        # control plane may inspect environment defaults without constructing
+        # directories, clients or workers. Invalid settings never activate it.
+        if mode == "disabled" and not preserve_disabled:
             return cls()
-        if mode not in {"enabled", "draining"}:
+        if mode not in {"disabled", "enabled", "draining"}:
             return cls(mode="disabled", config_error="invalid_mode")
         base = os.getenv("ALCHEMY_RENDER_BRIDGE_URL", "").rstrip("/")
         token = os.getenv("ALCHEMY_RENDER_BRIDGE_TOKEN", "")

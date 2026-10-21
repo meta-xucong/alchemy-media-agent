@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Veyra Billing Admin</title>
+    <title>Alchemy 管理员设置</title>
     <link rel="stylesheet" href="/static/styles.css?v=__STATIC_STYLES_VERSION__" />
     <link rel="stylesheet" href="/static/api-access.css?v=__API_ACCESS_CSS_VERSION__" />
   </head>
@@ -14,11 +14,11 @@
           <div class="brand-mark" aria-hidden="true">A</div>
           <div>
             <p class="eyebrow">Veyra Agent</p>
-            <h1>Billing Admin</h1>
+            <h1>Alchemy 管理员设置</h1>
           </div>
         </a>
         <div class="module-tabs billing-admin-title" aria-label="管理模块">
-          <button class="tab active" type="button">Alchemy 计费参数</button>
+          <button class="tab active" type="button">Alchemy 配置</button>
         </div>
         <div class="header-status">
           <a class="surface-switch-link" href="/">返回 Alchemy</a>
@@ -27,6 +27,36 @@
       </header>
 
       <main class="homepage billing-admin-page">
+        <section class="panel flow-section render-bridge-console" aria-labelledby="bridgeAdminTitle">
+          <div class="panel-head section-title">
+            <div><p class="eyebrow">Render Bridge</p><h3 id="bridgeAdminTitle">渲染桥接设置</h3></div>
+            <span id="bridgeAdminState" class="state-pill" role="status">读取中</span>
+          </div>
+          <p class="micro-copy">仅影响独立的 Render Bridge 开发入口，不改变原有 Alchemy 生图流程。启用不代表真实工具已就绪或正式交付已验收。</p>
+          <form id="bridgeAdminForm" aria-describedby="bridgeAdminHint">
+            <fieldset id="bridgeAdminFields" disabled>
+              <div class="bridge-admin-grid">
+                <label class="field"><span>运行模式</span><select id="bridgeAdminMode">
+                  <option value="disabled">停用：暂停恢复，不删除任务</option>
+                  <option value="enabled">启用：允许新任务与恢复</option>
+                  <option value="draining">排空：只恢复已有任务</option>
+                </select></label>
+                <label class="field"><span>Bridge 服务地址</span><input id="bridgeAdminUrl" type="url" maxlength="2048" placeholder="https://bridge.example.com" autocomplete="off" /></label>
+                <label class="field"><span>工作区标识</span><input id="bridgeAdminWorkspace" maxlength="128" autocomplete="off" /></label>
+                <div class="field"><span>连接凭据</span><p id="bridgeAdminCredential" class="micro-copy">检查中</p><small>凭据仅由服务器环境提供，不在网页中读取或保存。地址须与凭据配置的目标一致。</small></div>
+                <label class="field"><span>允许的执行配置（可多选）</span><select id="bridgeAdminProfiles" multiple size="3"><option value="fake-image">fake-image · 模拟验收</option><option value="codex-image">codex-image · 本地工具</option><option value="midjourney-manual">midjourney-manual · 人工操作</option></select></label>
+                <label class="field"><span>原生开发入口配置（可多选）</span><select id="bridgeAdminNativeProfiles" multiple size="3"><option value="fake-image">fake-image</option><option value="codex-image">codex-image</option><option value="midjourney-manual">midjourney-manual</option></select></label>
+              </div>
+              <label class="billing-toggle-row"><input id="bridgeAdminNative" type="checkbox" /><span>启用原生开发验证入口（不是生产切换）</span></label>
+              <div class="billing-actions">
+                <button id="bridgeAdminSave" class="button primary" type="submit">保存桥接设置</button>
+                <button id="bridgeAdminProbe" class="button secondary" type="button">探测已保存的配置</button>
+              </div>
+            </fieldset>
+          </form>
+          <p id="bridgeAdminHint" class="micro-copy" role="status">页面加载只读取本地配置，不发起远程探测。</p>
+          <div id="bridgeAdminResult" class="bridge-admin-result" role="status" aria-live="polite" hidden></div>
+        </section>
         <section class="panel flow-section billing-console-panel">
           <div class="panel-head section-title">
             <div>

@@ -4259,9 +4259,10 @@ def _create_render_bridge_native_gateway(config):
     )
 
 
-from app.integrations.render_bridge.routes import install_render_bridge
-install_render_bridge(
+from app.integrations.render_bridge.admin import install_render_bridge_admin
+install_render_bridge_admin(
     app,
+    admin_resolver=lambda request, authorization: _require_veyra_admin(request, authorization),
     session_user=lambda request, authorization: _veyra_user_id_from_request(request, authorization),
     auth_enabled=lambda: settings.veyra_auth_enabled,
     project_snapshot=_render_bridge_preview_project_snapshot,
