@@ -206,6 +206,21 @@ def field(page: Page, name: str):
     return page.locator(DIALOG).locator(FIELD % name)
 
 
+def expect_settings_disabled(page: Page) -> None:
+    # CI 39554386105: Playwright's actionability matcher does not classify the
+    # fieldset container itself as disabled. Check its native property and the
+    # actual controls affected by inherited fieldset disabling instead.
+    expect(field(page, "settings")).to_have_js_property("disabled", True)
+    for name in ("prompt", "ack", "format"):
+        expect(field(page, name)).to_be_disabled()
+    shapes = page.locator(f'{DIALOG} input[name="bridge-size"]')
+    expect(shapes).to_have_count(3)
+    for shape in shapes.all():
+        expect(shape).to_be_disabled()
+    for profile in page.locator(f'{DIALOG} input[name="bridge-profile"]').all():
+        expect(profile).to_be_disabled()
+
+
 def open_controller(page: Page, *, project_id: str = PROJECT_A, eligible: bool = True,
                     prompt: str = "Synthetic single image, no external generation.") -> None:
     page.evaluate("input => window.AlchemyBridgeTrial.open(input)", {
@@ -424,7 +439,7 @@ def test_controller_pending_submit_blocks_duplicate_and_changed_content_gets_new
                                  and request.method == "POST"):
             field(page, "start").click()
         expect(field(page, "start")).to_be_disabled()
-        expect(field(page, "settings")).to_be_disabled()
+        expect_settings_disabled(page)
         field(page, "form").evaluate("form => form.dispatchEvent(new Event('submit', {cancelable: true}))")
         assert len(fixture.creates) == 1 and fixture.pending_submit is not None
         fixture.pending_submit.fulfill(status=202, json=next(iter(fixture.tasks.values())))
@@ -455,7 +470,7 @@ def test_controller_unavailable_missing_draining_or_auth_denied_stays_disabled(
         open_controller(page)
         expect(field(page, "notice")).to_contain_text(message)
         expect(field(page, "start")).to_be_disabled()
-        expect(field(page, "settings")).to_be_disabled()
+        expect_settings_disabled(page)
         assert fixture.creates == []
 
 
