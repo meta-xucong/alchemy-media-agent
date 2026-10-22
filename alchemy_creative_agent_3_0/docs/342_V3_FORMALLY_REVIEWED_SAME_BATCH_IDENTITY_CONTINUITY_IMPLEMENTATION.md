@@ -1,6 +1,6 @@
 # Doc342 - V3 Formally Reviewed Same-Batch Identity Continuity Implementation
 
-Status: **development contract; design audit passed; implementation and acceptance pending**.
+Status: **superseded before implementation by user-selected advisory-first semantics; see Doc343**.
 
 Scope: V3 Foundation generation, shared visual review, and frozen provider input.
 
@@ -167,5 +167,7 @@ no external model/provider calls in simulation.
    for the intended multi-image human suite. Preserve job/output/review
    evidence and report success, timing, and any limitations. Do not push to VPS.
 
-Passing one phase authorizes the next phase only; total acceptance requires all
-phases above and a final integrated local result.
+This strict-review-first variant was audited but not selected. Do not implement
+it. The user selected Doc73 same-batch temporary advisory reference with
+Doc322 formal review still controlling project-anchor promotion. See
+[Doc343](343_V3_SAME_BATCH_ADVISORY_CONTINUITY_MINIMAL_REPAIR.md).

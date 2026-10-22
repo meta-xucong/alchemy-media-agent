@@ -1,0 +1,150 @@
+# Doc343 - V3 Same-Batch Advisory Continuity Minimal Repair
+
+Status: **design audit passed; implementation, code audit, simulation, and local real acceptance pending**.
+
+Scope: V3 Foundation, Doc73/Doc287 same-batch advisory continuity and Doc322
+frozen Provider inputs.
+
+## 1. Objective and observed defect
+
+For an eligible text-only human portrait batch, use the first canonical output
+as temporary identity continuity context for the remaining outputs. After the
+normal full-batch visual review, the existing Doc322 path may bind that first
+output as the project's persistent anchor only if it is formally eligible.
+
+The observed four-image job produced four outputs but its frozen
+`ReferenceInputPlan` contained no continuity source, and its policy had
+`enabled=false` / `applied=false`. The immediate Brain gate requires
+`frozen_reference_plan is None`; removing that predicate alone would still
+fail because Production Provider returns only `plan.references()` when a
+frozen plan exists and ignores dynamic `reference_assets` metadata.
+
+## 2. Selected behavior and authority
+
+The user selected the simple advisory-first behavior. This document makes the
+following distinction explicit:
+
+- **Same-batch advisory reference:** Doc73/Doc287 job-local transport context.
+  It may be consumed by later outputs before the batch's formal visual review.
+  It is not a project binding, formal identity truth, or a claim that the first
+  image passed.
+- **Project continuity anchor:** Doc322 persistent project state. Only the
+  first planned output that satisfies the existing final-delivery review and
+  canonical binding requirements may be bound. No later image can replace it;
+  manual binding/unbinding remains authoritative.
+
+Doc343 narrows the Doc322 wording “first formally passing image as later
+continuity reference”: “later continuity reference” means the persistent
+project reference for subsequent jobs. Intra-job temporary context remains
+governed by Doc73/Doc287. The matching clarification is recorded in Doc322
+§1, §4.1, and §4.2.
+
+No review timing changes, added review calls, new eligibility rules, new
+module, new public contract, or project-state mutations are introduced.
+
+## 3. Minimal implementation
+
+### 3.1 Central Brain predicate
+
+In `creative_core/central_brain.py`, allow the existing Doc73 eligibility
+decision when a frozen plan is present if all existing conditions still hold:
+
+- real, multi-output text-only Standard generation;
+- human/portrait-led photoreal output;
+- no explicit user or mode-scoped reference input;
+- not E-Commerce and no template policy disabling generated-output chaining;
+- no active anchor and no manually unbound/invalid state;
+- the frozen plan's `anchor_auto_enabled` is true.
+
+The stale “no frozen plan” predicate is removed. Existing active project anchor,
+manual unbind, explicit references, mock runs, and unsupported template modes
+retain their current behavior. The explicit-reference condition applies only
+to this Doc73 same-batch chain; it must not disable Doc322's separate project
+anchor candidacy for a directly uploaded Standard task.
+
+The first source stays the existing Doc287 source: only the canonical persisted
+output at plan position 0 with the valid receipt may be used. Do not choose the
+first arbitrary candidate or allow position 1 to replace a missing source.
+
+### 3.2 Freeze the actual later-image input
+
+In `app/reference_input_plan.py`, add one narrow derivation method for a
+validated Doc287 source. It creates a per-output `ReferenceInputPlan` for the
+later image while leaving the Job-level plan unchanged.
+
+The derived plan stores `same_batch_continuity_reference` as its own
+job-local advisory field, separate from `continuity_anchor`, direct references,
+and `derived_evidence`. Its `references()` view includes the advisory image
+only when the plan is auto-enabled, has no active project anchor or explicit
+mode inputs, and the mode is `standard`. The plan digest and Standard physical
+reference count include that exact source. Existing file/hash and Provider
+materialization receipt checks continue to run unchanged against the derived
+plan.
+
+In the Brain, derive that plan for each output after position 0 has produced
+the existing valid Doc287 receipt. Keep `auto_batch_identity_anchor_applied`,
+the receipt/reference metadata, and the plan in sync, but never depend on the
+metadata copy as the Provider's input authority.
+
+### 3.3 Review and project binding remain at the current boundary
+
+The existing Product API full-batch review remains unchanged. Continuity stays
+advisory under Doc287 and is not promoted to a formal person-identity evidence
+source. Existing `_maybe_claim_continuity_anchor()` remains the only project
+anchor writer and continues to require the canonical first output and the
+current final-delivery eligibility evidence.
+
+If the first image later fails review, the batch's outputs and review findings
+remain available under the existing result flow, but no project anchor is
+created. That does not retroactively change which same-batch advisory input was
+used. Manual unbind continues to disable project auto-promotion according to
+Doc322; it also disables the Doc73 same-batch auto chain.
+
+## 4. Compatibility and isolation
+
+- Existing frozen plans lacking `same_batch_continuity_reference` remain
+  readable and have no derived reference.
+- A derived per-output plan is internal to that output request; it does not
+  rewrite the persisted Job request or project's anchor snapshot.
+- Provider and MCP consume only the derived frozen plan. Arbitrary dynamic
+  metadata references are not merged.
+- No V1/V2/Lab, Sub2API, frontend, public API, or deployment changes.
+- No extra Vision call, new review gate, retry, or identity threshold.
+
+## 5. Focused regression tests
+
+Write failing tests before implementation. Use deterministic images and stores;
+do not invoke external providers.
+
+1. With an auto-enabled frozen Standard plan and eligible Doc73 text-only
+   profile, output 0 has no generated reference and every later output's frozen
+   plan contains the same canonical source ID and hash.
+2. Run the derived plan through `ProductionImageGenerationProvider` reference
+   resolution, `_asset_plan()`, and `_bind_reference_materialization_receipt()`;
+   the physical materialization contains exactly that source and its receipt
+   digest matches the derived plan.
+3. An existing project anchor stays the sole source. Manual unbind, explicit
+   same-job references, disabled auto flag, non-Standard mode, E-Commerce,
+   mock generation, and a missing/invalid Doc287 receipt create no same-batch
+   reference.
+4. An existing legal Doc287 receipt can be used for continuity context but
+   does not by itself create or promote a Doc322 project anchor; final project
+   binding still follows the current review eligibility predicate.
+5. Explicit Standard uploaded references continue to suppress only the
+   same-batch Doc73 chain; they do not suppress Doc322 project-level anchor
+   candidacy after formal review.
+6. The first planned output remains the sole source across retries and extra
+   Provider results; position 1 never replaces it.
+
+Run the focused Doc73/Doc322 suites, production Provider materialization tests,
+and the regression cases above. Then perform independent code audit, bounded
+local simulation, and the user-requested controlled local V3 real test only
+after all deterministic gates pass.
+
+## 6. Acceptance boundary
+
+Passing the focused tests and simulation authorizes local real validation only.
+Total acceptance requires the real local multi-image batch to demonstrate
+that all later Provider requests consumed the same first canonical image and
+that the project anchor is bound only after the existing formal review accepts
+it. This document does not authorize VPS deployment.
