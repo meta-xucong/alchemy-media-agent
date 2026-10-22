@@ -1136,7 +1136,30 @@ class HumanPhotorealismLayer:
         # object surface.  Do not run the legacy keyword classifier again:
         # doing so made a cartoon graphic on a child's dress disable the
         # shared real-person capability for an otherwise photographic image.
-        if _truthy(metadata.get("human_realism_execution_required")):
+        activation_plan = metadata.get("capability_activation_plan")
+        enforced_activation_plan = (
+            isinstance(activation_plan, dict)
+            and str(activation_plan.get("activation_mode") or "").strip().lower() == "enforced"
+        )
+        if _truthy(metadata.get("human_realism_execution_required")) or enforced_activation_plan:
+            if not _truthy(metadata.get("human_realism_execution_required")):
+                if _frozen_rendering_intent_is_whole_image_stylized(metadata):
+                    return _activation_payload(
+                        applies=False,
+                        primary_reason="stylized_request",
+                        disabled_reason="stylized_request",
+                        disabled_by_style=True,
+                        subject_type=subject_type,
+                        evidence={"frozen_rendering_intent": dict(metadata.get("frozen_rendering_intent") or {})},
+                    )
+                return _activation_payload(
+                    applies=False,
+                    primary_reason="no_visible_person_evidence",
+                    disabled_reason="no_visible_person_evidence",
+                    disabled_by_style=False,
+                    subject_type=subject_type,
+                    evidence={"frozen_activation_plan": "human_realism_inactive"},
+                )
             if _frozen_rendering_intent_is_whole_image_stylized(metadata):
                 return _activation_payload(
                     applies=False,

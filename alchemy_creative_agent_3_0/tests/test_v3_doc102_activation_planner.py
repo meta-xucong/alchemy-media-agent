@@ -116,6 +116,63 @@ def test_explicitly_stylized_person_does_not_force_photorealism() -> None:
     assert "human_realism" not in plan.dependency_order
 
 
+def test_brain_required_human_realism_is_normalized_for_stylized_whole_image() -> None:
+    profile = _profile().model_copy(
+        update={
+            "rendering_intent": RenderingIntent(
+                rendering_mode="stylized",
+                stylization_scope="whole_image",
+                decision_owner="remote_brain",
+            )
+        }
+    )
+    plan = _planner().plan(
+        task_profile=profile,
+        intent=CapabilityActivationIntent(
+            intent_id="intent",
+            task_profile_id="profile",
+            requested_capabilities=[
+                RequestedCapability(
+                    capability_id="human_realism",
+                    activation_mode="required",
+                    evidence_ids=["person_evidence"],
+                    confidence=1.0,
+                )
+            ],
+            confidence=0.9,
+        ),
+        template_policy=general_capability_policy(),
+        catalog_version="catalog",
+        activation_mode="enforced",
+    )
+
+    assert "human_realism" not in plan.dependency_order
+    inactive = next(item for item in plan.inactive_capabilities if item.capability_id == "human_realism")
+    assert inactive.reason_code == "stylized_request"
+
+
+def test_object_surface_stylization_keeps_visible_real_person_activation() -> None:
+    profile = _profile().model_copy(
+        update={
+            "rendering_intent": RenderingIntent(
+                rendering_mode="mixed",
+                stylization_scope="object_surface",
+                decision_owner="remote_brain",
+            )
+        }
+    )
+    plan = _planner().plan(
+        task_profile=profile,
+        intent=CapabilityActivationIntent(intent_id="intent", task_profile_id="profile", confidence=0.9),
+        template_policy=general_capability_policy(),
+        catalog_version="catalog",
+        activation_mode="enforced",
+    )
+
+    assert plan.active("human_realism") is not None
+    assert plan.active("human_realism").activation_mode == "required"
+
+
 def test_visible_real_person_fails_closed_if_a_template_forbids_shared_realism() -> None:
     policy = general_capability_policy().model_copy(update={"forbidden_capabilities": ["human_realism"]})
     with pytest.raises(CapabilityActivationError, match="required shared capability is forbidden"):

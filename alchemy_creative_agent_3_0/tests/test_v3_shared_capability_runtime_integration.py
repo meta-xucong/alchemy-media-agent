@@ -1,12 +1,15 @@
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.app.shared_capabilities import UploadedAssetInfo
+from alchemy_creative_agent_3_0.app.shared_capabilities.activation import CapabilityActivationError
 
 
 def _image(path: Path) -> Path:
@@ -161,3 +164,151 @@ def test_required_shared_capability_failure_blocks_runtime() -> None:
     assert result.capability_run.status.value == "failed"
     assert result.capability_run.required_failures == ["missing_capability"]
     assert result.planning_result is None
+
+
+def test_activation_block_receipt_preserves_safe_private_diagnostics() -> None:
+    runtime = ScenarioRuntime()
+    request = runtime._coerce_request(
+        {
+            "user_input": "private user prompt that must not be persisted in diagnostics",
+            "scenario_selection": {"scenario_id": "general_creative"},
+        }
+    )
+    resolution = runtime.scenario_registry.resolve(request.scenario_selection)
+    profile = SimpleNamespace(
+        profile_id="profile_123",
+        template_id="general_template",
+        scenario_id="general_creative",
+        output_medium="image",
+        rendering_intent=SimpleNamespace(
+            rendering_mode="photoreal",
+            stylization_scope="none",
+            decision_owner="remote_brain",
+        ),
+        developmental_age_intent="not_applicable",
+        subject_entities=[
+            SimpleNamespace(entity_type="person"),
+            SimpleNamespace(entity_type="person"),
+            SimpleNamespace(entity_type="leak_this_prompt"),
+        ],
+        unknown_requirements=["do not persist this private user wording"],
+    )
+    plan = SimpleNamespace(
+        plan_id="plan_123",
+        fingerprint="a1b2c3",
+        activation_mode="enforced",
+        dependency_order=["human_realism", "universal_visual_quality"],
+        base_capabilities=[SimpleNamespace(capability_id="human_realism", activation_mode="required", reason_codes=["visible_person"])],
+        active_capabilities=[SimpleNamespace(capability_id="human_realism", activation_mode="required", reason_codes=["visible_person"])],
+        inactive_capabilities=[SimpleNamespace(capability_id="portrait_identity", reason_code="not_applicable_no_visible_human")],
+    )
+    warning = SimpleNamespace(
+        code="capability_execution_failed",
+        severity="error",
+        message="unsafe raw provider or user detail must be omitted",
+        metadata={"exception_type": "ValueError"},
+    )
+    unknown_warning = SimpleNamespace(
+        code="leak_this_prompt_without_spaces",
+        severity="warning",
+        message="untrusted executor detail",
+        metadata={},
+    )
+    cluster_result = SimpleNamespace(
+        module_id="visual_capability_cluster",
+        status=SimpleNamespace(value="warning"),
+        warnings=[warning, unknown_warning],
+        facts={
+            "visual_capability_cluster": {
+                "human_photorealism_guidance": {
+                    "applies": False,
+                    "metadata": {
+                        "disabled_reason": "frozen_rendering_intent_conflict",
+                        "human_realism_plugin": {
+                            "primary_reason": "frozen_rendering_intent_conflict",
+                            "disabled_reason": "frozen_rendering_intent_conflict",
+                        },
+                    },
+                }
+            }
+        },
+    )
+    active_run = SimpleNamespace(
+        status=SimpleNamespace(value="failed"),
+        results=[cluster_result],
+        warnings=[warning, unknown_warning],
+        required_failures=["human_realism"],
+    )
+
+    diagnostics = runtime._activation_failure_diagnostics(
+        plan,
+        active_run,
+        SimpleNamespace(visual_task_profile=profile),
+        failure_code="human_realism_execution_mismatch",
+    )
+    exc = CapabilityActivationError("human_realism_execution_mismatch")
+    exc.activation_failure_diagnostics = diagnostics
+    blocked = runtime._activation_blocked_result(request, resolution, exc)
+
+    persisted = blocked.capability_run.metadata["activation_failure_diagnostics"]
+    serialized = json.dumps(persisted)
+    assert persisted["profile_summary"]["rendering_intent"]["rendering_mode"] == "photoreal"
+    assert persisted["profile_summary"]["subject_entity_counts"] == {"person": 2, "other": 1}
+    assert persisted["planned_capabilities"]["dependency_order"] == ["human_realism", "universal_visual_quality"]
+    assert persisted["human_realism_execution"] == {
+        "status": "not_applied",
+        "applies": False,
+        "primary_reason": "frozen_rendering_intent_conflict",
+        "disabled_reason": "frozen_rendering_intent_conflict",
+    }
+    assert persisted["executor"]["warnings"][0]["code"] == "capability_execution_failed"
+    assert persisted["executor"]["warnings"][1]["code"] == "other"
+    assert "leak_this_prompt" not in serialized
+    assert "unsafe raw provider" not in serialized
+    assert "private user prompt" not in serialized
+    assert "do not persist this private" not in serialized
+    assert "activation_failure_diagnostics" not in blocked.metadata
+    persisted_record = json.dumps(blocked.capability_run.model_dump(mode="json"))
+    assert "activation_failure_diagnostics" in persisted_record
+    public_summary = V3ProductApiService()._capability_run_summary(blocked.capability_run)
+    assert "activation_failure_diagnostics" not in public_summary
+    public_lifecycle = V3ProductApiService._generation_lifecycle_failure_from_runtime_result(blocked)
+    assert public_lifecycle["failure_code"] == "capability_activation_blocked"
+    assert "activation_failure_diagnostics" not in public_lifecycle
+
+    # Missing executor reason is explicit in the receipt rather than silently
+    # producing an unexplained `not_applied` state.
+    cluster_result.facts["visual_capability_cluster"]["human_photorealism_guidance"]["metadata"] = {}
+    fallback = runtime._activation_failure_diagnostics(
+        plan,
+        active_run,
+        SimpleNamespace(visual_task_profile=profile),
+        failure_code="human_realism_execution_mismatch",
+    )
+    assert fallback["human_realism_execution"]["disabled_reason"] == "reason_unavailable"
+
+
+def test_frozen_capability_guard_ignores_inactive_and_blocks_missing_active_hr() -> None:
+    runtime = ScenarioRuntime()
+    runtime._validate_frozen_capability_execution(  # noqa: SLF001
+        SimpleNamespace(dependency_order=[]),
+        SimpleNamespace(results=[]),
+    )
+
+    blocked_run = SimpleNamespace(
+        results=[
+            SimpleNamespace(
+                module_id="visual_capability_cluster",
+                facts={
+                    "visual_capability_cluster": {
+                        "human_photorealism_guidance": {"applies": False}
+                    }
+                },
+            )
+        ]
+    )
+    with pytest.raises(CapabilityActivationError, match="human_realism_execution_mismatch"):
+        runtime._validate_frozen_capability_execution(  # noqa: SLF001
+            SimpleNamespace(dependency_order=["human_realism"]),
+            blocked_run,
+        )

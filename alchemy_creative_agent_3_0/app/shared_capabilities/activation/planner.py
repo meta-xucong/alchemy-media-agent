@@ -143,6 +143,19 @@ class CapabilityActivationPlanner:
             )
             budget_decisions.append(CapabilityBudgetDecision(capability_id=capability_id, included=True, reason_code="within_budget", cost=manifest.estimated_cost))
 
+        if task_profile.rendering_intent.explicitly_stylized_whole_image and (
+            "human_realism" in active
+            or "human_realism" in requested
+            or "human_realism" in required
+            or "human_realism" in recommended
+            or "human_realism" in optional
+        ):
+            active.pop("human_realism", None)
+            inactive["human_realism"] = InactiveCapability(
+                capability_id="human_realism",
+                reason_code="stylized_request",
+            )
+
         self._add_dependencies(active, inactive, template_policy)
         for capability_id in list(active):
             manifest = self.registry.manifest(capability_id)
