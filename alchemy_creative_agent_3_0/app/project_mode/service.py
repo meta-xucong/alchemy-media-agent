@@ -3913,6 +3913,105 @@ class V3ProjectModeService:
             self.project_store.save_project(project)
             return {"operation_id": clean_operation_id, "job_id": clean_job_id}
 
+    def get_project_planning_operation(
+        self,
+        project_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Resolve one browser planning operation from its durable identity."""
+
+        project = self._require_project(project_id)
+        clean_operation_id = str(operation_id or "").strip()
+        if not clean_operation_id:
+            raise KeyError("doc277_planning_operation_not_found")
+        try:
+            records = self.project_store.list_private_records(
+                project.project_id,
+                _DOC277_PRIVATE_PLANNING_NAMESPACE,
+            )
+        except ValueError as exc:
+            raise KeyError("doc277_planning_operation_not_found") from exc
+        matching = [
+            record
+            for record in records
+            if record.get("project_id") == project.project_id
+            and record.get("operation_id") == clean_operation_id
+        ]
+        opened = next(
+            (record for record in matching if record.get("record_kind") == "opened"),
+            None,
+        )
+        expected_open_identity = {
+            "project_id": project.project_id,
+            "operation_id": clean_operation_id,
+            "record_kind": "opened",
+        }
+        if (
+            not isinstance(opened, dict)
+            or opened.get("identity_digest") != self._doc277_digest(expected_open_identity)
+        ):
+            raise KeyError("doc277_planning_operation_not_found")
+
+        terminal = next(
+            (
+                record
+                for record in reversed(matching)
+                if record.get("record_kind") in {"completed", "failed"}
+            ),
+            None,
+        )
+        if terminal is None:
+            current = self._doc277_current_planning_operation(project)
+            if current is not None and current.get("operation_id") == clean_operation_id:
+                return current
+            raise KeyError("doc277_planning_operation_not_found")
+
+        record_kind = str(terminal.get("record_kind") or "")
+        job_id = str(terminal.get("job_id") or "").strip()
+        if record_kind == "completed":
+            expected_identity = {
+                "project_id": project.project_id,
+                "operation_id": clean_operation_id,
+                "record_kind": "completed",
+                "job_id": job_id,
+            }
+            if (
+                not job_id
+                or job_id not in project.job_ids
+                or terminal.get("identity_digest") != self._doc277_digest(expected_identity)
+            ):
+                raise ValueError("doc277_planning_completion_binding_invalid")
+            return {
+                "operation_id": clean_operation_id,
+                "state": "completed",
+                "terminal": True,
+                "pending": False,
+                "job_id": job_id,
+                "next_actions": [],
+            }
+
+        failure_code = str(terminal.get("failure_code") or "planning_unavailable").strip()
+        failed_identity = {
+            "project_id": project.project_id,
+            "operation_id": clean_operation_id,
+            "record_kind": "failed",
+            "failure_code": failure_code,
+            **({"job_id": job_id} if job_id else {}),
+        }
+        if terminal.get("identity_digest") != self._doc277_digest(failed_identity):
+            raise ValueError("doc277_planning_failure_binding_invalid")
+        operation = {
+            "operation_id": clean_operation_id,
+            "state": "planning_failed",
+            "terminal": True,
+            "pending": False,
+            "next_actions": [{"id": "review_project_request"}],
+            "failure_code": failure_code,
+        }
+        if job_id and job_id in project.job_ids:
+            operation["job_id"] = job_id
+        return operation
+
     def fail_project_planning_operation(
         self,
         project_id: str,

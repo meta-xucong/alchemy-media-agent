@@ -15,6 +15,10 @@ const partialStart = source.indexOf("function v3JobHasRecoverablePartialDelivery
 const partialEnd = source.indexOf("\nfunction v3StoredProjectOutputItems", partialStart);
 assert.ok(partialStart >= 0 && partialEnd > partialStart, "partial-delivery helper must be present");
 const partialDeliverySource = source.slice(partialStart, partialEnd);
+const recoveryStart = source.indexOf("async function recoverV3PlannedJob(");
+const recoveryEnd = source.indexOf("\nasync function createV3Job", recoveryStart);
+assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, "planned job recovery function must be present");
+const plannedJobRecoverySource = source.slice(recoveryStart, recoveryEnd);
 
 async function completeWith(job, expectedCount = null) {
   const progress = [];
@@ -144,4 +148,55 @@ test("terminal generated payloads without expected outputs do not show success",
   );
   assert.equal(shortCount.progress[0][0], "failed");
   assert.equal(shortCount.notices[0][1], "warning");
+});
+
+test("planned job recovery reads only the job bound to its operation id", async () => {
+  const calls = [];
+  const context = {
+    v3ApiBase: "/api/v3/creative-agent",
+    v3State: { currentProject: { job_ids: ["job_previous_one_image"] } },
+    window: { setTimeout: (resolve) => resolve() },
+    v3GenerationSessionOwns: () => true,
+    request: async (url) => {
+      calls.push(url);
+      if (url.endsWith("/planning-operations/op_current")) {
+        return {
+          operation_id: "op_current",
+          state: "completed",
+          job_id: "job_current_two_images",
+        };
+      }
+      if (url.endsWith("/jobs/job_current_two_images")) {
+        return { job_id: "job_current_two_images", status: "generated" };
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  };
+  vm.runInNewContext(plannedJobRecoverySource, context);
+
+  const result = await context.recoverV3PlannedJob("project_1", "op_current");
+
+  assert.equal(result.job.job_id, "job_current_two_images");
+  assert.deepEqual(calls, [
+    "/api/v3/creative-agent/projects/project_1/planning-operations/op_current",
+    "/api/v3/creative-agent/jobs/job_current_two_images",
+  ]);
+  assert.ok(!calls.some((url) => url.endsWith("/jobs/job_previous_one_image")));
+});
+
+test("planned job recovery never returns a different operation on timeout", async () => {
+  const context = {
+    v3ApiBase: "/api/v3/creative-agent",
+    v3State: { currentProject: { job_ids: ["job_previous_one_image"] } },
+    window: { setTimeout: (resolve) => resolve() },
+    v3GenerationSessionOwns: () => true,
+    request: async () => ({ operation_id: "op_other", state: "planning" }),
+    setV3Progress: () => {},
+  };
+  vm.runInNewContext(plannedJobRecoverySource, context);
+
+  const result = await context.recoverV3PlannedJob("project_1", "op_current");
+
+  assert.equal(result.operation, null);
+  assert.equal(result.job, null);
 });

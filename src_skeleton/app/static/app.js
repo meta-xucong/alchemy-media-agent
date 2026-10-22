@@ -10873,32 +10873,31 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   return payload;
 }
 
-async function recoverV3PlannedJob(projectId, { shouldContinue = null } = {}) {
+async function recoverV3PlannedJob(projectId, operationId, { shouldContinue = null } = {}) {
+  const cleanOperationId = String(operationId || "").trim();
+  if (!cleanOperationId) return { operation: null, job: null };
   const maxAttempts = 240;
+  const operationEndpoint = `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/planning-operations/${encodeURIComponent(cleanOperationId)}`;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 450 : 2500));
     if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
     try {
-      const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
+      const operation = await request(operationEndpoint);
       if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-      v3State.currentProject = payload.project || v3State.currentProject;
-      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-      syncV3ProjectOutputsFromPayload(payload);
-      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-      saveV3ProjectSnapshot(v3State.currentProject);
-      const operation = v3ProjectPlanningOperation(v3State.currentProject);
       if (operation?.state === "planning_failed") {
+        if (operation.operation_id !== cleanOperationId) continue;
+        v3State.currentProject = await refreshV3CurrentProject({ silent: true, shouldContinue }) || v3State.currentProject;
         renderV3ProjectDetail();
         return { operation, job: null };
       }
-      const jobIds = Array.isArray(v3State.currentProject?.job_ids) ? v3State.currentProject.job_ids : [];
-      const jobId = String(jobIds[jobIds.length - 1] || "").trim();
-      if (!operation && jobId) {
+      if (operation?.state === "completed" && operation.operation_id === cleanOperationId) {
+        const jobId = String(operation.job_id || "").trim();
+        if (!jobId) throw new Error("v3_planning_operation_job_missing");
         const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
         if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
         return { operation: null, job };
       }
-      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
+      if (operation?.operation_id !== cleanOperationId || operation?.state !== "planning") continue;
       setV3Progress("planning", `V3 中枢正在理解需求并规划画面，已刷新 ${attempt} 次。`);
     } catch (_error) {
       if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
@@ -10906,7 +10905,7 @@ async function recoverV3PlannedJob(projectId, { shouldContinue = null } = {}) {
     }
   }
   if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-  return { operation: v3ProjectPlanningOperation(v3State.currentProject), job: null };
+  return { operation: null, job: null };
 }
 
 async function createV3Job() {
@@ -10954,13 +10953,15 @@ async function createV3Job() {
     v3State.currentJob = created;
     v3State.selectedResult = null;
     syncV3ProjectOutputsFromPayload(created);
-    if (
-      v3ProjectPlanningOperation(v3State.currentProject)?.state === "planning"
-      && !String(created?.job_id || "").trim()
-    ) {
+    if (String(created?.status || "").trim().toLowerCase() === "planning" && !String(created?.job_id || "").trim()) {
+      const operationId = String(created?.metadata?.current_operation?.operation_id || "").trim();
       v3State.currentJob = null;
       renderV3Job(null);
-      const planningResult = await recoverV3PlannedJob(v3State.currentProject.project_id, {
+      if (!operationId) {
+        updateV3Notice("后台已接受规划请求，但没有返回本次操作编号。项目已保留，请刷新项目状态后再试。", "warning");
+        return;
+      }
+      const planningResult = await recoverV3PlannedJob(v3State.currentProject.project_id, operationId, {
         shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
       });
       if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;

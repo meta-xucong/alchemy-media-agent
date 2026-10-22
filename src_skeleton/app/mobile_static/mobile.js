@@ -5932,34 +5932,38 @@ function mobileV3PlanningFailureMessage(operation) {
   return "规划已在图像请求发送前停止，尚未发送图像请求。";
 }
 
-async function recoverMobileV3PlannedJob(projectId, { shouldContinue = null } = {}) {
+async function recoverMobileV3PlannedJob(projectId, operationId, { shouldContinue = null } = {}) {
+  const cleanOperationId = String(operationId || "").trim();
+  if (!cleanOperationId) return { operation: null, job: null };
   const maxAttempts = 240;
+  const operationEndpoint = `/projects/${encodeURIComponent(projectId)}/planning-operations/${encodeURIComponent(cleanOperationId)}`;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 450 : 2500));
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
     try {
-      const payload = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}`);
+      const operation = await mobileV3Request(operationEndpoint);
       if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-      const project = mobileV3ProjectWithResponseMetadata(payload.project || payload, payload);
-      if (String(project?.project_id || "") !== String(projectId || "")) continue;
-      if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-      mobileV3State.currentProject = project;
-      applyMobileV3GenerationPreferences(project);
-      if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-      mobileV3MergeProjectOutputs(projectId, payload?.metadata?.project_outputs || []);
-      const operation = mobileV3PlanningOperation(project);
       if (operation?.state === "planning_failed") {
-        renderMobileV3ProjectCurrentOperation(project);
+        if (operation.operation_id !== cleanOperationId) continue;
+        const payload = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}`);
+        if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
+        const project = mobileV3ProjectWithResponseMetadata(payload.project || payload, payload);
+        if (String(project?.project_id || "") === String(projectId || "")) {
+          mobileV3State.currentProject = project;
+          applyMobileV3GenerationPreferences(project);
+          mobileV3MergeProjectOutputs(projectId, payload?.metadata?.project_outputs || []);
+          renderMobileV3ProjectCurrentOperation(project);
+        }
         return { operation, job: null };
       }
-      const jobIds = Array.isArray(project?.job_ids) ? project.job_ids : [];
-      const jobId = String(jobIds[jobIds.length - 1] || "").trim();
-      if (!operation && jobId) {
+      if (operation?.state === "completed" && operation.operation_id === cleanOperationId) {
+        const jobId = String(operation.job_id || "").trim();
+        if (!jobId) throw new Error("v3_planning_operation_job_missing");
         const job = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
         if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
         return { operation: null, job };
       }
-      if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
+      if (operation?.operation_id !== cleanOperationId || operation?.state !== "planning") continue;
       setMobileV3Progress("planning", `V3 正在整理本次画面方向，已刷新 ${attempt} 次`);
     } catch (_error) {
       if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
@@ -5967,7 +5971,7 @@ async function recoverMobileV3PlannedJob(projectId, { shouldContinue = null } = 
     }
   }
   if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
-  return { operation: mobileV3PlanningOperation(), job: null };
+  return { operation: null, job: null };
 }
 
 async function generateMobileV3Job() {
@@ -6005,13 +6009,15 @@ async function generateMobileV3Job() {
     if (uploadedAssets.length) clearMobileV3PendingUploads({ render: true });
     mobileV3State.currentJob = created;
     mobileV3State.currentProject = mobileV3ProjectWithResponseMetadata(mobileV3State.currentProject, created);
-    if (
-      mobileV3PlanningOperation(mobileV3State.currentProject)?.state === "planning"
-      && !String(created?.job_id || created?.job?.job_id || created?.id || "").trim()
-    ) {
+    if (String(created?.status || "").trim().toLowerCase() === "planning" && !String(created?.job_id || created?.job?.job_id || created?.id || "").trim()) {
+      const operationId = String(created?.metadata?.current_operation?.operation_id || "").trim();
       mobileV3State.currentJob = null;
       renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
-      const planningResult = await recoverMobileV3PlannedJob(projectId, {
+      if (!operationId) {
+        updateMobileV3Status("后台已接受规划请求，但没有返回本次操作编号。项目已保留，请刷新项目状态后再试。");
+        return;
+      }
+      const planningResult = await recoverMobileV3PlannedJob(projectId, operationId, {
         shouldContinue: () => !ecommerceSession || mobileV3EcommerceGenerationSessionOwns(ecommerceSession),
       });
       if (ecommerceSession && !mobileV3EcommerceGenerationSessionOwns(ecommerceSession)) return;

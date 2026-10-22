@@ -1728,6 +1728,21 @@ async def v3_get_project_endpoint(
     return response
 
 
+@app.get("/api/v3/creative-agent/projects/{project_id}/planning-operations/{operation_id}")
+async def v3_get_project_planning_operation_endpoint(
+    project_id: str,
+    operation_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    await _require_v3_project_read_visible(request, project_id, authorization)
+    return _run_v3_handler(
+        v3_route_handlers.get_project_planning_operation,
+        project_id,
+        operation_id,
+    )
+
+
 @app.post("/api/v3/creative-agent/projects/{project_id}/archive")
 def v3_archive_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     _require_v3_project_visible(request, project_id, authorization)
