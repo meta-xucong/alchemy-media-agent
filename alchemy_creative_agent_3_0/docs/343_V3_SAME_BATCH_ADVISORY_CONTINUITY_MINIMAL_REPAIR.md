@@ -5,6 +5,11 @@ Status: **implementation and deterministic checks passed; same-batch real contin
 Scope: V3 Foundation, Doc73/Doc287 same-batch advisory continuity and Doc322
 frozen Provider inputs.
 
+Scope amendment: Doc344 supersedes this document's photo-only character scope
+and the persistent anchor's position-zero/original-only restrictions. The
+same-batch temporary source remains the immutable Doc287 position-zero source.
+Historical acceptance evidence below is retained without reinterpretation.
+
 ## 1. Objective and observed defect
 
 For an eligible text-only human portrait batch, use the first canonical output
