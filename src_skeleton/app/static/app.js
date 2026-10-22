@@ -5567,8 +5567,7 @@ function v3JobHasTerminalOutcome(job = v3State.currentJob) {
 }
 
 function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
-  const finalizationWithheld = v3EcommerceReviewWithheldFinalizationOperation(v3State.currentProject, job);
-  if (!job || v3FailureArtifactExpired(job) || (!v3JobDeliveryWithheld(job) && !finalizationWithheld)) return [];
+  if (!job || v3FailureArtifactExpired(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
   const reviewOutputIds = v3ReviewOutputIdSet("review_output_ids", job);
@@ -5583,13 +5582,58 @@ function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
     .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "review_only" }))
     .filter((item) => {
       const identity = v3OutputItemIdentity(item);
+      const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
       const selectionState = item?.selection_state || v3ProjectOutputStateMap().get(identity);
+      const deliveryState = String(item?.delivery_state || metadata.delivery_state || "").trim().toLowerCase();
+      const reviewOnly = item?.review_only === true
+        || metadata.review_only === true
+        || reviewOutputIds.has(identity);
+      const attempt = Number.parseInt(String(item?.delivery_attempt_index ?? metadata.delivery_attempt_index ?? ""), 10);
+      const finalAttempt = Number.parseInt(String(item?.delivery_final_attempt_index ?? metadata.delivery_final_attempt_index ?? ""), 10);
+      const attemptBoundToFinal = Number.isFinite(attempt) && Number.isFinite(finalAttempt)
+        ? attempt === finalAttempt
+        : reviewOutputIds.has(identity);
       return (
-        v3OutputImageCandidates(item).length > 0
+        reviewOnly
+        && deliveryState !== "superseded"
+        && metadata.retry_superseded !== true
+        && item?.retry_superseded !== true
+        && attemptBoundToFinal
+        && v3OutputImageCandidates(item).length > 0
         && selectionState !== "rejected"
       );
     })
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
+}
+
+function appendV3ReviewOnlyResultCards(board, items, { job, startIndex = 0 } = {}) {
+  (Array.isArray(items) ? items : []).forEach((item, index) => {
+    const card = document.createElement("article");
+    const title = `复核图 ${startIndex + index + 1}`;
+    const imageCandidates = v3OutputImageCandidates(item);
+    const downloadUrl = v3OutputDownloadUrl(item);
+    card.className = "v3-result-card v3-review-only-card";
+    card.innerHTML = `
+      <button class="v3-result-preview" type="button" data-v3-review-preview aria-label="预览复核图"><img alt="${escapeHtml(title)}" loading="lazy" /></button>
+      <div class="v3-card-head">
+        <strong>${escapeHtml(title)}</strong>
+        <span class="mini-pill">仅供复核</span>
+      </div>
+      <p>这张图已生成，但没有进入正式交付；可查看并人工确认。</p>
+      <div class="v3-result-meta">
+        ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载复核图</button>` : ""}
+      </div>
+    `;
+    const image = card.querySelector(".v3-result-preview img");
+    if (image) bindV3ImageWithFallback(image, imageCandidates, { emptyAlt: "复核图暂时无法加载", detailBound: true });
+    card.querySelector("[data-v3-review-preview]")?.addEventListener("click", () => {
+      openV3OutputLightbox(item, {
+        title,
+        meta: `${v3ScenarioLabel(job?.scenario?.scenario_id)} - 仅供复核`,
+      });
+    });
+    board.appendChild(card);
+  });
 }
 
 function mergeV3ReviewImageSources(...sources) {
@@ -12241,6 +12285,7 @@ function renderV3ResultBoard(job) {
     return;
   }
   const reviewCertification = finalizationWithheld ? null : v3ReviewCertification(job);
+  const expectedCount = v3ExpectedImageCountForJob(job);
   if ((!v3JobDeliverySettled(job) || finalizationWithheld) && !hasPersistedDelivery) {
     v3State.resultItems = [];
     els.v3ResultBoard.classList.add("empty-v3-board");
@@ -12259,33 +12304,7 @@ function renderV3ResultBoard(job) {
       els.v3ResultBoard.classList.remove("empty-v3-board");
       if (!finalizationWithheld) els.v3ResultBoard.appendChild(notice);
       const reviewItems = v3ReviewOnlyJobImageItems(job);
-      reviewItems.slice(0, 8).forEach((item, index) => {
-        const card = document.createElement("article");
-        const title = `复核图 ${index + 1}`;
-        const imageCandidates = v3OutputImageCandidates(item);
-        const downloadUrl = v3OutputDownloadUrl(item);
-        card.className = "v3-result-card v3-review-only-card";
-        card.innerHTML = `
-          <button class="v3-result-preview" type="button" data-v3-review-preview aria-label="预览复核图"><img alt="${escapeHtml(title)}" loading="lazy" /></button>
-          <div class="v3-card-head">
-            <strong>${escapeHtml(title)}</strong>
-            <span class="mini-pill">仅供复核</span>
-          </div>
-          <p>这张图已生成，但没有进入正式交付，也不会自动设为后续参考。</p>
-          <div class="v3-result-meta">
-            ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载复核图</button>` : ""}
-          </div>
-        `;
-        const image = card.querySelector(".v3-result-preview img");
-        if (image) bindV3ImageWithFallback(image, imageCandidates, { emptyAlt: "复核图暂时无法加载", detailBound: true });
-        card.querySelector("[data-v3-review-preview]")?.addEventListener("click", () => {
-          openV3OutputLightbox(item, {
-            title,
-            meta: `${v3ScenarioLabel(job?.scenario?.scenario_id)} - 仅供复核`,
-          });
-        });
-        els.v3ResultBoard.appendChild(card);
-      });
+      appendV3ReviewOnlyResultCards(els.v3ResultBoard, reviewItems.slice(0, expectedCount), { job });
       return;
     }
     if (["blocked", "failed", "not_found"].includes(String(job.status || "").toLowerCase())) {
@@ -12325,7 +12344,7 @@ function renderV3ResultBoard(job) {
   const visibleItems = deliveryItems
     .filter((item) => v3OutputVisibleInProject(item))
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
-  const items = v3DeliveryDisplayItems(visibleItems);
+  const items = v3DeliveryDisplayItems(visibleItems).slice(0, expectedCount);
   if (!items.length) {
     v3State.resultItems = [];
     els.v3ResultBoard.classList.add("empty-v3-board");
@@ -12334,13 +12353,20 @@ function renderV3ResultBoard(job) {
   }
   v3State.resultItems = items.map((item, index) => ({ ...item, _v3Index: index, _v3Source: "current_result" }));
   els.v3ResultBoard.classList.remove("empty-v3-board");
-  const expectedCount = v3ExpectedImageCountForJob(job);
+  const reviewItems = v3ReviewOnlyJobImageItems(job)
+    .filter((item) => !items.some((delivered) => v3OutputItemIdentity(delivered) === v3OutputItemIdentity(item)))
+    .slice(0, Math.max(0, expectedCount - items.length));
   if (scenarioId === "ecommerce") {
     const summary = document.createElement("p");
     summary.className = "v3-result-delivery-summary";
     summary.textContent = items.length === expectedCount
       ? `已交付 ${items.length} 张完整图片。`
-      : `当前已交付 ${items.length} 张；本次请求 ${expectedCount} 张，未交付的图片不会被当作完成。`;
+      : `本次请求 ${expectedCount} 张：已交付 ${items.length} 张，另 ${reviewItems.length} 张仅供复核。`;
+    els.v3ResultBoard.appendChild(summary);
+  } else if (reviewItems.length) {
+    const summary = document.createElement("p");
+    summary.className = "v3-result-delivery-summary";
+    summary.textContent = `本次请求 ${expectedCount} 张：已交付 ${items.length} 张，另 ${reviewItems.length} 张仅供复核。`;
     els.v3ResultBoard.appendChild(summary);
   }
   v3State.resultItems.slice(0, 8).forEach((item, index) => {
@@ -12427,6 +12453,7 @@ function renderV3ResultBoard(job) {
     });
     els.v3ResultBoard.appendChild(card);
   });
+  appendV3ReviewOnlyResultCards(els.v3ResultBoard, reviewItems, { job, startIndex: items.length });
 }
 
 function v3OutputImageCandidates(item) {
