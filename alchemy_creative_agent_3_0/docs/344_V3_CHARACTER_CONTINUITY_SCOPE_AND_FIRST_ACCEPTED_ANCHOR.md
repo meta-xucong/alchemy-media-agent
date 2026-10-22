@@ -183,3 +183,39 @@ No external provider generation, new visual comparison, historical backfill,
 or VPS deployment was performed. This passes the requested development and
 offline-test phase only. Next acceptance is the user's normal generation and
 inspection of same-person appearance after deployment; that remains unclaimed.
+
+## 7. Integrated acceptance follow-up (2026-10-23)
+
+The user requested completion of local real acceptance, including persistent
+reuse, explicit unbind, and replacement. The offline milestone above is not
+the final acceptance gate.
+
+Independent read-only audit of `779ca0ca`: PASS for first eligible planned
+winner selection, persistent frozen references, manual action/version
+precedence, and normal/resumed completion. The focused suite was rerun with
+external calls blocked: **130 passed, 1 deselected** (35.97 seconds).
+
+HTTP fixture correction model: the foreign-owner read test expected 404 but
+received `veyra_auth_misconfigured` (503). The owner-or-admin read policy must
+resolve the foreign caller's account role; the fixture supplied a user ID but
+no account provider. This is a missing test dependency, not a continuity or
+authorization runtime defect. Supply an async ordinary-user account double
+inside that test. Keep owner-or-admin reads, owner-only writes, and production
+authentication errors unchanged. An isolated discriminating run with only
+that double passed. Six local browser cases and the shared-shell static case
+also passed; the prior browser launch errors came from the temporary runner's
+subprocess guard, not application code.
+
+The repository fixture correction was independently audited and rerun without
+the temporary account injection: **1 passed, 7 deselected** (2.94 seconds).
+Responses were `200, 200, 409, 400, 200, 404, 404`; no network guard denials.
+No production runtime changed in this follow-up.
+
+Real acceptance uses a new isolated persistent project/job/upload/output root,
+the actual configured Brain, production image provider, and visual reviewer.
+The observer retains canonical final-delivery review and exact physical input
+receipts. Its gates require five final accepted outputs across initial pair,
+next-job reuse, unbound generation, and active-source replacement; existing
+bounded retry attempts are counted separately. Fresh processes read back the
+binding ledger. The observer was independently audited before launch. Final
+real acceptance remains pending until those gates complete.

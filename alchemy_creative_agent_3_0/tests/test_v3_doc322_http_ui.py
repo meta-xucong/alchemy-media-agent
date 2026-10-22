@@ -1,5 +1,6 @@
 """Authenticated binding routes and shared desktop/mobile reference panel."""
 from pathlib import Path
+from types import SimpleNamespace
 import json
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,10 @@ def test_http_binding_compare_and_swap_and_foreign_project_rejection(tmp_path,mo
     monkeypatch.setattr(main,"v3_route_handlers",handlers)
     monkeypatch.setattr(settings,"veyra_auth_enabled",True)
     monkeypatch.setattr(main,"_veyra_user_id_from_request",lambda request,authorization:101)
+    # Foreign-project reads also resolve the owner-or-admin account policy.
+    async def ordinary_account(user_id):
+        return SimpleNamespace(user_id=user_id, role="user")
+    monkeypatch.setattr(main,"load_account",ordinary_account)
     client=TestClient(main.app)
     url=f"/api/v3/creative-agent/projects/{project['project_id']}/continuity-anchor"
     state=client.get(url).json()
