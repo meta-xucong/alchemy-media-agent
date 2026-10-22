@@ -1,6 +1,6 @@
 # Doc343 - V3 Same-Batch Advisory Continuity Minimal Repair
 
-Status: **implementation, independent code audit, deterministic tests, and two-round local real continuity validation passed; VPS deployment excluded**.
+Status: **implementation and deterministic checks passed; same-batch real continuity observed; final integrated real acceptance pending; VPS deployment excluded**.
 
 Scope: V3 Foundation, Doc73/Doc287 same-batch advisory continuity and Doc322
 frozen Provider inputs.
@@ -144,11 +144,12 @@ after all deterministic gates pass.
 ## 6. Acceptance boundary
 
 Passing the focused tests and simulation authorizes local real validation only.
-The real run must demonstrate that all later Provider requests consumed the
-same first canonical image. Project binding remains controlled by the existing
-formal review predicate; a real run whose images are withheld by that review
-must leave the project anchor empty. This document does not authorize VPS
-deployment.
+Total acceptance requires the real local multi-image batch to demonstrate
+that all later Provider requests consumed the same first canonical image and
+that the project anchor is bound only after the existing formal review accepts
+it. A review-withheld run must leave the project anchor empty, but that negative
+case alone does not complete integrated acceptance. This document does not
+authorize VPS deployment.
 
 ## 7. Implementation and acceptance record
 
@@ -173,7 +174,62 @@ deployment.
 - Real runs used isolated temporary project, job, asset, and output stores.
   No production project or user image was changed. VPS deployment was not run.
 
-Final implementation acceptance: **passed for same-batch advisory continuity
-and review-gated non-promotion**. Formal approval and permanent binding remain
-the responsibility of the existing Doc322 review path. VPS deployment remains
-out of scope.
+Phase acceptance: **same-batch advisory continuity and review-gated
+non-promotion observed**. Final integrated real acceptance is pending.
+VPS deployment remains out of scope.
+
+## 8. Acceptance re-audit and correction model (2026-10-23)
+
+The previous status overstated phase evidence as final acceptance and narrowed
+section 6 after two review-withheld runs. Restore the original acceptance
+boundary; do not relax review or change runtime behavior to obtain a pass.
+
+The responsible layer is validation/reporting. The retained live receipt has
+`review_state: null` because the temporary runner read `final_delivery` from
+generation metadata rather than the canonical final-delivery projection. The
+durable output closures establish `withheld_review_failure` for both jobs,
+three outputs per job, and zero eligible outputs. They do not retain the
+complete per-image review reasons, so the cause of review failure is unresolved.
+
+The temporary runner's binding predicate also accepted an empty anchor when
+the source was eligible but the anchor object was missing. That did not turn
+either recorded round into a pass (both retained `pass: false`), but it cannot
+be reused as proof of successful promotion.
+
+Before the next controlled acceptance run, its observer must:
+
+1. Read `_public_final_delivery_projection(result)` and retain the canonical
+   `post_generation_review_package`, including per-output status, verification,
+   issues, and receipt errors, in local evidence.
+2. Retain each output's physical reference materialization receipt as well as
+   the request plan; record anchor state before and after final review.
+3. Require a non-empty anchor whose output ID exactly equals the eligible
+   first planned source for positive promotion. For an ineligible source,
+   require no newly created anchor. Assert these branches separately.
+4. For a review-approved source, verify the next job's frozen input plan
+   carries that persistent anchor. Preserve failed evidence; do not reroll or
+   tune prompts merely to obtain an approved review.
+
+Existing scope boundaries remain visible: automatic candidacy requires a
+multi-image photoreal human profile; single-image jobs and stylized/illustrated
+profiles do not enter this automatic path. If the first planned output fails
+review, a later passing sibling does not replace it automatically. These are
+existing predicates, not new behavior introduced by this repair, and this
+milestone does not establish universal automatic binding for those cases.
+
+Re-audit evidence:
+
+- All six retained output records were inspected. Each batch's first output
+  has zero physical references; both later outputs have one original-frame
+  reference to that same first output with the matching SHA-256. All six
+  `reference_truth_source_ids` arrays remain empty, as required for advisory
+  context rather than formal identity truth.
+- Additional binding, reference-isolation, and re-audit suites: **49 passed,
+  1 deselected**. The excluded brand-export test constructs the default live
+  Brain instead of an isolated planning double; the initial broader run was
+  stopped at that test and is not reported as a complete pass. That unrelated
+  fixture needs isolation before inclusion in an offline suite.
+- No production-code change or new real image generation was made during this
+  re-audit. The remaining work is review-failure evidence capture and positive
+  real promotion/next-job reuse acceptance, not another speculative runtime
+  patch.
