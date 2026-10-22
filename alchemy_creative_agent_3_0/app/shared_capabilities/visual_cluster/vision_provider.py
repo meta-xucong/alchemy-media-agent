@@ -169,7 +169,7 @@ class OpenAIVisionInspectionProvider:
         self.timeout_seconds = timeout_seconds
 
     def available(self, *, force: bool = False) -> bool:
-        if not force and not _env_bool("V3_VISION_INSPECTION_ENABLED", default=False):
+        if not force and not _env_bool("V3_VISION_INSPECTION_ENABLED", default=True):
             return False
         return bool(self._api_key() and self._base_url())
 

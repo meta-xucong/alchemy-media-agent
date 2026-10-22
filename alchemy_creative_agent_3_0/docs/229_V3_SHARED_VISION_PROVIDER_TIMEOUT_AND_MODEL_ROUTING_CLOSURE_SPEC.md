@@ -70,5 +70,6 @@ Focused tests must prove that a configured Lab Vision route makes forced real
 Vision review available without relying on the general LLM route, and that the
 actual OpenAI-compatible request uses the Lab Vision API key/base/model rather
 than `openai_llm_model`. Ordinary non-forced review discovery remains governed
-by `V3_VISION_INSPECTION_ENABLED` so tests and low-risk local checks do not
-silently call external reviewers.
+by `V3_VISION_INSPECTION_ENABLED`, which defaults to enabled for local and
+production V3 runtimes. Tests and low-risk checks must explicitly disable it or
+mock the provider; operators may set it to `false` to opt out.

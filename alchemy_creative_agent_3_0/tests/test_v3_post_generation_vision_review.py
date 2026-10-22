@@ -117,6 +117,18 @@ def _ready_resolution(tmp_path: Path) -> GeneratedOutputResolution:
     )
 
 
+def test_vision_provider_is_enabled_by_default_and_can_be_explicitly_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("V3_VISION_INSPECTION_ENABLED", raising=False)
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://vision.example/v1")
+    provider = OpenAIVisionInspectionProvider()
+
+    assert provider.available() is True
+
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "false")
+    assert provider.available() is False
+
+
 def test_vision_provider_uses_shared_claude_kimi_gpt_route_and_disables_retries(tmp_path, monkeypatch) -> None:
     from alchemy_creative_agent_3_0.app.model_routing import build_v3_model_candidates, v3_gateway_credentials
 
