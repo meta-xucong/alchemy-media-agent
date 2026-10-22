@@ -251,6 +251,37 @@ reported 203 passed and one existing unrelated failure: the availability test
 configures provider `deepseek`, but the unchanged provider implementation
 rejects it as `unsupported_model_route` before the test's expected
 `missing_credentials` branch. That fixture was intentionally left untouched to
-preserve Doc346's scope. VPS deployment and the four-image live run remain
-pending the guarded activation workflow's required maintenance acknowledgment
-and disk-reserve input.
+preserve Doc346's scope.
+
+## 9. Controlled deployment and live acceptance record
+
+The user later confirmed the guarded activation's planned V1/V2 downtime and a
+1 GiB minimum-free-space reserve. GitHub Actions workflow
+`39869850814` completed successfully for commit
+`83fea63c8a6acc0fa229eaf9802dab4727e3770c`. Its release checks reported the
+active release as `/opt/alchemy-media-agent-releases/doc276-277-83fea63c8a6a`,
+V1/V2 local and public health as 200, V3 project access protection intact, and
+historical state unchanged.
+
+After activation, one four-image request using the original fox-character
+instruction was submitted through the V3 project's normal durable planning and
+generation path. Planning operation `doc277_project_planning_a99c7de4bb`
+completed and created job `job_40d8dcf33d`. The job finished as `generated`
+with four candidates and four ready project outputs. Each output reported
+`review_status=pass` and `verification_state=verified`. The continuity anchor
+became active, cites `job_40d8dcf33d`, and resolves to the first candidate in
+the job's candidate order (`candidate_2429afe2e4`). The pre-existing successful
+job remained generated and the prior failed job remained blocked; neither was
+rewritten or retried.
+
+This live run verifies automatic first-candidate binding and four-image
+delivery on the deployed build. It does not exercise live manual unbind or
+replacement; those behaviors passed the focused local Doc322 tests. The
+successful Brain response exposed no image-set or contract audit fields, so
+the bounded diagnostic projection was verified by its focused local regression
+rather than by this successful live run. No browser page was used for the live
+request.
+
+The implementation and controlled VPS activation phases are complete. The
+broader test run retains the one unrelated provider-fixture failure recorded
+above; no remaining integration dependency is known.
