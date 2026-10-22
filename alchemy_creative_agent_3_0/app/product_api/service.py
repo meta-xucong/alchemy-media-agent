@@ -13896,6 +13896,76 @@ class V3ProductApiService:
         )
         if transport_kind:
             projected["remote_provider_transport_kind"] = transport_kind
+        cardinality_audit = outcome.get("remote_image_set_cardinality_audit")
+        if isinstance(cardinality_audit, dict):
+            safe_cardinality: dict[str, Any] = {}
+            for key in ("expected_image_count", "remote_image_count", "remote_shot_plan_count"):
+                value = cardinality_audit.get(key)
+                if (key in cardinality_audit and value is None) or (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and 0 <= value <= 1_000_000
+                ):
+                    safe_cardinality[key] = value
+            if isinstance(cardinality_audit.get("cardinality_valid"), bool):
+                safe_cardinality["cardinality_valid"] = cardinality_audit["cardinality_valid"]
+            if safe_cardinality:
+                projected["remote_image_set_cardinality_audit"] = safe_cardinality
+        validation_audit = outcome.get("remote_image_set_validation_audit")
+        if isinstance(validation_audit, dict):
+            safe_validation: dict[str, Any] = {}
+            error_count = validation_audit.get("validation_error_count")
+            if isinstance(error_count, int) and not isinstance(error_count, bool) and 0 <= error_count <= 8:
+                safe_validation["validation_error_count"] = error_count
+            for key in ("validation_error_paths", "validation_error_types"):
+                values = validation_audit.get(key)
+                if isinstance(values, list):
+                    pattern = (
+                        r"image_set_plan(?:\.[a-z_]+|\.item)*"
+                        if key == "validation_error_paths"
+                        else r"[a-z0-9_.-]{1,64}"
+                    )
+                    safe_validation[key] = [
+                        item for item in values if isinstance(item, str) and re.fullmatch(pattern, item)
+                    ][:8]
+            if safe_validation:
+                projected["remote_image_set_validation_audit"] = safe_validation
+        contract_audit = outcome.get("remote_contract_validation_audit")
+        if (
+            isinstance(contract_audit, dict)
+            and contract_audit.get("schema_version") == "v3_remote_contract_validation_audit_v1"
+            and isinstance(contract_audit.get("sections"), dict)
+        ):
+            safe_sections: dict[str, dict[str, Any]] = {}
+            for section, audit in contract_audit["sections"].items():
+                if (
+                    section not in {"image_set_plan", "visual_task_profile", "capability_activation_intent"}
+                    or not isinstance(audit, dict)
+                ):
+                    continue
+                safe_section: dict[str, Any] = {}
+                count = audit.get("validation_error_count")
+                if isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= 8:
+                    safe_section["validation_error_count"] = count
+                for key in ("validation_error_paths", "validation_error_types"):
+                    values = audit.get(key)
+                    if isinstance(values, list):
+                        path_section = str(section)
+                        pattern = (
+                            rf"{re.escape(path_section)}(?:\.[a-z_]+|\.item)*"
+                            if key == "validation_error_paths"
+                            else r"[a-z0-9_.-]{1,64}"
+                        )
+                        safe_section[key] = [
+                            item for item in values if isinstance(item, str) and re.fullmatch(pattern, item)
+                        ][:8]
+                if safe_section:
+                    safe_sections[section] = safe_section
+            if safe_sections:
+                projected["remote_contract_validation_audit"] = {
+                    "schema_version": "v3_remote_contract_validation_audit_v1",
+                    "sections": safe_sections,
+                }
         finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
             outcome.get("remote_brain_finalizer_lifecycle")
         )

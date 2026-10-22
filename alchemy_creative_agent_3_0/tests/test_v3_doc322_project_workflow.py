@@ -7,7 +7,11 @@ import pytest
 from PIL import Image
 from alchemy_creative_agent_3_0.tests.test_v3_doc281_unified_source_library_smart_matching_phase0 import _general_project
 from alchemy_creative_agent_3_0.tests.doc322_test_support import certify_output
-from alchemy_creative_agent_3_0.app.reference_input_plan import PLAN_KEY
+from alchemy_creative_agent_3_0.app.reference_input_plan import PLAN_KEY, ReferenceInputPlan
+from alchemy_creative_agent_3_0.app.creative_core import CentralCreativeBrain
+from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter
+from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
+from alchemy_creative_agent_3_0.tests.test_v3_doc73_first_output_identity_anchor import RecordingImageProvider
 
 
 def create_source(handlers, project, *, count=2, index=0, retry=0, mock=False):
@@ -56,6 +60,67 @@ def test_first_accepted_output_can_claim_but_mock_cannot(tmp_path,count,index,re
         created=handlers.post_project_job(project["project_id"],{"user_input":"Another view of the same character."})
         plan=handlers.service.get_job_record(created["job_id"]).request.metadata[PLAN_KEY]
         assert plan["continuity_anchor"]["output_id"]==output.output_id
+
+
+def test_stylized_character_candidate_binds_first_accepted_output_and_reuses_it(tmp_path):
+    handlers, project, _, _ = _general_project(tmp_path)
+    created = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Create one adult stylized character portrait.", "metadata": {"requested_image_count": 1}},
+    )
+    job = handlers.service.get_job_record(created["job_id"])
+    image_provider = RecordingImageProvider(tmp_path / "brain-output")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=image_provider))
+    brain_result = brain.run_generation_loop(
+        "Create one adult stylized character portrait.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 1,
+            "requested_image_size": "1024x1024",
+            "project_id": project["project_id"],
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "creative_exploration",
+            "effective_variation_mode": "creative_exploration",
+            PLAN_KEY: ReferenceInputPlan.freeze(
+                job_id=job.job_id,
+                project_id=project["project_id"],
+                mode="standard",
+                inputs=[],
+            ).as_dict(),
+            "llm_brain": {
+                "visual_task_profile": {
+                    "subject_entities": [{"entity_type": "stylized_character"}],
+                }
+            },
+        },
+    )
+    assert brain_result.metadata["doc322_auto_anchor_candidate"] is True
+    generated_asset = brain_result.asset_pack.assets[0]
+    output = handlers.service.output_store.save_base64_output(
+        job_id=job.job_id,
+        candidate_id=brain_result.metadata["selected_candidate_ids"][0],
+        asset_id=job.planning_result.series_plan.assets[0].asset_id,
+        provider="recording_image_provider",
+        model="doc73-test",
+        encoded_image=base64.b64encode(Path(generated_asset.file_path).read_bytes()).decode("ascii"),
+        metadata={"project_id": project["project_id"]},
+    )
+    certified_job = certify_output(handlers.service, output)
+    certified_job.generation_result.metadata["doc322_auto_anchor_candidate"] = brain_result.metadata[
+        "doc322_auto_anchor_candidate"
+    ]
+    handlers.service.job_store.save(certified_job)
+    handlers.project_service._maybe_claim_continuity_anchor(project["project_id"], job.job_id)
+
+    anchor = handlers.project_service.get_continuity_anchor(project["project_id"])["active_continuity_anchor"]
+    assert anchor["output_id"] == output.output_id
+    next_job = handlers.post_project_job(
+        project["project_id"],
+        {"user_input": "Create another view of the same character.", "metadata": {"requested_image_count": 1}},
+    )
+    next_plan = handlers.service.get_job_record(next_job["job_id"]).request.metadata[PLAN_KEY]
+    assert next_plan["continuity_anchor"]["output_id"] == output.output_id
 
 
 def test_three_uploads_plus_one_anchor_freeze_four_sources_and_retry_does_not_rebind(tmp_path):

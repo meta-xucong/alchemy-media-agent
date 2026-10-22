@@ -189,7 +189,8 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
 
 @pytest.mark.parametrize("count", [1, 3])
 @pytest.mark.parametrize("rendering_mode,scope", [("photoreal", "none"), ("stylized", "whole_image"), ("illustration", "whole_image")])
-def test_doc73_frozen_doc322_plan_uses_first_output_as_same_batch_advisory_reference(tmp_path, monkeypatch, count, rendering_mode, scope) -> None:
+@pytest.mark.parametrize("subject_entity_type", ["person", "stylized_character"])
+def test_doc73_frozen_doc322_plan_uses_first_output_as_same_batch_advisory_reference(tmp_path, monkeypatch, count, rendering_mode, scope, subject_entity_type) -> None:
     provider = RecordingImageProvider(tmp_path / "outputs")
     brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
     create_base_context = brain._create_base_context
@@ -225,7 +226,7 @@ def test_doc73_frozen_doc322_plan_uses_first_output_as_same_batch_advisory_refer
             "llm_brain": {
                 "visual_task_profile": {
                     "rendering_intent": {"rendering_mode": rendering_mode, "stylization_scope": scope},
-                    "subject_entities": [{"entity_id": "portrait_subject_1", "entity_type": "person", "confidence": 0.98}],
+                    "subject_entities": [{"entity_id": "portrait_subject_1", "entity_type": subject_entity_type, "confidence": 0.98}],
                 }
             },
         },
@@ -495,7 +496,8 @@ def test_doc134_raw_person_or_cartoon_words_do_not_start_an_identity_chain_witho
     assert provider.requests[1]["metadata"].get("auto_batch_identity_anchor_applied") is not True
 
 
-def test_doc73_stylized_character_profile_starts_an_identity_edit_chain(tmp_path) -> None:
+@pytest.mark.parametrize("subject_entity_type", ["character", "stylized_character"])
+def test_doc73_stylized_character_profile_starts_an_identity_edit_chain(tmp_path, subject_entity_type) -> None:
     provider = RecordingImageProvider(tmp_path / "outputs")
     brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
 
@@ -517,7 +519,7 @@ def test_doc73_stylized_character_profile_starts_an_identity_edit_chain(tmp_path
                         "stylization_scope": "whole_image",
                     },
                     "subject_entities": [
-                        {"entity_id": "heroine", "entity_type": "character", "confidence": 0.98}
+                        {"entity_id": "heroine", "entity_type": subject_entity_type, "confidence": 0.98}
                     ],
                 }
             },

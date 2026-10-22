@@ -1525,7 +1525,7 @@ class CentralCreativeBrain:
         # rendering style. Prompt words and role labels do not establish it.
         return bool(
             profile_subject_types
-            & {"person", "human", "character", "portrait", "portrait_subject", "human_subject"}
+            & {"person", "human", "character", "stylized_character", "portrait", "portrait_subject", "human_subject"}
         )
 
     def _llm_profile_subject_entity_types(self, context: PipelineContext) -> set[str]:
