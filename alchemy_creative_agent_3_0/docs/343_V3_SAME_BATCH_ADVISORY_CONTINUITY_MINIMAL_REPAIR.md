@@ -1,6 +1,7 @@
 # Doc343 - V3 Same-Batch Advisory Continuity Minimal Repair
 
-Status: **implementation and deterministic checks passed; same-batch real continuity observed; final integrated real acceptance pending; VPS deployment excluded**.
+Status: **implementation and deterministic checks passed; final local integrated
+real acceptance completed in Doc344 section 8; VPS deployment excluded**.
 
 Scope: V3 Foundation, Doc73/Doc287 same-batch advisory continuity and Doc322
 frozen Provider inputs.
@@ -9,6 +10,8 @@ Scope amendment: Doc344 supersedes this document's photo-only character scope
 and the persistent anchor's position-zero/original-only restrictions. The
 same-batch temporary source remains the immutable Doc287 position-zero source.
 Historical acceptance evidence below is retained without reinterpretation.
+Doc344 section 8 supersedes the pending acceptance status below with new positive
+real evidence; the earlier review-withheld runs remain failures as recorded.
 
 ## 1. Objective and observed defect
 

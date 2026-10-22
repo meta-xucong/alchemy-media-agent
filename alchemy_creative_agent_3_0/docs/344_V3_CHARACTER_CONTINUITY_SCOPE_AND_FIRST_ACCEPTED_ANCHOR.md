@@ -1,8 +1,8 @@
 # Doc344 - Character continuity scope and first accepted project anchor
 
-Status: implementation complete; independent design/code audits and deterministic
-tests passed. Production visual acceptance remains pending user generation;
-VPS deployment is outside this milestone.
+Status: implementation, independent code audit, deterministic tests, and local
+integrated real acceptance **PASSED**. Ready for user acceptance. VPS deployment
+is outside this milestone; local acceptance does not establish deployed status.
 
 ## 1. Objective and correction model
 
@@ -218,4 +218,70 @@ receipts. Its gates require five final accepted outputs across initial pair,
 next-job reuse, unbound generation, and active-source replacement; existing
 bounded retry attempts are counted separately. Fresh processes read back the
 binding ledger. The observer was independently audited before launch. Final
-real acceptance remains pending until those gates complete.
+real acceptance was pending at launch; section 8 records their completion.
+
+## 8. Completed local integrated acceptance (2026-10-23)
+
+The authorized native Project/Product service flow completed against the real
+configured Brain, image provider, and hybrid visual reviewer. All **four jobs,
+five image-provider calls, and five stored outputs** succeeded. Every image
+received `status=pass`, `verification_state=verified`, and an empty issue list;
+all four canonical final-delivery projections were `ready`. No image retry,
+review threshold change, injected review result, or extra production gate was
+needed.
+
+Project: `project_0f1a2eb055`.
+
+| Case | Job | Observed result |
+| --- | --- | --- |
+| Initial two-image batch | `job_65591405bc` | First output has zero references; second physically consumes that exact first output. Both pass; the first planned eligible output becomes automatic anchor A. |
+| Next-job reuse | `job_3ee793613d` | Frozen plan and sole physical input identify A with matching bytes. New output B passes; project anchor remains A. |
+| Manual unbind | `job_85095aa56b` | New character output passes with zero physical inputs. Candidacy is true, yet the ledger remains unbound with auto-binding disabled. |
+| Active A-to-B replacement | `job_48cc9a4a76` | After the unbind case, explicitly rebind A and replace active A with B. The next job consumes only B, passes review, and retains B. A remains stored. |
+
+Anchor A: `v3_output_56f1eafaf22b4fb09c2f`.
+Replacement B: `v3_output_6ad0b2b049814dcdbe7c`.
+Replacement-followup output: `v3_output_9532821f63a74d55ab70`.
+
+Fresh Python processes independently reconstructed the persistent services and
+read identical bound, unbound, and replaced ledger states. For every generation
+request, the observer matched the physical receipt's job, project, plan digest,
+source identity and byte hash to the persisted output receipt. A final read-only
+check reconfirmed all five file hashes and verified passing review rows.
+
+Runtime baseline was `779ca0ca`. The concurrently completed `b6b5a48e` changes
+only this document and the HTTP account-role test fixture; production code is
+identical. Distinct focused coverage totals **138 passing tests**: 130 core and
+simulation cases, one corrected HTTP case, six browser cases, and one static
+shared-shell case. The unrelated live-Brain `explicit_brand_export` fixture was
+excluded from the offline suite. The account fixture change passed independent
+audit before commit/push.
+
+Evidence is retained locally, not committed as repository artifacts:
+
+- Real run: `C:/Users/T14S/AppData/Local/Temp/alchemy-continuity-20261023-live-01/`.
+  `acceptance.json` reports `pass=true`; per-case `*_evidence.json` retains the
+  canonical review, before/after state, and physical input receipts. `jobs/`,
+  `projects/`, and `outputs/` preserve the durable source records and pixels.
+- Observer snapshot: `observer.py` in that evidence root; SHA-256
+  `480c763be251ea9f52294b1e9cf2dcb4737bc109ca94a19b5236c103d1ea3b63`.
+- Core simulation: `alchemy-doc344-779ca0ca-b3c6dc8f1a77/focused-v2/`
+  under the same TEMP parent, including JUnit evidence and command manifests.
+- Browser cases: `alchemy-doc344-followup-2be70aeca440/`.
+- Corrected repository HTTP fixture: `alchemy-doc344-fixture-baseline-u6vv0jvq/`.
+
+One observer-only failure is preserved in `failure.json`: it attempted
+`model_dump()` on the dataclass Job record after planning, before any image call.
+The observer was corrected to read the persisted JSON. It resumed the exact
+existing planned job, after checking that it had no generation result or
+outputs. No replacement project/job was created and no evidence was overwritten.
+The initial Brain also used its existing bounded finalizer schema-repair path;
+this did not create an extra image request.
+
+This completes the requested local binding/reuse/unbind/replacement acceptance
+and the positive real-promotion gap recorded in Doc343. Live image coverage is
+the photographic portrait flow. Illustrated/stylized scope, failed-first sibling
+selection, selected retries, and review-resume branches remain covered by the
+deterministic suite, not additional live cases. VPS deployment and production
+user-project changes were not performed. No further local integration dependency
+remains for the tested scope; user acceptance is next.
