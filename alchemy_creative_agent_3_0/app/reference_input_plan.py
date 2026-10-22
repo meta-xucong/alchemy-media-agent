@@ -10,6 +10,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    validate_doc73_binding,
+)
+
 PLAN_KEY = "reference_input_plan"
 SCHEMA = "v3_reference_input_plan_v3"
 MODES = {"standard": "standard_direct_reference", "professional": "professional_asset_binding", "ecommerce": "ecommerce_product_truth"}
@@ -159,7 +164,38 @@ class ReferenceInputPlan:
                        or anchor["reference"].get("provider_input_required") is not True
                        or anchor.get("output_id") != anchor["reference"].get("output_id")):
             raise ValueError("reference_input_anchor_invalid")
-        all_sources = ([anchor["reference"]] if anchor else []) + sources
+        same_batch = payload.get("same_batch_continuity_reference")
+        same_batch_reference = None
+        if same_batch is not None:
+            if (mode != "standard" or anchor is not None or payload.get("anchor_auto_enabled") is not True
+                    or not isinstance(same_batch, dict) or not isinstance(same_batch.get("reference"), dict)
+                    or not isinstance(same_batch.get("receipt"), dict)):
+                raise ValueError("reference_input_same_batch_continuity_invalid")
+            same_batch_reference = same_batch["reference"]
+            receipt = same_batch["receipt"]
+            if (same_batch_reference.get("reference_channel") != "same_batch_continuity"
+                    or same_batch_reference.get("provider_input_required") is not True
+                    or same_batch_reference.get("source_type") != "auto_batch_continuity"
+                    or same_batch_reference.get("origin") != "auto_batch_continuity"
+                    or direct
+                    or same_batch_reference.get("output_id") != same_batch_reference.get("asset_id")
+                    or receipt.get("job_id") != payload.get("job_id")
+                    or receipt.get("project_id") != payload.get("project_id")
+                    or receipt.get("source_output_id") != same_batch_reference.get("output_id")
+                    or receipt.get("source_content_sha256") != same_batch_reference.get("content_sha256")
+                    or receipt != same_batch_reference.get("metadata", {}).get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+                    or same_batch_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) not in (None, receipt)
+                    or not validate_doc73_binding(
+                        receipt,
+                        expected_job_id=payload.get("job_id"),
+                        expected_project_id=payload.get("project_id"),
+                        expected_batch_plan_digest=receipt.get("batch_plan_digest"),
+                        expected_output_id=same_batch_reference.get("output_id"),
+                        expected_source_plan_position=0,
+                        expected_source_candidate_id=same_batch_reference.get("candidate_id"),
+                    )):
+                raise ValueError("reference_input_same_batch_continuity_invalid")
+        all_sources = ([anchor["reference"]] if anchor else []) + ([same_batch_reference] if same_batch_reference else []) + sources
         for source in all_sources:
             if not isinstance(source,dict) or not isinstance(source.get("asset_id"),str) or not source["asset_id"] or not isinstance(source.get("file_path"),str):
                 raise ValueError("reference_input_plan_source_invalid")
@@ -188,7 +224,11 @@ class ReferenceInputPlan:
         sources = p["direct_references"] if mode == "standard" else p[{"professional":"professional_binding_set", "ecommerce":"ecommerce_product_truth"}[mode]]["references"]
         if mode == "ecommerce":
             sources = [*sources, *p["ecommerce_product_truth"].get("identity_references", [])]
-        result = ([p["continuity_anchor"]["reference"]] if p["continuity_anchor"] else []) + sources
+        same_batch = p.get("same_batch_continuity_reference")
+        result = ([p["continuity_anchor"]["reference"]] if p["continuity_anchor"] else [])
+        if isinstance(same_batch, dict) and isinstance(same_batch.get("reference"), dict):
+            result.append(same_batch["reference"])
+        result.extend(sources)
         for item in result:
             if verify_bytes:
                 try:
@@ -198,6 +238,46 @@ class ReferenceInputPlan:
                 if actual != item.get("content_sha256"):
                     raise ValueError("reference_input_source_integrity_mismatch")
         return result
+
+    def with_same_batch_continuity_reference(self, reference: dict, *, receipt: dict) -> "ReferenceInputPlan":
+        """Derive an output-scoped advisory ref without changing the Job plan or project anchor."""
+        payload = self.as_dict()
+        if (payload.get("project_mode") != "standard" or payload.get("continuity_anchor") is not None
+                or payload.get("anchor_auto_enabled") is not True or payload.get("direct_references")):
+            raise ValueError("reference_input_same_batch_continuity_not_applicable")
+        if not isinstance(reference, dict) or not isinstance(receipt, dict):
+            raise ValueError("reference_input_same_batch_continuity_invalid")
+        output_id = str(reference.get("output_id") or "").strip()
+        expected_sha = str(receipt.get("source_content_sha256") or "").strip().lower()
+        if (not output_id or output_id != str(receipt.get("source_output_id") or "").strip()
+                or receipt.get("job_id") != payload.get("job_id")
+                or receipt.get("project_id") != payload.get("project_id")
+                or not expected_sha or len(expected_sha) != 64):
+            raise ValueError("reference_input_same_batch_continuity_invalid")
+        normalized = _source({**reference, "asset_id": output_id, "content_sha256": expected_sha}, channel="same_batch_continuity")
+        if (normalized.get("source_type") != "auto_batch_continuity"
+                or normalized.get("origin") != "auto_batch_continuity"
+                or normalized.get("output_id") != output_id
+                or receipt != normalized.get("metadata", {}).get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+                or normalized.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) not in (None, receipt)
+                or not validate_doc73_binding(
+                    receipt,
+                    expected_job_id=payload.get("job_id"),
+                    expected_project_id=payload.get("project_id"),
+                    expected_batch_plan_digest=receipt.get("batch_plan_digest"),
+                    expected_output_id=output_id,
+                    expected_source_plan_position=0,
+                    expected_source_candidate_id=normalized.get("candidate_id"),
+                )
+                or expected_sha != hashlib.sha256(Path(normalized["file_path"]).read_bytes()).hexdigest()):
+            raise ValueError("reference_input_same_batch_continuity_invalid")
+        payload["same_batch_continuity_reference"] = {"reference": normalized, "receipt": _copy(receipt)}
+        refs = ([payload["continuity_anchor"]["reference"]] if payload["continuity_anchor"] else []) + [normalized]
+        refs.extend(payload["direct_references"])
+        payload["physical_provider_reference_count"] = len({item["content_sha256"] for item in refs})
+        payload.pop("plan_digest", None)
+        payload["plan_digest"] = digest(payload)
+        return self.from_dict(payload, job_id=payload.get("job_id"), project_id=payload.get("project_id"))
 
     def facts(self) -> dict:
         p = self.as_dict()

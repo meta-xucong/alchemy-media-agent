@@ -1,6 +1,6 @@
 # Doc343 - V3 Same-Batch Advisory Continuity Minimal Repair
 
-Status: **design audit passed; implementation, code audit, simulation, and local real acceptance pending**.
+Status: **implementation, independent code audit, deterministic tests, and two-round local real continuity validation passed; VPS deployment excluded**.
 
 Scope: V3 Foundation, Doc73/Doc287 same-batch advisory continuity and Doc322
 frozen Provider inputs.
@@ -144,7 +144,36 @@ after all deterministic gates pass.
 ## 6. Acceptance boundary
 
 Passing the focused tests and simulation authorizes local real validation only.
-Total acceptance requires the real local multi-image batch to demonstrate
-that all later Provider requests consumed the same first canonical image and
-that the project anchor is bound only after the existing formal review accepts
-it. This document does not authorize VPS deployment.
+The real run must demonstrate that all later Provider requests consumed the
+same first canonical image. Project binding remains controlled by the existing
+formal review predicate; a real run whose images are withheld by that review
+must leave the project anchor empty. This document does not authorize VPS
+deployment.
+
+## 7. Implementation and acceptance record
+
+- The independent implementation audit passed. It checked the validated
+  Doc287 receipt path, rejection of conflicting top-level binding metadata,
+  direct-reference suppression, and three-output source stability.
+- Focused deterministic tests passed: **54 passed** across
+  `test_v3_doc322_reference_plan.py`,
+  `test_v3_doc73_first_output_identity_anchor.py`, and
+  `test_v3_doc322_project_workflow.py`.
+- Two isolated local real V3 Standard batches each requested and generated
+  three real images. In both batches output position 0 had no generated
+  reference; positions 1 and 2 carried the same canonical position-0 output
+  ID, SHA-256, and Doc287 receipt through the Production Image Provider.
+  Stored source bytes matched the reference hash in both rounds.
+- Both batches completed image generation, but existing visual review returned
+  `withheld_review_failure` with no eligible outputs. In both cases the project
+  anchor correctly remained empty. This verifies the runtime advisory path and
+  the no-promotion-on-review-failure behavior. The positive project-binding
+  branch is covered by deterministic Doc322 workflow tests; these real runs do
+  not claim a review-approved image or a live project-anchor promotion.
+- Real runs used isolated temporary project, job, asset, and output stores.
+  No production project or user image was changed. VPS deployment was not run.
+
+Final implementation acceptance: **passed for same-batch advisory continuity
+and review-gated non-promotion**. Formal approval and permanent binding remain
+the responsibility of the existing Doc322 review path. VPS deployment remains
+out of scope.

@@ -388,8 +388,15 @@ class CentralCreativeBrain:
         explicit_references_present = self._has_explicit_user_reference_assets(context)
         auto_identity_anchor_state = self._project_auto_identity_anchor_state(context)
         frozen_reference_plan = plan_from_metadata(context.metadata)
+        frozen_plan_facts = frozen_reference_plan.facts() if frozen_reference_plan else {}
+        same_batch_plan_eligible = frozen_reference_plan is None or (
+            frozen_plan_facts.get("project_mode") == "standard"
+            and not frozen_plan_facts.get("has_explicit_continuity_anchor")
+            and not frozen_plan_facts.get("has_direct_reference_inputs")
+            and frozen_reference_plan.as_dict().get("anchor_auto_enabled") is True
+        )
         auto_identity_anchor_enabled = (
-            frozen_reference_plan is None
+            same_batch_plan_eligible
             and not use_mock_generation
             and not explicit_references_present
             and self._is_human_identity_suite_context(context)
@@ -633,6 +640,11 @@ class CentralCreativeBrain:
                     generation_plan.metadata,
                     auto_identity_anchor_reference,
                 )
+                if frozen_reference_plan is not None:
+                    generation_plan.metadata[PLAN_KEY] = frozen_reference_plan.with_same_batch_continuity_reference(
+                        auto_identity_anchor_reference,
+                        receipt=dict(auto_identity_anchor_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) or {}),
+                    ).as_dict()
             if not use_mock_generation:
                 generation_plan.candidate_count = 1
                 generation_plan.max_refine_rounds = 0

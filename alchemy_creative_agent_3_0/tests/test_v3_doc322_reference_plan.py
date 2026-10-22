@@ -1,5 +1,7 @@
 """Mode-scoped logical sources and exact Provider/MCP physical inputs."""
 from copy import deepcopy
+import base64
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
@@ -8,6 +10,11 @@ from PIL import Image
 from alchemy_creative_agent_3_0.app.reference_input_plan import ReferenceInputPlan, plan_from_metadata, digest, PLAN_KEY
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider, McpMaterializationProvider
 from alchemy_creative_agent_3_0.app.schemas import PromptCompilationResult, ConditionPlan, GenerationPlan
+from alchemy_creative_agent_3_0.app.creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    issue_doc73_auto_identity_anchor_source_skeleton,
+)
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 
 
 @pytest.fixture
@@ -27,12 +34,36 @@ def request_for(plan):
         metadata={PLAN_KEY:plan.as_dict(),"job_id":"job_test","project_id":"project_test"})
 
 
+def valid_doc73_source(plan, tmp_path):
+    buffer=BytesIO()
+    Image.new("RGB",(96,96),(80,120,160)).save(buffer,format="PNG")
+    encoded=base64.b64encode(buffer.getvalue()).decode("ascii")
+    candidate_id="candidate_doc73_reference"
+    asset_id="asset_doc73_reference"
+    source_metadata={"project_id":"project_test","doc73_batch_plan_digest":"a"*64,
+        "auto_batch_identity_anchor_policy":{"enabled":True}}
+    skeleton=issue_doc73_auto_identity_anchor_source_skeleton(source_metadata,
+        job_id="job_test",project_id="project_test",asset_id=asset_id,plan_position=0,
+        output_index=1,candidate_id=candidate_id)
+    output=V3GeneratedOutputStore(tmp_path/"doc73-outputs").save_base64_output(
+        job_id="job_test",candidate_id=candidate_id,asset_id=asset_id,provider="doc73_test",
+        model="doc73-test",encoded_image=encoded,
+        metadata={**source_metadata,"doc73_auto_identity_anchor_skeleton":skeleton})
+    receipt=output.metadata[DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY]
+    reference={"asset_id":output.output_id,"source_id":output.output_id,"output_id":output.output_id,
+        "candidate_id":candidate_id,"source_type":"auto_batch_continuity","origin":"auto_batch_continuity",
+        "role":"continuity_reference","use_policy":"continuity","strength":"hard",
+        "provider_input_required":True,"file_path":output.file_path,"mime_type":"image/png",
+        "metadata":{DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY:receipt},
+        DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY:receipt}
+    return reference,receipt
+
+
 def test_three_current_sources_are_three_originals_not_six(sources, monkeypatch):
     plan=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=sources)
     provider=ProductionImageGenerationProvider.__new__(ProductionImageGenerationProvider)
     monkeypatch.setattr(provider,"_reference_technical_admission",lambda path:(True,"accepted"))
     monkeypatch.setattr(provider,"_reference_capacity_limit",lambda request,refs:3)
-    monkeypatch.setattr(provider,"_reference_truth_package",lambda *a,**k:{})
     monkeypatch.setattr(provider,"_reference_truth_derivatives",lambda *a,**k:pytest.fail("Standard constructed crop"))
     request=request_for(plan)
     request.metadata["reference_assets"]=[{"asset_id":"old-history","file_path":"must-not-read"}]
@@ -123,6 +154,76 @@ def test_duplicate_bytes_are_one_physical_input_with_logical_count_retained(sour
     plan=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[sources[0],copied])
     assert plan.facts()["logical_mode_input_count"]==2
     assert plan.facts()["physical_provider_reference_count"]==1
+
+
+def test_same_batch_reference_is_derived_without_becoming_project_anchor(sources,tmp_path):
+    plan=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[])
+    reference,receipt=valid_doc73_source(plan,tmp_path)
+
+    derived=plan.with_same_batch_continuity_reference(reference,receipt=receipt)
+    payload=derived.as_dict()
+
+    assert payload["continuity_anchor"] is None
+    assert payload["same_batch_continuity_reference"]["receipt"]==receipt
+    assert payload["same_batch_continuity_reference"]["reference"]["reference_channel"]=="same_batch_continuity"
+    assert derived.references()[0]["output_id"]==reference["output_id"]
+    assert payload["physical_provider_reference_count"]==1
+    assert ReferenceInputPlan.from_dict(payload,job_id="job_test",project_id="project_test").as_dict()==payload
+    conflict={**reference,DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY:{**receipt,"origin":"forged"}}
+    with pytest.raises(ValueError,match="same_batch"):
+        plan.with_same_batch_continuity_reference(conflict,receipt=receipt)
+    forged=deepcopy(payload)
+    forged["same_batch_continuity_reference"]["reference"][DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY]={**receipt,"origin":"forged"}
+    forged["plan_digest"]=digest({k:v for k,v in forged.items() if k!="plan_digest"})
+    with pytest.raises(ValueError,match="same_batch"):
+        ReferenceInputPlan.from_dict(forged)
+
+
+def test_same_batch_reference_rejects_project_anchor_and_legacy_plans_remain_readable(sources,tmp_path):
+    legacy=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[]).as_dict()
+    legacy.pop("same_batch_continuity_reference",None)
+    legacy["plan_digest"]=digest({k:v for k,v in legacy.items() if k!="plan_digest"})
+    assert ReferenceInputPlan.from_dict(legacy).as_dict()==legacy
+
+    anchor_reference={**ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[sources[0]]).as_dict()["direct_references"][0],
+        "reference_channel":"continuity","asset_id":"v3_output_anchor","output_id":"v3_output_anchor"}
+    anchor={"binding_id":"binding_test","output_id":"v3_output_anchor","reference":anchor_reference}
+    anchored=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[],
+        anchor_snapshot={"state":"active","version":1,"auto_enabled":True,"active_continuity_anchor":anchor})
+    base=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[])
+    reference,receipt=valid_doc73_source(base,tmp_path)
+    with pytest.raises(ValueError,match="same_batch"):
+        anchored.with_same_batch_continuity_reference(reference,receipt=receipt)
+    with pytest.raises(ValueError,match="same_batch"):
+        base.with_same_batch_continuity_reference(reference,receipt={**receipt,"job_id":"other_job"})
+    direct=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[sources[0]])
+    with pytest.raises(ValueError,match="not_applicable"):
+        direct.with_same_batch_continuity_reference(reference,receipt=receipt)
+
+
+def test_same_batch_reference_reaches_production_provider_materialization(sources, monkeypatch,tmp_path):
+    plan=ReferenceInputPlan.freeze(job_id="job_test",project_id="project_test",mode="standard",inputs=[])
+    reference,receipt=valid_doc73_source(plan,tmp_path)
+    derived=plan.with_same_batch_continuity_reference(reference,receipt=receipt)
+    provider=ProductionImageGenerationProvider.__new__(ProductionImageGenerationProvider)
+    monkeypatch.setattr(provider,"_reference_technical_admission",lambda path:(True,"accepted"))
+    monkeypatch.setattr(provider,"_reference_capacity_limit",lambda request,refs:3)
+
+    request=request_for(derived)
+    refs=provider._reference_assets(request)
+    assets=provider._asset_plan(request,refs)
+    provider._bind_reference_materialization_receipt(request,assets)
+    materialized=provider._materialized_provider_reference_assets(assets)
+
+    assert [item["file_path"] for item in materialized]==[str(Path(reference["file_path"]).resolve())]
+    provider_receipt=assets["reference_input_plan_receipt"]
+    assert provider_receipt["plan_digest"]==derived.as_dict()["plan_digest"]
+    assert provider_receipt["physical_provider_reference_count"]==1
+    assert provider_receipt["derived_evidence_count"]==0
+    truth_package=provider._reference_truth_package(request,refs,allow_product_language=False,human_photo_context=True)
+    assert truth_package["truth_source_ids"]==[]
+    assert truth_package["sources"][reference["output_id"]]["truth_layers"]==[]
+    assert truth_package["sources"][reference["output_id"]]["priority_note"]=="doc73_auto_batch_continuity_input"
 
 
 @pytest.mark.parametrize("field,value",[("physical_provider_reference_count",6),("physical_provider_reference_count",True),
