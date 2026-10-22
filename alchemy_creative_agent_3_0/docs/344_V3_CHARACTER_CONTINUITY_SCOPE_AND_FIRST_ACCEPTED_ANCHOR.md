@@ -1,6 +1,8 @@
 # Doc344 - Character continuity scope and first accepted project anchor
 
-Status: independent design audit passed; implementation, code audit, and tests pending.
+Status: implementation complete; independent design/code audits and deterministic
+tests passed. Production visual acceptance remains pending user generation;
+VPS deployment is outside this milestone.
 
 ## 1. Objective and correction model
 
@@ -127,3 +129,57 @@ filter by canonical eligible IDs before asset uniqueness (append-only retry
 history), and invoke the existing finalizer at the resumed-review completion
 exit as well as normal completion. No new decision authority is introduced.
 Independent re-audit: PASS. Ready for implementation and focused regressions.
+
+## 6. Implementation and acceptance record (2026-10-23)
+
+Implemented only the three approved production files:
+
+- Brain: reuse typed character detection independently of rendering style;
+  retain image-count gating for the temporary batch chain only.
+- Project: filter append-only assets by canonical reviewed eligible output IDs,
+  select in original plan order, then use the existing binding resolver/CAS.
+- Product API: reuse the existing warning-only finalizer at both normal and
+  resumed-review successful completion, after saving the reviewed result.
+
+Independent read-only code audit: PASS. No blocking finding. Existing explicit
+unbind, ownership, canonical output, file-integrity and version authorities
+remain in the original resolver. No new module, review rule or state was added.
+
+Regression-first record: the initial two-file suite against the old runtime
+reported 19 failed / 29 passed, exposing the count/style/selection/resume gaps.
+After implementation, three multi-output cases revealed a fixture issue:
+`certify_output` rebuilt metadata from planning and removed the generation-only
+candidacy flag. The final assembled fixture now restores and asserts that flag;
+production logic was not changed to accommodate the fixture.
+
+Final deterministic run: **130 passed, 1 deselected in 28.87 seconds** using
+Python 3.12 and pytest. Executed suites:
+
+- `test_v3_doc322_reference_plan.py`
+- `test_v3_doc322_project_workflow.py`
+- `test_v3_doc73_first_output_identity_anchor.py`
+- `test_v3_doc322_continuity_binding.py`
+- `test_v3_doc322_reference_isolation.py`
+- `test_v3_doc322_reaudit.py`
+- `test_v3_body_review_resume_package_predicate.py`
+- `test_v3_review_resume_timeout_propagation.py`
+- `test_v3_doc94_universal_visual_governance.py`
+- `test_v3_photography_mainline_004.py::test_professional_set_t2i_executes_three_frozen_roles_without_generated_image_edit_chain`
+
+The command used `-k 'not explicit_brand_export' -q --tb=short`; the excluded
+brand-export fixture can invoke a real Brain and is unrelated to this change.
+The E-Commerce continuity-exclusion test sets the already-built context's
+scenario explicitly to isolate this predicate from remote E-Commerce planning.
+The professional photography test separately covers its real template opt-out.
+
+Coverage includes single-image and next-job binding; photo studio, anime city,
+and illustrated forest character profiles; unchanged input rendering intent;
+first-failed/second-passed; reversed pack order; retained original plus selected
+retry; ambiguous and all-failed non-promotion; mock/missing-profile/product/
+E-Commerce/template exclusions; unbind/CAS; resumed successful/pending/error
+outcomes; and reference/mode isolation. `git diff --check` passed.
+
+No external provider generation, new visual comparison, historical backfill,
+or VPS deployment was performed. This passes the requested development and
+offline-test phase only. Next acceptance is the user's normal generation and
+inspection of same-person appearance after deployment; that remains unclaimed.

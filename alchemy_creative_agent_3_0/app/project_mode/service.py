@@ -14450,24 +14450,31 @@ class V3ProjectModeService:
         if p["continuity_anchor"] is not None or not p["anchor_auto_enabled"] or result.metadata.get("doc322_auto_anchor_candidate") is not True:
             return
         planned=getattr(job,"planning_result",None)
-        if planned is None or len(planned.series_plan.assets)<2:
+        if planned is None:
             return
-        source_asset=planned.series_plan.assets[0].asset_id
-        matching=[a for a in result.asset_pack.assets if a.asset_id==source_asset]
-        if len(matching)!=1:
+        eligible = self.product_service._public_final_delivery_projection(result)[1]
+        # The pack retains superseded attempts. Review has already selected the
+        # final winners; choose the first eligible one in original plan order.
+        for planned_asset in planned.series_plan.assets:
+            matching = [
+                str((asset.metadata.get("candidate_metadata") or {}).get("output_id")
+                    or asset.metadata.get("output_id") or "")
+                for asset in result.asset_pack.assets
+                if asset.asset_id == planned_asset.asset_id
+            ]
+            matching = [output_id for output_id in matching if output_id in eligible]
+            if not matching:
+                continue
+            if len(matching) != 1:
+                return
+            try:
+                self._anchor_bindings().change(
+                    project_id, output_id=matching[0], expected_job_id=job_id,
+                    expected_version=p["anchor_version"], mode="auto_first_formal",
+                )
+            except (ValueError, OSError):
+                pass  # Preserve concurrent user action and canonical evidence authority.
             return
-        asset=matching[0]; cm=dict(asset.metadata.get("candidate_metadata") or {})
-        output_id=str(cm.get("output_id") or asset.metadata.get("output_id") or "")
-        if not output_id or any(cm.get(k) not in (None,0,False) for k in ("refine_round","retry_attempt","visual_auto_retry_attempt")):
-            return
-        records=[r for r in self.product_service.output_store.list_by_job(job_id) if r.asset_id==source_asset]
-        if len(records)!=1 or records[0].output_id!=output_id or records[0].candidate_id!=asset.metadata.get("selected_candidate_id"):
-            return
-        try:
-            self._anchor_bindings().change(project_id,output_id=output_id,expected_job_id=job_id,
-                expected_version=p["anchor_version"],mode="auto_first_formal")
-        except (ValueError,OSError):
-            return  # Concurrent user action or unverified pixels cannot be overwritten.
 
     def _reference_project_mode(self, project: ProjectRecord, template_id: str | None = None) -> str:
         if (template_id or project.primary_template_id)==ECOMMERCE_TEMPLATE_ID:

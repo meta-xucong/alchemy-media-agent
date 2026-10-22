@@ -4035,6 +4035,10 @@ class V3ProductApiService:
         record.balance_estimate = self._estimate_for_result(generation_result)
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
+        self._finalize_project_continuity_anchor(record)
+        return self._status_from_record(record)
+
+    def _finalize_project_continuity_anchor(self, record: ProductJobRecord) -> None:
         anchor_finalizer = getattr(self, "_continuity_anchor_finalizer", None)
         project_id = str(record.request.metadata.get("project_id") or "")
         if callable(anchor_finalizer) and project_id:
@@ -4044,7 +4048,6 @@ class V3ProductApiService:
                 # Auxiliary anchor promotion cannot erase an already accepted image.
                 record.warnings.append("Continuity anchor was not updated; existing image delivery is unchanged.")
                 self.job_store.save(record)
-        return self._status_from_record(record)
 
     @staticmethod
     def _is_professional_character_card_body_mcp_generation(record: ProductJobRecord) -> bool:
@@ -5119,6 +5122,7 @@ class V3ProductApiService:
         record.balance_estimate = self._estimate_for_result(generation_result)
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
+        self._finalize_project_continuity_anchor(record)
         return self._status_from_record(record)
 
     def _sync_mcp_review_resume_projection(
