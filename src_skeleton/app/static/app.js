@@ -6172,7 +6172,7 @@ async function handleV3ProjectOutputBoardClick(event) {
   } else if (action === "select") {
     await selectV3OutputItem(item, actionButton);
   } else if (action === "remove_from_project") {
-    await removeV3OutputFromProject(item);
+    await removeV3OutputFromProject(item, actionButton);
   }
 }
 
@@ -6229,7 +6229,7 @@ async function selectV3OutputItem(item, actionButton = null) {
   }
 }
 
-async function removeV3OutputFromProject(item) {
+async function removeV3OutputFromProject(item, actionButton = null) {
   const projectId = v3State.currentProject?.project_id;
   const outputId = v3OutputItemIdentity(item);
   if (!projectId || !outputId) {
@@ -6240,7 +6240,13 @@ async function removeV3OutputFromProject(item) {
     "从当前项目成果中移除这张图？\n\n它不会删除服务器中的图片文件或项目历史，只会停止把这张图作为当前项目成果和后续生成方向。",
   );
   if (!ok) return;
+  const originalButtonContent = actionButton?.innerHTML || "";
   try {
+    if (actionButton) {
+      actionButton.disabled = true;
+      actionButton.setAttribute("aria-busy", "true");
+      actionButton.innerHTML = '<span class="v3-continuity-loading-spinner" aria-hidden="true"></span><span class="v3-continuity-loading-label">正在移除</span>';
+    }
     setV3Busy(true, "正在从项目成果中移除...");
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/unselect`, {
       method: "POST",
@@ -6252,6 +6258,8 @@ async function removeV3OutputFromProject(item) {
     if (payload.project) v3State.currentProject = payload.project;
     syncV3ProjectOutputsFromPayload(payload);
     saveV3ProjectSnapshot(v3State.currentProject);
+    renderV3Job(v3State.currentJob);
+    renderV3ProjectDetail();
     await loadV3ProjectTimeline(projectId, { silent: true });
     await loadV3ProjectOutputs({ silent: true, force: true });
     renderV3Job(v3State.currentJob);
@@ -6260,6 +6268,11 @@ async function removeV3OutputFromProject(item) {
   } catch (error) {
     updateV3Notice(`移除失败：${friendlyError(error)}`, "error");
   } finally {
+    if (actionButton?.isConnected && actionButton.getAttribute("aria-busy") === "true") {
+      actionButton.disabled = false;
+      actionButton.removeAttribute("aria-busy");
+      actionButton.innerHTML = originalButtonContent;
+    }
     setV3Busy(false);
   }
 }
@@ -12450,7 +12463,7 @@ function renderV3ResultBoard(job) {
         const resultItem = v3State.resultItems[Number(button.dataset.v3ResultIndex || 0)];
         if (!resultItem) return;
         if (button.dataset.v3ResultAction === "select") await selectV3OutputItem(resultItem);
-        if (button.dataset.v3ResultAction === "remove_from_project") await removeV3OutputFromProject(resultItem);
+        if (button.dataset.v3ResultAction === "remove_from_project") await removeV3OutputFromProject(resultItem, button);
       });
     });
     els.v3ResultBoard.appendChild(card);

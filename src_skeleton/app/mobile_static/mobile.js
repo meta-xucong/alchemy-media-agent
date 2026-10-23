@@ -4947,7 +4947,7 @@ function handleMobileV3Click(event) {
     if (outputActionButton.dataset.mobileV3OutputAction === "select_continuation") {
       void selectMobileV3OutputItem(item, outputActionButton);
     } else if (outputActionButton.dataset.mobileV3OutputAction === "remove_from_project") {
-      void removeMobileV3OutputFromProject(item);
+      void removeMobileV3OutputFromProject(item, outputActionButton);
     }
     return;
   }
@@ -7506,7 +7506,7 @@ async function selectMobileV3OutputItem(item, actionButton = null) {
   }
 }
 
-async function removeMobileV3OutputFromProject(item) {
+async function removeMobileV3OutputFromProject(item, actionButton = null) {
   const projectId = mobileV3State.currentProject?.project_id;
   const outputId = mobileV3OutputId(item);
   if (!projectId || !outputId) {
@@ -7517,20 +7517,40 @@ async function removeMobileV3OutputFromProject(item) {
     "从当前项目成果中移除这张图？\n\n它不会删除服务器中的图片文件或项目历史，只会停止把这张图作为当前项目成果和后续生成方向。",
   );
   if (!confirmed) return;
+  const originalButtonContent = actionButton?.innerHTML || "";
   try {
+    if (actionButton) {
+      actionButton.disabled = true;
+      actionButton.setAttribute("aria-busy", "true");
+      actionButton.innerHTML = '<span class="v3-continuity-loading-spinner" aria-hidden="true"></span><span class="v3-continuity-loading-label">正在移除</span>';
+    }
     setMobileV3Busy(true);
-    await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/unselect`, {
+    const payload = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/unselect`, {
       method: "POST",
       body: {
         plain_text: "用户从当前项目成果中移除了这张图。",
         metadata: { frontend_surface: "commercial_v3_project_mode", removed_from: "mobile_project_output" },
       },
     });
-    await refreshMobileV3ProjectDetail(projectId);
+    const updatedProject = payload.project || mobileV3State.currentProject;
+    mobileV3State.currentProject = updatedProject;
+    mobileV3State.projects = [updatedProject, ...mobileV3State.projects.filter((item) => item.project_id !== projectId)];
+    renderMobileV3ProjectOutputs(updatedProject);
+    try {
+      await refreshMobileV3ProjectDetail(projectId);
+    } catch (error) {
+      updateMobileV3Status(`已从当前项目成果中移除；项目详情刷新失败：${friendlyError(error)}`);
+      return;
+    }
     updateMobileV3Status("已从当前项目成果中移除。这张图仍保留在项目历史里。");
   } catch (error) {
     updateMobileV3Status(`移除失败：${friendlyError(error)}`);
   } finally {
+    if (actionButton?.isConnected && actionButton.getAttribute("aria-busy") === "true") {
+      actionButton.disabled = false;
+      actionButton.removeAttribute("aria-busy");
+      actionButton.innerHTML = originalButtonContent;
+    }
     setMobileV3Busy(false);
   }
 }
@@ -7921,7 +7941,18 @@ function mobileV3DedupeOutputItems(items) {
 
 function mobileV3FinalOutputsForProject(projectId) {
   const outputs = mobileV3OutputsForProject(projectId);
-  return mobileV3DedupeOutputItems(outputs).filter((item) => mobileV3CanonicalFinalDelivery(item));
+  const project = mobileV3State.currentProject?.project_id === projectId
+    ? mobileV3State.currentProject
+    : mobileV3State.projects.find((item) => item?.project_id === projectId);
+  const selectionStates = new Map(
+    (Array.isArray(project?.selected_output_states) ? project.selected_output_states : [])
+      .map((item) => [String(item?.output_id || ""), String(item?.selection_state || "selected")]),
+  );
+  return mobileV3DedupeOutputItems(outputs).filter((item) => {
+    const outputId = mobileV3OutputId(item);
+    const selectionState = String(selectionStates.get(outputId) || item?.selection_state || item?.metadata?.selection_state || "selected");
+    return selectionState !== "unselected" && selectionState !== "rejected" && mobileV3CanonicalFinalDelivery(item);
+  });
 }
 
 function mobileV3ExpectedImageCountForJob(job = mobileV3State.currentJob, explicitCount = null) {

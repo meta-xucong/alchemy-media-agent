@@ -85,6 +85,7 @@ def test_doc261_mobile_keeps_the_same_reference_groups_visible() -> None:
     groups = _function(source, "mobileV3ProjectReferenceGroups", "mobileV3UsefulReferences")
     compatibility = _function(source, "mobileV3UsefulReferences", "mobileV3ReferenceThumb")
     board = _function(source, "renderMobileV3ReferenceBoard", "renderMobileV3Timeline")
+    final_outputs = _function(source, "mobileV3FinalOutputsForProject", "mobileV3ExpectedImageCountForJob")
     select_output = _function(source, "selectMobileV3OutputItem", "removeMobileV3OutputFromProject")
     remove_output = _function(source, "removeMobileV3OutputFromProject", "removeMobileV3ProjectReference")
     remove_reference = _function(source, "removeMobileV3ProjectReference", "renderMobileV3Timeline")
@@ -112,6 +113,13 @@ def test_doc261_mobile_keeps_the_same_reference_groups_visible() -> None:
     assert ".v3-mobile-reference-group" in css
     assert ".v3-mobile-reference-actions" in css
     assert ".v3-mobile-output-actions" in css
+    assert 'class="v3-continuity-loading-spinner"' in remove_output
+    assert 'selectionState !== "unselected"' in final_outputs
+    assert 'selectionState !== "rejected"' in final_outputs
+    assert 'String(selectionStates.get(outputId) || item?.selection_state' in final_outputs
+    assert "const updatedProject = payload.project || mobileV3State.currentProject;" in remove_output
+    assert remove_output.index("renderMobileV3ProjectOutputs(updatedProject)") < remove_output.index("await refreshMobileV3ProjectDetail(projectId)")
+    assert "项目详情刷新失败" in remove_output
 
 
 def test_doc261_preserves_visual_assets_and_review_only_separation() -> None:
@@ -122,3 +130,21 @@ def test_doc261_preserves_visual_assets_and_review_only_separation() -> None:
     assert 'id="v3ProjectVisualAssetPanel"' in desktop_index
     assert "未通过正式交付的图片，仅供查看，不能设为后续参考" in desktop_source
     assert "这些图片没有进入首页正式预览，也不能设为后续参考。" in mobile_source
+
+
+def test_project_output_removal_shows_inline_busy_state_on_desktop_and_mobile() -> None:
+    desktop_source = (ROOT / "src_skeleton" / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    mobile_source = MOBILE_JS.read_text(encoding="utf-8")
+    desktop_remove = _function(desktop_source, "removeV3OutputFromProject", "rejectV3OutputItem")
+    mobile_remove = _function(mobile_source, "removeMobileV3OutputFromProject", "bindMobileV3AutoIdentityAnchor")
+
+    assert "removeV3OutputFromProject(item, actionButton)" in desktop_source
+    assert "removeV3OutputFromProject(resultItem, button)" in desktop_source
+    assert "removeMobileV3OutputFromProject(item, outputActionButton)" in mobile_source
+    for source in (desktop_remove, mobile_remove):
+        assert 'setAttribute("aria-busy", "true")' in source
+        assert 'class="v3-continuity-loading-spinner"' in source
+        assert "正在移除" in source
+        assert "finally" in source
+    assert desktop_remove.index("syncV3ProjectOutputsFromPayload(payload)") < desktop_remove.index("renderV3ProjectDetail();")
+    assert desktop_remove.index("renderV3ProjectDetail();") < desktop_remove.index("await loadV3ProjectTimeline(projectId")
