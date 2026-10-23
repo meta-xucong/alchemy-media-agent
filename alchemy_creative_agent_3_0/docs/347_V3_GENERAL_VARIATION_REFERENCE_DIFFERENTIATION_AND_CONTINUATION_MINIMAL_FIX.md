@@ -1,8 +1,8 @@
 # V3 General Variation: Reference Source and Direction Continuation
 
-**Status:** Local implementation revision 7; focused and adjacent regression sets pass; independent code audit passed; deployed real-generation acceptance remains pending
+**Status:** Implemented, independently audited, tested, deployed, and visually verified with real V3 provider output
 **Scope:** V3 Foundation variation contract and General Template only
-**Phase:** Local implementation and simulation complete. Do not treat this as release acceptance until independent audit and real V3 image acceptance pass.
+**Phase:** Implementation, deterministic regression, independent code audit, guarded VPS activation, and real-provider visual acceptance passed. The acceptance notes retain one mock-fixture artifact from the test runner.
 
 ## 1. Objective
 
@@ -127,3 +127,13 @@ The 2026-10-23 VPS run `job_9303f22720` exercised release `e6639f4c`, while the 
 The local correction carries existing selected-output provenance into the frozen role plan. Same-mode route history still controls which role key is skipped. A generated selected output from another mode does not consume a role in the new mode, but it activates the existing delivery-suite first-row shot-change axes. Uploaded references leave that behavior off. Follow-up audit found a legacy metadata fallback defect: the delivery projection intentionally removes mode metadata, so old route recipes without their own mode could be missed. The fix retains the original Job status for that one route-mode fallback while all delivery eligibility remains based on the projected canonical status. Added regression coverage both for this fallback and for the cross-mode selected-output path from project route plan through Runtime's first-row contract.
 
 The focused suite passes **11/11**; it plus adjacent variation/source-closure regressions passes **70 tests**. Python compilation and `git diff --check` pass. One Windows temporary-directory cleanup warning was emitted by pytest; all test assertions passed. The independent follow-up audit returned **PASS** for local code and deterministic regressions, with no new blocking issue. The auditor independently reran the focused 11 tests; the 70-test adjacent selection was not rerun by the auditor. The VPS remains on `e6639f4c`; no output from the corrected local code has been generated yet, so visual outcome and deployment acceptance remain open.
+
+### Revision 7 — guarded deployment and real provider acceptance
+
+Commit `499ac057d03c62e5db8909e3dbccd183204e459b` was pushed to `origin/main`. Guarded candidate run `39915139690` passed for `/opt/alchemy-media-agent-releases/doc276-277-499ac057d03c`; guarded activation run `39915855163` passed with the previously approved `CUTOVER-PR29` confirmation and 1 GiB reserve. A read-only SSH check confirmed active SHA `499ac057`, the V1 container running, `/healthz` HTTP 200, and the application root HTTP 200.
+
+Real continuation Job `job_49f632bf47` used the existing project-selected AI output and `delivery_suite`, requested two outputs, and froze routes `hero_subject_variant_5` (`angle`, `viewpoint`, `pose`) and `detail_focus_variant_6`. Both outputs were delivered by `openai_gpt_image` / `gpt-image-2` without warnings. Visual comparison against selected anchor `v3_output_768a8170608c493eab86` confirmed output 1 changed from the anchor's frontal, centered vertical sword pose to a turned face/body pose with a diagonal sword; output 2 used a wider body pose and diagonal sword composition. The project’s authoritative completed route history now includes both real route keys, so the next delivery-suite batch continues after them.
+
+During acceptance, a direct internal-handler call was mistakenly used before applying the official V3 server-owned auto-generation intent helper. It created `job_ffebc85c79` with two deterministic 2×2 outputs (`v3_output_78fbe2d77fbd4a2bb947`, `v3_output_53b6ad1168c54e40b160`) marked `mock_contract_fixture` and `not_a_provider_delivery`. They were excluded from completed route history, but the project output listing still labels them `final_delivery`; they remain visible there. Per the repository's append-only unexpected-output rule, these records were preserved and not hidden or deleted. The subsequent real acceptance used the official real-image intent helper, verified the persisted marker and frozen route axes, and generated the provider outputs above. This mock-path projection behavior is separate from the variation-continuation fix and was not changed in this release.
+
+**Acceptance:** The original first-image near-copy behavior was reproduced on the old release `e6639f4c`, fixed in `499ac057`, and the deployed real-provider continuation produced a visibly different first composition. Remaining note: the two mock fixture outputs from the mistaken acceptance invocation are still present in the project output list.
