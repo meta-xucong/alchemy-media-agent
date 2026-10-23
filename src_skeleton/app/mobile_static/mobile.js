@@ -4945,7 +4945,7 @@ function handleMobileV3Click(event) {
     const item = mobileV3DisplayOutputsForProject(mobileV3State.currentProject)[index];
     if (!item) return;
     if (outputActionButton.dataset.mobileV3OutputAction === "select_continuation") {
-      void selectMobileV3OutputItem(item);
+      void selectMobileV3OutputItem(item, outputActionButton);
     } else if (outputActionButton.dataset.mobileV3OutputAction === "remove_from_project") {
       void removeMobileV3OutputFromProject(item);
     }
@@ -6779,6 +6779,8 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     if (outputPreview) outputPreview.__mobileV3OutputItem = item;
     const outputImage = card.querySelector("img[data-mobile-media-url]");
     if (outputImage) bindImageWithFallback(outputImage, [outputImage.dataset.mobileMediaUrl], { emptyAlt: outputImage.alt });
+    const selectButton = card.querySelector('[data-mobile-v3-output-action="select_continuation"]');
+    if (selectButton) window.AlchemyContinuity?.showPending(selectButton, project.project_id, String(item.output_id || ""));
   });
 }
 
@@ -7462,7 +7464,7 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
   });
 }
 
-async function selectMobileV3OutputItem(item) {
+async function selectMobileV3OutputItem(item, actionButton = null) {
   const projectId = mobileV3State.currentProject?.project_id;
   const jobId = item?.job_id || mobileV3State.currentJob?.job_id || "";
   const outputId = mobileV3OutputId(item);
@@ -7479,7 +7481,7 @@ async function selectMobileV3OutputItem(item) {
       refresh: () => refreshMobileV3ProjectDetail(project.project_id),
       isCurrent: (id) => mobileV3State.currentProject?.project_id === id,
       notify: (text, tone) => updateMobileV3Status(text),
-    }, {output_id: outputId, job_id: jobId});
+    }, {output_id: outputId, job_id: jobId}, actionButton);
     return;
   }
   try {

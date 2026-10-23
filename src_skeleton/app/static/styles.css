@@ -9692,6 +9692,38 @@ body.v3-page-loading-active {
   justify-self: start;
 }
 
+.v3-continuity-anchor-unbind[aria-busy="true"],
+.v3-output-actions button[aria-busy="true"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: progress;
+}
+
+.v3-continuity-loading-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: v3-continuity-spin 0.75s linear infinite;
+}
+
+.v3-continuity-loading-label {
+  white-space: nowrap;
+}
+
+@keyframes v3-continuity-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v3-continuity-loading-spinner { animation: none; opacity: 0.7; }
+}
+
 .v3-project-reference-group-head {
   display: flex;
   align-items: flex-start;

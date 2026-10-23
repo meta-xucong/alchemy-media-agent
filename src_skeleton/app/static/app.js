@@ -6110,6 +6110,8 @@ function renderV3ProjectOutputBoard() {
         });
       });
     }
+    const selectButton = card.querySelector('[data-v3-output-action="select"]');
+    if (selectButton) window.AlchemyContinuity?.showPending(selectButton, project.project_id, String(item.output_id || ""));
     els.v3ProjectOutputBoard.appendChild(card);
   });
   if (reviewItems.length) {
@@ -6168,13 +6170,13 @@ async function handleV3ProjectOutputBoardClick(event) {
       promptOpen: true,
     });
   } else if (action === "select") {
-    await selectV3OutputItem(item);
+    await selectV3OutputItem(item, actionButton);
   } else if (action === "remove_from_project") {
     await removeV3OutputFromProject(item);
   }
 }
 
-async function selectV3OutputItem(item) {
+async function selectV3OutputItem(item, actionButton = null) {
   const projectId = v3State.currentProject?.project_id;
   const jobId = item?.job_id || v3State.currentJob?.job_id || v3LatestProjectJobId(v3State.currentProject);
   if (!projectId || !jobId) {
@@ -6192,7 +6194,7 @@ async function selectV3OutputItem(item) {
       refresh: () => refreshV3CurrentProject({silent: true}),
       isCurrent: (id) => v3State.currentProject?.project_id === id,
       notify: (text, tone) => updateV3Notice(text, tone),
-    }, {output_id: outputId, job_id: jobId});
+    }, {output_id: outputId, job_id: jobId}, actionButton);
     return;
   }
   try {

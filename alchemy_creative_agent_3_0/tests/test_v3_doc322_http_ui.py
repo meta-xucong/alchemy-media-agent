@@ -105,10 +105,16 @@ def test_mode_panel_does_not_display_other_source_channels(browser,mode,expected
 def test_both_shells_load_same_versioned_component_without_global_source_persist():
     for rel in ['src_skeleton/app/static/index.html','src_skeleton/app/mobile_static/index.html']:
         assert 'continuity-anchor.js?v=__CONTINUITY_ANCHOR_VERSION__' in (ROOT/rel).read_text(encoding='utf-8')
-    for rel in ['src_skeleton/app/static/app.js','src_skeleton/app/mobile_static/mobile.js']:
-        source=(ROOT/rel).read_text(encoding='utf-8')
-        assert 'window.AlchemyContinuity?.render' in source
-        assert 'window.AlchemyContinuity.bind' in source
+    desktop=(ROOT/'src_skeleton/app/static/app.js').read_text(encoding='utf-8')
+    mobile=(ROOT/'src_skeleton/app/mobile_static/mobile.js').read_text(encoding='utf-8')
+    assert 'window.AlchemyContinuity?.render' in desktop
+    assert 'window.AlchemyContinuity.bind' in desktop
+    assert 'selectV3OutputItem(item, actionButton)' in desktop
+    assert '}, {output_id: outputId, job_id: jobId}, actionButton);' in desktop
+    assert 'window.AlchemyContinuity?.render' in mobile
+    assert 'window.AlchemyContinuity.bind' in mobile
+    assert 'selectMobileV3OutputItem(item, outputActionButton)' in mobile
+    assert '}, {output_id: outputId, job_id: jobId}, actionButton);' in mobile
 
 
 def test_failed_write_and_refresh_do_not_retry_or_reject_the_ui_promise(browser):
@@ -127,6 +133,64 @@ def test_failed_write_and_refresh_do_not_retry_or_reject_the_ui_promise(browser)
     }""")
     assert result["writes"]==1
     assert result["notices"] and all(item["tone"]=="warning" for item in result["notices"])
+    page.close()
+
+
+def test_bind_and_unbind_show_spinner_until_the_write_finishes(browser):
+    page=browser.new_page()
+    page.set_content('<main id="board"></main><button id="bind">设为主图</button>')
+    page.add_script_tag(path=str(ROOT/"src_skeleton/app/static/continuity-anchor.js"))
+    page.evaluate("""() => {
+      window.confirm=()=>true;
+      window.options={project:{project_id:'p',metadata:{continuity_anchor:{state:'active',version:2,
+        active_continuity_anchor:{output_id:'old',preview_url:'/api/v3/creative-agent/outputs/old/preview'}}}},
+        request:()=>{window.releaseRefresh=undefined;return new Promise(resolve=>window.releaseWrite=resolve);},
+        refresh:()=>new Promise(resolve=>window.releaseRefresh=resolve),
+        isCurrent:()=>true, notify:()=>{}};
+      window.AlchemyContinuity.render(document.querySelector('#board'),window.options);
+      document.querySelector('#bind').addEventListener('click',()=>{
+        window.bindPromise=window.AlchemyContinuity.bind(window.options,{output_id:'new',job_id:'job'},document.querySelector('#bind'));
+      });
+    }""")
+    unbind=page.get_by_role('button',name='解绑主图')
+    unbind.click()
+    assert unbind.is_disabled()
+    assert unbind.locator('.v3-continuity-loading-spinner').count()==1
+    assert unbind.get_attribute('aria-busy')=='true'
+    page.evaluate("window.AlchemyContinuity.render(document.querySelector('#board'),window.options)")
+    unbind=page.get_by_role('button',name='正在更新主图')
+    assert unbind.locator('.v3-continuity-loading-spinner').count()==1
+    page.evaluate("window.releaseWrite({})")
+    page.wait_for_function("typeof window.releaseRefresh==='function'")
+    assert unbind.is_disabled()
+    assert unbind.locator('.v3-continuity-loading-spinner').count()==1
+    page.evaluate("window.releaseRefresh()")
+    page.wait_for_function("document.querySelector('.v3-continuity-anchor-unbind')?.textContent==='解绑主图'")
+
+    bind=page.locator('#bind')
+    bind.click()
+    assert bind.is_disabled()
+    assert bind.locator('.v3-continuity-loading-spinner').count()==1
+    assert bind.get_attribute('aria-busy')=='true'
+    page.evaluate("""() => {
+      window.rerenderedBind=document.createElement('button');
+      window.rerenderedBind.id='rerenderedBind';
+      window.rerenderedBind.textContent='设为主图';
+      document.querySelector('main').appendChild(window.rerenderedBind);
+      window.AlchemyContinuity.showPending(window.rerenderedBind,'p','new');
+    }""")
+    assert page.locator('main > button').nth(1).is_disabled()
+    assert page.locator('main > button .v3-continuity-loading-spinner').count()==1
+    page.evaluate("window.releaseWrite({})")
+    page.wait_for_function("typeof window.releaseRefresh==='function'")
+    assert bind.is_disabled()
+    assert bind.locator('.v3-continuity-loading-spinner').count()==1
+    assert page.locator('#rerenderedBind').is_disabled()
+    assert page.locator('#rerenderedBind .v3-continuity-loading-spinner').count()==1
+    page.evaluate("window.releaseRefresh()")
+    page.wait_for_function("document.querySelector('#bind')?.textContent==='设为主图'")
+    assert page.locator('#bind').is_enabled()
+    assert page.locator('#rerenderedBind').text_content()=='设为主图'
     page.close()
 
 
