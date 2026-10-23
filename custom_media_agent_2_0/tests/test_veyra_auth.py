@@ -212,6 +212,7 @@ def test_veyra_bridge_prefers_ipv4_on_first_attempt(monkeypatch: pytest.MonkeyPa
 
     sentinel = object()
     transport_calls: list[dict[str, object]] = []
+    request_calls: list[dict[str, object]] = []
 
     def fake_transport(**kwargs):
         transport_calls.append(kwargs)
@@ -228,14 +229,26 @@ def test_veyra_bridge_prefers_ipv4_on_first_attempt(monkeypatch: pytest.MonkeyPa
             return False
 
         async def post(self, *args, **kwargs):
-            return httpx.Response(200, json={"data": {"user_id": 42}})
+            request_calls.append(kwargs)
+            return httpx.Response(200, json={"data": {"user_id": 42, "intent": "alchemy"}})
 
     monkeypatch.setattr(veyra_auth_module.httpx, "AsyncHTTPTransport", fake_transport)
     monkeypatch.setattr(veyra_auth_module.httpx, "AsyncClient", CapturingAsyncClient)
 
     client = VeyraSub2APIClient(base_url="https://aiself.vip", internal_token="bridge-secret")
-    assert asyncio.run(client.exchange_login_ticket("ticket-1")) == {"user_id": 42}
+    assert asyncio.run(client.exchange_login_ticket("ticket-1")) == {"user_id": 42, "intent": "alchemy"}
+    assert request_calls[0]["json"] == {"ticket": "ticket-1", "intent": "alchemy"}
     assert transport_calls == [{"local_address": "0.0.0.0"}]
+
+
+def test_veyra_login_rejects_ticket_for_another_application(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_exchange(self, ticket: str):
+        assert ticket == "ticket-1"
+        return {"user_id": 42, "intent": "video"}
+
+    monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "exchange_login_ticket", fake_exchange)
+    with pytest.raises(VeyraAuthUnauthorized, match="not valid for Alchemy"):
+        asyncio.run(veyra_auth_module.login_with_ticket("ticket-1"))
 
 
 def test_veyra_upstream_http_failure_has_a_safe_reason_code() -> None:
