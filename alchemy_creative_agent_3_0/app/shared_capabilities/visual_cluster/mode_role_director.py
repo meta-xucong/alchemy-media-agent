@@ -1005,7 +1005,7 @@ def _generic_delivery_recipes() -> list[dict[str, Any]]:
 def _creative_exploration_recipes(subject_type: str) -> list[dict[str, Any]]:
     keep = _base_keep(subject_type)[:2]
     return [
-        _recipe("concept_clean_bright", "Clean bright idea", "Clear approachable direction", "clean concept", "medium", "simple clear angle", "balanced crop", "bright simple scene", ["mood", "palette"], keep, "Explore a clean, bright, high-clarity direction."),
+        _recipe("concept_clean_bright", "Clean bright idea", "Clear approachable direction", "clean concept", "medium", "simple clear angle", "balanced crop", "bright simple scene", ["angle", "camera distance", "scene depth", "placement", "mood", "palette"], keep, "Explore a clean, bright, high-clarity direction."),
         _recipe("concept_editorial", "Editorial idea", "More styled direction", "editorial concept", "medium", "styled magazine angle", "designed crop", "styled set", ["styling", "art direction"], keep, "Explore a more editorial, magazine-like direction."),
         _recipe("concept_cinematic", "Cinematic idea", "Atmospheric direction", "cinematic concept", "medium-wide", "dramatic lens angle", "deeper crop", "atmospheric scene", ["light", "depth", "scene"], keep, "Explore a more cinematic direction with stronger depth and atmosphere."),
         _recipe("concept_minimal_or_graphic", "Minimal idea", "Shape/layout direction", "minimal concept", "medium", "graphic angle", "layout-forward crop", "minimal scene", ["shape", "negative space"], keep, "Explore a simpler, more graphic composition with stronger shape and spacing."),
