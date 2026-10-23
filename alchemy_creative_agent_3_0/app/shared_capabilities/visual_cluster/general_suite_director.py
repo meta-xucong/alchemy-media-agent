@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from ...creative_core.rules import stable_id
-from .contracts import GENERAL_VARIATION_MAX_OUTPUTS, GeneralSuiteRole, GeneralSuiteRolePlan
+from .contracts import (
+    GENERAL_VARIATION_MAX_OUTPUTS,
+    GeneralSuiteRole,
+    GeneralSuiteRolePlan,
+    RoleSpecificGenerationPlan,
+)
 from .mode_role_director import ModeAwareRoleDirector, normalize_mode
 
 
@@ -25,20 +30,22 @@ class GeneralSuiteDirector:
         subject_type: str = "generic",
         scenario_id: str | None = None,
         template_id: str | None = None,
+        role_plan: RoleSpecificGenerationPlan | None = None,
     ) -> GeneralSuiteRolePlan:
         mode = normalize_mode(variation_mode)
         count = max(1, min(GENERAL_VARIATION_MAX_OUTPUTS, int(requested_image_count or 1)))
-        role_plan = self.mode_role_director.build(
-            project_id=project_id,
-            job_id=job_id,
-            user_input=user_input,
-            mode=mode,
-            requested_image_count=count,
-            subject_type=subject_type,
-            scenario_id=scenario_id,
-            template_id=template_id,
-            has_identity_anchor=has_identity_anchor,
-        )
+        if role_plan is None:
+            role_plan = self.mode_role_director.build(
+                project_id=project_id,
+                job_id=job_id,
+                user_input=user_input,
+                mode=mode,
+                requested_image_count=count,
+                subject_type=subject_type,
+                scenario_id=scenario_id,
+                template_id=template_id,
+                has_identity_anchor=has_identity_anchor,
+            )
         role_models = [
             GeneralSuiteRole(
                 role_id=stable_id("general_suite_role", project_id, job_id, mode, recipe.index, recipe.role_key),
@@ -80,6 +87,7 @@ class GeneralSuiteDirector:
             metadata={
                 "doc": "59",
                 "role_count": len(role_models),
+                "completed_role_keys": role_plan.metadata.get("completed_role_keys", []),
                 "mode_execution_policy": role_plan.policy.model_dump(mode="json"),
                 "role_specific_generation_plan": role_plan.model_dump(mode="json"),
             },

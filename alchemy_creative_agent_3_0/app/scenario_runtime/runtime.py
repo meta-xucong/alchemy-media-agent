@@ -112,6 +112,7 @@ from ..shared_capabilities.visual_cluster.contracts import (
     GENERAL_VARIATION_MAX_OUTPUTS,
     GeneralVariationModeBinding,
     ModeRoleRecipe,
+    RoleSpecificGenerationPlan,
     VariationExecutionContract,
 )
 from ..shared_capabilities.visual_cluster.mode_role_director import ALLOWED_MODES, ModeAwareRoleDirector
@@ -4673,6 +4674,25 @@ class ScenarioRuntime:
         if requested_count > GENERAL_VARIATION_MAX_OUTPUTS:
             raise CapabilityActivationError("general_variation_execution_contract_count_unsupported")
         role_plan_for_binding = None
+        project_context = metadata.get("project_context_snapshot")
+        project_context = dict(project_context) if isinstance(project_context, dict) else {}
+        project_suite_plan = project_context.get("general_suite_role_plan")
+        project_suite_metadata = project_suite_plan.get("metadata") if isinstance(project_suite_plan, dict) else {}
+        completed_role_keys = (
+            project_suite_metadata.get("completed_role_keys")
+            if isinstance(project_suite_metadata, dict)
+            else []
+        )
+        completed_role_keys = [
+            str(value).strip()
+            for value in completed_role_keys
+            if str(value).strip()
+        ] if isinstance(completed_role_keys, list) else []
+        has_generated_reference_anchor = bool(
+            project_suite_metadata.get("has_generated_reference_anchor")
+            if isinstance(project_suite_metadata, dict)
+            else False
+        )
         frozen_plan = metadata.get("capability_activation_plan")
         if isinstance(frozen_plan, dict) and frozen_plan.get("plan_id"):
             if (
@@ -4715,7 +4735,10 @@ class ScenarioRuntime:
                 scenario_id=scenario_id,
                 template_id=template_id,
                 has_identity_anchor=role_binding["has_identity_anchor"],
+                has_generated_reference_anchor=has_generated_reference_anchor,
+                completed_role_keys=completed_role_keys,
             )
+            role_plan_for_binding = role_plan
             contract = director.build_variation_execution_contract(
                 role_plan=role_plan,
                 scenario_id=scenario_id,
@@ -4726,6 +4749,19 @@ class ScenarioRuntime:
 
         if contract.mode != resolved_mode:
             raise CapabilityActivationError("general_variation_execution_contract_mode_conflict")
+        if role_plan_for_binding is None:
+            raw_role_plan = metadata.get("variation_execution_role_plan")
+            if isinstance(raw_role_plan, dict):
+                try:
+                    saved_role_plan = RoleSpecificGenerationPlan.model_validate(raw_role_plan)
+                except Exception:
+                    saved_role_plan = None
+                if (
+                    saved_role_plan is not None
+                    and saved_role_plan.mode == contract.mode
+                    and saved_role_plan.requested_image_count == contract.requested_image_count
+                ):
+                    role_plan_for_binding = saved_role_plan
         # Keep one server-owned role identity projection beside the neutral
         # contract. It is used later to bind each TemplateDeliverable to the
         # active General mode; it is not forwarded as Brain creative prose.
@@ -4744,7 +4780,22 @@ class ScenarioRuntime:
                     scenario_id=scenario_id,
                     template_id=template_id,
                     has_identity_anchor=role_binding["has_identity_anchor"],
+                    has_generated_reference_anchor=has_generated_reference_anchor,
+                    completed_role_keys=completed_role_keys,
                 )
+
+        if role_plan_for_binding is not None:
+            module = self.shared_capability_registry.get(VISUAL_CAPABILITY_CLUSTER_ID)
+            director = getattr(module, "mode_role_director", None)
+            if isinstance(director, ModeAwareRoleDirector):
+                projected_contract = director.build_variation_execution_contract(
+                    role_plan=role_plan_for_binding,
+                    scenario_id=scenario_id,
+                    template_id=template_id,
+                )
+                if projected_contract is None:
+                    raise CapabilityActivationError("general_variation_execution_contract_missing")
+                contract = projected_contract
 
         if (
             not contract.contract_digest
@@ -4793,6 +4844,24 @@ class ScenarioRuntime:
                 and role_plan_payload.get("requested_image_count") == contract.requested_image_count
             ):
                 metadata["variation_execution_role_plan"] = role_plan_payload
+                if project_context:
+                    module = self.shared_capability_registry.get(VISUAL_CAPABILITY_CLUSTER_ID)
+                    suite_director = getattr(module, "suite_director", None)
+                    if suite_director is not None:
+                        suite_plan = suite_director.build(
+                            project_id=role_plan_for_binding.project_id,
+                            job_id=role_plan_for_binding.job_id,
+                            user_input=request.user_input,
+                            variation_mode=contract.mode,
+                            requested_image_count=contract.requested_image_count,
+                            has_identity_anchor=bool(role_binding["has_identity_anchor"]),
+                            subject_type=str(role_binding["subject_type"]),
+                            scenario_id=scenario_id,
+                            template_id=template_id,
+                            role_plan=role_plan_for_binding,
+                        )
+                        project_context["general_suite_role_plan"] = suite_plan.model_dump(mode="json")
+                        metadata["project_context_snapshot"] = project_context
         role_binding = self._resolved_general_variation_role_binding(request)
         if role_binding["source"] == "runtime_typed_reference_facts":
             metadata["variation_execution_role_binding"] = role_binding

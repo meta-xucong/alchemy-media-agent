@@ -11258,9 +11258,21 @@ class V3ProjectModeService:
             ).get("effective_variation_mode")
             or "delivery_suite"
         )
+        completed_role_keys = self._project_completed_general_suite_role_keys(
+            project=project,
+            mode=mode,
+        )
+        has_generated_reference_anchor = bool(project.selected_output_refs)
         roles = self._suite_roles_for_mode(mode, requested_count, has_anchor=bool(project.selected_output_refs))
         return {
-            "plan_id": stable_id("general_suite_role_plan", project.project_id, mode, requested_count, continuation_instruction or project.user_goal),
+            "plan_id": stable_id(
+                "general_suite_role_plan",
+                project.project_id,
+                mode,
+                requested_count,
+                continuation_instruction or project.user_goal,
+                completed_role_keys,
+            ),
             "project_id": project.project_id,
             "variation_mode": mode,
             "requested_image_count": requested_count,
@@ -11275,8 +11287,89 @@ class V3ProjectModeService:
                 "keep the same project direction across all roles",
             ],
             "user_visible_summary": ["V3 planned distinct uses for this set."],
-            "metadata": {"doc": "58", "role_count": len(roles)},
+            "metadata": {
+                "doc": "58",
+                "role_count": len(roles),
+                "completed_role_keys": completed_role_keys,
+                "has_generated_reference_anchor": has_generated_reference_anchor,
+            },
         }
+
+    def _project_completed_general_suite_role_keys(
+        self,
+        *,
+        project: ProjectRecord,
+        mode: str,
+    ) -> list[str]:
+        """Read already delivered General routes from canonical project Jobs."""
+
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is None:
+            return []
+        completed: list[str] = []
+        seen_outputs: set[str] = set()
+        seen_roles: set[str] = set()
+        for job_id in dict.fromkeys(project.job_ids):
+            try:
+                source_job_status = self.product_service.get_job(job_id)
+                job_status = self._project_output_job_status_projection(source_job_status)
+            except Exception:
+                continue
+            if job_status is None or not self._job_delivery_is_settled(job_status):
+                continue
+            final_output_ids = self._canonical_final_delivery_output_ids(job_status)
+            if final_output_ids is None:
+                continue
+            try:
+                records = list(output_store.list_by_job(job_id))
+            except Exception:
+                continue
+            delivery = self._delivery_annotations_for_records(
+                records,
+                final_output_ids=final_output_ids,
+            )
+            # Mode is needed only to interpret legacy route recipes that did
+            # not persist their own mode. Keep using the delivery projection
+            # for all delivery decisions; read this one field from the source
+            # status because that projection intentionally omits it.
+            source_job_metadata = dict(getattr(source_job_status, "metadata", None) or {})
+            job_metadata = dict(job_status.metadata or {})
+            job_mode = str(
+                source_job_metadata.get("effective_variation_mode")
+                or source_job_metadata.get("variation_execution_mode")
+                or source_job_metadata.get("variation_mode")
+                or job_metadata.get("effective_variation_mode")
+                or job_metadata.get("variation_execution_mode")
+                or job_metadata.get("variation_mode")
+                or ""
+            ).strip()
+            for record in sorted(records, key=lambda item: item.created_at or ""):
+                output_id = self._output_record_identity(record)
+                if (
+                    not output_id
+                    or output_id in seen_outputs
+                    or delivery.get(output_id, {}).get("delivery_state") != "final_delivery"
+                ):
+                    continue
+                seen_outputs.add(output_id)
+                record_metadata = dict(getattr(record, "metadata", None) or {})
+                role_recipe = record_metadata.get("mode_role_recipe")
+                if not isinstance(role_recipe, dict):
+                    asset_metadata = record_metadata.get("asset_metadata")
+                    role_recipe = asset_metadata.get("mode_role_recipe") if isinstance(asset_metadata, dict) else None
+                if not isinstance(role_recipe, dict):
+                    continue
+                recipe_metadata = role_recipe.get("metadata")
+                recipe_mode = str(
+                    (recipe_metadata.get("mode") if isinstance(recipe_metadata, dict) else "")
+                    or job_mode
+                ).strip()
+                role_key = str(role_recipe.get("role_key") or "").strip()
+                if recipe_mode != mode or not role_key or role_key in seen_roles:
+                    continue
+                seen_roles.add(role_key)
+                completed.append(role_key)
+        return completed
 
     def _project_batch_identity_diversity_review(
         self,
