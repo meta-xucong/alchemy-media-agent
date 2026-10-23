@@ -867,15 +867,15 @@ def test_malformed_naturalness_receipt_is_not_hidden_by_disabled_semantic_prefli
 def test_brain_availability_explains_disabled_and_missing_credentials(monkeypatch) -> None:
     import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
 
-    provider = providers_module.V3LLMBrainProvider.__new__(providers_module.V3LLMBrainProvider)
-    provider.provider = "deepseek"
-    provider.model = "deepseek-v4-pro"
-    provider.reasoning_effort = None
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("V3_LLM_BRAIN_BACKUP_MODEL", "kimi-k3")
+    monkeypatch.delenv("LLM_GATEWAY_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_GATEWAY_BASE_URL", raising=False)
+    provider = providers_module.V3LLMBrainProvider()
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
     assert provider.availability()["reason_code"] == "remote_disabled"
 
     monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED")
-    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
     monkeypatch.setattr(providers_module, "_remote_enabled", lambda force=False: True)
     assert provider.availability()["reason_code"] == "missing_credentials"
 

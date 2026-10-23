@@ -246,12 +246,19 @@ added before the final PASS.
 Local verification: the exact Brain diagnostic projection regression passed;
 the focused `stylized_character`/Doc73 set passed 14 tests; the Doc322
 first-accepted binding, reuse, unbind, replace, and selection set passed 11;
-the Doc277/Doc162 image-set planning set passed 19. A broader five-file run
-reported 203 passed and one existing unrelated failure: the availability test
-configures provider `deepseek`, but the unchanged provider implementation
-rejects it as `unsupported_model_route` before the test's expected
-`missing_credentials` branch. That fixture was intentionally left untouched to
-preserve Doc346's scope.
+the Doc277/Doc162 image-set planning set passed 19. The initial broader
+five-file run reported 203 passed and one failure because its availability
+fixture still configured the retired `deepseek` route. That was a stale test
+fixture, not a runtime defect.
+
+Follow-up after the route was standardized: the availability regression now
+sets the canonical primary and backup (`claude-sonnet-5-5` and `kimi-k3`) and
+clears the supported `LLM_GATEWAY_*` credentials to exercise
+`missing_credentials`. The shared route authority in `app/model_routing.py`
+adds `gpt-6.1-sol` as the final fallback; adjacent route tests verify the full
+Claude→Kimi→GPT-6.1-Sol sequence. No provider behavior or live credentials
+were changed. The entire Doc298 boundary-repair test file passed 62 tests, and
+the focused route/fallback tests in `test_v3_llm_brain_adapter.py` passed 4.
 
 ## 9. Controlled deployment and live acceptance record
 
@@ -283,5 +290,6 @@ rather than by this successful live run. No browser page was used for the live
 request.
 
 The implementation and controlled VPS activation phases are complete. The
-broader test run retains the one unrelated provider-fixture failure recorded
-above; no remaining integration dependency is known.
+stale availability fixture has since been corrected and its owning regression
+and route tests pass. This follow-up changes tests and this record only, so the
+active VPS application build remains unchanged and needs no redeployment.
