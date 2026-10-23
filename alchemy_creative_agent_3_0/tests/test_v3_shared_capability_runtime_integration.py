@@ -10,11 +10,32 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, Sce
 from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.app.shared_capabilities import UploadedAssetInfo
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import CapabilityActivationError
+from alchemy_creative_agent_3_0.app.shared_capabilities.base import SharedCapabilityModule
+from alchemy_creative_agent_3_0.app.shared_capabilities.contracts import CapabilityInput
 
 
 def _image(path: Path) -> Path:
     Image.new("RGB", (320, 320), (200, 40, 40)).save(path)
     return path
+
+
+def test_shared_capability_exception_keeps_only_a_sanitized_failure_frame() -> None:
+    class RaisingVisualCluster(SharedCapabilityModule):
+        module_id = "visual_capability_cluster"
+
+        def execute(self, capability_input: CapabilityInput):
+            raise TypeError("private prompt text must not enter the diagnostic receipt")
+
+    result = RaisingVisualCluster().run(
+        CapabilityInput(job_id="job_test", scenario_id="general_creative", user_input="private prompt")
+    )
+
+    assert result.status.value == "error"
+    assert result.metadata["exception_type"] == "TypeError"
+    assert result.metadata["exception_frame"]["source"] == Path(__file__).name
+    assert result.metadata["exception_frame"]["function"] == "execute"
+    assert result.metadata["exception_frame"]["line"] > 0
+    assert "private prompt" not in json.dumps(result.metadata)
 
 
 def test_scenario_runtime_runs_optional_asset_capabilities_for_general_creative(tmp_path) -> None:
@@ -217,6 +238,14 @@ def test_activation_block_receipt_preserves_safe_private_diagnostics() -> None:
     cluster_result = SimpleNamespace(
         module_id="visual_capability_cluster",
         status=SimpleNamespace(value="warning"),
+        metadata={
+            "exception_type": "TypeError",
+            "exception_frame": {
+                "source": r"C:\private\visual_cluster.py",
+                "line": 321,
+                "function": "execute",
+            },
+        },
         warnings=[warning, unknown_warning],
         facts={
             "visual_capability_cluster": {
@@ -263,6 +292,14 @@ def test_activation_block_receipt_preserves_safe_private_diagnostics() -> None:
     }
     assert persisted["executor"]["warnings"][0]["code"] == "capability_execution_failed"
     assert persisted["executor"]["warnings"][1]["code"] == "other"
+    visual_result = next(item for item in persisted["executor"]["results"] if item["module_id"] == "visual_capability_cluster")
+    assert visual_result["exception_type"] == "TypeError"
+    assert visual_result["exception_frame"] == {
+        "source": "visual_cluster.py",
+        "line": 321,
+        "function": "execute",
+    }
+    assert "C:\\private\\visual_cluster.py" not in serialized
     assert "leak_this_prompt" not in serialized
     assert "unsafe raw provider" not in serialized
     assert "private user prompt" not in serialized

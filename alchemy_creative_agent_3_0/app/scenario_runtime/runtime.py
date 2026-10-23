@@ -6054,6 +6054,24 @@ class ScenarioRuntime:
                 "module_id": module_id,
                 "status": enum_value(value(result, "status"), status_values),
             }
+            result_metadata = value(result, "metadata", {}) or {}
+            exception_type = str(value(result_metadata, "exception_type") or "")
+            if exception_type:
+                item["exception_type"] = exception_type if exception_type in {
+                    "ValueError", "TypeError", "KeyError", "RuntimeError", "OSError", "TimeoutError"
+                } else "custom_exception"
+            raw_frame = value(result_metadata, "exception_frame", {}) or {}
+            source = str(value(raw_frame, "source") or "")
+            source_name = source.replace("\\", "/").rsplit("/", 1)[-1]
+            if source_name:
+                frame: dict[str, Any] = {"source": source_name[:120]}
+                line_number = value(raw_frame, "line")
+                if isinstance(line_number, int) and not isinstance(line_number, bool) and line_number > 0:
+                    frame["line"] = line_number
+                function_name = str(value(raw_frame, "function") or "")
+                if function_name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,99}|<module>", function_name):
+                    frame["function"] = function_name
+                item["exception_frame"] = frame
             result_warnings = []
             for warning in value(result, "warnings", []) or []:
                 warning_item = {
