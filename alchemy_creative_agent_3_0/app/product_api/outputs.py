@@ -98,23 +98,26 @@ class V3GeneratedOutputStore:
         width: int | None = None,
         height: int | None = None,
         metadata: dict | None = None,
+        preserve_original_bytes: bool = False,
     ) -> V3GeneratedOutputRecord:
         fmt = _normalise_format(output_format, mime_type)
         mime = _normalise_mime(mime_type, fmt)
         content = _decode_image(encoded_image)
         actual_width, actual_height = _validate_image(content)
         source_dimensions = (actual_width, actual_height)
-        content, normalized_dimensions = _normalize_requested_aspect_ratio(
-            content,
-            image_format=fmt,
-            metadata=metadata or {},
-            source_dimensions=(actual_width, actual_height),
-        )
+        normalized_dimensions = None
+        if not preserve_original_bytes:
+            content, normalized_dimensions = _normalize_requested_aspect_ratio(
+                content,
+                image_format=fmt,
+                metadata=metadata or {},
+                source_dimensions=(actual_width, actual_height),
+            )
         if normalized_dimensions is not None:
             actual_width, actual_height = normalized_dimensions
         content_sha256 = hashlib.sha256(content).hexdigest()
-        width = width or actual_width
-        height = height or actual_height
+        width = actual_width if preserve_original_bytes else (width or actual_width)
+        height = actual_height if preserve_original_bytes else (height or actual_height)
         if normalized_dimensions is not None:
             width, height = normalized_dimensions
         output_id = str(output_id or "").strip() or f"v3_output_{uuid4().hex[:20]}"

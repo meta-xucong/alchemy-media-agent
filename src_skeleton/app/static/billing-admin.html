@@ -41,10 +41,11 @@
             <button id="bridgeAdminProbe" class="button secondary" type="button" disabled>检查连接</button>
           </div>
           <p><a id="bridgeAdminOpen" class="surface-switch-link" href="/render-bridge-preview" hidden>打开桥接试用入口</a></p>
-          <p class="micro-copy">暂停：不接新任务，已有任务继续。关闭：完全停止桥接，已有任务保留。</p>
-          <label class="billing-toggle-row"><input id="bridgeAdminFallback" type="checkbox" disabled /><span>本地繁忙或不可用时，允许自动使用云端生图</span></label>
-          <p class="micro-copy">仅对用户明确选择并同意的新试用任务生效。云端沿用已配置的 Sub2API 账号和费用规则，可能收费，也可能接收文字与参考素材；不是免费或零积分生图。原生成按钮不变，结果仍仅供审核。</p>
+          <p class="micro-copy">暂停或关闭：不接新的桥接任务，已受理任务仍按原任务恢复，不会重新生图。</p>
+          <label class="billing-toggle-row"><input id="bridgeAdminFallback" type="checkbox" disabled /><span>试用入口：本地繁忙或不可用时允许云端生图</span></label>
+          <p class="micro-copy">仅对用户明确选择并同意的新试用任务生效。云端沿用已配置的 Sub2API 账号和费用规则，可能收费，也可能接收文字与参考素材；不是免费或零积分生图。此选项只控制试用入口，试用结果仍仅供审核。</p>
           <p class="micro-copy">本地恢复后，新任务优先本地；已经在云端制作的任务继续完成，不会重新生成。</p>
+          <p class="micro-copy">普通生图：启用 Codex 工具后，优先桥接；仅明确未受理或不支持所需能力时使用原 Provider。已受理任务不因排队而转移，原有审核与费用规则保留。</p>
           <p id="bridgeAdminHint" class="micro-copy" role="status">正在读取设置，请稍候。</p>
           <details id="bridgeAdminAdvanced" class="bridge-admin-details">
             <summary>高级设置</summary>

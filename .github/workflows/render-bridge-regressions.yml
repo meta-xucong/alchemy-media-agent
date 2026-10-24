@@ -2,7 +2,7 @@ name: Render Bridge mock regressions
 
 on:
   push:
-    branches: ["feature/render-bridge-preview"]
+    branches: ["feature/render-bridge-preview", "feature/render-bridge-primary"]
   workflow_dispatch:
 
 permissions:
@@ -71,6 +71,8 @@ env:
   V3_VISUAL_ASSET_LIBRARY_ROOT: /tmp/render-bridge-ci/v3/asset-library
   ALCHEMY_V3_MCP_MATERIALIZATION_ROOT: /tmp/render-bridge-ci/v3/materializations
   ALCHEMY_RENDER_BRIDGE_STORAGE: /tmp/render-bridge-ci/bridge
+  ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG: /tmp/render-bridge-ci/primary/control.json
+  ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT: /tmp/render-bridge-ci/primary/ledgers
 
 jobs:
   contracts:
@@ -109,12 +111,76 @@ jobs:
             alchemy_creative_agent_3_0/tests/test_v3_review_resume_timeout_propagation.py \
             alchemy_creative_agent_3_0/tests/test_v3_shared_capability_runtime_integration.py
           node --test tests/v3_doc341_current_job_result_projection.test.mjs tests/v3_frontend_terminal_contract.test.mjs tests/v3_mobile_terminal_contract.test.mjs
+      - name: Verify actual V1 Lab and V3 primary entrypoints
+        run: |
+          HOME="$RUNNER_TEMP/render-bridge-home" python -m pytest -q \
+            tests/test_v1_lab_primary_transport.py \
+            alchemy_creative_agent_3_0/tests/test_v3_bridge_primary_transport.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: render-bridge-contracts-${{ github.sha }}
           path: ${{ runner.temp }}/render-bridge-contracts.xml
           if-no-files-found: warn
+
+  primary-core:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install standalone neutral transport
+        run: python -m pip install ./render_bridge_primary pytest==8.3.3
+      - name: Test durable ownership and original image contracts
+        run: python -m pytest -q tests/render_bridge_primary
+
+  primary-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install standalone V2 and neutral transport
+        run: |
+          python -m pip install -r custom_media_agent_2_0/requirements.txt pytest==8.3.3
+          python -m pip install --no-deps ./render_bridge_primary
+      - name: Test V2 without V1 source imports
+        working-directory: custom_media_agent_2_0
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q tests/test_render_bridge_primary.py
+
+  primary-wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: meta-xucong/alchemy-render-bridge
+          ref: fff524484fa98845033e21f2d24664a361d09efe
+          path: .bridge-primary-counterpart
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the pinned companion test environment
+        run: python -m pip install --require-hashes -r .bridge-primary-counterpart/requirements-test.txt
+      - name: Verify actual companion handlers with synthetic pixels
+        run: python scripts/verify_render_bridge_primary_contract.py --bridge-checkout .bridge-primary-counterpart
 
   preview-browser:
     runs-on: ubuntu-latest

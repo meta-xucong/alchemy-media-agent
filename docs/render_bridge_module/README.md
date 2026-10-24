@@ -1,0 +1,16 @@
+# Render Bridge module authorities
+
+- [RB13](RB13_FULL_PRODUCT_PRIMARY_ROUTING_CONTRACT.md): current full-product Bridge-primary contract.
+- [RB14](RB14_PRIMARY_TRANSPORT_IMPLEMENTATION.md): neutral transport, immutable ownership, wire negotiation and maintenance.
+- [RB15](RB15_PRIMARY_ADMIN_CONTROL.md): simple administrator controls and shared process configuration.
+- [RB16](RB16_V1_LAB_PRIMARY_IMPLEMENTATION.md): V1 and Lab transport, recovery, billing and publication.
+- [RB17](RB17_V2_PRIMARY_TRANSPORT.md): isolated V2 transport and queue lifecycle.
+- [RB18](RB18_V3_PRIMARY_TRANSPORT.md): canonical V3 transport, original checkpoints and review/slot isolation.
+- [RB19](RB19_FULL_PRODUCT_ACCEPTANCE_20261024.md): this implementation's evidence and local acceptance handoff.
+
+RB00–RB12 and the integration package's older native/preview documents describe
+historical experimental milestones. Their evidence remains pinned to those
+revisions. The optional trial retains its review-only and opt-in queue-withdrawal
+behavior. Ordinary product transport instead follows RB13: once admitted or
+uncertain, a task never migrates to the API-key route. Neither API/MCP access
+signing nor the old native development gateway is the new image transport.

@@ -1020,6 +1020,60 @@ async def history_reference_asset(
     return asset
 
 
+def _bridge_job_request(job_id: str, request: Request, authorization: str, *, allow_completed: bool = False, allow_queue_cancel: bool = False):
+    from app.services import render_bridge_primary
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    record = render_bridge_primary.load_frozen(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"error_code": "bridge_job_not_found"})
+    owner = record["request"].get("veyra_user_id")
+    if settings.veyra_auth_enabled and (not owner or int(owner) != int(user_id or 0)):
+        raise HTTPException(status_code=404, detail={"error_code": "bridge_job_not_found"})
+    existing = repository.get_image_job(job_id)
+    if record.get("queue_task_id") and not allow_queue_cancel and not (allow_completed and existing is not None and existing.status == "completed"):
+        raise HTTPException(status_code=409, detail={"error_code": "bridge_job_queue_owned"})
+    return record
+
+
+@app.post("/api/v2/image/jobs/{job_id}/resume")
+async def resume_bridge_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
+    from app.services import render_bridge_primary
+    record = _bridge_job_request(job_id, request, authorization, allow_completed=True)
+    try:
+        return await run_with_generation_capacity(lambda: create_image_job(
+            render_bridge_primary.frozen_request(record), job_id=job_id))
+    except GenerationCapacityExceeded as exc:
+        raise _generation_capacity_http_error() from exc
+    except GenerationCapacityStorageBusy as exc:
+        raise _local_database_busy_http_error() from exc
+
+
+@app.post("/api/v2/image/jobs/{job_id}/cancel")
+async def cancel_bridge_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
+    from app.services import render_bridge_primary, task_queue
+    record = _bridge_job_request(job_id, request, authorization, allow_queue_cancel=True)
+    job = repository.get_image_job(job_id)
+    if job is not None and job.status == "completed":
+        return job
+    if record.get("queue_task_id"):
+        try:
+            job = task_queue.cancel_bridge_owned_job(task_id=record["queue_task_id"],
+                run_id=record["request"]["run_id"], job_id=job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail={"error_code": str(exc)}) from None
+        if job.status != "cancelled":
+            return job
+    elif job is not None:
+        try:
+            job = task_queue.cancel_direct_bridge_job(job_id)
+        except task_queue.BridgeFinalizationStarted as exc:
+            raise HTTPException(status_code=409, detail={"error_code": str(exc)}) from None
+        if job is not None and job.status == "completed":
+            return job
+    await render_bridge_primary.cancel(record)
+    return job
+
+
 @app.get("/api/v2/image/jobs/{job_id}")
 def get_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)

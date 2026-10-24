@@ -930,3 +930,106 @@ def _json_loads(payload: str | bytes | None) -> dict[str, Any]:
         return {}
     parsed = json.loads(payload)
     return parsed if isinstance(parsed, dict) else {}
+
+
+def cancel_bridge_owned_job(*, task_id: str, run_id: str, job_id: str):
+    """Owner-authorized Bridge cancellation revokes the queue claim atomically.
+
+    The HTTP adapter authenticates the frozen request owner first. This function
+    only handles a task whose exact frozen job is already in its run snapshot;
+    it neither cancels unrelated jobs nor changes ordinary provider queue policy.
+    """
+    from app.repositories import repository
+
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM v2_tasks WHERE task_id=? AND run_id=?", (task_id, run_id)).fetchone()
+        if row is None:
+            raise ValueError("bridge_queue_binding_missing")
+        job = repository.get_image_job(job_id)
+        if job is None:
+            raise ValueError("bridge_queue_job_missing")
+        # A durable success checkpoint wins over late cancellation, just as it
+        # wins over a stale worker's retry/failure attempt.
+        if row["status"] == "completed" or row["success_checkpoint_json"] or job.status == "completed":
+            return job
+        snapshot = CreativeRun.model_validate(_json_loads(row["queued_run_json"]))
+        if not any(item.job_id == job_id for item in snapshot.generation_jobs):
+            raise ValueError("bridge_queue_job_mismatch")
+        _reserve_bridge_cancellation(conn, job_id)
+        cancelled = job.model_copy(update={"status": "cancelled", "updated_at": utc_now()})
+        run = snapshot.model_copy(update={"status": "cancelled", "updated_at": utc_now(),
+            "generation_jobs": [cancelled if item.job_id == job_id else item for item in snapshot.generation_jobs],
+            "next_actions": ["Image generation cancelled; no replacement generation will be submitted."]})
+        value = _json_dumps(run.model_dump(mode="json"))
+        conn.execute("""UPDATE v2_tasks SET status='cancelled', queued_run_json=?, result_json=?,
+            error_json=NULL, locked_by=NULL, locked_at=NULL, claim_token=NULL, not_before=NULL,
+            updated_at=? WHERE task_id=?""", (value, value, utc_now().isoformat(), task_id))
+        repository.save_image_job(cancelled)
+        repository.save_creative_run(run)
+        conn.commit()
+        return cancelled
+
+
+class BridgeFinalizationStarted(ValueError):
+    """Cancellation lost to durable debit/output finalization, not to an RPC."""
+
+
+def _bridge_finalization_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS v2_bridge_finalizations (
+        job_id TEXT PRIMARY KEY, state TEXT NOT NULL, billing_json TEXT NOT NULL
+    )""")
+
+
+def begin_bridge_finalization(job_id: str, billing: dict | None) -> dict | None:
+    """Freeze debit arguments before awaiting charge; serialize against cancel.
+
+    A finalizing row is intentionally retained across crashes and API errors.
+    Recovery may only replay its debit key and publish already-cached pixels.
+    """
+    from app.repositories import repository
+
+    settings.task_queue_db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _bridge_finalization_table(conn)
+        claim = current_claim()
+        if claim is not None and conn.execute(
+            "SELECT 1 FROM v2_tasks WHERE task_id=? AND status='running' AND locked_by=? AND claim_token=?",
+            (claim.task_id, claim.worker_id, claim.claim_token),
+        ).fetchone() is None:
+            raise StaleTaskClaim("The V2 claim was superseded before finalization.")
+        job = repository.get_image_job(job_id)
+        if job is not None and job.status == "cancelled":
+            return None
+        row = conn.execute("SELECT * FROM v2_bridge_finalizations WHERE job_id=?", (job_id,)).fetchone()
+        if row is not None:
+            return None if row["state"] == "cancelled" else _json_loads(row["billing_json"])
+        payload = {"billing": billing}
+        conn.execute("INSERT INTO v2_bridge_finalizations VALUES (?, 'finalizing', ?)", (job_id, _json_dumps(payload)))
+        conn.commit()
+        return payload
+
+
+def _reserve_bridge_cancellation(conn: sqlite3.Connection, job_id: str) -> None:
+    _bridge_finalization_table(conn)
+    row = conn.execute("SELECT state FROM v2_bridge_finalizations WHERE job_id=?", (job_id,)).fetchone()
+    if row is not None and row["state"] == "finalizing":
+        raise BridgeFinalizationStarted("bridge_finalization_in_progress")
+    conn.execute("INSERT OR IGNORE INTO v2_bridge_finalizations VALUES (?, 'cancelled', '{}')", (job_id,))
+
+
+def cancel_direct_bridge_job(job_id: str):
+    from app.repositories import repository
+
+    settings.task_queue_db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        job = repository.get_image_job(job_id)
+        if job is None or job.status == "completed":
+            return job
+        _reserve_bridge_cancellation(conn, job_id)
+        cancelled = job.model_copy(update={"status": "cancelled", "updated_at": utc_now()})
+        repository.save_image_job(cancelled)
+        conn.commit()
+        return cancelled

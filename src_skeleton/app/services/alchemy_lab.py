@@ -7,6 +7,7 @@ import os
 import random
 import re
 import threading
+from weakref import WeakValueDictionary
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -202,6 +203,7 @@ class GenerationVariant(BaseModel):
 
 
 class ExplorationSession(BaseModel):
+    primary_transport: bool = False
     id: str
     veyra_user_id: int | None = None
     feature: str = "rare-style-explorer"
@@ -333,6 +335,14 @@ class AlchemyLabStore:
             if latest_json is None:
                 raise KeyError(session.id)
             latest = ExplorationSession.model_validate_json(latest_json)
+            if latest.primary_transport and (
+                any(error.code == "user_canceled" for error in latest.errors)
+                or (latest.status in TERMINAL_SESSION_STATUSES and session.status not in TERMINAL_SESSION_STATUSES)
+            ):
+                return latest
+            if latest.primary_transport:
+                completed = {variant.id: variant for variant in latest.variants if variant.status == "succeeded"}
+                session.variants = [completed.get(variant.id, variant) for variant in session.variants]
             # Favorites are independently user-owned updates. A runner's older
             # snapshot must never roll them back while saving progress/results.
             session.favorites = list(latest.favorites)
@@ -376,6 +386,7 @@ class AlchemyLabStore:
                     "SELECT record_key, payload FROM v1_records "
                     "WHERE namespace='lab_sessions' "
                     "AND json_extract(payload, '$.status') IN ('queued', 'running') "
+                    "AND COALESCE(json_extract(payload, '$.primary_transport'), 0) = 0 "
                     "ORDER BY rowid LIMIT ?",
                     (max(1, int(batch_size)),),
                 ).fetchall()
@@ -706,7 +717,33 @@ async def prepare_exploration_session(request: ExplorationRequest, *, veyra_user
     return await _run_lab_sqlite_call(lab_store.save, session)
 
 
+_primary_lab_locks = WeakValueDictionary()
+_primary_lab_locks_guard = threading.Lock()
+
+
 async def run_exploration_session(session_id: str, *, veyra_user_id: int | None = None) -> ExplorationSession:
+    with _primary_lab_locks_guard:
+        lock = _primary_lab_locks.setdefault(session_id, threading.Lock())
+    while not lock.acquire(blocking=False):
+        await asyncio.sleep(0.05)
+    try:
+        return await _run_exploration_session_owned(session_id, veyra_user_id=veyra_user_id)
+    finally:
+        lock.release()
+
+
+def _primary_session_canceled(session: ExplorationSession | None) -> bool:
+    return bool(session and session.primary_transport and any(error.code == "user_canceled" for error in session.errors))
+
+
+async def _latched_primary_cancellation(session: ExplorationSession) -> ExplorationSession | None:
+    if not session.primary_transport:
+        return None
+    latest = await _run_lab_sqlite_call(lab_store.get, session.id)
+    return latest if _primary_session_canceled(latest) else None
+
+
+async def _run_exploration_session_owned(session_id: str, *, veyra_user_id: int | None = None) -> ExplorationSession:
     session = await _run_lab_sqlite_call(lab_store.get, session_id)
     if not session:
         raise ValueError("Exploration session not found.")
@@ -717,6 +754,10 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
     if session.status in TERMINAL_SESSION_STATUSES:
         return session
 
+    from app.services.primary_image_transport import primary_enabled
+    from app.config import settings as image_settings
+    if primary_enabled("lab") and (session.request.provider_preference or image_settings.default_image_provider) != "mock_image":
+        session.primary_transport = True
     fatal_provider_error: ExplorationError | None = None
     total = len(session.variants)
     session.status = "running"
@@ -729,7 +770,9 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
         message="正在准备提示词增强，然后逐张串行生成。",
     )
     session.updated_at = now_iso()
-    await _save_runner_state(session)
+    checkpoint = await _save_runner_state(session)
+    if _primary_session_canceled(checkpoint):
+        return checkpoint
     await _ensure_session_prompts_enhanced(session)
 
     media_session = await _run_lab_sqlite_call(
@@ -748,6 +791,9 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
         prompt = prompt_by_id[variant.prompt_id]
         last_variant = variant
         for attempt in range(MAX_RETRIES_PER_VARIANT + 1):
+            canceled = await _latched_primary_cancellation(session)
+            if canceled:
+                return next(item for item in canceled.variants if item.id == variant.id)
             try:
                 prepared = await submit_image_job(
                     session_id=media_session.id,
@@ -764,16 +810,30 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
                     veyra_user_id=effective_user_id,
                 )
                 job = prepared.job
-                if prepared.request and job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.provider_not_configured, JobStatus.rejected, JobStatus.canceled}:
+                canceled = await _latched_primary_cancellation(session)
+                if canceled:
+                    if job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.canceled, JobStatus.rejected}:
+                        job.status = JobStatus.canceled
+                        repository.save_job(job)
+                    return next(item for item in canceled.variants if item.id == variant.id)
+                if job.raw_response_summary.get("primary_image_transport"):
+                    from app.services.primary_image_transport import resume_primary_job
+                    job = await resume_primary_job(job.id) or job
+                elif prepared.request and job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.provider_not_configured, JobStatus.rejected, JobStatus.canceled}:
                     job = await run_submitted_image_job(job.id, prepared.request) or job
                 _attach_lab_history_metadata(job, session=session, variant=variant, prompt=prompt)
                 last_variant = _variant_from_job(variant, job, attempt=attempt)
+                if job.raw_response_summary.get("primary_image_transport"):
+                    # An owned transport never becomes a new Lab attempt, even after failure.
+                    return last_variant
                 if last_variant.error and _is_fatal_provider_error(last_variant.error):
                     fatal_provider_error = last_variant.error
                 if last_variant.status == "succeeded" or not (last_variant.error and last_variant.error.retryable) or attempt >= MAX_RETRIES_PER_VARIANT:
                     return last_variant
                 await _sleep_before_retry(last_variant.error, attempt=attempt)
             except Exception as exc:
+                if "job" in locals() and job.raw_response_summary.get("primary_image_transport"):
+                    return variant.model_copy(update={"status": "running", "error": None, "provider_metadata": {"job_id": job.id, "primary_transport": True, "attempt": attempt}})
                 last_variant = _exception_variant(variant, exc, attempt=attempt)
                 if not last_variant.error.retryable or attempt >= MAX_RETRIES_PER_VARIANT:
                     return last_variant
@@ -781,6 +841,11 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
         return last_variant
 
     for index, variant in enumerate(list(session.variants)):
+        canceled = await _latched_primary_cancellation(session)
+        if canceled:
+            return canceled
+        if variant.status in {"succeeded", "failed"}:
+            continue
         if fatal_provider_error:
             result = _skipped_variant(variant, fatal_provider_error)
         else:
@@ -794,10 +859,18 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
                 message=f"正在生成第 {index + 1}/{total} 张。",
             )
             session.updated_at = now_iso()
-            await _save_runner_state(session)
+            checkpoint = await _save_runner_state(session)
+            if _primary_session_canceled(checkpoint):
+                return checkpoint
             result = await run_variant(variant)
+        canceled = await _latched_primary_cancellation(session)
+        if canceled:
+            return canceled
         _replace_variant(session, result)
         session.errors = [item.error for item in session.variants if item.error]
+        if result.status == "running":
+            session.updated_at = now_iso()
+            return await _save_runner_state(session)
         wait_seconds = _cooldown_after_variant(session.request, result, is_last=index >= total - 1)
         session.progress = _progress_payload(
             total=total,
@@ -810,7 +883,9 @@ async def run_exploration_session(session_id: str, *, veyra_user_id: int | None 
             message=_variant_progress_message(index=index, total=total, result=result),
         )
         session.updated_at = now_iso()
-        await _save_runner_state(session)
+        checkpoint = await _save_runner_state(session)
+        if _primary_session_canceled(checkpoint):
+            return checkpoint
         if wait_seconds > 0:
             await asyncio.sleep(wait_seconds)
 
@@ -842,9 +917,73 @@ def get_exploration_session(session_id: str, *, veyra_user_id: int | None = None
     return session if session.veyra_user_id == veyra_user_id else None
 
 
+def _cancel_primary_session_checkpoint(session_id: str) -> ExplorationSession:
+    from app.services.primary_image_transport import PrimaryFinalizationInProgress
+    # Production Lab and image records share this DB. The optional distinct Lab
+    # store used by tests is written while holding the same image-finalization lock.
+    jobs_connection = connect(repository.database_path)
+    lab_connection = jobs_connection if Path(lab_store.database_path).resolve() == Path(repository.database_path).resolve() else connect(lab_store.database_path)
+    try:
+        jobs_connection.execute("BEGIN IMMEDIATE")
+        if lab_connection is not jobs_connection:
+            lab_connection.execute("BEGIN IMMEDIATE")
+        payload = lab_store.sessions.get_record_json_on(lab_connection, session_id)
+        session = ExplorationSession.model_validate_json(payload) if payload else None
+        if not session or not session.primary_transport:
+            raise ValueError("Primary exploration session not found.")
+        if session.status in TERMINAL_SESSION_STATUSES:
+            return session
+        rows = jobs_connection.execute(
+            "SELECT payload FROM v1_records WHERE namespace='jobs' AND json_extract(payload, '$.session_id')=?",
+            (f"ses_{session_id}",),
+        ).fetchall()
+        jobs = [GenerationJob.model_validate_json(row[0]) for row in rows]
+        active = [job for job in jobs if job.status not in {JobStatus.ready, JobStatus.failed, JobStatus.canceled, JobStatus.rejected}]
+        if any(job.raw_response_summary.get("primary_image_transport", {}).get("billing_finalizing") for job in active):
+            raise PrimaryFinalizationInProgress("A Lab image is already finalizing its billing.")
+        error = ExplorationError(code="user_canceled", message="Generation canceled by its owner.", retryable=False)
+        session.errors = [*session.errors, error]
+        session.variants = [variant.model_copy(update={"status": "failed", "error": error})
+                            if variant.status in {"queued", "running"} else variant for variant in session.variants]
+        session.status = "partial_success" if _completed_variant_count(session) else "failed"
+        session.updated_at = now_iso()
+        lab_store.sessions.put_on(lab_connection, session.id, session)
+        for job in active:
+            job.status = JobStatus.canceled
+            repository.jobs.put_on(jobs_connection, job.id, job)
+        if lab_connection is not jobs_connection:
+            lab_connection.commit()
+        jobs_connection.commit()
+        return session
+    except Exception:
+        jobs_connection.rollback()
+        if lab_connection is not jobs_connection:
+            lab_connection.rollback()
+        raise
+    finally:
+        jobs_connection.close()
+        if lab_connection is not jobs_connection:
+            lab_connection.close()
+
+
+async def cancel_primary_exploration_session(session_id: str) -> ExplorationSession:
+    """Caller authenticates the Lab owner before reaching this mutation."""
+    saved = _cancel_primary_session_checkpoint(session_id)
+    from app.services.primary_image_transport import cancel_primary_job
+    for job in repository.list_jobs(session_id=f"ses_{session_id}"):
+        if job.raw_response_summary.get("primary_image_transport"):
+            await cancel_primary_job(job.id)
+    return saved
+
+
 def public_exploration_session(session: ExplorationSession) -> dict[str, Any]:
     payload = session.model_dump()
     payload.pop("veyra_user_id", None)
+    payload.pop("primary_transport", None)
+    for variant in payload.get("variants", []):
+        metadata = variant.get("provider_metadata")
+        if isinstance(metadata, dict):
+            metadata.pop("primary_transport", None)
     reference_plan = payload.get("reference_plan")
     if isinstance(reference_plan, dict):
         payload["reference_plan"] = _public_reference_plan(reference_plan)
@@ -1015,6 +1154,13 @@ async def _run_exploration_session_guarded(session_id: str, *, veyra_user_id: in
     except Exception as exc:
         session = await _run_lab_checkpoint_call(lab_store.get, session_id)
         if not session:
+            return
+        if session.primary_transport and any(job.raw_response_summary.get("primary_image_transport") for job in repository.list_jobs(session_id=f"ses_{session.id}")):
+            # Polling resumes the existing jobs; a checkpoint error must not mint
+            # new variant attempts or mark unknown executions retryable.
+            session.status = "running"
+            session.updated_at = now_iso()
+            await _save_runner_state(session)
             return
         error = ExplorationError(
             code="session_background_failed",
@@ -1645,6 +1791,8 @@ def _variant_from_job(variant: GenerationVariant, job: GenerationJob, *, attempt
                 },
             }
         )
+    if job.raw_response_summary.get("primary_image_transport") and job.status not in {JobStatus.failed, JobStatus.canceled, JobStatus.rejected, JobStatus.provider_not_configured}:
+        return variant.model_copy(update={"status": "running", "error": None, "provider_metadata": {"job_id": job.id, "primary_transport": True, "attempt": attempt}})
     error = job.error
     exploration_error = _exploration_error_from_provider_error(error, attempt=attempt) if error else None
     return variant.model_copy(

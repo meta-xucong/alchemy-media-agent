@@ -12598,7 +12598,11 @@ function updateV2Notice(message, type = "info") {
 }
 
 const v2AccountHistoryTimeoutMs = 8000;
-const v2OptionalResourceTimeoutMs = 3500;
+// Local V1-to-V2 proxy bootstrap can serialize its first burst of read-only
+// status requests while the V2 runtime opens its stores.  Keep those status
+// cards optional, but give the complete burst enough time to return before
+// rendering a misleading "not configured" state.
+const v2OptionalResourceTimeoutMs = 8000;
 const v2TemplateBootstrapTimeoutMs = 20000;
 
 function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false, favorite = false } = {}) {

@@ -118,6 +118,25 @@ class MemoryRepository:
                 # to read first, then overwrite a private owner committed by a
                 # concurrent save before this transaction's first write.
                 connection.execute("BEGIN IMMEDIATE")
+                latest_json = self.jobs.get_record_json_on(connection, job.id)
+                if latest_json is not None:
+                    latest = GenerationJob.model_validate_json(latest_json)
+                    primary = latest.raw_response_summary.get("primary_image_transport")
+                    incoming = job.raw_response_summary.get("primary_image_transport")
+                    if primary:
+                        if primary.get("billing_finalizing") and job.status == JobStatus.canceled:
+                            return latest
+                        # A second polling process cannot roll a completed or
+                        # canceled primary execution back to an older checkpoint.
+                        if latest.status in {JobStatus.ready, JobStatus.canceled, JobStatus.failed, JobStatus.rejected} and job.status != latest.status:
+                            return latest
+                        if incoming:
+                            # Private per-unit checkpoints are append-only even
+                            # when two processes reconcile the same batch.
+                            completed = {item["id"]: item for item in primary.get("outputs", [])}
+                            completed.update({item["id"]: item for item in incoming.get("outputs", [])})
+                            merged = {**incoming, "billing_finalizing": bool(primary.get("billing_finalizing") or incoming.get("billing_finalizing")), "debit": primary.get("debit") or incoming.get("debit"), "outputs": list(completed.values()), "units": {**primary.get("units", {}), **incoming.get("units", {})}}
+                            job = job.model_copy(update={"raw_response_summary": {**job.raw_response_summary, "primary_image_transport": merged}})
                 canonical_outputs: list[GenerationOutput] = []
                 for output in job.outputs:
                     if self.output_delete_claims.get_record_json_on(connection, output.id) is not None:
@@ -148,6 +167,28 @@ class MemoryRepository:
         finally:
             connection.close()
         return canonical_job
+
+    def begin_primary_finalization(self, job_id: str, debit: dict[str, Any]) -> dict[str, Any] | None:
+        """Serialize the irreversible debit boundary against owner cancellation."""
+        connection = connect(self.database_path)
+        try:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                payload = self.jobs.get_record_json_on(connection, job_id)
+                if payload is None:
+                    return None
+                job = GenerationJob.model_validate_json(payload)
+                primary = job.raw_response_summary.get("primary_image_transport")
+                if not primary or job.status in {JobStatus.canceled, JobStatus.failed, JobStatus.rejected}:
+                    return None
+                # The first boundary owns the entire debit identity. Later
+                # configuration changes cannot change the amount, key or owner.
+                primary["debit"] = primary.get("debit") or dict(debit)
+                primary["billing_finalizing"] = True
+                self.jobs.put_on(connection, job.id, job)
+                return dict(primary["debit"])
+        finally:
+            connection.close()
 
     def begin_output_delete_claim(
         self,
@@ -565,6 +606,7 @@ class MemoryRepository:
                 rows = connection.execute(
                     "SELECT record_key, payload FROM v1_records "
                     f"WHERE namespace='jobs' AND json_extract(payload, '$.status') IN ({placeholders}) "
+                    "AND json_extract(payload, '$.raw_response_summary.primary_image_transport') IS NULL "
                     "ORDER BY rowid LIMIT ?",
                     (*active_statuses, max(1, int(batch_size))),
                 ).fetchall()

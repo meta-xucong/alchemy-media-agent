@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 
 from app.config import settings
 from app.providers.images import (
@@ -21,6 +22,7 @@ from app.services.output_storage import save_provider_output
 from app.services.prompt_transform.transformer import fallback_prompt_plan, transform_prompt_plan
 from app.services.reference_delivery import reference_delivery_audit
 from app.services import task_queue
+from app.services import render_bridge_primary as bridge_primary
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
 from app.services.veyra_billing_settings import get_billing_rule
 from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
@@ -54,23 +56,27 @@ async def create_running_image_job(request: CreateImageJobRequest) -> ImageJob:
                 created_at=now,
             )
         )
-    try:
-        provider = await get_v2_image_provider(request.provider_hint)
-    except V2ImageProviderError as exc:
-        return _save_job(
-            _failed_job(
-                request,
-                provider_id=exc.provider or "v2_provider_selection",
-                error=exc,
-                job_id=new_id("job"),
-                created_at=now,
+    if bridge_primary.enabled() and _requested_provider(request.provider_hint) != "mock_image":
+        provider_name = "render_bridge_primary"
+    else:
+        try:
+            provider = await get_v2_image_provider(request.provider_hint)
+        except V2ImageProviderError as exc:
+            return _save_job(
+                _failed_job(
+                    request,
+                    provider_id=exc.provider or "v2_provider_selection",
+                    error=exc,
+                    job_id=new_id("job"),
+                    created_at=now,
+                )
             )
-        )
+        provider_name = provider.name
     job = ImageJob(
         job_id=new_id("job"),
         run_id=request.run_id,
         status="running",
-        provider_id=provider.name,
+        provider_id=provider_name,
         model=_requested_model(request.provider_hint) or "unknown",
         prompt_plan=request.prompt_plan,
         outputs=[],
@@ -87,8 +93,24 @@ async def create_image_job(
     created_at: datetime | None = None,
     _qr_preservation_enabled: bool = False,
 ) -> ImageJob:
-    request = _with_prompt_transform(request)
-    request, preflight = _with_prompt_integrity_preflight(request)
+    task_queue.ensure_current_claim()
+    frozen = bridge_primary.load_frozen() if task_queue.current_claim() else bridge_primary.load_frozen(job_id) if job_id else None
+    if frozen:
+        request = bridge_primary.frozen_request(frozen)
+        job_id = frozen["job_id"]
+        created_at = datetime.fromisoformat(frozen["created_at"])
+        _qr_preservation_enabled = frozen["qr"]
+        previous = repository.get_image_job(job_id)
+        if previous and previous.status == "cancelled":
+            return previous
+        if previous and previous.status == "completed":
+            await bridge_primary.acknowledge(frozen)
+            return previous
+    if frozen:
+        preflight = {"status": "passed"}
+    else:
+        request = _with_prompt_transform(request)
+        request, preflight = _with_prompt_integrity_preflight(request)
     job_id = job_id or new_id("job")
     created_at = created_at or utc_now()
     if preflight.get("status") == "failed":
@@ -105,18 +127,23 @@ async def create_image_job(
                 created_at=created_at,
             )
         )
-    try:
-        provider = await get_v2_image_provider(request.provider_hint)
-    except V2ImageProviderError as exc:
-        return _save_job(
-            _failed_job(
-                request,
-                provider_id=exc.provider or "v2_provider_selection",
-                error=exc,
-                job_id=job_id,
-                created_at=created_at,
+    use_bridge = frozen is not None or (bridge_primary.enabled() and _requested_provider(request.provider_hint) != "mock_image")
+    provider = None
+    provider_name = "render_bridge_primary"
+    if not use_bridge:
+        try:
+            provider = await get_v2_image_provider(request.provider_hint)
+        except V2ImageProviderError as exc:
+            return _save_job(
+                _failed_job(
+                    request,
+                    provider_id=exc.provider or "v2_provider_selection",
+                    error=exc,
+                    job_id=job_id,
+                    created_at=created_at,
+                )
             )
-        )
+        provider_name = provider.name
     if not repository.get_image_job(job_id):
         task_queue.persist_claimed_operation(
             lambda: repository.save_image_job(
@@ -124,7 +151,7 @@ async def create_image_job(
                     job_id=job_id,
                     run_id=request.run_id,
                     status="running",
-                    provider_id=provider.name,
+                    provider_id=provider_name,
                     model=_requested_model(request.provider_hint) or "unknown",
                     prompt_plan=request.prompt_plan,
                     outputs=[],
@@ -136,69 +163,105 @@ async def create_image_job(
     billing_result = None
     billing_rule = get_billing_rule("alchemy:v2")
     billing_required = _should_bill_veyra(request, billing_rule=billing_rule)
-    if billing_required:
+    if billing_required and frozen is None:
         try:
             await _ensure_veyra_balance(user_id=int(request.veyra_user_id or 0), amount=billing_rule.charge_amount)
         except (VeyraInsufficientBalance, VeyraAuthError) as exc:
-            return _save_job(_failed_job(request, provider_id=provider.name, error=_billing_provider_error(exc), job_id=job_id, created_at=created_at))
+            return _save_job(_failed_job(request, provider_id=provider_name, error=_billing_provider_error(exc), job_id=job_id, created_at=created_at))
 
     fallback_error = None
-    try:
-        _ensure_claim_before_provider_request(job_id)
-        result = await provider.generate(
-            V2ImageProviderRequest(
-                run_id=request.run_id,
-                prompt_plan=request.prompt_plan,
-                input_images=request.input_images,
-            )
-        )
-    except V2ImageProviderNotConfiguredError as exc:
-        if _can_fallback_to_mock(request.provider_hint):
-            fallback_provider = await get_v2_image_provider("mock_image")
+    if use_bridge:
+        frozen = frozen or bridge_primary.freeze(request, job_id, created_at, _qr_preservation_enabled)
+        try:
+            result = await bridge_primary.generate(frozen, get_v2_image_provider)
+        except bridge_primary.BridgeWait as exc:
+            error = V2ImageProviderError("The same image task is retained for recovery.",
+                provider="render_bridge", detail={"state": exc.state})
+            error.code = "bridge_terminal" if exc.terminal else "bridge_wait"
+            error.retryable = not exc.terminal
+            waiting = _failed_job(request, provider_id="render_bridge", error=error, job_id=job_id, created_at=created_at)
+            if not exc.terminal and task_queue.current_claim() is None:
+                waiting = waiting.model_copy(update={"status": "queued"})
+            return _save_job(waiting)
+        except V2ImageProviderError as exc:
+            # This is an API fallback unit; never re-enter mock/another provider.
+            return _save_job(_failed_job(request, provider_id=exc.provider or provider_name, error=exc, job_id=job_id, created_at=created_at))
+    else:
+        fallback_error = None
+        try:
             _ensure_claim_before_provider_request(job_id)
-            result = await fallback_provider.generate(
+            result = await provider.generate(
                 V2ImageProviderRequest(
                     run_id=request.run_id,
                     prompt_plan=request.prompt_plan,
                     input_images=request.input_images,
                 )
             )
-            fallback_error = exc
-        else:
-            return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
-    except V2ImageProviderError as exc:
-        if _can_fallback_to_mock(request.provider_hint):
-            fallback_provider = await get_v2_image_provider("mock_image")
-            _ensure_claim_before_provider_request(job_id)
-            result = await fallback_provider.generate(
-                V2ImageProviderRequest(
-                    run_id=request.run_id,
-                    prompt_plan=request.prompt_plan,
-                    input_images=request.input_images,
+        except V2ImageProviderNotConfiguredError as exc:
+            if _can_fallback_to_mock(request.provider_hint):
+                fallback_provider = await get_v2_image_provider("mock_image")
+                _ensure_claim_before_provider_request(job_id)
+                result = await fallback_provider.generate(
+                    V2ImageProviderRequest(
+                        run_id=request.run_id,
+                        prompt_plan=request.prompt_plan,
+                        input_images=request.input_images,
+                    )
                 )
-            )
-            fallback_error = exc
-        else:
-            return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
-
+                fallback_error = exc
+            else:
+                return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
+        except V2ImageProviderError as exc:
+            if _can_fallback_to_mock(request.provider_hint):
+                fallback_provider = await get_v2_image_provider("mock_image")
+                _ensure_claim_before_provider_request(job_id)
+                result = await fallback_provider.generate(
+                    V2ImageProviderRequest(
+                        run_id=request.run_id,
+                        prompt_plan=request.prompt_plan,
+                        input_images=request.input_images,
+                    )
+                )
+                fallback_error = exc
+            else:
+                return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
     try:
         task_queue.ensure_current_claim()
     except task_queue.StaleTaskClaim:
         _discard_uncommitted_running_job(job_id)
         raise
-    if billing_required:
+    if frozen:
+        current = repository.get_image_job(job_id)
+        if current is not None and current.status == "cancelled":
+            return current
+    debit_arguments = {
+        "user_id": int(request.veyra_user_id or 0), "amount": billing_rule.charge_amount,
+        "idempotency_key": _billing_idempotency_key(billing_rule, job_id),
+        "source": billing_rule.source, "reference_id": _billing_reference_id(job_id),
+    } if billing_required else None
+    if frozen:
+        finalization = task_queue.begin_bridge_finalization(job_id, debit_arguments)
+        if finalization is None:
+            return repository.get_image_job(job_id)
+        debit_arguments = finalization["billing"]
+    if debit_arguments is not None:
         try:
-            billing_result = await VeyraSub2APIClient().debit(
-                user_id=int(request.veyra_user_id or 0),
-                amount=billing_rule.charge_amount,
-                idempotency_key=_billing_idempotency_key(billing_rule, job_id),
-                source=billing_rule.source,
-                reference_id=_billing_reference_id(job_id),
-            )
+            billing_result = await VeyraSub2APIClient().debit(**debit_arguments)
         except (VeyraInsufficientBalance, VeyraAuthError) as exc:
-            return _save_job(_failed_job(request, provider_id=result.provider, error=_billing_provider_error(exc), job_id=job_id, created_at=created_at))
+            error = _billing_provider_error(exc)
+            if frozen:
+                error.code = "bridge_finalization_wait"
+                error.retryable = True
+                error.detail = {**error.detail, "state": "billing_finalization_pending"}
+            waiting = _failed_job(request, provider_id=result.provider, error=error, job_id=job_id, created_at=created_at)
+            if frozen and task_queue.current_claim() is None:
+                waiting = waiting.model_copy(update={"status": "queued"})
+            return _save_job(waiting)
 
     def persist_result() -> ImageJob:
+        current = repository.get_image_job(job_id)
+        if frozen and current is not None and current.status == "cancelled":
+            return current
         saved = _save_job_unfenced(
             _job_from_result(
                 request,
@@ -218,17 +281,20 @@ async def create_image_job(
                     balance_after=billing_result.balance_after,
                     idempotency_key=billing_result.idempotency_key,
                     reference_id=job_id,
-                    source=billing_rule.source,
+                    source=debit_arguments["source"],
                     replayed=billing_result.replayed,
                 )
             )
         return saved
 
     try:
-        return task_queue.persist_claimed_operation(
+        saved = task_queue.persist_claimed_operation(
             persist_result,
             on_persisted=task_queue.checkpoint_completed_generation,
         )
+        if frozen and saved.status == "completed":
+            await bridge_primary.acknowledge(frozen)
+        return saved
     except task_queue.StaleTaskClaim:
         _discard_uncommitted_running_job(job_id)
         raise
@@ -246,9 +312,9 @@ def _job_from_result(
 ) -> ImageJob:
     now = utc_now()
     outputs: list[ImageOutput] = []
-    for item in result.outputs:
+    for index, item in enumerate(result.outputs):
         output = ImageOutput(
-            output_id=new_id("out"),
+            output_id=("out_" + hashlib.sha256(f"{job_id}:{index}".encode()).hexdigest()[:32]) if item.metadata.get("render_bridge_primary") else new_id("out"),
             job_id=job_id,
             url="",
             metadata={
@@ -453,6 +519,9 @@ def _save_job(job: ImageJob) -> ImageJob:
 
 
 def _save_job_unfenced(job: ImageJob) -> ImageJob:
+    current = repository.get_image_job(job.job_id)
+    if current is not None and current.status == "cancelled":
+        return current
     reviewed = review_image_job(job)
     saved = repository.save_image_job(reviewed)
     persist_image_job_history(saved)

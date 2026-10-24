@@ -100,9 +100,18 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                 return True
             if run is not None:
                 run = task_queue.restore_success_checkpoint(run)
+                from app.services import render_bridge_primary
+                frozen = render_bridge_primary.load_frozen()
+                if frozen is not None:
+                    asyncio.run(render_bridge_primary.acknowledge(frozen))
                 _complete_task_with_bounded_retry(record, run)
                 return True
-            run = asyncio.run(_preflight_veyra_balance(request, record.run_id))
+            # A frozen request already passed billing preflight before admission.
+            # Recovery may follow a successful debit; low remaining balance must
+            # not replace that job or prevent its idempotent completion.
+            from app.services import render_bridge_primary
+            frozen = render_bridge_primary.load_frozen()
+            run = None if frozen is not None else asyncio.run(_preflight_veyra_balance(request, record.run_id))
             if run is not None:
                 run = task_queue.persist_claimed_operation(lambda: _save_preflight_run(run))
             if not task_queue.task_claim_is_current(record):
@@ -304,6 +313,12 @@ def _job_retry_directive(error: dict) -> QueueRetryDirective | None:
     provider = str(error.get("provider") or "")
     lowered = message.lower()
     detail = error.get("detail") if isinstance(error.get("detail"), dict) else {}
+    if provider == "veyra_billing" and code == "bridge_finalization_wait":
+        return QueueRetryDirective(message="Completing the existing image and billing transaction; no new image will be generated.",
+                                   retry_delay_seconds=120.0, consume_attempt=False)
+    if provider == "render_bridge" and code == "bridge_wait":
+        return QueueRetryDirective(message="Image task retained; recovering the same Render Bridge task.",
+                                   retry_delay_seconds=5.0, consume_attempt=False)
     if provider == "veyra_billing" and code == "veyra_insufficient_balance":
         return None
     if "sub2api balance is insufficient" in lowered:

@@ -1732,6 +1732,45 @@ class V3ProductApiService:
         self.job_store.save(record)
         return {"status": "canceled"}
 
+    async def cancel_primary_bridge_generation(self, job_id: str, *, owner_user_id: int | None) -> dict[str, Any]:
+        """Cancel only durable Bridge units belonging to this authorized V3 job."""
+        from render_bridge_primary import PrimarySettings, PrimaryTransport
+        from ..generation_router.bridge_primary import BatchAdmissionGate
+
+        record = self.get_job_record(job_id)
+        if record is None:
+            raise ValueError("render_bridge_target_not_found")
+        metadata = dict(record.request.metadata or {})
+        actual_owner = metadata.get("veyra_user_id") or metadata.get("owner_user_id")
+        if owner_user_id is not None and actual_owner != owner_user_id:
+            raise ValueError("render_bridge_target_not_found")
+        owner = str(actual_owner or "server") + ":" + str(metadata.get("project_id") or "project")
+        settings = PrimarySettings.from_env(product="v3")
+        transport = PrimaryTransport(settings)
+        try:
+            async with BatchAdmissionGate(settings, owner, job_id) as gate:
+                units = transport.bindings_for("v3", owner, job_id + ":", route="bridge")
+                if not units:
+                    raise ValueError("render_bridge_target_not_found")
+                active_units = transport.bindings_for("v3", owner, job_id + ":", route="bridge", active_only=True)
+                if not active_units and record.status == ProductJobStatusValue.GENERATED and record.generation_result is not None:
+                    return {"status": "already_materialized", "job_id": job_id}
+                # An empty active set is not completion: a serial batch can be
+                # between its first ACK and its next unit journal. Latch the
+                # whole job before releasing the next-admission lock.
+                gate.cancel()
+                record.request.metadata = {**metadata, "render_bridge_primary_cancel_requested": True}
+                record.status = ProductJobStatusValue.BLOCKED
+                record.lifecycle = self._build_lifecycle(record)
+                self.job_store.save(record)
+            states = []
+            for unit in active_units:
+                result = await transport.cancel_binding("v3", owner, unit)
+                states.append(result.state)
+            return {"status": "cancel_requested", "job_id": job_id, "unit_states": states}
+        finally:
+            await transport.close()
+
     def create_project_visual_asset_bound_job(
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
@@ -3816,6 +3855,8 @@ class V3ProductApiService:
                         }
                     }
                 )
+        if dict(record.request.metadata or {}).get("render_bridge_primary_cancel_requested") is True:
+            return self._status_from_record(record)
         self._bind_generate_image_options(record, generate_request)
         self._assert_photographer_profile_binding_immutable(record, generate_request)
         if worker_claim and not self._background_generation_attempt_is_current(record, background_attempt_id):
@@ -3974,6 +4015,11 @@ class V3ProductApiService:
                     "generation_lifecycle_failure": self._product_api_runtime_failure_from_exception(exc),
                 }
             detail = getattr(exc, "detail", None)
+            if isinstance(detail, dict) and isinstance(detail.get("render_bridge_primary"), dict):
+                record.request.metadata = {
+                    **dict(record.request.metadata),
+                    "render_bridge_primary": dict(detail["render_bridge_primary"]),
+                }
             if (
                 isinstance(detail, dict)
                 and str(detail.get("reference_input_failure_code") or "").strip()
@@ -6376,6 +6422,12 @@ class V3ProductApiService:
         )
 
     def _background_generation_attempt_is_current(self, record: ProductJobRecord, background_attempt_id: str) -> bool:
+        latest = self.job_store.get(record.job_id)
+        if latest is not None and dict(latest.request.metadata or {}).get("render_bridge_primary_cancel_requested") is True:
+            record.request.metadata = dict(latest.request.metadata)
+            record.status = ProductJobStatusValue.BLOCKED
+            record.lifecycle = latest.lifecycle
+            return False
         if not background_attempt_id:
             return True
         active_attempt_id = str(dict(record.request.metadata).get("background_generation_attempt_id") or "")
@@ -15356,7 +15408,12 @@ class V3ProductApiService:
         *,
         records: list[V3GeneratedOutputRecord] | None = None,
     ) -> ProductJobStatus | None:
+        job = self.job_store.get(job_id)
+        if job is not None and dict(job.request.metadata or {}).get("render_bridge_primary_cancel_requested") is True:
+            return None
         records = list(records) if records is not None else self.output_store.list_by_job(job_id)
+        records = [item for item in records if not (item.metadata or {}).get("render_bridge_primary")
+                   or (item.metadata or {}).get("render_bridge_primary_checkpoint_complete") is True]
         if not records:
             return None
         records = sorted(records, key=lambda item: item.created_at or "")
