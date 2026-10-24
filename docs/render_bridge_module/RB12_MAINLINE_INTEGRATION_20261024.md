@@ -85,3 +85,20 @@ pixels were explicit fixtures, not actual host authentication/Brain/shared revie
 or live CLI recovery. Each scenario planned and registered once; repeated polling
 did not duplicate registration; accepted ACK replay was idempotent. Both remained
 nonformal and reported no charge in the synthetic gateway. All services stopped.
+
+## CI follow-up: legacy review-card fixture
+
+The current-main Doc341 renderer requires explicit final-attempt lineage or a
+current-job `review_output_ids` binding before showing a review-only image. The
+legacy Doc263 quality-failure fixture supplied only `hidden_output_ids`, which
+withholds delivery but does not establish current-final review identity. CI
+correctly excluded that unbound image. Preserve the runtime gate: update the
+fixture to first assert exclusion without lineage, then supply the matching
+review ID and assert exactly one review-only card and no formal-delivery action.
+This is a browser contract fixture correction, not an output visibility bypass.
+
+Local follow-up validation: Doc341 Node projection tests 2/2 passed; all 9 Doc263
+browser cases collected successfully. Local Chromium download from the official
+Playwright CDN returned a truncated/non-ZIP archive, so rendered browser execution
+is not claimed locally. The exact new-head GitHub browser job remains the acceptance
+source for this fixture change. No production renderer code was changed.

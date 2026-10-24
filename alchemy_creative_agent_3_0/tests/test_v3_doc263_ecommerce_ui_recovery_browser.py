@@ -607,6 +607,16 @@ def test_doc_review_only_generated_images_are_visible_without_delivery_promotion
             assert "自动审核发现需要处理的视觉问题" in failure_board.inner_text()
             assert "审核证据需确认" not in failure_board.inner_text()
             assert "审核证据不完整" not in failure_board.inner_text()
+            # Doc341: hidden_output_ids withholds delivery but does not prove
+            # final-attempt lineage. An unbound image must stay off this board.
+            assert failure_board.locator(".v3-review-only-card img").count() == 0
+            page.evaluate(
+                """() => {
+                  v3State.currentJob.metadata.post_generation_review.review_output_ids = ["fail-final-output"];
+                  renderV3ResultBoard(v3State.currentJob);
+                }"""
+            )
+            assert page.evaluate("v3ReviewOnlyJobImageItems(v3State.currentJob).map(item => item.output_id)") == ["fail-final-output"]
             assert failure_board.locator(".v3-review-only-card img").count() == 1
             assert failure_board.locator(".v3-result-card:not(.v3-review-only-card) [data-v3-preview]").count() == 0
 
