@@ -14,6 +14,7 @@ import threading
 import time
 from typing import Any
 
+from ..model_routing import build_v3_model_candidates, model_protocol, v3_gateway_credentials
 from .contracts import (
     BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS,
     BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
@@ -536,16 +537,7 @@ class V3LLMBrainProvider:
         }
 
     def run(self, request: BrainRunRequest) -> dict[str, Any]:
-        fallback_models = ["kimi-k3", self.backup_model, "gpt-6.1-sol"]
-        fallback_candidates = []
-        seen_models = {self.model.strip().lower()}
-        for model in fallback_models:
-            normalized = model.strip().lower()
-            if not normalized or normalized in seen_models:
-                continue
-            seen_models.add(normalized)
-            fallback_candidates.append((_model_protocol(model) or "unsupported", model))
-        candidates = [(self.provider, self.model), *fallback_candidates]
+        candidates = list(build_v3_model_candidates(self.model, self.backup_model))
         attempts: list[dict[str, Any]] = []
         last_error: BrainProviderError | None = None
         for index, (provider_name, model_name) in enumerate(candidates):
@@ -938,7 +930,7 @@ class V3LLMBrainProvider:
         # Responses contract.  Choosing the transport by the declared Brain
         # provider keeps an image gateway credential from deciding how the
         # Central Brain talks to its own remote model.
-        if self.provider == "deepseek":
+        if self.provider == "deepseek" or _is_kimi_k3(self.model):
             return self._run_openai_chat_completions(
                 api_key=api_key,
                 base_url=base_url,
@@ -1010,6 +1002,7 @@ class V3LLMBrainProvider:
                         },
                         {"role": "user", "content": build_remote_payload(request)},
                     ],
+                    **_responses_model_parameters(self.model, self.reasoning_effort),
                     text={"format": {"type": "json_object"}},
                     timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds)),
                     max_output_tokens=self.max_tokens,
@@ -1093,12 +1086,16 @@ class V3LLMBrainProvider:
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 "response_format": {"type": "json_object"},
-                "max_tokens": self.max_tokens,
                 "stream": True,
             }
-            reasoning_effort = getattr(self, "reasoning_effort", None)
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
+            payload[_chat_completion_token_parameter(self.model)] = self.max_tokens
+            payload.update(
+                _chat_model_parameters(
+                    self.model,
+                    getattr(self, "reasoning_effort", None),
+                    streaming=True,
+                )
+            )
             text = _collect_openai_chat_completion_stream(
                 url=_chat_completions_url(base_url),
                 api_key=api_key,
@@ -1164,6 +1161,12 @@ class V3LLMBrainProvider:
             try:
                 _mark_transport_event("complete_response_call_entered")
                 _mark_transport_event("request_call_entered")
+                model_parameters = _chat_model_parameters(
+                    self.model,
+                    getattr(self, "reasoning_effort", None),
+                    streaming=False,
+                )
+                token_parameter = {_chat_completion_token_parameter(self.model): self.max_tokens}
                 response = client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -1174,9 +1177,9 @@ class V3LLMBrainProvider:
                         {"role": "user", "content": build_remote_payload(request)},
                     ],
                     response_format={"type": "json_object"},
-                    temperature=0,
+                    **model_parameters,
+                    **token_parameter,
                     timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds)),
-                    max_tokens=self.max_tokens,
                 )
                 _mark_transport_event("request_dispatched")
                 _mark_transport_event("complete_response_started")
@@ -1242,6 +1245,10 @@ class V3LLMBrainProvider:
                 "system": _system_prompt(request.stage, json_recovery=json_recovery),
                 "messages": [{"role": "user", "content": build_remote_payload(request)}],
             }
+            if _is_claude_sonnet_55(self.model):
+                effort = getattr(self, "reasoning_effort", None)
+                if effort in {"low", "medium", "high", "xhigh", "max"}:
+                    payload["output_config"] = {"effort": effort}
             _mark_transport_event("client_constructing")
             with httpx.Client(timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds))) as client:
                 client_registration = _register_transport_close(client)
@@ -1282,9 +1289,7 @@ class V3LLMBrainProvider:
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
     def _credentials(self) -> tuple[str, str | None]:
-        api_key = _env("LLM_GATEWAY_API_KEY")
-        base_url = _env("LLM_GATEWAY_BASE_URL")
-        api_key = _normalize_provider_api_key(api_key)
+        api_key, base_url = v3_gateway_credentials()
         if not api_key:
             raise BrainProviderUnavailable("remote brain API key is not configured")
         if not base_url or not str(base_url).strip():
@@ -2500,21 +2505,6 @@ def _env(name: str) -> str | None:
     return value.strip() if value and value.strip() else None
 
 
-def _normalize_provider_api_key(value: Any) -> str | None:
-    """Remove a UTF-8 BOM accidentally persisted at the start of a secret.
-
-    Some environment-file writers preserve a leading BOM as part of the value
-    after the equals sign.  HTTP Authorization headers are ASCII, so the OpenAI
-    SDK rejects that key locally before any request is sent.  Normalize only
-    the boundary BOM and surrounding whitespace; never alter key contents.
-    """
-
-    if value is None:
-        return None
-    normalized = str(value).strip().lstrip("\ufeff").strip()
-    return normalized or None
-
-
 def _remote_enabled(*, force: bool = False) -> bool:
     raw = os.getenv("V3_LLM_BRAIN_REMOTE_ENABLED")
     if raw is not None:
@@ -2541,13 +2531,63 @@ def _int_env(name: str, default: int) -> int:
 _SUPPORTED_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max", "xhigh"})
 
 
+def _is_claude_sonnet_55(model: str | None) -> bool:
+    return str(model or "").strip().lower().startswith("claude-sonnet-5-5")
+
+
+def _is_kimi_k3(model: str | None) -> bool:
+    return str(model or "").strip().lower().startswith("kimi-k3")
+
+
+def _kimi_reasoning_effort(configured_effort: str | None) -> str:
+    normalized = str(configured_effort or "").strip().lower()
+    return {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max",
+    }.get(normalized, "low")
+
+
+def _chat_model_parameters(
+    model: str | None,
+    reasoning_effort: str | None,
+    *,
+    streaming: bool,
+) -> dict[str, Any]:
+    normalized_model = str(model or "").strip().lower()
+    normalized_effort = str(reasoning_effort or "").strip().lower()
+    if _is_kimi_k3(normalized_model):
+        return {"reasoning_effort": _kimi_reasoning_effort(normalized_effort)}
+    if normalized_model.startswith("gpt-6.1-sol"):
+        params: dict[str, Any] = {}
+        if normalized_effort in _SUPPORTED_REASONING_EFFORTS:
+            params["reasoning_effort"] = normalized_effort
+        return params
+    # Preserve the pre-existing adapter behavior for other OpenAI-compatible
+    # models. The stricter controls below are scoped to the named target models.
+    if streaming:
+        return {"reasoning_effort": normalized_effort} if normalized_effort else {}
+    return {"temperature": 0}
+
+
+def _chat_completion_token_parameter(model: str | None) -> str:
+    """Select the output-token field supported by the specific chat model."""
+
+    return "max_completion_tokens" if str(model or "").strip().lower().startswith("gpt-6.1-sol") else "max_tokens"
+
+
+def _responses_model_parameters(model: str | None, reasoning_effort: str | None) -> dict[str, Any]:
+    normalized_model = str(model or "").strip().lower()
+    normalized_effort = str(reasoning_effort or "").strip().lower()
+    if normalized_model.startswith("gpt-6.1-sol") and normalized_effort in _SUPPORTED_REASONING_EFFORTS:
+        return {"reasoning": {"effort": normalized_effort}}
+    return {}
+
+
 def _model_protocol(model: str | None) -> str | None:
-    normalized = str(model or "").strip().lower()
-    if normalized.startswith("claude-"):
-        return "anthropic"
-    if normalized.startswith(("gpt-", "o1", "o3", "o4", "deepseek-", "kimi-", "doubao-")):
-        return "openai"
-    return None
+    return model_protocol(model)
 
 
 def _configured_reasoning_effort(provider: str) -> str | None:

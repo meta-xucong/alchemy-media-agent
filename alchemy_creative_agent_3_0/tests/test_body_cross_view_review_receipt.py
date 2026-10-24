@@ -253,6 +253,7 @@ def test_openai_compatible_cross_view_provider_builds_pass_receipt_from_three_ou
 
     assert receipt.activation_eligible is True
     assert receipt.real_pixel_review_verified is True
+    assert transport.calls[0]["timeout_seconds"] == 300.0
     assert transport.calls[0]["slot_keys"] == [
         "body.front_full",
         "body.side_full",

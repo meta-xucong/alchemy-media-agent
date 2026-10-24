@@ -867,15 +867,15 @@ def test_malformed_naturalness_receipt_is_not_hidden_by_disabled_semantic_prefli
 def test_brain_availability_explains_disabled_and_missing_credentials(monkeypatch) -> None:
     import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
 
-    provider = providers_module.V3LLMBrainProvider.__new__(providers_module.V3LLMBrainProvider)
-    provider.provider = "deepseek"
-    provider.model = "deepseek-v4-pro"
-    provider.reasoning_effort = None
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("V3_LLM_BRAIN_BACKUP_MODEL", "kimi-k3")
+    monkeypatch.delenv("LLM_GATEWAY_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_GATEWAY_BASE_URL", raising=False)
+    provider = providers_module.V3LLMBrainProvider()
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
     assert provider.availability()["reason_code"] == "remote_disabled"
 
     monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED")
-    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
     monkeypatch.setattr(providers_module, "_remote_enabled", lambda force=False: True)
     assert provider.availability()["reason_code"] == "missing_credentials"
 
@@ -968,6 +968,102 @@ def test_product_projection_cross_checks_and_completes_finalizer_lifecycle() -> 
         incomplete_nested
     )
     assert "remote_brain_finalizer_lifecycle" not in incomplete_projection
+
+
+def test_product_lifecycle_failure_preserves_safe_image_set_audits() -> None:
+    cardinality = {
+        "expected_image_count": 4,
+        "remote_image_count": 4,
+        "remote_shot_plan_count": 3,
+        "cardinality_valid": False,
+        "raw_prompt": "must not persist",
+    }
+    validation = {
+        "validation_error_count": 2,
+        "validation_error_paths": ["image_set_plan.shot_plan.item.role", "leak user prompt"],
+        "validation_error_types": ["missing", "raw prompt text"],
+        "raw_response": "must not persist",
+    }
+    contract_validation = {
+        "schema_version": "v3_remote_contract_validation_audit_v1",
+        "sections": {
+            "image_set_plan": {
+                "validation_error_count": 1,
+                "validation_error_paths": ["image_set_plan.shot_plan", "leak user prompt"],
+                "validation_error_types": ["missing", "raw prompt text"],
+                "raw_response": "must not persist",
+            },
+            "untrusted_section": {"raw": "must not persist"},
+        },
+        "raw_payload": "must not persist",
+    }
+    runtime_outcome = {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_creative_brain_image_set_plan_invalid",
+        "outcome_class": "remote_contract_invalid",
+        "remote_image_set_cardinality_audit": cardinality,
+        "remote_image_set_validation_audit": validation,
+        "remote_contract_validation_audit": contract_validation,
+        "raw_brain_payload": {"secret": "must not persist"},
+    }
+
+    failure = V3ProductApiService._generation_lifecycle_failure_from_runtime_result(
+        SimpleNamespace(metadata={"remote_creative_brain_outcome": runtime_outcome})
+    )
+
+    assert failure is not None
+    persisted = V3ProductApiService._generation_lifecycle_failure_metadata(failure)
+    expected_cardinality = {
+        "expected_image_count": 4,
+        "remote_image_count": 4,
+        "remote_shot_plan_count": 3,
+        "cardinality_valid": False,
+    }
+    expected_validation = {
+        "validation_error_count": 2,
+        "validation_error_paths": ["image_set_plan.shot_plan.item.role"],
+        "validation_error_types": ["missing"],
+    }
+    expected_contract = {
+        "schema_version": "v3_remote_contract_validation_audit_v1",
+        "sections": {
+            "image_set_plan": {
+                "validation_error_count": 1,
+                "validation_error_paths": ["image_set_plan.shot_plan"],
+                "validation_error_types": ["missing"],
+            },
+        },
+    }
+    assert persisted["remote_creative_brain_outcome"]["remote_image_set_cardinality_audit"] == expected_cardinality
+    assert persisted["remote_creative_brain_outcome"]["remote_image_set_validation_audit"] == expected_validation
+    assert persisted["remote_creative_brain_outcome"]["remote_contract_validation_audit"] == expected_contract
+    assert "raw_prompt" not in str(persisted)
+    assert "raw_response" not in str(persisted)
+    assert "raw_brain_payload" not in str(persisted)
+
+    missing_field_projection = V3ProductApiService._public_remote_brain_lifecycle_outcome(
+        {**runtime_outcome, "remote_image_set_cardinality_audit": {"remote_image_count": 4}}
+    )
+    assert missing_field_projection["remote_image_set_cardinality_audit"] == {"remote_image_count": 4}
+    explicit_null_projection = V3ProductApiService._public_remote_brain_lifecycle_outcome(
+        {**runtime_outcome, "remote_image_set_cardinality_audit": {"expected_image_count": None}}
+    )
+    assert explicit_null_projection["remote_image_set_cardinality_audit"] == {"expected_image_count": None}
+
+    oversized = {
+        **runtime_outcome,
+        "remote_image_set_cardinality_audit": {"remote_image_count": 10**200},
+        "remote_image_set_validation_audit": {"validation_error_count": 10**200},
+        "remote_contract_validation_audit": {
+            "schema_version": "v3_remote_contract_validation_audit_v1",
+            "sections": {"image_set_plan": {"validation_error_count": 10**200}},
+        },
+    }
+    oversized_projection = V3ProductApiService._public_remote_brain_lifecycle_outcome(oversized)
+    assert "remote_image_set_cardinality_audit" not in oversized_projection
+    assert "remote_image_set_validation_audit" not in oversized_projection
+    assert "remote_contract_validation_audit" not in oversized_projection
 
 
 def test_output_store_restore_requires_complete_immutable_closure(tmp_path) -> None:

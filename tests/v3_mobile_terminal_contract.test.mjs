@@ -18,6 +18,10 @@ const completionStart = source.indexOf("const deliveryWithheld = mobileV3JobDeli
 const completionEnd = source.indexOf("  } catch (error) {", completionStart);
 assert.ok(completionStart >= 0 && completionEnd > completionStart, "mobile terminal completion block must be present");
 const completionSource = source.slice(completionStart, completionEnd);
+const plannedRecoveryStart = source.indexOf("async function recoverMobileV3PlannedJob(");
+const plannedRecoveryEnd = source.indexOf("\nasync function generateMobileV3Job", plannedRecoveryStart);
+assert.ok(plannedRecoveryStart >= 0 && plannedRecoveryEnd > plannedRecoveryStart, "mobile planned job recovery function must be present");
+const plannedRecoverySource = source.slice(plannedRecoveryStart, plannedRecoveryEnd);
 
 test("backend formal partial delivery reports the eligible image count on mobile", () => {
   const context = {};
@@ -57,4 +61,64 @@ test("mobile does not label full or review-held delivery as formal partial deliv
   };
   assert.equal(context.mobileV3FormalPartialDeliveryNotice(fullDelivery), "");
   assert.equal(context.mobileV3FormalPartialDeliveryNotice(reviewHeld), "");
+});
+
+test("mobile planned job recovery reads only the job bound to its operation id", async () => {
+  const calls = [];
+  const context = {
+    mobileV3State: { currentProject: { job_ids: ["job_previous_one_image"] } },
+    window: { setTimeout: (resolve) => resolve() },
+    mobileV3GenerationSessionOwns: () => true,
+    mobileV3Request: async (url) => {
+      calls.push(url);
+      if (url.endsWith("/planning-operations/op_current")) {
+        return {
+          operation_id: "op_current",
+          state: "completed",
+          job_id: "job_current_two_images",
+        };
+      }
+      if (url.endsWith("/jobs/job_current_two_images")) {
+        return { job_id: "job_current_two_images", status: "generated" };
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  };
+  vm.runInNewContext(plannedRecoverySource, context);
+
+  const result = await context.recoverMobileV3PlannedJob("project_1", "op_current");
+
+  assert.equal(result.job.job_id, "job_current_two_images");
+  assert.deepEqual(calls, [
+    "/projects/project_1/planning-operations/op_current",
+    "/jobs/job_current_two_images",
+  ]);
+  assert.ok(!calls.some((url) => url.endsWith("/jobs/job_previous_one_image")));
+});
+
+test("mobile cancelled planning recovery does not write a stale project after refresh", async () => {
+  let ownsSession = true;
+  let ownershipChecks = 0;
+  const previousProject = { project_id: "project_1", marker: "previous" };
+  const context = {
+    mobileV3State: { currentProject: previousProject },
+    window: { setTimeout: (resolve) => resolve() },
+    mobileV3GenerationSessionOwns: () => {
+      ownershipChecks += 1;
+      if (ownershipChecks >= 3) ownsSession = false;
+      return ownsSession;
+    },
+    mobileV3Request: async (url) => (
+      url.endsWith("/planning-operations/op_current")
+        ? { operation_id: "op_current", state: "planning_failed" }
+        : { project: { project_id: "project_1", marker: "stale_refresh" } }
+    ),
+  };
+  vm.runInNewContext(plannedRecoverySource, context);
+
+  const result = await context.recoverMobileV3PlannedJob("project_1", "op_current");
+
+  assert.equal(result.operation, null);
+  assert.equal(result.job, null);
+  assert.equal(context.mobileV3State.currentProject.marker, "previous");
 });

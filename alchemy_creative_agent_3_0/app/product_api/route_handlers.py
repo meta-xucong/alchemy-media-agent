@@ -191,6 +191,16 @@ class V3ProductRouteHandlers:
             job_id=job_id,
         )
 
+    def get_project_planning_operation(
+        self,
+        project_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        return self.project_service.get_project_planning_operation(
+            project_id,
+            operation_id,
+        )
+
     def fail_project_planning_operation(
         self,
         project_id: str,

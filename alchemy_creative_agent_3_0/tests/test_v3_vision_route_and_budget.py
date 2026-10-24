@@ -50,10 +50,11 @@ def test_enforced_review_prompt_is_compact_without_dropping_frozen_contract(monk
     assert "Return keys:" in prompt
 
 
-def test_vision_review_default_deadline_is_longer_than_legacy_provider_cap(monkeypatch) -> None:
+def test_vision_review_default_deadline_allows_a_300_second_request(monkeypatch) -> None:
     monkeypatch.delenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", raising=False)
 
-    assert _vision_provider_timeout_seconds({}) == 120.0
+    assert _vision_provider_timeout_seconds({}) == 300.0
+    assert _vision_provider_timeout_seconds({"vision_inspection_timeout_seconds": "invalid"}) == 300.0
 
 
 def test_review_transport_failure_is_not_worded_as_a_quality_failure() -> None:

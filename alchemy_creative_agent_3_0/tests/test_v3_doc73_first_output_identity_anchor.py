@@ -26,6 +26,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 from alchemy_creative_agent_3_0.app.product_api.output_resolver import GeneratedOutputResolver
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.reference_input_plan import ReferenceInputPlan, PLAN_KEY
 from alchemy_creative_agent_3_0.app.schemas import AssetType, CandidateResult, PackagedAsset, Platform, ProviderStrategy
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_evidence import ExactReviewEvidenceResolver
 
@@ -184,6 +185,152 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
     assert second_metadata["doc73_auto_identity_anchor_receipt"] == source_binding
     assert "eye shape and spacing" in second_metadata["reference_assets"][0]["lock_targets"]
     assert result.metadata["candidate_loop"] is True
+
+
+@pytest.mark.parametrize("count", [1, 3])
+@pytest.mark.parametrize("rendering_mode,scope", [("photoreal", "none"), ("stylized", "whole_image"), ("illustration", "whole_image")])
+@pytest.mark.parametrize("subject_entity_type", ["person", "stylized_character"])
+def test_doc73_frozen_doc322_plan_uses_first_output_as_same_batch_advisory_reference(tmp_path, monkeypatch, count, rendering_mode, scope, subject_entity_type) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+    create_base_context = brain._create_base_context
+
+    def create_context_with_frozen_plan(*args, **kwargs):
+        context = create_base_context(*args, **kwargs)
+        context.metadata[PLAN_KEY] = ReferenceInputPlan.freeze(
+            job_id=context.creative_job.job_id,
+            project_id="project_doc73_frozen_plan",
+            mode="standard",
+            inputs=[],
+        ).as_dict()
+        return context
+
+    monkeypatch.setattr(brain, "_create_base_context", create_context_with_frozen_plan)
+
+    result = brain.run_generation_loop(
+        {
+            "photoreal": "An adult studio portrait with soft daylight.",
+            "stylized": "An anime heroine on a neon city editorial cover.",
+            "illustration": "An ink illustration of an adult explorer in a forest.",
+        }[rendering_mode],
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": count,
+            "requested_image_size": "1024x1024",
+            "doc73_batch_plan_digest": "1" * 64,
+            "project_id": "project_doc73_frozen_plan",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "delivery_suite",
+            "effective_variation_mode": "delivery_suite",
+            "llm_brain": {
+                "visual_task_profile": {
+                    "rendering_intent": {"rendering_mode": rendering_mode, "stylization_scope": scope},
+                    "subject_entities": [{"entity_id": "portrait_subject_1", "entity_type": subject_entity_type, "confidence": 0.98}],
+                }
+            },
+        },
+    )
+
+    assert len(provider.requests) == count
+    assert result.metadata["doc322_auto_anchor_candidate"] is True
+    assert result.metadata["llm_brain"]["visual_task_profile"]["rendering_intent"] == {
+        "rendering_mode": rendering_mode, "stylization_scope": scope,
+    }
+    assert result.metadata[PLAN_KEY]["continuity_anchor"] is None
+    assert "same_batch_continuity_reference" not in result.metadata[PLAN_KEY]
+    first = provider.requests[0]["metadata"]
+    assert first["auto_batch_identity_anchor_policy"]["enabled"] is (count > 1)
+    if count == 1:
+        assert "same_batch_continuity_reference" not in first[PLAN_KEY]
+        return
+    second = provider.requests[1]["metadata"]
+    assert first["auto_batch_identity_anchor_policy"]["enabled"] is True
+    assert "same_batch_continuity_reference" not in first[PLAN_KEY]
+    assert second["auto_batch_identity_anchor_applied"] is True
+    assert second[PLAN_KEY]["continuity_anchor"] is None
+    advisory = second[PLAN_KEY]["same_batch_continuity_reference"]
+    assert advisory["reference"]["output_id"] == second["auto_batch_identity_anchor_source_output_id"]
+    assert advisory["receipt"] == second["doc73_auto_identity_anchor_receipt"]
+    assert all(
+        request["metadata"][PLAN_KEY]["same_batch_continuity_reference"] == advisory
+        for request in provider.requests[2:]
+    )
+
+
+@pytest.mark.parametrize("exclusion", ["ecommerce", "product", "missing_profile", "disabled", "explicit_references_only", "mock"])
+def test_doc344_character_scope_preserves_existing_exclusions(tmp_path, monkeypatch, exclusion):
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+    create_base_context = brain._create_base_context
+
+    def with_plan(*args, **kwargs):
+        context = create_base_context(*args, **kwargs)
+        # Exercise the continuity exclusion without invoking E-Commerce's
+        # unrelated remote creative-direction admission path.
+        if exclusion == "ecommerce":
+            context.metadata["scenario_id"] = "ecommerce"
+        context.metadata[PLAN_KEY] = ReferenceInputPlan.freeze(
+            job_id=context.creative_job.job_id, project_id="project_doc344_exclusion",
+            mode="standard", inputs=[],
+        ).as_dict()
+        return context
+
+    monkeypatch.setattr(brain, "_create_base_context", with_plan)
+    if exclusion in {"disabled", "explicit_references_only"}:
+        monkeypatch.setattr(brain, "_mode_execution_policy_metadata",
+                            lambda context: {"generated_output_reference_chain": exclusion})
+    profile = {"subject_entities": [{"entity_type": "product" if exclusion == "product" else "character"}]}
+    result = brain.run_generation_loop(
+        "Create two illustrated character views.",
+        provider_strategy=ProviderStrategy.MOCK_GENERATION if exclusion == "mock" else ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 2, "project_id": "project_doc344_exclusion",
+            "scenario_id": "general_creative",
+            "llm_brain": {} if exclusion == "missing_profile" else {"visual_task_profile": profile},
+        },
+    )
+    assert result.metadata["doc322_auto_anchor_candidate"] is False
+    assert all(not r["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] for r in provider.requests)
+
+
+def test_doc73_direct_upload_suppresses_batch_chain_without_suppressing_project_candidate(tmp_path) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+    reference_path = tmp_path / "user-reference.png"
+    Image.new("RGB", (96, 96), color=(80, 120, 160)).save(reference_path)
+    plan = ReferenceInputPlan.freeze(
+        job_id="job_doc73_direct_upload",
+        project_id="project_doc73_direct_upload",
+        mode="standard",
+        inputs=[{"asset_id": "user-reference", "file_path": str(reference_path), "role": "person_reference"}],
+    )
+
+    result = brain.run_generation_loop(
+        "Create a two-image realistic portrait set with the same adult subject and natural daylight.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            PLAN_KEY: plan.as_dict(),
+            "requested_image_count": 2,
+            "requested_image_size": "1024x1024",
+            "project_id": "project_doc73_direct_upload",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "delivery_suite",
+            "effective_variation_mode": "delivery_suite",
+            "llm_brain": {
+                "visual_task_profile": {
+                    "rendering_intent": {"rendering_mode": "photoreal", "stylization_scope": "none"},
+                    "subject_entities": [{"entity_id": "portrait_subject_1", "entity_type": "person", "confidence": 0.98}],
+                }
+            },
+        },
+    )
+
+    assert len(provider.requests) >= 2
+    assert all(request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False for request in provider.requests)
+    assert all("same_batch_continuity_reference" not in request["metadata"][PLAN_KEY] for request in provider.requests)
+    assert result.metadata["doc322_auto_anchor_candidate"] is True
 
 
 def test_doc73_unbound_project_anchor_does_not_reenter_next_generation(tmp_path) -> None:
@@ -349,7 +496,8 @@ def test_doc134_raw_person_or_cartoon_words_do_not_start_an_identity_chain_witho
     assert provider.requests[1]["metadata"].get("auto_batch_identity_anchor_applied") is not True
 
 
-def test_doc73_stylized_brain_profile_does_not_start_an_identity_edit_chain(tmp_path) -> None:
+@pytest.mark.parametrize("subject_entity_type", ["character", "stylized_character"])
+def test_doc73_stylized_character_profile_starts_an_identity_edit_chain(tmp_path, subject_entity_type) -> None:
     provider = RecordingImageProvider(tmp_path / "outputs")
     brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
 
@@ -371,7 +519,7 @@ def test_doc73_stylized_brain_profile_does_not_start_an_identity_edit_chain(tmp_
                         "stylization_scope": "whole_image",
                     },
                     "subject_entities": [
-                        {"entity_id": "heroine", "entity_type": "person", "confidence": 0.98}
+                        {"entity_id": "heroine", "entity_type": subject_entity_type, "confidence": 0.98}
                     ],
                 }
             },
@@ -380,13 +528,10 @@ def test_doc73_stylized_brain_profile_does_not_start_an_identity_edit_chain(tmp_
 
     assert len(provider.requests) >= 2
     assert all(
-        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False
+        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is True
         for request in provider.requests
     )
-    assert all(
-        not any(item.get("source_type") == "auto_batch_continuity" for item in request["metadata"].get("reference_assets", []))
-        for request in provider.requests
-    )
+    assert provider.requests[1]["metadata"]["auto_batch_identity_anchor_applied"] is True
 
 
 @pytest.mark.parametrize(
@@ -399,7 +544,7 @@ def test_doc73_stylized_brain_profile_does_not_start_an_identity_edit_chain(tmp_
         {"rendering_mode": "stylized", "stylization_scope": "object_surface"},
     ],
 )
-def test_doc287_incomplete_or_ambiguous_rendering_profile_closes_auto_anchor(
+def test_doc344_rendering_profile_does_not_override_typed_character_continuity(
     tmp_path,
     rendering_intent,
 ) -> None:
@@ -430,7 +575,7 @@ def test_doc287_incomplete_or_ambiguous_rendering_profile_closes_auto_anchor(
 
     assert len(provider.requests) >= 2
     assert all(
-        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False
+        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is True
         for request in provider.requests
     )
 

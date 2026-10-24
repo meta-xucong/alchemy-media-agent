@@ -388,8 +388,15 @@ class CentralCreativeBrain:
         explicit_references_present = self._has_explicit_user_reference_assets(context)
         auto_identity_anchor_state = self._project_auto_identity_anchor_state(context)
         frozen_reference_plan = plan_from_metadata(context.metadata)
+        frozen_plan_facts = frozen_reference_plan.facts() if frozen_reference_plan else {}
+        same_batch_plan_eligible = frozen_reference_plan is None or (
+            frozen_plan_facts.get("project_mode") == "standard"
+            and not frozen_plan_facts.get("has_explicit_continuity_anchor")
+            and not frozen_plan_facts.get("has_direct_reference_inputs")
+            and frozen_reference_plan.as_dict().get("anchor_auto_enabled") is True
+        )
         auto_identity_anchor_enabled = (
-            frozen_reference_plan is None
+            same_batch_plan_eligible
             and not use_mock_generation
             and not explicit_references_present
             and self._is_human_identity_suite_context(context)
@@ -633,6 +640,11 @@ class CentralCreativeBrain:
                     generation_plan.metadata,
                     auto_identity_anchor_reference,
                 )
+                if frozen_reference_plan is not None:
+                    generation_plan.metadata[PLAN_KEY] = frozen_reference_plan.with_same_batch_continuity_reference(
+                        auto_identity_anchor_reference,
+                        receipt=dict(auto_identity_anchor_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) or {}),
+                    ).as_dict()
             if not use_mock_generation:
                 generation_plan.candidate_count = 1
                 generation_plan.max_refine_rounds = 0
@@ -822,7 +834,7 @@ class CentralCreativeBrain:
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
                 **({PLAN_KEY:frozen_reference_plan.as_dict(), "reference_input_summary":frozen_reference_plan.facts(),
-                    "doc322_auto_anchor_candidate":(not use_mock_generation and self._is_human_identity_suite_context(context)
+                    "doc322_auto_anchor_candidate":(not use_mock_generation and self._is_human_identity_context(context)
                         and self._generated_output_reference_chain_allowed(context))} if frozen_reference_plan else {}),
                 "requested_image_count": _requested_image_count_for_context(context),
                 "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
@@ -1501,40 +1513,19 @@ class CentralCreativeBrain:
         return projection
 
     def _is_human_identity_suite_context(self, context: PipelineContext) -> bool:
-        if str(context.metadata.get("scenario_id") or "").strip().lower() == "ecommerce":
-            return False
         requested_count = _bounded_requested_image_count(context.metadata.get("requested_image_count"))
         asset_count = len(context.series_plan.assets) if context.series_plan is not None else 0
-        if max(requested_count, asset_count) < 2:
-            return False
-        profile = self._llm_brain_metadata(context).get("visual_task_profile")
-        if not isinstance(profile, dict):
-            return False
-        rendering_intent = profile.get("rendering_intent")
-        if not isinstance(rendering_intent, dict):
-            return False
-        rendering_mode = str(rendering_intent.get("rendering_mode") or "").strip().lower()
-        stylization_scope = str(rendering_intent.get("stylization_scope") or "").strip().lower()
-        photoreal_modes = {
-            "photo",
-            "photographic",
-            "photoreal",
-            "photorealistic",
-            "realistic_photo",
-            "naturalistic",
-        }
-        if rendering_mode not in photoreal_modes:
-            return False
-        if stylization_scope not in {"none", "object_surface"}:
+        return max(requested_count, asset_count) >= 2 and self._is_human_identity_context(context)
+
+    def _is_human_identity_context(self, context: PipelineContext) -> bool:
+        if str(context.metadata.get("scenario_id") or "").strip().lower() == "ecommerce":
             return False
         profile_subject_types = self._llm_profile_subject_entity_types(context)
-        # The frozen task profile is the best available statement of what the
-        # image set is about. In particular, do not let incidental words from
-        # generic prompt guidance or a role-plan label turn a product/stylized
-        # delivery into an image-edit continuation.
+        # Doc344: typed character identity is independent of image count and
+        # rendering style. Prompt words and role labels do not establish it.
         return bool(
             profile_subject_types
-            & {"person", "human", "character", "portrait", "portrait_subject", "human_subject"}
+            & {"person", "human", "character", "stylized_character", "portrait", "portrait_subject", "human_subject"}
         )
 
     def _llm_profile_subject_entity_types(self, context: PipelineContext) -> set[str]:

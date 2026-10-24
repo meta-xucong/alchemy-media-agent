@@ -233,13 +233,21 @@ jobs:
 
           configure_candidate_env() {
             local env_file="$candidate_release/src_skeleton/.env"
-            local gate_count
+            local gate_count vision_enabled
             [ -f "$env_file" ] || stop candidate_env_missing
             [ "$(normalized_env_digest "$env_file")" = "$(normalized_env_digest "$live_env")" ] || stop candidate_env_drift
 
             # Keep user-selected models and providers; migrate only stale GPT defaults.
             migrate_candidate_model_defaults "$env_file"
             assert_candidate_model_defaults "$env_file"
+
+            # Enable ordinary V3 visual review by default while preserving an explicit operator opt-out.
+            vision_enabled="$(env_value "$env_file" V3_VISION_INSPECTION_ENABLED | tr '[:upper:]' '[:lower:]')"
+            if [ -z "$vision_enabled" ]; then
+              set_env_value "$env_file" V3_VISION_INSPECTION_ENABLED true
+            elif [[ "$vision_enabled" != "true" && "$vision_enabled" != "false" ]]; then
+              stop candidate_vision_inspection_value_invalid
+            fi
 
             gate_count="$(grep -c '^V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=' "$env_file" || true)"
             case "$gate_count" in

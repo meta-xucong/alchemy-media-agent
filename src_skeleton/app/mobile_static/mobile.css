@@ -6077,6 +6077,38 @@ body.v3-mobile-loading-active {
   justify-self: start;
 }
 
+.v3-continuity-anchor-unbind[aria-busy="true"],
+.v3-mobile-output-actions button[aria-busy="true"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: progress;
+}
+
+.v3-continuity-loading-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: v3-continuity-spin 0.75s linear infinite;
+}
+
+.v3-continuity-loading-label {
+  white-space: nowrap;
+}
+
+@keyframes v3-continuity-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v3-continuity-loading-spinner { animation: none; opacity: 0.7; }
+}
+
 .v3-mobile-reference-group-head {
   display: flex;
   align-items: flex-start;

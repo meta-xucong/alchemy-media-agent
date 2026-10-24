@@ -161,19 +161,32 @@ class ModeAwareRoleDirector:
         scenario_id: str | None = None,
         template_id: str | None = None,
         has_identity_anchor: bool = False,
+        has_generated_reference_anchor: bool = False,
+        completed_role_keys: list[str] | None = None,
     ) -> RoleSpecificGenerationPlan:
         normalized_mode = normalize_mode(mode)
         normalized_subject = _normalize_subject_type(subject_type)
         count = max(1, min(GENERAL_VARIATION_MAX_OUTPUTS, int(requested_image_count or 1)))
         policy = self._policy(normalized_mode, has_identity_anchor=has_identity_anchor)
+        completed_keys = list(dict.fromkeys(str(key).strip() for key in completed_role_keys or [] if str(key).strip()))
+        candidate_count = count + len(completed_keys)
+        for key in completed_keys:
+            suffix = key.rsplit("_variant_", 1)
+            if len(suffix) == 2 and suffix[1].isdigit():
+                candidate_count = max(candidate_count, int(suffix[1]) + count)
         raw_recipes = _expanded_recipe_dicts(
             self._recipe_dicts(
                 mode=normalized_mode,
                 subject_type=normalized_subject,
                 scenario_id=scenario_id,
             ),
-            count,
+            candidate_count,
         )
+        if completed_keys:
+            completed_key_set = set(completed_keys)
+            raw_recipes = [recipe for recipe in raw_recipes if str(recipe.get("role_key") or "") not in completed_key_set][:count]
+        else:
+            raw_recipes = raw_recipes[:count]
         # Doc128: the General mode director owns only neutral role structure.
         # Historical casebook overlays remain readable in old records but must
         # not add static camera/light/prompt atoms to a new job.
@@ -188,6 +201,16 @@ class ModeAwareRoleDirector:
             )
             for index, recipe in enumerate(raw_recipes, 1)
         ]
+        has_route_continuation = bool(completed_keys or has_generated_reference_anchor)
+        if normalized_mode == "delivery_suite" and has_route_continuation and recipes:
+            first = recipes[0]
+            axes = list(first.variation_axes)
+            if not _DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES.intersection(axes):
+                for axis in ("viewpoint", "pose"):
+                    if axis not in axes and len(axes) < 6:
+                        axes.append(axis)
+            if _DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES.intersection(axes):
+                recipes[0] = first.model_copy(update={"variation_axes": axes})
         prompt_additions = [
             f"Output {recipe.index} must serve the role '{recipe.label}': {recipe.prompt_pressure}"
             for recipe in recipes
@@ -225,6 +248,8 @@ class ModeAwareRoleDirector:
                 "scenario_id": scenario_id,
                 "template_id": template_id,
                 "has_identity_anchor": has_identity_anchor,
+                "has_generated_reference_anchor": has_generated_reference_anchor,
+                "completed_role_keys": completed_keys,
                 "mode_role_director": True,
             },
         )
@@ -282,6 +307,10 @@ class ModeAwareRoleDirector:
         outputs = _ensure_delivery_suite_minimum_diversity(
             mode=role_plan.mode,
             outputs=outputs,
+            is_continuation=bool(
+                role_plan.metadata.get("completed_role_keys")
+                or role_plan.metadata.get("has_generated_reference_anchor")
+            ),
         )
         if outputs is None:
             return None
@@ -686,6 +715,7 @@ def _ensure_delivery_suite_minimum_diversity(
     *,
     mode: str,
     outputs: list[VariationExecutionOutput],
+    is_continuation: bool = False,
 ) -> list[VariationExecutionOutput] | None:
     """Keep the old suite minimum while preserving the Brain-owned prompt path.
 
@@ -698,14 +728,23 @@ def _ensure_delivery_suite_minimum_diversity(
 
     if mode != "delivery_suite" or len(outputs) < 2:
         return outputs
+    normalized = list(outputs)
+    if is_continuation and not _DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES.intersection(normalized[0].variation_axes):
+        axes = list(normalized[0].variation_axes)
+        for axis in ("viewpoint", "pose"):
+            if axis not in axes and len(axes) < 6:
+                axes.append(axis)
+        if not _DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES.intersection(axes):
+            return None
+        normalized[0] = normalized[0].model_copy(update={"variation_axes": tuple(axes)})
     if any(
         _DELIVERY_SUITE_MINIMUM_DIVERSITY_AXES.intersection(output.variation_axes)
-        for output in outputs[1:]
+        for output in normalized[1:]
     ):
-        return outputs
+        return normalized
 
     target_index = 1
-    target = outputs[target_index]
+    target = normalized[target_index]
     axes = list(target.variation_axes)
     for axis in ("viewpoint", "pose"):
         if axis not in axes and len(axes) < 6:
@@ -714,7 +753,6 @@ def _ensure_delivery_suite_minimum_diversity(
         # Do not silently produce a weak suite if a future role catalog fills
         # all six slots with detail/layout semantics.
         return None
-    normalized = list(outputs)
     normalized[target_index] = target.model_copy(update={"variation_axes": tuple(axes)})
     return normalized
 
@@ -967,7 +1005,7 @@ def _generic_delivery_recipes() -> list[dict[str, Any]]:
 def _creative_exploration_recipes(subject_type: str) -> list[dict[str, Any]]:
     keep = _base_keep(subject_type)[:2]
     return [
-        _recipe("concept_clean_bright", "Clean bright idea", "Clear approachable direction", "clean concept", "medium", "simple clear angle", "balanced crop", "bright simple scene", ["mood", "palette"], keep, "Explore a clean, bright, high-clarity direction."),
+        _recipe("concept_clean_bright", "Clean bright idea", "Clear approachable direction", "clean concept", "medium", "simple clear angle", "balanced crop", "bright simple scene", ["angle", "camera distance", "scene depth", "placement", "mood", "palette"], keep, "Explore a clean, bright, high-clarity direction."),
         _recipe("concept_editorial", "Editorial idea", "More styled direction", "editorial concept", "medium", "styled magazine angle", "designed crop", "styled set", ["styling", "art direction"], keep, "Explore a more editorial, magazine-like direction."),
         _recipe("concept_cinematic", "Cinematic idea", "Atmospheric direction", "cinematic concept", "medium-wide", "dramatic lens angle", "deeper crop", "atmospheric scene", ["light", "depth", "scene"], keep, "Explore a more cinematic direction with stronger depth and atmosphere."),
         _recipe("concept_minimal_or_graphic", "Minimal idea", "Shape/layout direction", "minimal concept", "medium", "graphic angle", "layout-forward crop", "minimal scene", ["shape", "negative space"], keep, "Explore a simpler, more graphic composition with stronger shape and spacing."),

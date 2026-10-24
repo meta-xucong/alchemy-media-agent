@@ -104,6 +104,41 @@ def test_human_realism_does_not_override_a_stylized_person_request() -> None:
     assert guidance.metadata["disabled_reason"] == "stylized_request"
 
 
+def test_enforced_inactive_plan_does_not_reactivate_from_legacy_keywords() -> None:
+    guidance = _build(
+        "Create an anime manga illustration of a fantasy girl.",
+        metadata={
+            "capability_activation_plan": {
+                "activation_mode": "enforced",
+                "dependency_order": [],
+            },
+            "human_realism_execution_required": False,
+            "frozen_rendering_intent": {
+                "rendering_mode": "stylized",
+                "stylization_scope": "whole_image",
+            },
+        },
+    )
+
+    assert guidance.applies is False
+    assert guidance.metadata["disabled_reason"] == "stylized_request"
+
+
+def test_shadow_plan_preserves_legacy_keyword_activation() -> None:
+    guidance = _build(
+        "Create a real-camera editorial portrait of an adult in natural light.",
+        metadata={
+            "capability_activation_plan": {
+                "activation_mode": "shadow",
+                "dependency_order": [],
+            },
+            "human_realism_execution_required": False,
+        },
+    )
+
+    assert guidance.applies is True
+
+
 def test_object_artwork_does_not_suppress_visible_real_person_activation() -> None:
     guidance = _build(
         "Create a realistic photo of a model wearing a shirt with a front illustration print.",

@@ -8,9 +8,11 @@ from .context_digest import compact_brand_visual_context
 
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
+from copy import deepcopy
 import os
 import re
 import time
+import math
 from json import JSONDecodeError
 from typing import Any, Mapping
 
@@ -307,6 +309,7 @@ class V3LLMBrainAdapter:
         initial_rejected_sections: list[str] = []
         initial_contract_validation_audit: dict[str, Any] = {}
         final_contract_validation_audit: dict[str, Any] = {}
+        initial_profile_format_normalizations: list[str] = []
         try:
             record_stage_event(
                 "brain_adapter",
@@ -336,6 +339,9 @@ class V3LLMBrainAdapter:
             image_set_cardinality_audit = _remote_image_set_cardinality_audit(result)
             image_set_validation_audit = _remote_image_set_validation_audit(result)
             initial_contract_validation_audit = _remote_contract_validation_audit(result)
+            initial_profile_format_normalizations = list(
+                result.audit.get("remote_visual_task_profile_format_normalizations") or []
+            )
             record_stage_event(
                 "brain_adapter",
                 "semantic_plan_schema_validated",
@@ -353,8 +359,8 @@ class V3LLMBrainAdapter:
                 # A valid transport JSON object can still violate the frozen
                 # semantic schema. Give the same remote Brain one bounded
                 # opportunity to re-answer the same immutable request. This
-                # is not local JSON repair and it happens before any image
-                # Provider operation.
+                # follows representation-only normalization and happens before
+                # any image Provider operation.
                 semantic_recovery_attempted = True
                 record_stage_event(
                     "brain_adapter",
@@ -519,8 +525,21 @@ class V3LLMBrainAdapter:
                         "remote_semantic_contract_recovery_initial_rejected_sections": initial_rejected_sections,
                         "remote_semantic_contract_recovery_final_rejected_sections": initial_rejected_sections,
                         "remote_semantic_contract_recovery_call_count": 1,
+                        "remote_semantic_contract_recovery_initial_validation_audit": initial_contract_validation_audit,
                     }
                     if semantic_recovery_attempted
+                    else {}
+                ),
+                **(
+                    {"remote_contract_validation_audit": initial_contract_validation_audit}
+                    if semantic_recovery_attempted and initial_contract_validation_audit
+                    else {}
+                ),
+                **(
+                    {
+                        "remote_visual_task_profile_format_normalizations": initial_profile_format_normalizations[:16]
+                    }
+                    if semantic_recovery_attempted and initial_profile_format_normalizations
                     else {}
                 ),
             }
@@ -1567,6 +1586,14 @@ class V3LLMBrainAdapter:
         max_product_truth_source_refs: int | None = None,
         product_truth_context_issues: list[str] | None = None,
     ) -> BrainRunResult:
+        data = dict(data)
+        visual_profile_format_normalizations: list[str] = []
+        if requires_complete_image_set:
+            normalized_profile, visual_profile_format_normalizations = (
+                _normalize_remote_visual_task_profile_format(data.get("visual_task_profile"))
+            )
+            if visual_profile_format_normalizations:
+                data["visual_task_profile"] = normalized_profile
         payload = fallback.model_dump(mode="json")
         rejected_sections: list[str] = []
         cardinality_audit: dict[str, Any] = {}
@@ -1776,6 +1803,11 @@ class V3LLMBrainAdapter:
                     if contract_validation_sections
                     else {}
                 ),
+            }
+        if visual_profile_format_normalizations:
+            payload["audit"] = {
+                **dict(payload.get("audit") or {}),
+                "remote_visual_task_profile_format_normalizations": visual_profile_format_normalizations[:16],
             }
         return BrainRunResult.model_validate(payload)
 
@@ -4239,6 +4271,82 @@ def _has_remote_rendering_intent(candidate: Any) -> bool:
         and str(intent.get("stylization_scope") or "") in {"whole_image", "object_surface", "none", "ambiguous"}
         and str(intent.get("decision_owner") or "") == "remote_brain"
     )
+
+
+def _normalize_remote_visual_task_profile_format(candidate: Any) -> tuple[Any, list[str]]:
+    """Canonicalize representation-only variations without inventing semantics."""
+
+    if not isinstance(candidate, dict):
+        return candidate, []
+    profile = deepcopy(candidate)
+    changed: list[str] = []
+
+    list_item_types = {
+        "visual_task_profile.visual_intent_tags": str,
+        "visual_task_profile.unknown_requirements": str,
+        "visual_task_profile.subject_entities": dict,
+        "visual_task_profile.evidence": dict,
+        "visual_task_profile.reference_channel_ownership_intent.reference_owned_channels": str,
+        "visual_task_profile.reference_channel_ownership_intent.current_request_owned_channels": str,
+        "visual_task_profile.reference_channel_ownership_intent.evidence_ids": str,
+        "visual_task_profile.subject_entities.item.source_asset_ids": str,
+    }
+    enum_paths = {
+        "visual_task_profile.rendering_intent.rendering_mode",
+        "visual_task_profile.rendering_intent.stylization_scope",
+        "visual_task_profile.rendering_intent.decision_owner",
+        "visual_task_profile.developmental_age_intent",
+        "visual_task_profile.reference_channel_ownership_intent.applicability",
+        "visual_task_profile.reference_channel_ownership_intent.decision_owner",
+    }
+    confidence_paths = {
+        "visual_task_profile.confidence",
+        "visual_task_profile.reference_channel_ownership_intent.confidence",
+        "visual_task_profile.subject_entities.item.confidence",
+        "visual_task_profile.evidence.item.confidence",
+    }
+    string_list_paths = {path for path, item_type in list_item_types.items() if item_type is str}
+
+    def visit(value: Any, path: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, list):
+            return [visit(item, path + ("item",)) for item in value]
+        if not isinstance(value, dict):
+            if (
+                isinstance(value, str)
+                and len(path) > 1
+                and ".".join(path[:-1]) in string_list_paths
+                and value != value.strip()
+            ):
+                changed.append(".".join(path))
+                return value.strip()
+            return value
+        result = dict(value)
+        for field, item in result.items():
+            field_path = path + (field,)
+            path_key = ".".join(field_path)
+            if path_key in list_item_types and isinstance(item, list_item_types[path_key]):
+                result[field] = [item]
+                changed.append(path_key)
+                item = result[field]
+            elif path_key in confidence_paths and isinstance(item, str):
+                try:
+                    parsed = float(item.strip())
+                except ValueError:
+                    parsed = None
+                if parsed is not None and math.isfinite(parsed) and 0.0 <= parsed <= 1.0:
+                    result[field] = parsed
+                    changed.append(path_key)
+                    item = parsed
+            elif path_key in enum_paths and isinstance(item, str) and item != item.strip():
+                result[field] = item.strip()
+                changed.append(path_key)
+                item = result[field]
+            result[field] = visit(item, field_path)
+        return result
+
+    profile = visit(profile, ("visual_task_profile",))
+
+    return profile, list(dict.fromkeys(changed))
 
 
 def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:

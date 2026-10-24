@@ -32,17 +32,49 @@
     section.append(el("strong", title), el("p", description));
     board.append(section); return section;
   };
-  const pending = new Set();
-  async function change(options, output = null) {
+  const pending = new Map();
+  function showLoading(button, operation = null) {
+    if (!button) return;
+    if (operation) operation.buttons.add(button);
+    if (button.dataset.continuityLoading === "true") return;
+    button.dataset.continuityOriginalLabel = button.textContent.trim();
+    button.dataset.continuityWasDisabled = String(button.disabled);
+    button.dataset.continuityLoading = "true";
+    const spinner = el("span", undefined, "v3-continuity-loading-spinner");
+    spinner.setAttribute("aria-hidden", "true");
+    button.replaceChildren(spinner, el("span", "正在更新…", "v3-continuity-loading-label"));
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.setAttribute("aria-label", "正在更新主图");
+  }
+  function restoreLoading(button) {
+    if (!button?.isConnected || button.dataset.continuityLoading !== "true") return;
+    button.textContent = button.dataset.continuityOriginalLabel || "主图";
+    button.disabled = button.dataset.continuityWasDisabled === "true";
+    button.removeAttribute("aria-busy");
+    button.removeAttribute("aria-label");
+    delete button.dataset.continuityOriginalLabel;
+    delete button.dataset.continuityWasDisabled;
+    delete button.dataset.continuityLoading;
+  }
+  function showPending(button, projectId, outputId = null) {
+    const operation = pending.get(projectId);
+    if (!operation || operation.outputId !== outputId) return false;
+    showLoading(button, operation);
+    return true;
+  }
+  async function change(options, output = null, button = null) {
     const {project, request, refresh, isCurrent, notify} = options;
     const state = project?.metadata?.continuity_anchor;
     if (!project?.project_id || !Number.isInteger(state?.version)) {
       notify("主图状态尚未确认，请刷新项目。", "warning"); return;
     }
     const message = output ? "将这张已通过图片设为唯一连续性主图？原主图会被替换，历史记录保留。" : "解除当前主图？解绑后不会自动从历史补回。";
-    if (!window.confirm(message)) return;
     if (pending.has(project.project_id)) return;
-    pending.add(project.project_id);
+    if (!window.confirm(message)) return;
+    const operation = {outputId: output ? String(output.output_id) : null, buttons: new Set()};
+    pending.set(project.project_id, operation);
+    showLoading(button, operation);
     try {
       await request(`/projects/${encodeURIComponent(project.project_id)}/continuity-anchor/${output ? "bind" : "unbind"}`, {
         method: "POST", body: output ? {output_id: output.output_id, expected_job_id: output.job_id,
@@ -57,7 +89,8 @@
       notify("主图状态暂未确认，请刷新项目核对；未自动重试。", "warning");
       try { await refresh(); } catch (_) { /* Preserve the last known view when offline. */ }
     } finally {
-      pending.delete(project.project_id);
+      if (pending.get(project.project_id) === operation) pending.delete(project.project_id);
+      operation.buttons.forEach(restoreLoading);
     }
   }
   function render(board, options) {
@@ -75,11 +108,8 @@
     if (active) anchor.append(imageCard(active.preview_url, "当前连续性主图"));
     if (active || state.state === "invalid") {
       const button = el("button", "解绑主图", "button secondary v3-continuity-anchor-unbind"); button.type = "button";
-      button.addEventListener("click", async () => {
-        if (button.disabled) return;
-        button.disabled = true;
-        try { await change(options); } finally { if (button.isConnected) button.disabled = false; }
-      }); anchor.append(button);
+      showPending(button, project.project_id);
+      button.addEventListener("click", () => change(options, null, button)); anchor.append(button);
     }
     const mode = project.metadata.current_job_reference_mode;
     if (mode === "standard_direct_reference") {
@@ -105,5 +135,5 @@
     }
     return true;
   }
-  window.AlchemyContinuity = Object.freeze({render, bind: change});
+  window.AlchemyContinuity = Object.freeze({render, bind: change, showPending});
 })();

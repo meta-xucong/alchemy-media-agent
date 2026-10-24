@@ -38,7 +38,7 @@ The recovery must:
 - reuse the same immutable `BrainRunRequest`, requested count, template policy, assets and evidence;
 - identify only the rejected schema sections in a server-owned recovery marker;
 - ask the same Remote Brain to return the complete compact contract again;
-- perform no local JSON patching, keyword inference, prompt generation or fallback;
+- allow only representation-preserving canonicalization before typed validation (trim schema enum/list strings, wrap a single item where a list is required, and parse a finite in-range numeric confidence string); never normalize open-ended attributes/metadata, fill missing fields, infer semantic values, perform keyword inference, generate prompts or fall back to local creative decisions;
 - happen before any Provider request;
 - record attempted/succeeded/failed audit fields without recording the malformed response;
 - fail closed if the second answer is still incomplete or invalid.
@@ -92,14 +92,16 @@ This work must not:
 
 Code acceptance requires:
 
-1. first malformed strict semantic contract → one Remote Brain-only re-answer → valid result accepted;
-2. two malformed answers → fail closed, with exactly two Brain calls and zero Provider calls;
-3. non-schema Brain failures do not trigger the semantic recovery;
-4. the Product API host is bound to the existing lifecycle route and existing shared services;
-5. exact front/three-quarter/profile candidate counts and serial reference evidence remain 3/3/3 and 2/3/5 provider-native derivatives;
-6. shared Vision evidence maps to a complete typed identity score summary without local visual inference;
-7. metadata-only, unverified, blocked and missing-pixel results cannot become anchor candidates or winners;
-8. no Professional-private Provider/review/retry/storage is introduced;
-9. focused and full V3 regressions, compile checks and diff checks pass.
+1. representation-only profile variations normalize without adding or changing semantic decisions;
+2. missing or invalid semantic fields remain rejected, then receive at most one Remote Brain-only re-answer;
+3. two malformed answers fail closed, with exactly two Brain calls and zero Provider calls;
+4. non-schema Brain failures do not trigger semantic recovery;
+5. blocked outcomes retain bounded validation paths/types and normalization paths, without raw responses;
+6. the Product API host is bound to the existing lifecycle route and existing shared services;
+7. exact front/three-quarter/profile candidate counts and serial reference evidence remain 3/3/3 and 2/3/5 provider-native derivatives;
+8. shared Vision evidence maps to a complete typed identity score summary without local visual inference;
+9. metadata-only, unverified, blocked and missing-pixel results cannot become anchor candidates or winners;
+10. no Professional-private Provider/review/retry/storage is introduced;
+11. focused and full V3 regressions, compile checks and diff checks pass.
 
 Pixel acceptance restarts with one fresh formal preparation run. A complete M5 pass requires a verified front winner, verified three-quarter winner, verified profile winner, append-only lineage, prompt/reference parity and an activation-ready pack. If any bounded stage has no passing winner, later stages remain blocked and the evidence is sealed without gate relaxation.

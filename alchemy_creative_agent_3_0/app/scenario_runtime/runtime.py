@@ -9,6 +9,7 @@ from ..llm_brain.context_digest import compact_brand_visual_context
 from copy import deepcopy
 import hashlib
 import os
+import re
 from typing import Any, Callable
 
 from ..brand_memory.profile_service import BrandProfileService
@@ -111,6 +112,7 @@ from ..shared_capabilities.visual_cluster.contracts import (
     GENERAL_VARIATION_MAX_OUTPUTS,
     GeneralVariationModeBinding,
     ModeRoleRecipe,
+    RoleSpecificGenerationPlan,
     VariationExecutionContract,
 )
 from ..shared_capabilities.visual_cluster.mode_role_director import ALLOWED_MODES, ModeAwareRoleDirector
@@ -574,6 +576,40 @@ def _safe_remote_contract_rejected_sections(value: Any) -> list[str]:
         if token in _SAFE_REMOTE_CONTRACT_REJECTED_SECTIONS:
             sections.append(token)
     return list(dict.fromkeys(sections))[:8]
+
+
+def _safe_remote_contract_validation_audit(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("schema_version") != "v3_remote_contract_validation_audit_v1":
+        return {}
+    raw_sections = value.get("sections")
+    if not isinstance(raw_sections, dict):
+        return {}
+    sections: dict[str, dict[str, Any]] = {}
+    allowed_sections = {"image_set_plan", "visual_task_profile", "capability_activation_intent"}
+    for section, raw in raw_sections.items():
+        if section not in allowed_sections or not isinstance(raw, dict):
+            continue
+        paths = raw.get("validation_error_paths")
+        types = raw.get("validation_error_types")
+        safe_paths = []
+        for path in paths if isinstance(paths, list) else []:
+            token = str(path or "")
+            if re.fullmatch(r"(?:image_set_plan|visual_task_profile|capability_activation_intent)(?:\.[a-z_]+|\.item)*", token):
+                safe_paths.append(token)
+        safe_types = [
+            re.sub(r"[^a-z0-9_.-]", "_", str(item or "").lower())[:64]
+            for item in (types if isinstance(types, list) else [])
+            if str(item or "").strip()
+        ][:8]
+        count = raw.get("validation_error_count")
+        sections[section] = {
+            "validation_error_count": count if isinstance(count, int) and not isinstance(count, bool) else len(safe_paths),
+            "validation_error_paths": list(dict.fromkeys(safe_paths))[:8],
+            "validation_error_types": list(dict.fromkeys(safe_types)),
+        }
+    if not sections:
+        return {}
+    return {"schema_version": "v3_remote_contract_validation_audit_v1", "sections": sections}
 
 
 def _safe_remote_image_set_cardinality_audit(value: Any) -> dict[str, Any]:
@@ -1054,7 +1090,19 @@ class ScenarioRuntime:
         )
         record_stage_event("scenario_runtime", "active_capabilities_returned", stage=stage)
         record_stage_event("scenario_runtime", "frozen_capability_validation_call", stage=stage)
-        self._validate_frozen_capability_execution(plan, active_run)
+        try:
+            self._validate_frozen_capability_execution(plan, active_run)
+        except CapabilityActivationError as exc:
+            # Preserve a private, allowlisted snapshot before the generic
+            # blocked-result path serializes the failure.  Never retain the
+            # profile prose, provider payload, or raw executor warning text.
+            exc.activation_failure_diagnostics = self._activation_failure_diagnostics(
+                plan,
+                active_run,
+                brain_result,
+                failure_code=str(exc),
+            )
+            raise
         record_stage_event("scenario_runtime", "frozen_capability_validation_returned", stage=stage)
         record_stage_event("scenario_runtime", "combine_capability_runs_call", stage=stage)
         combined = self._combine_capability_runs(request, resolution, pre_activation_run, active_run, plan)
@@ -4224,6 +4272,7 @@ class ScenarioRuntime:
             outcome_class = "remote_provider_unavailable"
         elif reason_code in {
             "remote_creative_brain_image_set_plan_invalid",
+            "remote_creative_brain_task_profile_invalid",
             "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_request_contract_invalid",
         }:
@@ -4256,6 +4305,18 @@ class ScenarioRuntime:
             or audit.get("remote_semantic_contract_recovery_initial_rejected_sections")
             or []
         )
+        validation_audit = _safe_remote_contract_validation_audit(
+            audit.get("remote_contract_validation_audit")
+            or audit.get("remote_semantic_contract_recovery_final_validation_audit")
+            or audit.get("remote_semantic_contract_recovery_initial_validation_audit")
+        )
+        format_normalizations = audit.get("remote_visual_task_profile_format_normalizations")
+        safe_format_normalizations = [
+            str(item)
+            for item in format_normalizations
+            if isinstance(item, str)
+            and re.fullmatch(r"visual_task_profile(?:\.[a-z_]+|\.item)*", item)
+        ][:16] if isinstance(format_normalizations, list) else []
 
         safe_finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
             audit.get("remote_brain_finalizer_lifecycle")
@@ -4309,6 +4370,12 @@ class ScenarioRuntime:
             else {}
         ),
         "remote_contract_rejected_sections": rejected_sections,
+        **({"remote_contract_validation_audit": validation_audit} if validation_audit else {}),
+        **(
+            {"remote_visual_task_profile_format_normalizations": safe_format_normalizations}
+            if safe_format_normalizations
+            else {}
+        ),
         **(
             {
                 "remote_provider_availability_reason": str(
@@ -4607,6 +4674,25 @@ class ScenarioRuntime:
         if requested_count > GENERAL_VARIATION_MAX_OUTPUTS:
             raise CapabilityActivationError("general_variation_execution_contract_count_unsupported")
         role_plan_for_binding = None
+        project_context = metadata.get("project_context_snapshot")
+        project_context = dict(project_context) if isinstance(project_context, dict) else {}
+        project_suite_plan = project_context.get("general_suite_role_plan")
+        project_suite_metadata = project_suite_plan.get("metadata") if isinstance(project_suite_plan, dict) else {}
+        completed_role_keys = (
+            project_suite_metadata.get("completed_role_keys")
+            if isinstance(project_suite_metadata, dict)
+            else []
+        )
+        completed_role_keys = [
+            str(value).strip()
+            for value in completed_role_keys
+            if str(value).strip()
+        ] if isinstance(completed_role_keys, list) else []
+        has_generated_reference_anchor = bool(
+            project_suite_metadata.get("has_generated_reference_anchor")
+            if isinstance(project_suite_metadata, dict)
+            else False
+        )
         frozen_plan = metadata.get("capability_activation_plan")
         if isinstance(frozen_plan, dict) and frozen_plan.get("plan_id"):
             if (
@@ -4649,7 +4735,10 @@ class ScenarioRuntime:
                 scenario_id=scenario_id,
                 template_id=template_id,
                 has_identity_anchor=role_binding["has_identity_anchor"],
+                has_generated_reference_anchor=has_generated_reference_anchor,
+                completed_role_keys=completed_role_keys,
             )
+            role_plan_for_binding = role_plan
             contract = director.build_variation_execution_contract(
                 role_plan=role_plan,
                 scenario_id=scenario_id,
@@ -4660,6 +4749,19 @@ class ScenarioRuntime:
 
         if contract.mode != resolved_mode:
             raise CapabilityActivationError("general_variation_execution_contract_mode_conflict")
+        if role_plan_for_binding is None:
+            raw_role_plan = metadata.get("variation_execution_role_plan")
+            if isinstance(raw_role_plan, dict):
+                try:
+                    saved_role_plan = RoleSpecificGenerationPlan.model_validate(raw_role_plan)
+                except Exception:
+                    saved_role_plan = None
+                if (
+                    saved_role_plan is not None
+                    and saved_role_plan.mode == contract.mode
+                    and saved_role_plan.requested_image_count == contract.requested_image_count
+                ):
+                    role_plan_for_binding = saved_role_plan
         # Keep one server-owned role identity projection beside the neutral
         # contract. It is used later to bind each TemplateDeliverable to the
         # active General mode; it is not forwarded as Brain creative prose.
@@ -4678,7 +4780,22 @@ class ScenarioRuntime:
                     scenario_id=scenario_id,
                     template_id=template_id,
                     has_identity_anchor=role_binding["has_identity_anchor"],
+                    has_generated_reference_anchor=has_generated_reference_anchor,
+                    completed_role_keys=completed_role_keys,
                 )
+
+        if role_plan_for_binding is not None:
+            module = self.shared_capability_registry.get(VISUAL_CAPABILITY_CLUSTER_ID)
+            director = getattr(module, "mode_role_director", None)
+            if isinstance(director, ModeAwareRoleDirector):
+                projected_contract = director.build_variation_execution_contract(
+                    role_plan=role_plan_for_binding,
+                    scenario_id=scenario_id,
+                    template_id=template_id,
+                )
+                if projected_contract is None:
+                    raise CapabilityActivationError("general_variation_execution_contract_missing")
+                contract = projected_contract
 
         if (
             not contract.contract_digest
@@ -4727,6 +4844,24 @@ class ScenarioRuntime:
                 and role_plan_payload.get("requested_image_count") == contract.requested_image_count
             ):
                 metadata["variation_execution_role_plan"] = role_plan_payload
+                if project_context:
+                    module = self.shared_capability_registry.get(VISUAL_CAPABILITY_CLUSTER_ID)
+                    suite_director = getattr(module, "suite_director", None)
+                    if suite_director is not None:
+                        suite_plan = suite_director.build(
+                            project_id=role_plan_for_binding.project_id,
+                            job_id=role_plan_for_binding.job_id,
+                            user_input=request.user_input,
+                            variation_mode=contract.mode,
+                            requested_image_count=contract.requested_image_count,
+                            has_identity_anchor=bool(role_binding["has_identity_anchor"]),
+                            subject_type=str(role_binding["subject_type"]),
+                            scenario_id=scenario_id,
+                            template_id=template_id,
+                            role_plan=role_plan_for_binding,
+                        )
+                        project_context["general_suite_role_plan"] = suite_plan.model_dump(mode="json")
+                        metadata["project_context_snapshot"] = project_context
         role_binding = self._resolved_general_variation_role_binding(request)
         if role_binding["source"] == "runtime_typed_reference_facts":
             metadata["variation_execution_role_binding"] = role_binding
@@ -5808,6 +5943,187 @@ class ScenarioRuntime:
         guidance = cluster.get("human_photorealism_guidance")
         if not isinstance(guidance, dict) or not bool(guidance.get("applies")):
             raise CapabilityActivationError("human_realism_execution_mismatch")
+
+    def _activation_failure_diagnostics(
+        self,
+        plan: CapabilityActivationPlan,
+        active_run: CapabilityRunResult | None,
+        brain_result: BrainRunResult | None,
+        *,
+        failure_code: str,
+    ) -> dict[str, Any]:
+        """Build a private, data-minimized receipt for activation blocks."""
+
+        def value(obj: Any, key: str, default: Any = None) -> Any:
+            return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+        def enum_value(raw: Any, allowed: set[str]) -> str | None:
+            candidate = str(value(raw, "value", raw) or "").strip().lower()
+            return candidate if candidate in allowed else None
+
+        known_capability_ids = {item.capability_id for item in self.visual_capability_registry.manifests(enabled_only=False)}
+        known_module_ids = {item.module_id for item in self.shared_capability_registry.list_modules()}
+        safe_warning_codes = {
+            "asset_binding_role_conflict", "body_mcp_reference_partition_invalid",
+            "asset_file_missing", "asset_resolution_low", "asset_vision_failed",
+            "capability_execution_failed", "capability_not_registered",
+            "unsupported_claim_requires_evidence", "output_review_metadata_only",
+        }
+        safe_hr_reasons = {
+            "frozen_rendering_intent_conflict", "frozen_human_realism_execution",
+            "disabled_by_metadata", "forced_by_metadata", "stylized_request",
+            "no_visible_person_evidence", "no_human_signal",
+        }
+        status_values = {"success", "warning", "error", "skipped", "complete", "degraded", "failed"}
+        severity_values = {"info", "warning", "error"}
+        activation_modes = {"required", "recommended", "optional", "forbidden"}
+        rendering_modes = {"photoreal", "stylized", "mixed", "unknown"}
+        stylization_scopes = {"whole_image", "object_surface", "none", "ambiguous"}
+        decision_owners = {"remote_brain", "evidence_fallback", "legacy"}
+        age_intents = {"current_request_assigns_stage", "preserve_reference_stage", "not_applicable", "ambiguous"}
+
+        def capability_summary(items: Any) -> list[dict[str, Any]]:
+            summaries: list[dict[str, Any]] = []
+            for item in items or []:
+                capability_id = enum_value(value(item, "capability_id"), known_capability_ids)
+                if not capability_id:
+                    continue
+                entry: dict[str, Any] = {"capability_id": capability_id}
+                activation_mode = enum_value(value(item, "activation_mode"), activation_modes)
+                if activation_mode:
+                    entry["activation_mode"] = activation_mode
+                summaries.append(entry)
+            return summaries
+
+        profile = value(brain_result, "visual_task_profile") if brain_result is not None else None
+        rendering_intent = value(profile, "rendering_intent", {}) if profile is not None else {}
+        profile_summary = None
+        if profile is not None:
+            entities = value(profile, "subject_entities", []) or []
+            entity_counts: dict[str, int] = {}
+            for entity in entities:
+                # Entity types are free-form in the input contract. Keep only
+                # the diagnostic distinction relevant to Human Realism.
+                bucket = "person" if value(entity, "entity_type") == "person" else "other"
+                entity_counts[bucket] = entity_counts.get(bucket, 0) + 1
+            profile_summary = {
+                "rendering_intent": {
+                    "rendering_mode": enum_value(value(rendering_intent, "rendering_mode"), rendering_modes),
+                    "stylization_scope": enum_value(value(rendering_intent, "stylization_scope"), stylization_scopes),
+                    "decision_owner": enum_value(value(rendering_intent, "decision_owner"), decision_owners),
+                },
+                "developmental_age_intent": enum_value(value(profile, "developmental_age_intent"), age_intents),
+                "subject_entity_counts": entity_counts,
+            }
+
+        cluster_result = next(
+            (
+                result
+                for result in (active_run.results if active_run is not None else [])
+                if value(result, "module_id") == VISUAL_CAPABILITY_CLUSTER_ID
+            ),
+            None,
+        )
+        facts = value(cluster_result, "facts", {}) if cluster_result is not None else {}
+        cluster = value(facts, "visual_capability_cluster", {}) or {}
+        guidance = value(cluster, "human_photorealism_guidance", {}) or {}
+        guidance_metadata = value(guidance, "metadata", {}) or {}
+        plugin_activation = value(guidance_metadata, "human_realism_plugin", {}) or {}
+        applies = value(guidance, "applies") if guidance else None
+        human_realism_status = (
+            "applied" if applies is True else "not_applied" if applies is False else
+            "guidance_missing" if cluster_result is not None else "cluster_result_missing"
+        )
+        primary_reason = enum_value(value(plugin_activation, "primary_reason"), safe_hr_reasons)
+        disabled_reason = enum_value(value(plugin_activation, "disabled_reason"), safe_hr_reasons) or enum_value(
+            value(guidance_metadata, "disabled_reason"), safe_hr_reasons
+        )
+        if not primary_reason and not disabled_reason:
+            fallback_reason = human_realism_status if human_realism_status in safe_hr_reasons else "reason_unavailable"
+            if applies is True:
+                primary_reason = fallback_reason
+            else:
+                disabled_reason = fallback_reason
+
+        executor_results: list[dict[str, Any]] = []
+        for result in (active_run.results if active_run is not None else []):
+            module_id = enum_value(value(result, "module_id"), known_module_ids)
+            if not module_id:
+                continue
+            item: dict[str, Any] = {
+                "module_id": module_id,
+                "status": enum_value(value(result, "status"), status_values),
+            }
+            result_metadata = value(result, "metadata", {}) or {}
+            exception_type = str(value(result_metadata, "exception_type") or "")
+            if exception_type:
+                item["exception_type"] = exception_type if exception_type in {
+                    "ValueError", "TypeError", "KeyError", "RuntimeError", "OSError", "TimeoutError"
+                } else "custom_exception"
+            raw_frame = value(result_metadata, "exception_frame", {}) or {}
+            source = str(value(raw_frame, "source") or "")
+            source_name = source.replace("\\", "/").rsplit("/", 1)[-1]
+            if source_name:
+                frame: dict[str, Any] = {"source": source_name[:120]}
+                line_number = value(raw_frame, "line")
+                if isinstance(line_number, int) and not isinstance(line_number, bool) and line_number > 0:
+                    frame["line"] = line_number
+                function_name = str(value(raw_frame, "function") or "")
+                if function_name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,99}|<module>", function_name):
+                    frame["function"] = function_name
+                item["exception_frame"] = frame
+            result_warnings = []
+            for warning in value(result, "warnings", []) or []:
+                warning_item = {
+                    "code": enum_value(value(warning, "code"), safe_warning_codes) or "other",
+                    "severity": enum_value(value(warning, "severity"), severity_values),
+                }
+                warning_metadata = value(warning, "metadata", {}) or {}
+                exception_type = str(value(warning_metadata, "exception_type") or "")
+                if exception_type:
+                    warning_item["exception_type"] = exception_type if exception_type in {"ValueError", "TypeError", "KeyError", "RuntimeError", "OSError", "TimeoutError"} else "custom_exception"
+                result_warnings.append({key: val for key, val in warning_item.items() if val})
+            if result_warnings:
+                item["warnings"] = result_warnings[:20]
+            executor_results.append(item)
+
+        executor_warnings = []
+        for warning in (active_run.warnings if active_run is not None else []):
+            item = {
+                "code": enum_value(value(warning, "code"), safe_warning_codes) or "other",
+                "severity": enum_value(value(warning, "severity"), severity_values),
+            }
+            warning_metadata = value(warning, "metadata", {}) or {}
+            exception_type = str(value(warning_metadata, "exception_type") or "")
+            if exception_type:
+                item["exception_type"] = exception_type if exception_type in {"ValueError", "TypeError", "KeyError", "RuntimeError", "OSError", "TimeoutError"} else "custom_exception"
+            executor_warnings.append({key: val for key, val in item.items() if val})
+
+        return {
+            "schema_version": "v3_activation_failure_diagnostics_v1",
+            "failure_code": enum_value(failure_code, {"human_realism_execution_mismatch", "human_realism_execution_missing"}) or "capability_activation_error",
+            "provider_request_started": False,
+            "profile_summary": profile_summary,
+            "planned_capabilities": {
+                "activation_mode": enum_value(value(plan, "activation_mode"), {"enforced", "shadow", "legacy"}),
+                "dependency_order": [code for code in (enum_value(item, known_capability_ids) for item in (value(plan, "dependency_order", []) or [])) if code],
+                "base": capability_summary(value(plan, "base_capabilities", [])),
+                "active": capability_summary(value(plan, "active_capabilities", [])),
+                "inactive": capability_summary(value(plan, "inactive_capabilities", [])),
+            },
+            "human_realism_execution": {
+                "status": human_realism_status,
+                "applies": applies if isinstance(applies, bool) else None,
+                "primary_reason": primary_reason,
+                "disabled_reason": disabled_reason,
+            },
+            "executor": {
+                "status": enum_value(value(active_run, "status"), status_values),
+                "results": executor_results,
+                "warnings": executor_warnings,
+                "required_failures": [code for code in (enum_value(item, known_module_ids) for item in (value(active_run, "required_failures", []) or [])) if code],
+            },
+        }
 
     def _attach_composed_contribution(
         self,
@@ -7141,7 +7457,14 @@ class ScenarioRuntime:
                 )
             ],
             required_failures=required_failures,
-            metadata={"activation_mode": self._capability_activation_mode(request)},
+            metadata={
+                "activation_mode": self._capability_activation_mode(request),
+                **(
+                    {"activation_failure_diagnostics": dict(exc.activation_failure_diagnostics)}
+                    if isinstance(getattr(exc, "activation_failure_diagnostics", None), dict)
+                    else {}
+                ),
+            },
         )
         return ScenarioRuntimeResult(
             status=ScenarioRuntimeStatus.BLOCKED,

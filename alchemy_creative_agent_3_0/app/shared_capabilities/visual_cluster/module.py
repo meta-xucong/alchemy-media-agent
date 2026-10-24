@@ -908,6 +908,13 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             mode=variation_mode,
             subject_type=subject_type,
         )
+        runtime_role_plan = None
+        raw_runtime_role_plan = capability_input.metadata.get("variation_execution_role_plan")
+        if suite_direction_active and isinstance(raw_runtime_role_plan, dict):
+            try:
+                runtime_role_plan = RoleSpecificGenerationPlan.model_validate(raw_runtime_role_plan)
+            except Exception:
+                runtime_role_plan = None
         suite_role_plan = (
             self.suite_director.build(
                 project_id=str(project_context.get("project_id") or "") or None,
@@ -931,6 +938,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     if runtime_general_contract_scope
                     else str(project_context.get("template_id") or capability_input.metadata.get("template_id") or "")
                 ),
+                role_plan=runtime_role_plan,
             )
             if suite_direction_active
             else self._inactive_suite_role_plan(capability_input, project_id, variation_mode, requested_count)

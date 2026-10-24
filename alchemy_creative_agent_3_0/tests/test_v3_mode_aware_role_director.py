@@ -59,6 +59,16 @@ def test_doc59_mode_role_director_makes_four_modes_distinct() -> None:
         assert plan.role_recipes[0].role_key == first_role
         assert len({recipe.role_key for recipe in plan.role_recipes}) == 4
         assert all(recipe.prompt_pressure for recipe in plan.role_recipes)
+        if mode == "creative_exploration":
+            contract = director.build_variation_execution_contract(
+                role_plan=plan,
+                scenario_id="general_creative",
+                template_id="general_template",
+            )
+            assert contract is not None
+            assert {"viewpoint", "framing", "depth", "placement"}.issubset(
+                contract.outputs[0].variation_axes
+            )
 
 
 def test_selection_review_does_not_use_an_unreachable_distance_predicate() -> None:

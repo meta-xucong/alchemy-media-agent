@@ -3913,6 +3913,105 @@ class V3ProjectModeService:
             self.project_store.save_project(project)
             return {"operation_id": clean_operation_id, "job_id": clean_job_id}
 
+    def get_project_planning_operation(
+        self,
+        project_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Resolve one browser planning operation from its durable identity."""
+
+        project = self._require_project(project_id)
+        clean_operation_id = str(operation_id or "").strip()
+        if not clean_operation_id:
+            raise KeyError("doc277_planning_operation_not_found")
+        try:
+            records = self.project_store.list_private_records(
+                project.project_id,
+                _DOC277_PRIVATE_PLANNING_NAMESPACE,
+            )
+        except ValueError as exc:
+            raise KeyError("doc277_planning_operation_not_found") from exc
+        matching = [
+            record
+            for record in records
+            if record.get("project_id") == project.project_id
+            and record.get("operation_id") == clean_operation_id
+        ]
+        opened = next(
+            (record for record in matching if record.get("record_kind") == "opened"),
+            None,
+        )
+        expected_open_identity = {
+            "project_id": project.project_id,
+            "operation_id": clean_operation_id,
+            "record_kind": "opened",
+        }
+        if (
+            not isinstance(opened, dict)
+            or opened.get("identity_digest") != self._doc277_digest(expected_open_identity)
+        ):
+            raise KeyError("doc277_planning_operation_not_found")
+
+        terminal = next(
+            (
+                record
+                for record in reversed(matching)
+                if record.get("record_kind") in {"completed", "failed"}
+            ),
+            None,
+        )
+        if terminal is None:
+            current = self._doc277_current_planning_operation(project)
+            if current is not None and current.get("operation_id") == clean_operation_id:
+                return current
+            raise KeyError("doc277_planning_operation_not_found")
+
+        record_kind = str(terminal.get("record_kind") or "")
+        job_id = str(terminal.get("job_id") or "").strip()
+        if record_kind == "completed":
+            expected_identity = {
+                "project_id": project.project_id,
+                "operation_id": clean_operation_id,
+                "record_kind": "completed",
+                "job_id": job_id,
+            }
+            if (
+                not job_id
+                or job_id not in project.job_ids
+                or terminal.get("identity_digest") != self._doc277_digest(expected_identity)
+            ):
+                raise ValueError("doc277_planning_completion_binding_invalid")
+            return {
+                "operation_id": clean_operation_id,
+                "state": "completed",
+                "terminal": True,
+                "pending": False,
+                "job_id": job_id,
+                "next_actions": [],
+            }
+
+        failure_code = str(terminal.get("failure_code") or "planning_unavailable").strip()
+        failed_identity = {
+            "project_id": project.project_id,
+            "operation_id": clean_operation_id,
+            "record_kind": "failed",
+            "failure_code": failure_code,
+            **({"job_id": job_id} if job_id else {}),
+        }
+        if terminal.get("identity_digest") != self._doc277_digest(failed_identity):
+            raise ValueError("doc277_planning_failure_binding_invalid")
+        operation = {
+            "operation_id": clean_operation_id,
+            "state": "planning_failed",
+            "terminal": True,
+            "pending": False,
+            "next_actions": [{"id": "review_project_request"}],
+            "failure_code": failure_code,
+        }
+        if job_id and job_id in project.job_ids:
+            operation["job_id"] = job_id
+        return operation
+
     def fail_project_planning_operation(
         self,
         project_id: str,
@@ -11275,9 +11374,21 @@ class V3ProjectModeService:
             ).get("effective_variation_mode")
             or "delivery_suite"
         )
+        completed_role_keys = self._project_completed_general_suite_role_keys(
+            project=project,
+            mode=mode,
+        )
+        has_generated_reference_anchor = bool(project.selected_output_refs)
         roles = self._suite_roles_for_mode(mode, requested_count, has_anchor=bool(project.selected_output_refs))
         return {
-            "plan_id": stable_id("general_suite_role_plan", project.project_id, mode, requested_count, continuation_instruction or project.user_goal),
+            "plan_id": stable_id(
+                "general_suite_role_plan",
+                project.project_id,
+                mode,
+                requested_count,
+                continuation_instruction or project.user_goal,
+                completed_role_keys,
+            ),
             "project_id": project.project_id,
             "variation_mode": mode,
             "requested_image_count": requested_count,
@@ -11292,8 +11403,89 @@ class V3ProjectModeService:
                 "keep the same project direction across all roles",
             ],
             "user_visible_summary": ["V3 planned distinct uses for this set."],
-            "metadata": {"doc": "58", "role_count": len(roles)},
+            "metadata": {
+                "doc": "58",
+                "role_count": len(roles),
+                "completed_role_keys": completed_role_keys,
+                "has_generated_reference_anchor": has_generated_reference_anchor,
+            },
         }
+
+    def _project_completed_general_suite_role_keys(
+        self,
+        *,
+        project: ProjectRecord,
+        mode: str,
+    ) -> list[str]:
+        """Read already delivered General routes from canonical project Jobs."""
+
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is None:
+            return []
+        completed: list[str] = []
+        seen_outputs: set[str] = set()
+        seen_roles: set[str] = set()
+        for job_id in dict.fromkeys(project.job_ids):
+            try:
+                source_job_status = self.product_service.get_job(job_id)
+                job_status = self._project_output_job_status_projection(source_job_status)
+            except Exception:
+                continue
+            if job_status is None or not self._job_delivery_is_settled(job_status):
+                continue
+            final_output_ids = self._canonical_final_delivery_output_ids(job_status)
+            if final_output_ids is None:
+                continue
+            try:
+                records = list(output_store.list_by_job(job_id))
+            except Exception:
+                continue
+            delivery = self._delivery_annotations_for_records(
+                records,
+                final_output_ids=final_output_ids,
+            )
+            # Mode is needed only to interpret legacy route recipes that did
+            # not persist their own mode. Keep using the delivery projection
+            # for all delivery decisions; read this one field from the source
+            # status because that projection intentionally omits it.
+            source_job_metadata = dict(getattr(source_job_status, "metadata", None) or {})
+            job_metadata = dict(job_status.metadata or {})
+            job_mode = str(
+                source_job_metadata.get("effective_variation_mode")
+                or source_job_metadata.get("variation_execution_mode")
+                or source_job_metadata.get("variation_mode")
+                or job_metadata.get("effective_variation_mode")
+                or job_metadata.get("variation_execution_mode")
+                or job_metadata.get("variation_mode")
+                or ""
+            ).strip()
+            for record in sorted(records, key=lambda item: item.created_at or ""):
+                output_id = self._output_record_identity(record)
+                if (
+                    not output_id
+                    or output_id in seen_outputs
+                    or delivery.get(output_id, {}).get("delivery_state") != "final_delivery"
+                ):
+                    continue
+                seen_outputs.add(output_id)
+                record_metadata = dict(getattr(record, "metadata", None) or {})
+                role_recipe = record_metadata.get("mode_role_recipe")
+                if not isinstance(role_recipe, dict):
+                    asset_metadata = record_metadata.get("asset_metadata")
+                    role_recipe = asset_metadata.get("mode_role_recipe") if isinstance(asset_metadata, dict) else None
+                if not isinstance(role_recipe, dict):
+                    continue
+                recipe_metadata = role_recipe.get("metadata")
+                recipe_mode = str(
+                    (recipe_metadata.get("mode") if isinstance(recipe_metadata, dict) else "")
+                    or job_mode
+                ).strip()
+                role_key = str(role_recipe.get("role_key") or "").strip()
+                if recipe_mode != mode or not role_key or role_key in seen_roles:
+                    continue
+                seen_roles.add(role_key)
+                completed.append(role_key)
+        return completed
 
     def _project_batch_identity_diversity_review(
         self,
@@ -14467,24 +14659,31 @@ class V3ProjectModeService:
         if p["continuity_anchor"] is not None or not p["anchor_auto_enabled"] or result.metadata.get("doc322_auto_anchor_candidate") is not True:
             return
         planned=getattr(job,"planning_result",None)
-        if planned is None or len(planned.series_plan.assets)<2:
+        if planned is None:
             return
-        source_asset=planned.series_plan.assets[0].asset_id
-        matching=[a for a in result.asset_pack.assets if a.asset_id==source_asset]
-        if len(matching)!=1:
+        eligible = self.product_service._public_final_delivery_projection(result)[1]
+        # The pack retains superseded attempts. Review has already selected the
+        # final winners; choose the first eligible one in original plan order.
+        for planned_asset in planned.series_plan.assets:
+            matching = [
+                str((asset.metadata.get("candidate_metadata") or {}).get("output_id")
+                    or asset.metadata.get("output_id") or "")
+                for asset in result.asset_pack.assets
+                if asset.asset_id == planned_asset.asset_id
+            ]
+            matching = [output_id for output_id in matching if output_id in eligible]
+            if not matching:
+                continue
+            if len(matching) != 1:
+                return
+            try:
+                self._anchor_bindings().change(
+                    project_id, output_id=matching[0], expected_job_id=job_id,
+                    expected_version=p["anchor_version"], mode="auto_first_formal",
+                )
+            except (ValueError, OSError):
+                pass  # Preserve concurrent user action and canonical evidence authority.
             return
-        asset=matching[0]; cm=dict(asset.metadata.get("candidate_metadata") or {})
-        output_id=str(cm.get("output_id") or asset.metadata.get("output_id") or "")
-        if not output_id or any(cm.get(k) not in (None,0,False) for k in ("refine_round","retry_attempt","visual_auto_retry_attempt")):
-            return
-        records=[r for r in self.product_service.output_store.list_by_job(job_id) if r.asset_id==source_asset]
-        if len(records)!=1 or records[0].output_id!=output_id or records[0].candidate_id!=asset.metadata.get("selected_candidate_id"):
-            return
-        try:
-            self._anchor_bindings().change(project_id,output_id=output_id,expected_job_id=job_id,
-                expected_version=p["anchor_version"],mode="auto_first_formal")
-        except (ValueError,OSError):
-            return  # Concurrent user action or unverified pixels cannot be overwritten.
 
     def _reference_project_mode(self, project: ProjectRecord, template_id: str | None = None) -> str:
         if (template_id or project.primary_template_id)==ECOMMERCE_TEMPLATE_ID:

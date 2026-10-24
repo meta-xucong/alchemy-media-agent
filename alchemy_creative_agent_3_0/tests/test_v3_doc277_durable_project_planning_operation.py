@@ -109,6 +109,104 @@ def test_doc277_planning_completion_binds_one_job_and_failure_is_safe_terminal()
     assert service.get_project(project.project_id).metadata["current_operation"] == failed
 
 
+def test_doc277_operation_lookup_returns_its_bound_job_not_the_project_tail() -> None:
+    service = _service()
+    project = service.create_project(
+        {
+            "user_goal": "Create a visual set.",
+            "primary_template_id": "general_template",
+        }
+    ).project
+    project.job_ids.append("job_previous_one_image")
+    service.project_store.save_project(project)
+
+    operation = service.begin_project_planning_operation(
+        project.project_id,
+        {
+            "user_input": "Create two fresh images.",
+            "template_id": "general_template",
+            "metadata": {"requested_image_count": 2},
+        },
+    )
+    current_project = service.project_store.get_project(project.project_id)
+    current_project.job_ids.append("job_current_two_images")
+    service.project_store.save_project(current_project)
+    service.complete_project_planning_operation(
+        project.project_id,
+        operation["operation_id"],
+        job_id="job_current_two_images",
+    )
+
+    resolved = service.get_project_planning_operation(
+        project.project_id,
+        operation["operation_id"],
+    )
+
+    assert resolved == {
+        "operation_id": operation["operation_id"],
+        "state": "completed",
+        "terminal": True,
+        "pending": False,
+        "job_id": "job_current_two_images",
+        "next_actions": [],
+    }
+
+    next_operation = service.begin_project_planning_operation(
+        project.project_id,
+        {
+            "user_input": "Create another image.",
+            "template_id": "general_template",
+        },
+    )
+    assert service.get_project_planning_operation(
+        project.project_id,
+        operation["operation_id"],
+    ) == resolved
+    assert next_operation["operation_id"] != operation["operation_id"]
+
+
+def test_doc277_operation_lookup_is_exposed_for_the_exact_project_operation(monkeypatch) -> None:
+    handlers = V3ProductRouteHandlers(
+        service=V3ProductApiService(),
+        project_store=InMemoryProjectStore(),
+    )
+    monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
+    client = TestClient(app_main.app)
+    project_id = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create two images."},
+    ).json()["project"]["project_id"]
+    operation = handlers.begin_project_planning_operation(
+        project_id,
+        {
+            "user_input": "Create two images.",
+            "template_id": "general_template",
+        },
+    )
+
+    pending = client.get(
+        f"/api/v3/creative-agent/projects/{project_id}/planning-operations/{operation['operation_id']}"
+    )
+    assert pending.status_code == 200
+    assert pending.json()["state"] == "planning"
+    assert pending.json()["operation_id"] == operation["operation_id"]
+
+    project = handlers.project_service.project_store.get_project(project_id)
+    project.job_ids.append("job_exact_operation")
+    handlers.project_service.project_store.save_project(project)
+    handlers.project_service.complete_project_planning_operation(
+        project_id,
+        operation["operation_id"],
+        job_id="job_exact_operation",
+    )
+    completed = client.get(
+        f"/api/v3/creative-agent/projects/{project_id}/planning-operations/{operation['operation_id']}"
+    )
+    assert completed.status_code == 200
+    assert completed.json()["state"] == "completed"
+    assert completed.json()["job_id"] == "job_exact_operation"
+
+
 def test_doc277_terminal_job_overrides_stale_planning_projection() -> None:
     """A terminal Job must not leave the project UI stuck in planning."""
 

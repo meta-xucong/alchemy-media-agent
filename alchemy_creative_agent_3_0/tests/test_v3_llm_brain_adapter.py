@@ -1777,6 +1777,7 @@ def test_unified_gpt_fallback_uses_chat_completions_transport(monkeypatch) -> No
         return '{"remote": true}'
 
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", "max")
     monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
     # The production path is configured non-streaming.  This test covers the
@@ -1798,7 +1799,159 @@ def test_unified_gpt_fallback_uses_chat_completions_transport(monkeypatch) -> No
     assert payload["model"] == "gpt-6.1-sol"
     assert payload["response_format"] == {"type": "json_object"}
     assert "temperature" not in payload
-    assert "reasoning_effort" not in payload
+    assert payload["reasoning_effort"] == "max"
+    assert payload["max_completion_tokens"] == 20000
+    assert "max_tokens" not in payload
+
+
+def test_v3_kimi_k3_uses_supported_chat_controls_without_sampling_fields(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls: dict[str, object] = {}
+
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls.update(kwargs)
+        return '{"remote": true}'
+
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "kimi-k3")
+    monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", "medium")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
+
+    provider = V3LLMBrainProvider()
+    assert provider._run_openai_compatible(  # noqa: SLF001
+        BrainRunRequest(user_input="Make a visual plan.")
+    ) == {"remote": True}
+    payload = calls["payload"]
+    assert payload["reasoning_effort"] == "high"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["max_tokens"] == 20000
+    assert "max_completion_tokens" not in payload
+    assert not {"temperature", "top_p", "top_k", "n", "presence_penalty", "frequency_penalty"} & set(payload)
+
+
+def test_v3_kimi_k3_nonstream_payload_keeps_legal_effort_and_token_field(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"remote": true}', refusal=None),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "kimi-k3")
+    monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", "xhigh")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_nonstream")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create a visual plan."))
+
+    assert result["remote"] is True
+    assert len(calls) == 1
+    payload = calls[0]
+    assert payload["model"] == "kimi-k3"
+    assert payload["reasoning_effort"] == "max"
+    assert payload["max_tokens"] == 20000
+    assert "max_completion_tokens" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert not {"temperature", "top_p", "top_k", "n", "presence_penalty", "frequency_penalty"} & set(payload)
+
+
+def test_v3_claude_sonnet_55_sends_output_effort_without_sampling_fields(monkeypatch) -> None:
+    import httpx
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"content": [{"type": "text", "text": '{"remote": true}'}]}
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, _url, *, headers, json):
+            captured.update(json)
+            return FakeResponse()
+
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", "medium")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+
+    provider = V3LLMBrainProvider()
+    assert provider._run_anthropic_compatible(  # noqa: SLF001
+        BrainRunRequest(user_input="Make a visual plan.")
+    ) == {"remote": True}
+    assert captured["output_config"] == {"effort": "medium"}
+    assert not {"temperature", "top_p", "top_k"} & set(captured)
+
+
+def test_v3_model_parameter_matrix_preserves_gpt6_effort_and_maps_kimi_effort() -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    assert brain_providers._chat_model_parameters("gpt-6.1-sol", "max", streaming=True) == {"reasoning_effort": "max"}  # noqa: SLF001
+    assert brain_providers._responses_model_parameters("gpt-6.1-sol", "xhigh") == {"reasoning": {"effort": "xhigh"}}  # noqa: SLF001
+    assert brain_providers._chat_model_parameters("kimi-k3", "medium", streaming=True) == {"reasoning_effort": "high"}  # noqa: SLF001
+
+
+def test_v3_gpt6_responses_transport_uses_responses_effort_and_no_sampling_fields(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    captured: dict[str, object] = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                output_text='{"remote": true}',
+                output=[],
+                status="completed",
+                incomplete_details=None,
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = FakeResponses()
+
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", "xhigh")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    provider = V3LLMBrainProvider()
+    assert provider._run_openai_compatible(  # noqa: SLF001
+        BrainRunRequest(user_input="Make a visual plan.")
+    ) == {"remote": True}
+    assert captured["reasoning"] == {"effort": "xhigh"}
+    assert not {"temperature", "top_p", "top_logprobs"} & set(captured)
 
 
 def test_reasoning_effort_is_explicit_and_supported_only(monkeypatch) -> None:
@@ -1841,6 +1994,7 @@ def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch
         return '{"remote": true}'
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-5.6-terra")
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
@@ -2093,6 +2247,7 @@ def test_openai_brain_can_use_codex_compatible_complete_chat_transport(monkeypat
     assert payload["model"] == "gpt-5.6-terra"
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["temperature"] == 0
+    assert payload["max_tokens"] == 20000
     import httpx
 
     assert isinstance(payload["timeout"], httpx.Timeout)
@@ -2101,6 +2256,47 @@ def test_openai_brain_can_use_codex_compatible_complete_chat_transport(monkeypat
     assert payload["timeout"].write == 120.0
     assert payload["timeout"].pool == 120.0
     assert "stream" not in payload
+
+
+def test_gpt6_nonstream_chat_uses_max_completion_tokens(monkeypatch) -> None:
+    from app.config import settings
+
+    calls: list[dict[str, object]] = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"remote": true}'),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_nonstream")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", "high")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "openai")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create a visual plan."))
+
+    assert result["remote"] is True
+    assert len(calls) == 1
+    payload = calls[0]
+    assert payload["max_completion_tokens"] == 20000
+    assert "max_tokens" not in payload
+    assert payload["reasoning_effort"] == "high"
+    assert "temperature" not in payload
 
 
 def test_openai_responses_transport_caps_connect_timeout(monkeypatch) -> None:
@@ -2346,7 +2542,8 @@ def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(
     assert result["_alchemy_brain_transport"]["attempts"] == 2
     assert len(calls) == 2
     assert calls[0]["payload"]["messages"][1] == calls[1]["payload"]["messages"][1]
-    assert all(call["payload"]["max_tokens"] == 20000 for call in calls)
+    assert all(call["payload"]["max_completion_tokens"] == 20000 for call in calls)
+    assert all("max_tokens" not in call["payload"] for call in calls)
 
 
 def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> None:

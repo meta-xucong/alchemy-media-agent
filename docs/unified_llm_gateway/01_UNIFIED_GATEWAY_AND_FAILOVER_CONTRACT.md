@@ -26,6 +26,37 @@ local configuration); V3 keeps its existing provider-specific effort
 configuration. A provider that does not support a control must omit that
 parameter, not turn a capability mismatch into a user-requested model failure.
 
+### Model request parameter contract
+
+Keep one semantic effort choice in the product, then serialize it at the
+model adapter boundary. Do not forward a generic `temperature` value to every
+candidate: the providers have different sampling and reasoning contracts.
+
+| Model | Wire control | Effort mapping | Sampling fields |
+| --- | --- | --- | --- |
+| Claude Sonnet 5.5 | Anthropic Messages `output_config.effort` | `low`, `medium`, `high`, `xhigh`, `max`; omit when the product has no explicit effort | Omit `temperature`, `top_p`, and `top_k` |
+| Kimi K3 | Chat Completions `reasoning_effort` | `low→low`, `medium→high`, `high→high`, `xhigh→max`, `max→max` | Omit fixed `temperature`, `top_p`, `n`, `presence_penalty`, and `frequency_penalty` |
+| GPT-6.1-sol | Chat Completions `reasoning_effort` or Responses `reasoning.effort` | Preserve `low`, `medium`, `high`, `xhigh`, and `max` | Omit `temperature`, `top_p`, and other sampling controls while reasoning is enabled |
+
+Kimi's ordered effort mapping is monotonic: the product's `medium` level maps
+to Kimi's next available strength (`high`), while `xhigh` and `max` saturate
+at Kimi's strongest supported level (`max`). This is a protocol translation,
+not a prompt/schema change. If Kimi rejects its mapped effort, fail over using
+the same frozen request; do not retry with a sampling parameter or silently
+rewrite the prompt.
+
+These controls apply at all four product outlets (V1, V2, V3, LAB). V2's
+Claude Code-owned primary invocation keeps its CLI-native effort option; the
+adapter rules above govern its direct OpenAI-compatible backup calls. LAB
+vision routing remains separate: only a vision request already routed to
+Claude/Kimi/GPT uses the corresponding model adapter.
+
+Provider references (reviewed 2026-10-21): [Claude Sonnet 5.5 migration
+guide](https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide),
+[Kimi K3 API guide](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart),
+[Kimi JSON mode](https://platform.kimi.ai/docs/guide/use-json-mode-feature-of-kimi-api),
+[GPT-6 usage guide](https://developers.openai.com/api/docs/guides/latest-model).
+
 ## 2. Single text-gateway credential
 
 - The canonical secret is `LLM_GATEWAY_API_KEY`, configured once per running

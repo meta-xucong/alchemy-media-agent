@@ -157,6 +157,11 @@ def test_doc140_partial_remote_task_profile_blocks_before_signing_or_materializa
     outcome = result.metadata["remote_creative_brain_outcome"]
     assert outcome["reason_code"] == "remote_creative_brain_task_profile_invalid"
     assert outcome["remote_contract_rejected_sections"] == ["visual_task_profile"]
+    profile_audit = outcome["remote_contract_validation_audit"]["sections"]["visual_task_profile"]
+    assert profile_audit["validation_error_paths"] == [
+        "visual_task_profile.developmental_age_intent"
+    ]
+    assert profile_audit["validation_error_types"] == ["missing"]
     assert [item["stage"] for item in provider.requests] == ["plan", "plan"]
 
 
