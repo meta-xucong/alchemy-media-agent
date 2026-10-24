@@ -2533,7 +2533,8 @@ async def cancel_primary_lab_session(session_id: str, request: Request, authoriz
     from app.services.alchemy_lab import cancel_primary_exploration_session
     from app.services.primary_image_transport import PrimaryFinalizationInProgress
     try:
-        return {"session": public_exploration_session(await cancel_primary_exploration_session(session.id))}
+        canceled = await cancel_primary_exploration_session(session.id)
+        return {"session": public_exploration_session(canceled), "board": comparison_board(canceled)}
     except PrimaryFinalizationInProgress:
         raise HTTPException(status_code=409, detail={"code": "primary_finalization_in_progress"}) from None
 

@@ -350,7 +350,15 @@ def test_lab_authenticated_poll_restores_pending_session(runtime, monkeypatch):
     async def context(*args, **kwargs): return {'user_id': None, 'is_admin': False}
     monkeypatch.setattr(main, '_veyra_history_context', context)
     req = Request({'type': 'http', 'method': 'GET', 'path': '/', 'headers': [], 'query_string': b''})
+    bridge.state = 'queued'
+    pending = asyncio.run(main.get_rare_style_explorer_session(session.id, req, 'fixture'))
+    _assert_lab_response_schema(pending)
+    assert pending['session']['status'] == 'running'
+    assert 'primary_transport' not in pending['session']['variants'][0]['provider_metadata']
+    assert lab.lab_store.get(session.id).variants[0].provider_metadata['primary_transport'] is True
+    bridge.state = 'artifacts_ready'
     result = asyncio.run(main.get_rare_style_explorer_session(session.id, req, 'fixture'))
+    _assert_lab_response_schema(result)
     assert result['session']['status'] == 'completed'
     assert bridge.creates == 1 and api.calls == 0
 
@@ -389,6 +397,9 @@ def test_lab_owner_cancel_endpoint_latches_session_and_job(runtime, monkeypatch)
     assert not bridge.cancels
     response = asyncio.run(main.cancel_primary_lab_session(session.id, req, '41'))
     assert response['session']['status'] == 'failed'
+    assert 'primary_transport' not in response['session']
+    assert 'board' in response
+    _assert_lab_response_schema(response)
     assert bridge.cancels and bridge.creates == 1 and not api.calls
     job = repository.list_jobs()[0]
     assert job.status == JobStatus.canceled
@@ -563,3 +574,32 @@ def test_lost_debit_response_freezes_all_arguments_across_billing_rule_change(ru
                       'source': 'original_source', 'reference_id': pending.id}
     assert bridge.creates == 1 and not api.calls and len(bridge.acks) == 1
     assert 'debit' not in primary.public_image_job(done).raw_response_summary[primary.KEY]
+
+
+def _assert_lab_response_schema(response):
+    import json
+    from pathlib import Path
+    from fastapi.encoders import jsonable_encoder
+    jsonschema = pytest.importorskip('jsonschema')
+    schema = json.loads(Path('specs/alchemy_lab/rare_style_explorer.schema.json').read_text(encoding='utf-8'))
+    jsonschema.Draft202012Validator(schema).validate(jsonable_encoder(response))
+
+
+@pytest.mark.parametrize('state', ['queued', 'running', 'completed', 'failed', 'partial_success'])
+def test_lab_public_projection_preserves_strict_schema_and_private_recovery_flag(runtime, state):
+    import json
+    from pathlib import Path
+    jsonschema = pytest.importorskip('jsonschema')
+    session = make_lab_session()
+    session.primary_transport = True
+    session.status = state
+    if state in {'failed', 'partial_success'}:
+        session.errors = [lab.ExplorationError(code='user_canceled', message='Canceled by owner', retryable=False)]
+        session.variants[0].status = 'failed'
+        session.variants[0].error = session.errors[0]
+    lab.lab_store.save(session)
+    public = lab.public_exploration_session(session)
+    assert 'primary_transport' not in public and 'veyra_user_id' not in public
+    schema = json.loads(Path('specs/alchemy_lab/rare_style_explorer.schema.json').read_text(encoding='utf-8'))
+    jsonschema.Draft202012Validator(schema).validate({'session': public, 'board': lab.comparison_board(session).model_dump(mode='json')})
+    assert lab.lab_store.get(session.id).primary_transport is True

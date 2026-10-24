@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio import sleep as _primary_maintenance_sleep
 from dataclasses import replace
 from datetime import datetime, timezone
 import inspect
@@ -90,7 +91,9 @@ class BridgeAdminController:
 
     async def maintain_primary(self):
         while True:
-            await asyncio.sleep(5)
+            # Keep this worker's clock independent of product-specific injected
+            # sleeps (for example Lab's serial-generation interval tests).
+            await _primary_maintenance_sleep(5)
             await self.maintain_primary_once()
 
     def validate(self, body):

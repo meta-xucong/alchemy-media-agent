@@ -46,8 +46,10 @@ task. Public route evidence excludes private frozen requests, paths and checkpoi
 ## Test and audit evidence
 
 Final local selections on the integrated implementation:
-- 508 passed: Bridge compatibility, neutral core, administrator, actual V1/Lab/V3
+- 513 passed: Bridge compatibility, neutral core, administrator, actual V1/Lab/V3
   entries and selected original product/export paths (342 existing deprecation warnings).
+- 97 passed: the complete legacy V1 API smoke file, including strict Lab response
+  schemas and serial provider timing, rerun after the final projection/clock fixes.
 - 245 passed: current-main Brain, reference-plan, continuity and review seams.
 - 828 passed: complete standalone V2 suite, against the neutral package without
   exposing V1 source imports through PYTHONPATH.
@@ -107,11 +109,18 @@ this journal fences adapter dispatch, not a claim of exactly one upstream HTTP c
    ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT paths for all local processes. Use durable
    paths/mounts outside the checkout and product-specific ledger subdirectories.
    Bridge URL, source token and workspace must agree; do not paste secrets into reports.
-4. Existing administrator controls govern the route. Enable codex-image only after
+4. Start the real Hatchet engine and database, its worker, exactly one dispatcher,
+   and the configured Bridge Agent; an installed SDK alone is not an engine.
+   Prepare a real Veyra-authenticated user, owned project and required balance.
+   Do not substitute fake authentication for end-to-end acceptance.
+   Existing administrator controls govern the route. Enable codex-image only after
    local exact-version/tool acceptance. native_enabled controls only the older trial.
    Fake-only configuration never silently enables real product generation.
-5. With authorized cost/material scope, validate compatible auto requests in each
-   real product; hard-capability fallback; queue full/replay; service failure;
+5. With authorized cost/material scope, validate compatible auto requests through
+   real V1/V2/V3 entrypoints that expose that choice. Lab currently fixes high quality:
+   validate its explicit capability-unsupported fallback to the original provider,
+   not a fabricated Bridge-success by changing quality or capabilities. Also test
+   hard-capability fallback; queue full/replay; service failure;
    restart/unknown/cancel; same original bytes and no duplicate output/debit. Check
    the ordinary review/slot and billing results, not just a Bridge artifacts_ready.
 6. For0.163.0, account-health probing is a separate opt-in capability.0.157.1 with
@@ -124,3 +133,16 @@ this journal fences adapter dispatch, not a claim of exactly one upstream HTTP c
 Real Windows/Codex/account/provider review, actual image quality and live billing
 remain local acceptance. The earlier local CLI-layer receipt documented in RB12 is
 useful history but does not certify this full-product routing implementation.
+
+## Final handoff audit corrections
+
+The legacy Lab response schema remains strict: private routing flags stay only in
+persistent state, and normal/pending/resumed/canceled responses retain the existing
+public schema. The host maintenance delay is independent of Lab test-clock injection.
+The original standalone V2 CI now installs the neutral package explicitly, matching
+its deployment setup; no V1 import-path workaround is used.
+
+The companion Windows guide remains useful for Bridge/Agent/Hatchet setup, but its
+older Alchemy fake/native trial settings do not enable ordinary product-primary
+routing. RB15 and the shared absolute control/state configuration above are the
+authority for this new route. No live-account acceptance is inferred from CI.

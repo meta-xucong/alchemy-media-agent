@@ -979,6 +979,11 @@ async def cancel_primary_exploration_session(session_id: str) -> ExplorationSess
 def public_exploration_session(session: ExplorationSession) -> dict[str, Any]:
     payload = session.model_dump()
     payload.pop("veyra_user_id", None)
+    payload.pop("primary_transport", None)
+    for variant in payload.get("variants", []):
+        metadata = variant.get("provider_metadata")
+        if isinstance(metadata, dict):
+            metadata.pop("primary_transport", None)
     reference_plan = payload.get("reference_plan")
     if isinstance(reference_plan, dict):
         payload["reference_plan"] = _public_reference_plan(reference_plan)
