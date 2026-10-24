@@ -2588,6 +2588,7 @@ def test_v2_template_catalog_is_not_blocked_by_slow_history_demand():
         assert "loadV2ImageHistoryFallback" not in script
         assert 'return await loadV2HistoryWithTimeout(v2HistoryPath(options), timeoutMs);' in script
         assert "const v2AccountHistoryTimeoutMs = 8000;" in script
+        assert "const v2OptionalResourceTimeoutMs = 8000;" in script
         assert "const v2TemplateBootstrapTimeoutMs = 20000;" in script
         assert "async function loadV2TemplateBootstrap(path, fallbackValue = null)" in script
         assert 'loadV2TemplateBootstrap("/templates/index", null)' in init_body
