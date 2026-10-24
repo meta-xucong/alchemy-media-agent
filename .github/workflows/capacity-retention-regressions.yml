@@ -292,6 +292,8 @@ jobs:
               *project["dependencies"], *project["optional-dependencies"]["dev"],
           ])
           PY
+          # Product-neutral transport is a separate distribution, not V1 source.
+          python -m pip install --no-deps ../render_bridge_primary
       - name: Run the complete V2 suite with synthetic data and mock providers
         run: python -m pytest -q
       - name: Verify isolated V2 read matrix
