@@ -4237,3 +4237,49 @@ def mcp_download_page():
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     return response
+
+
+# Optional, isolated Bridge preview. No default provider/Brain/job mutation.
+def _render_bridge_preview_project_snapshot(owner: str, project_id: str) -> dict | None:
+    project = v3_route_handlers.project_service.project_store.get_project(project_id)
+    if project is None or str(project.status) != "active":
+        return None
+    project_owner = _positive_int_or_none(dict(project.metadata or {}).get("veyra_user_id"))
+    if owner == "local_preview":
+        if settings.veyra_auth_enabled or project_owner is not None:
+            return None
+    elif project_owner is None or str(project_owner) != owner:
+        return None
+    snapshot = project.model_dump(mode="json")
+    revision = hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+    return {"revision": revision}
+
+
+def _create_render_bridge_native_gateway(config):
+    # Imported only for explicit native-development enablement. This does not
+    # alter the existing provider registry or normal Generate route.
+    from alchemy_creative_agent_3_0.app.product_api.render_bridge_facade import RenderBridgeNativeFacade
+    from alchemy_creative_agent_3_0.app.product_api.render_bridge_native import NativeRenderBridgeGateway
+    return NativeRenderBridgeGateway(
+        allowed_profiles=config.native_profiles,
+        facade=RenderBridgeNativeFacade(
+            get_job_record=_v3_product_service.get_job_record,
+            get_project_record=v3_route_handlers.project_service.project_store.get_project,
+            enabled=True,
+        ),
+        service=_v3_product_service,
+        project_service=v3_route_handlers.project_service,
+        journal_root=config.storage / "native-registration",
+        enabled=True,
+    )
+
+
+from app.integrations.render_bridge.admin import install_render_bridge_admin
+install_render_bridge_admin(
+    app,
+    admin_resolver=lambda request, authorization: _require_veyra_admin(request, authorization),
+    session_user=lambda request, authorization: _veyra_user_id_from_request(request, authorization),
+    auth_enabled=lambda: settings.veyra_auth_enabled,
+    project_snapshot=_render_bridge_preview_project_snapshot,
+    native_gateway_factory=_create_render_bridge_native_gateway,
+)

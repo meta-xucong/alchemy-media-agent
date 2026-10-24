@@ -27,6 +27,7 @@
       })();
     </script>
     <link rel="stylesheet" href="/static/styles.css?v=__STATIC_STYLES_VERSION__" />
+    <link rel="stylesheet" href="/static/v3-bridge-trial.css?v=__STATIC_APP_VERSION__" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -1909,6 +1910,7 @@
 
                     <div class="composer-actions v3-action-row">
                       <button id="v3CreateJobBtn" class="button primary" type="button">生成一组图片</button>
+                      <button id="v3BridgeTrialBtn" class="button ghost" type="button">本地桥接试用</button>
                       <button id="v3GenerateBtn" class="button secondary" type="button" disabled hidden>继续生成</button>
                       <button id="v3SelectBtn" class="button secondary" type="button" disabled hidden>设为后续参考</button>
                       <button id="v3ResetBtn" class="button ghost" type="button" hidden>清空</button>
@@ -2266,6 +2268,7 @@
     </template>
 
     <script src="/static/continuity-anchor.js?v=__CONTINUITY_ANCHOR_VERSION__" defer></script>
+    <script src="/static/v3-bridge-trial.js?v=__STATIC_APP_VERSION__" defer></script>
     <script src="/static/app.js?v=__STATIC_APP_VERSION__" defer></script>
     <script src="/static/account-access.js?v=__ACCOUNT_ACCESS_VERSION__" defer></script>
   </body>

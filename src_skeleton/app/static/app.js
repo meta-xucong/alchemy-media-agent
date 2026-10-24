@@ -1780,6 +1780,17 @@ function bindControls() {
     });
   });
   if (els.v3CreateJobBtn) els.v3CreateJobBtn.addEventListener("click", createV3Job);
+  document.getElementById("v3BridgeTrialBtn")?.addEventListener("click", () => {
+    const project = v3State.currentProject;
+    window.AlchemyBridgeTrial?.open({
+      projectId: project?.project_id || "",
+      title: project ? v3ProjectDisplayTitle(project) : "",
+      eligible: v3State.view === "workspace" && project?.status === "active"
+        && project?.primary_template_id === "general_template"
+        && v3ProjectWorkspace(project) === "standard",
+      prompt: els.v3PromptInput?.value || "",
+    });
+  });
   if (els.v3PhotographerProfileInput) els.v3PhotographerProfileInput.addEventListener("change", selectV3PhotographerProfile);
   if (els.v3ConfirmPhotographerProfileBtn) els.v3ConfirmPhotographerProfileBtn.addEventListener("click", confirmV3PhotographerProfile);
   if (els.v3PhotographyReferenceRoleInput) {
@@ -2428,6 +2439,7 @@ function handleV3ScenarioClick(button) {
 }
 
 function openV3Home({ silent = false } = {}) {
+  window.AlchemyBridgeTrial?.close();
   const cancelledProjectOpening = Boolean(v3State.projectOpening);
   invalidateV3ProjectDetail("");
   if (cancelledProjectOpening) {
@@ -4926,6 +4938,7 @@ function handleV3ProjectHistoryGridClick(event) {
 }
 
 function renderV3ProjectDetail() {
+  window.AlchemyBridgeTrial?.syncProject(v3State.currentProject?.project_id || "");
   const project = v3State.currentProject;
   const terminalOperation = project?.metadata?.current_operation;
   if (terminalOperation?.terminal === true && terminalOperation?.pending === false) {
@@ -10022,6 +10035,7 @@ function waitForV3FirstProjectPreviewImage({ projectId = "", detailEpoch = null,
 }
 
 async function openV3Project(projectId) {
+  window.AlchemyBridgeTrial?.close();
   const requestedProjectId = String(projectId || "").trim();
   if (!requestedProjectId || v3State.projectOpening) return;
   const detailEpoch = invalidateV3ProjectDetail(requestedProjectId);
@@ -17588,6 +17602,7 @@ function hasVeyraClientSession() {
 function setVeyraToken(token) {
   const nextToken = String(token || "");
   const previousToken = getVeyraToken();
+  if (nextToken !== previousToken || !nextToken) globalThis.AlchemyBridgeTrial?.close();
   if (nextToken !== previousToken || !nextToken) clearHistoryDemandCaches();
   if (nextToken !== previousToken) clearV3LocalCaches();
   try {
@@ -17704,6 +17719,7 @@ function setVeyraAccount(account) {
   const previousOwnerId = v3CacheOwnerId();
   veyraState.account = account;
   const nextOwnerId = v3CacheOwnerId(account);
+  if (previousOwnerId && previousOwnerId !== nextOwnerId) globalThis.AlchemyBridgeTrial?.close();
   if (previousOwnerId && previousOwnerId !== nextOwnerId) clearHistoryDemandCaches();
   if (previousOwnerId && nextOwnerId && previousOwnerId !== nextOwnerId) clearV3LocalCaches();
 }

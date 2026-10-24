@@ -122,6 +122,8 @@ jobs:
           python-version: "3.12"
       - name: Install source and migration contract test dependencies
         run: python -m pip install pytest pydantic==2.13.4 python-dotenv==1.2.2
+      - name: Fetch the frozen PR28 migration evidence source
+        run: git fetch --no-tags --depth=1 origin 8c6dca317ece2538004bb0921f28ec8f188146cd
       - name: Verify Windows source fidelity and LF versus CRLF invariance
         run: python -m pytest -q tests/test_pr28_migration_reconciliation.py
       - name: Verify bounded read admission on Windows
@@ -149,6 +151,8 @@ jobs:
           python-version: "3.12"
       - name: Install V1 test dependencies
         run: python -m pip install -e './src_skeleton[dev]'
+      - name: Fetch the frozen PR28 migration evidence source
+        run: git fetch --no-tags --depth=1 origin 8c6dca317ece2538004bb0921f28ec8f188146cd
       - name: Verify durable records, ownership, cancellation and Lab recovery
         run: >-
           python -m pytest -q

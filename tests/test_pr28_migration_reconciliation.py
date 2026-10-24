@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 
 import pytest
 
@@ -26,18 +27,33 @@ from app.services.retention_settings import get_retention_settings, save_retenti
 ROOT = Path(__file__).resolve().parents[1]
 PLAN = ROOT / "docs/migrations/PR28-legacy-ram-state-cutover-plan.md"
 AUDITED_TEXT_SUFFIXES = (".py", ".service", ".env.example")
+AUDITED_CANDIDATE_REVISION = "8c6dca317ece2538004bb0921f28ec8f188146cd"
 
 
-def _candidate_source_blob(path: Path) -> str:
-    """Hash declared text sources as LF Git blobs using current working-tree bytes.
+def _candidate_source_blob(path: Path, *, content: bytes | None = None) -> str:
+    """Hash declared text sources, from a checkout or frozen revision, as LF blobs.
 
     Only checkout CRLF is normalized; bare CR, BOM, whitespace, and all other
-    bytes remain significant. Do not read a potentially stale Git index or
-    require historical objects to be available in shallow/source-only checkouts.
+    bytes remain significant. The default reads working-tree bytes, never the
+    potentially stale Git index. Historical evidence supplies its frozen bytes.
     """
     assert path.name.endswith(AUDITED_TEXT_SUFFIXES), f"Undeclared text source: {path}"
-    content = path.read_bytes().replace(b"\r\n", b"\n")
+    content = (path.read_bytes() if content is None else content).replace(b"\r\n", b"\n")
     return hashlib.sha1(f"blob {len(content)}\0".encode("ascii") + content).hexdigest()
+
+
+def _audited_candidate_source(path: str) -> bytes:
+    """Read the exact audited source, not a moving mainline file or index."""
+    result = subprocess.run(
+        ["git", "show", f"{AUDITED_CANDIDATE_REVISION}:{path}"],
+        cwd=ROOT, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, (
+        f"Frozen PR28 source is unavailable: {path}. "
+        "Fetch the audited revision before running this evidence check: "
+        f"git fetch --no-tags --depth=1 origin {AUDITED_CANDIDATE_REVISION}"
+    )
+    return result.stdout
 
 
 def _canonical_digest(payload: object) -> str:
@@ -102,8 +118,32 @@ def test_candidate_source_blob_rejects_undeclared_file_types(tmp_path):
         _candidate_source_blob(path)
 
 
+def test_frozen_candidate_bytes_do_not_follow_working_tree_changes(tmp_path):
+    path = tmp_path / "source.py"
+    frozen = b"value = 1\n"
+    path.write_bytes(frozen)
+    expected = _candidate_source_blob(path)
+    path.write_bytes(b"value = 2\n")
+    assert _candidate_source_blob(path) != expected
+    assert _candidate_source_blob(path, content=frozen) == expected
+    assert _candidate_source_blob(path, content=frozen.replace(b"\n", b"\r\n")) == expected
+    assert _candidate_source_blob(path, content=b"value = 3\n") != expected
+
+
+def test_missing_frozen_candidate_source_fails_with_fetch_instruction(monkeypatch):
+    def missing_revision(command, **kwargs):
+        assert command == ["git", "show", f"{AUDITED_CANDIDATE_REVISION}:source.py"]
+        assert kwargs["cwd"] == ROOT
+        return subprocess.CompletedProcess(command, 128, stdout=b"", stderr=b"missing object")
+
+    monkeypatch.setattr(subprocess, "run", missing_revision)
+    with pytest.raises(AssertionError, match=f"git fetch --no-tags --depth=1 origin {AUDITED_CANDIDATE_REVISION}"):
+        _audited_candidate_source("source.py")
+
+
 def test_candidate_source_overlay_and_expanded_manifest_are_internally_consistent():
     document = PLAN.read_text(encoding="utf-8")
+    assert f"Audited candidate source revision: `{AUDITED_CANDIDATE_REVISION}`" in document
     original = re.findall(
         r"^\| `([^`]+)` \| `([0-9a-f]{40})` \| `([0-9a-f]{40})` \|",
         document.split("## 2.1", 1)[0], re.M,
@@ -126,9 +166,10 @@ def test_candidate_source_overlay_and_expanded_manifest_are_internally_consisten
     expanded_digest = hashlib.sha256()
     for path in sorted(full, key=lambda path: path.encode("utf-8")):
         expanded_digest.update(f"{path}\0{full[path][0]}\0{full[path][1]}\n".encode("utf-8"))
-        # No Git executable, index contents, or old objects in shallow CI.
-        actual_blob = _candidate_source_blob(ROOT / path)
-        assert actual_blob == full[path][1], f"Candidate source drifted after audit: {path}"
+        # This manifest proves historical migration evidence. Later mainline
+        # edits neither rewrite that evidence nor invalidate its frozen source.
+        actual_blob = _candidate_source_blob(ROOT / path, content=_audited_candidate_source(path))
+        assert actual_blob == full[path][1], f"Frozen candidate source disagrees with audit: {path}"
     assert f"Expanded old-to-candidate manifest: {len(full)} files; SHA-256 `{expanded_digest.hexdigest()}`" in document
 
 

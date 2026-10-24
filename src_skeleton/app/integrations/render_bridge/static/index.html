@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Render Bridge · 独立测试预览</title><link rel="stylesheet" href="/render-bridge-preview/assets/preview.css"><script defer src="/render-bridge-preview/assets/preview.js"></script></head>
+<body><main>
+<nav><a href="/creative-agent-v3">← 返回 Alchemy V3</a><a href="/render-bridge-diagnostics">本地就绪诊断</a><span>可选模块 · TEST ONLY</span></nav>
+<header><p class="eyebrow">ALCHEMY / RENDER BRIDGE</p><h1>独立测试预览</h1><p>验证远端 Bridge 的任务与图片传输。不进入原有生成或交付流程。</p></header>
+<aside><strong>原生登记未接通</strong><p>这里的提示词是手动测试输入，不是 Brain 冻结的正式生成合同。测试图不会进入 V3 结果、审核、选图、记忆或导出；预览成功也不会发送 accepted 确认。</p></aside>
+<div id="notice" role="status">正在检查模块状态…</div>
+<section class="layout"><form id="create-form"><h2>新建测试任务</h2>
+<label>所属项目<select id="project" required><option value="">选择你有权限的现有项目</option></select></label>
+<label>执行配置<select id="profile"></select></label>
+<label>测试提示词<textarea id="prompt" rows="5" required maxlength="16000" placeholder="例如：一枚绿色方块，仅用于传输验证"></textarea></label>
+<div class="dimensions"><label>宽<input id="width" type="number" value="32" min="1" max="40000000" required></label><label>高<input id="height" type="number" value="32" min="1" max="40000000" required></label></div>
+<label>参考图（可选，PNG/JPEG，每张≤1 MiB，最多8张）<input id="references" type="file" multiple accept="image/png,image/jpeg"></label>
+<label class="check"><input id="acknowledge" type="checkbox" required>我知道这是独立测试，不是正式生成或交付。</label>
+<button id="submit" disabled>创建测试任务</button><p class="muted">重复点击不会创建第二个任务。Bridge 不可用时不自动切换其他 Provider。</p>
+</form><section><div class="section-heading"><h2>测试任务</h2><button id="refresh" type="button" class="secondary">刷新</button></div><div id="tasks" aria-live="polite"><p class="muted">选择项目后查看任务。</p></div></section></section>
+</main></body></html>

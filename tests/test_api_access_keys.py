@@ -30,10 +30,13 @@ def native(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "verify_session_token", verify)
     monkeypatch.setattr(main, "load_account", account)
     calls = []
-    def projects(limit, owner, cursor, view):
+    def projects(limit, owner, cursor, view, *, project_headers=None):
         calls.append(owner)
+        if view == "summary":
+            assert project_headers == []
         return {"items": [], "owner": owner}
     monkeypatch.setattr(main.v3_route_handlers, "get_projects", projects)
+    monkeypatch.setattr(main.v3_route_handlers.project_service.project_store, "list_project_headers", lambda: [])
     client = TestClient(main.app, base_url="https://ui.test")
     return SimpleNamespace(client=client, store=store, clock=clock, states=states, main=main, calls=calls)
 
@@ -90,7 +93,8 @@ def test_key_defaults_to_permanent_and_optional_expiry_is_enforced(native):
     assert native.client.get("/api/v3/creative-agent/projects", headers=headers(finite.json()["secret"])).status_code == 401
 
 
-def test_admin_can_read_and_delete_foreign_v3_projects_but_cannot_archive_them(native, monkeypatch, tmp_path):
+@pytest.mark.parametrize("browse_compute", [False, True], ids=["inline-browse", "compute-browse"])
+def test_admin_can_read_and_delete_foreign_v3_projects_but_cannot_archive_them(native, monkeypatch, tmp_path, browse_compute):
     captured = {}
 
     def projects(limit, owner, cursor, view):
@@ -102,6 +106,16 @@ def test_admin_can_read_and_delete_foreign_v3_projects_but_cannot_archive_them(n
         captured["output_owner"] = owner
         return {"items": [], "owner": owner}
 
+    compute = object() if browse_compute else None
+
+    async def computed_outputs(service, pool, **kwargs):
+        assert service is native.main.v3_route_handlers.project_service
+        assert pool is compute
+        captured["used_compute"] = True
+        return outputs(**kwargs)
+
+    monkeypatch.setattr(native.main, "_v3_browse_compute", compute)
+    monkeypatch.setattr(native.main, "run_output_browse", computed_outputs)
     monkeypatch.setattr(native.main.v3_route_handlers, "get_projects", projects)
     monkeypatch.setattr(native.main.v3_route_handlers, "get_project_outputs", outputs)
     monkeypatch.setattr(native.main.v3_route_handlers, "get_history", lambda _limit, owner: {"owner": owner})
@@ -111,6 +125,7 @@ def test_admin_can_read_and_delete_foreign_v3_projects_but_cannot_archive_them(n
     assert captured["project_owner"] is None
     assert native.client.get("/api/v3/creative-agent/project-outputs", headers=headers("session-admin")).status_code == 200
     assert captured["output_owner"] is None
+    assert captured.get("used_compute", False) is browse_compute
 
     monkeypatch.setattr(native.main, "_v3_project_owner_id", lambda _project_id: 101)
     monkeypatch.setattr(native.main.v3_route_handlers, "get_project", lambda project_id, owner_user_id, view: {

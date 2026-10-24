@@ -1336,7 +1336,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if index == 0 and type(planned_output_index) is int
                 else {}
             )
-            checkpoint_output_id = ""
+            checkpoint_output_id = self._native_output_checkpoint_id(request, output_index=index) or ""
             if isinstance(self, McpMaterializationProvider):
                 checkpoint_output_id = str(
                     (mcp_materialization.get("expected_checkpoint") or {}).get("output_id") or ""
@@ -1375,7 +1375,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 model=str(getattr(result, "model", "") or ""),
                 encoded_image=str(encoded),
                 # Provider pixels never author the persisted output identity.
-                # A server-issued MCP checkpoint is the sole resume authority;
+                # Only a server-issued native checkpoint can resume identity;
                 # ordinary transports still receive a fresh store identity.
                 output_id=checkpoint_output_id or None,
                 mime_type=output.get("mime_type"),
@@ -1641,6 +1641,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             },
             warnings=warnings,
         )
+
+    def _native_output_checkpoint_id(self, request: GenerationRequest, *, output_index: int) -> str | None:
+        """Opt-in native transport hook; renderer payloads never choose IDs.
+
+        Ordinary providers retain fresh identities. Existing MCP checkpoint
+        handling remains unchanged above; only a dedicated server-composed
+        result adapter may override this hook.
+        """
+
+        return None
 
     async def _generate_with_app_provider(self, provider_name: str, app_request):
         provider = self._app_provider(provider_name)
