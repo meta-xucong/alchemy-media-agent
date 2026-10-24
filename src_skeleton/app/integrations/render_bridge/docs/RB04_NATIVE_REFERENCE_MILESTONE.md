@@ -35,8 +35,10 @@ misrepresented as a supported Bridge editing operation.
 2. Freeze with the existing Doc322/materializer authority; re-read exact
    originals through the native facade. Persist frozen input bytes/order/hashes
    and stable Bridge input keys in the module before upload.
-3. Validate output dimensions against the frozen request, not hardcoded square
-   dimensions. Keep candidate persistence and existing review-only continuation.
+3. Validate fake/manual output dimensions against the frozen request, not
+   hardcoded square dimensions. The later Codex extension records decoded
+   original dimensions instead; see RB06. Keep candidate persistence and
+   existing review-only continuation.
 4. Add reference and size selectors only to native-test. Display that synthetic
    output does not visually use the references.
 
@@ -45,7 +47,7 @@ misrepresented as a supported Bridge editing operation.
 Run focused native/preview and affected old-path regressions. Run independent
 Alchemy/Bridge HTTP with two distinct originals, horizontal and vertical sizes,
 actual native registration and confirmed accepted acknowledgment. Check reference
-order/hash, exact output dimensions, repeated task/import idempotency and basic
+order/hash, the profile-specific output-dimension contract, repeated task/import idempotency and basic
 rejection for unowned/unbound/changed/oversize inputs. One independent scoped
 review, then stop expanding scope.
 
