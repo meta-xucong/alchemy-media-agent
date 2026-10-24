@@ -19,7 +19,7 @@ def capabilities():
         "validation": "local_validation_pending", "production_verified": False,
         "parameter_contract": {
             "schema_version": "1", "accepted_parameters": ["width", "height", "seed"],
-            "required_parameters": ["width", "height"], "dimension_semantics": "exact_output_match",
+            "required_parameters": ["width", "height"], "dimension_semantics": "original_dimensions_recorded",
             "executor_control": "text_instruction_only", "seed_semantics": "text_instruction_only",
             "reference_semantics": "local_image_input_unverified",
             "unsupported_parameters": ["quality", "output_format", "input_fidelity"],

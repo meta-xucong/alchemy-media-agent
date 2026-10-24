@@ -143,3 +143,20 @@ and explicit fidelity are **unsupported by the pinned upstream protocol**, not
 unfinished pass-through code. Real local authentication, image capability,
 visual/reference fidelity, and billing remain **unverified**. This milestone
 stops after the above main chain, repeat/recovery tests and one review.
+
+## Codex original-dimension correction (2026-10-24)
+
+`codex-image` does not promise that the CLI will render the requested preset
+dimensions. For that profile only, Alchemy sends the selected size as frozen
+request evidence and prompt guidance, then records and registers the decoded
+dimensions of the original that the Bridge received. It accepts one original
+PNG/JPEG up to 16 MiB and 40 megapixels (each axis up to 40,000), without
+resizing, transcoding, cropping, or a second generation. Receipt dimensions
+must still exactly match those decoded original bytes, and every other binding
+(attempt, receipt, hash, MIME and single-artifact cardinality) remains exact.
+
+`fake-image` and `midjourney-manual` retain their existing exact output-size
+contract. This is a narrow Codex adapter correction: it does not change the
+Standard/general entry point, native review-only status, delivery/charging
+boundaries, reference limits, or the meaning of the user's selected size in
+any other profile.

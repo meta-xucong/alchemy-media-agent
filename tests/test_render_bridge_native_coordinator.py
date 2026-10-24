@@ -38,6 +38,29 @@ class NativeMockBridge(MockBridge):
         return response
 
 
+class CodexNativeMockBridge(NativeMockBridge):
+    async def __call__(self, request):
+        if request.url.path.endswith("/capabilities"):
+            return httpx.Response(200, json={"schema_version": "1", "profiles": [{
+                "execution_profile_id": "codex-image", "execution_profile_revision": "1",
+                "operation": "image.generate",
+                "limits": {"max_output_bytes": 16777216, "max_image_pixels": 40000000,
+                           "max_dimension": 40000},
+                "image_options_contract": {"schema_version": "1",
+                    "quality": {"values": ["auto"], "semantics": "unspecified_only"},
+                    "output_format": {"values": ["png", "jpeg"],
+                                      "semantics": "original_artifact_postcondition"},
+                    "input_fidelity": {"values": [], "semantics": "omitted_only"},
+                    "references": {"max_count": 8, "semantics": "local_image_input_unverified"}},
+            }]})
+        response = await super().__call__(request)
+        if "/receipts/" in request.url.path and not request.url.path.endswith("/ack"):
+            payload = response.json()
+            payload["execution_profile_id"] = "codex-image"
+            return httpx.Response(200, json=payload)
+        return response
+
+
 class NativeGatewayDouble:
     def __init__(self):
         self.plans, self.registrations = {}, {}
@@ -47,6 +70,7 @@ class NativeGatewayDouble:
         self.unknown_register = False
         self.canceled = False
         self.revision = "freeze_1"
+        self.profile_id = "fake-image"
         self.size = "1024x1024"
         self.selected = []
         self.originals = {}
@@ -56,7 +80,9 @@ class NativeGatewayDouble:
             Image.new("RGB", (32, 24), color).save(output, format="PNG")
             self.originals[name] = output.getvalue()
 
-    def create_plan(self, actor, project, user_input, plan_key, *, uploaded_asset_ids=None, size="1024x1024"):
+    def create_plan(self, actor, project, user_input, plan_key, *, uploaded_asset_ids=None, size="1024x1024",
+                    execution_profile_id="fake-image", output_format="png"):
+        assert execution_profile_id == self.profile_id and output_format == "png"
         self.create_calls += 1
         self.size, self.selected = size, list(uploaded_asset_ids or [])
         result = {"status": "planned", "target": {"project_id": project, "job_id": "native_job_1", "asset_id": "asset_1"}, "plan_key": plan_key}
@@ -70,7 +96,7 @@ class NativeGatewayDouble:
         return self.plans.get(plan_key, {"status": "plan_unknown"})
 
     def prepare(self, actor, target, *, execution_profile_id):
-        assert actor == 101 and execution_profile_id == "fake-image"
+        assert actor == 101 and execution_profile_id == self.profile_id
         if self.canceled:
             raise ValueError("canceled")
         return {"frozen_request_id": self.revision, "target_revision": "target_r1",
@@ -79,7 +105,7 @@ class NativeGatewayDouble:
                                 "size_bytes": len(self.originals[name]), "mime_type": "image/png"}
                                for name in self.selected],
                 "image_options": {"size": self.size, "quality": "auto", "output_format": "png"},
-                "execution_profile_id": "fake-image", "execution_profile_revision": "1", "test_fixture": True, "submission_ready": True}
+                "execution_profile_id": self.profile_id, "execution_profile_revision": "1", "test_fixture": True, "submission_ready": True}
 
     def list_references(self, actor, project):
         assert actor == 101 and project == "project_1"
@@ -101,7 +127,7 @@ class NativeGatewayDouble:
         self.register_calls += 1
         assert not self.canceled
         assert values["frozen_request_id"] == self.revision
-        assert values["execution_profile_id"] == "fake-image"
+        assert values["execution_profile_id"] == self.profile_id
         assert hashlib.sha256(values["artifact_bytes"]).hexdigest() == values["original_sha256"]
         result = {"status": "registered", "native_registration_ref": "native_output_1",
                   "original_sha256": values["original_sha256"], "normalized_sha256": values["original_sha256"],
@@ -380,6 +406,35 @@ def test_native_receipt_must_match_selected_non_square_size(tmp_path):
             assert final["state"] == "protocol_error"
             assert final["last_error"] == "native_fixture_dimensions_required"
             assert gateway.register_calls == 0 and not bridge.acks
+        finally:
+            await svc.close()
+    run(case())
+
+
+def test_codex_native_receipt_records_actual_original_dimensions(tmp_path):
+    async def case():
+        gateway = NativeGatewayDouble()
+        gateway.profile_id = "codex-image"
+        bridge = CodexNativeMockBridge((1254, 1254))
+        config = settings(tmp_path, native_enabled=True,
+                          profiles=("fake-image", "codex-image"),
+                          native_profiles=("fake-image", "codex-image"))
+        svc = NativeBridgeService(config,
+            lambda owner, project: {"revision": "project_revision"} if owner == "101" and project == "project_1" else None,
+            gateway, client=BridgeClient("https://bridge.test", "fixture-secret", transport=httpx.MockTransport(bridge)),
+            target_factory=SimpleNamespace)
+        try:
+            job = await svc.create("101", request(
+                profile_id="codex-image",
+                acknowledge_native_development=True,
+            ))
+            await svc.tick()
+            final = await svc.local(svc.store.get, job["id"])
+            assert final["state"] == "registered", final
+            manifest, _ = await svc.local(svc.store.receipt, job["id"])
+            assert manifest["dimensions"] == {"width": 1254, "height": 1254}
+            wire = next(iter(bridge.tasks.values()))["request"]
+            assert wire["parameters"]["width"] == 1024 and wire["parameters"]["height"] == 1024
         finally:
             await svc.close()
     run(case())

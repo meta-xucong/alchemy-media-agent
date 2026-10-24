@@ -57,7 +57,7 @@ class ParameterContract(Projection):
     schema_version: Literal["1"]
     accepted_parameters: list[ParameterName] = Field(max_length=16)
     required_parameters: list[ParameterName] = Field(max_length=16)
-    dimension_semantics: Literal["exact_output_match"]
+    dimension_semantics: Literal["exact_output_match", "original_dimensions_recorded"]
     executor_control: Literal["deterministic_fixture", "text_instruction_only", "manual_user_selected"]
     seed_semantics: Literal["accepted_not_applied", "text_instruction_only", "manual_user_selected"]
     reference_semantics: Literal["hash_checked_not_conditioning", "local_image_input_unverified", "not_supported"]

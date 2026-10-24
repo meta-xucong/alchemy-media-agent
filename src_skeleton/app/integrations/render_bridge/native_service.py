@@ -312,7 +312,8 @@ class NativeBridgeService(PreviewService):
         if (options.get("quality") != "auto" or options.get("input_fidelity") is not None
                 or options.get("output_format") != record["request"].get("output_format", "png")):
             raise BridgeError("native_frozen_image_options_unsupported", retryable=False)
-        dimensions = self._frozen_dimensions(record)
+        dimensions = (self._requested_dimensions(record) if profile_id == "codex-image"
+                      else self._frozen_dimensions(record))
         if record.get("withdrawal_request") and not record.get("fallback_fenced"):
             if await self._consider_cloud(record, routing_context, submitted=True):
                 return
@@ -403,8 +404,10 @@ class NativeBridgeService(PreviewService):
         if headers.get("content-type", "").split(";")[0] != mime or receipt["mime_type"] != mime:
             raise BridgeError("native_output_format_mismatch", retryable=False)
         metadata = await self.local(validate_image, content, mime, expected_hash=receipt["original_sha256"],
-                                   expected_size=receipt["size"], max_bytes=limit, max_pixels=1048576)
-        if metadata["dimensions"] != dimensions or receipt["dimensions"] != metadata["dimensions"]:
+                                   expected_size=receipt["size"], max_bytes=limit,
+                                   max_pixels=40000000 if profile_id == "codex-image" else 1048576)
+        if (receipt["dimensions"] != metadata["dimensions"]
+                or (profile_id != "codex-image" and metadata["dimensions"] != dimensions)):
             raise BridgeError("native_fixture_dimensions_required", retryable=False)
         latest = await self.local(self.store.get, record["id"])
         if latest["cancel_requested"]:
@@ -555,6 +558,10 @@ class NativeBridgeService(PreviewService):
         if (width, height) != (record["request"]["width"], record["request"]["height"]):
             raise BridgeError("native_frozen_size_mismatch", retryable=False)
         return {"width": width, "height": height}
+
+    @staticmethod
+    def _requested_dimensions(record):
+        return {"width": record["request"]["width"], "height": record["request"]["height"]}
 
     async def _freeze_inputs(self, record):
         if record.get("inputs_frozen"):

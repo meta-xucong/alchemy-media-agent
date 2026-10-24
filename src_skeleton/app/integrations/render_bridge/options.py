@@ -64,9 +64,11 @@ def native_profile(capabilities, *, profile_id, output_format, reference_count, 
     if not isinstance(limits, dict) or any(type(limits.get(k)) is not int or limits[k] < 1 for k in
            ("max_output_bytes", "max_image_pixels", "max_dimension")):
         raise BridgeError("invalid_bridge_capabilities", retryable=False)
+    max_pixels = 40000000 if profile_id == "codex-image" else 1048576
+    max_dimension = 40000 if profile_id == "codex-image" else 1024
     limits = {"max_output_bytes": min(limits["max_output_bytes"], 1048576 if profile_id == "fake-image" else 16777216),
-              "max_image_pixels": min(limits["max_image_pixels"], 1048576),
-              "max_dimension": min(limits["max_dimension"], 1024)}
+              "max_image_pixels": min(limits["max_image_pixels"], max_pixels),
+              "max_dimension": min(limits["max_dimension"], max_dimension)}
     if max(width, height) > limits["max_dimension"] or width * height > limits["max_image_pixels"]:
         raise BridgeError("profile_dimensions_exceeded", retryable=False)
     contract = image_options_projection(profile.get("image_options_contract"))
