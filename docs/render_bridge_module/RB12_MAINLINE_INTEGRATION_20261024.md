@@ -32,7 +32,7 @@ bytes, project semantic revisions, plan keys and output identities stay unchange
 ## Bridge counterpart
 
 The local development counterpart is branch `codex/bridge-progress-20261023`,
-commit `59cbd88579c81409dcc4494ce49889079ae1395f` in
+commit `a89fef357ba69b5ca7ad5cb25c68474a38a01a44` in
 `meta-xucong/alchemy-render-bridge`, following the previous `fef12f65` handoff.
 Its aborted-turn recovery is explicit same-attempt reconciliation, not permission
 for Alchemy to re-render or switch uncertain in-flight tasks to Sub2API. Keep
@@ -47,6 +47,13 @@ enabled, health remains unknown; do not promise automatic health recovery for th
 combination. A supported executable version does not prove account or image-tool
 acceptance. Keep the default-off probe and verify the actual local capability.
 
+The pinned counterpart also adds a separate completed-rollout recovery gate for
+Agent stream loss. It accepts only the already-bound task/attempt, same thread and
+turn, exactly one completed generated original and a terminal `task_complete` at
+the end of the local rollout. It writes a versioned evidence record and reacquires
+`upload_only`; it never resumes or creates a Codex turn. This is distinct from the
+existing `turn_aborted(reason="interrupted")` review-only recovery.
+
 ## Verification
 
 Local sanitized verification on 2026-10-24: **401 passed** in the full Bridge plus
@@ -59,6 +66,22 @@ Dependency consistency and whitespace checks passed. Browser/Windows execution
 is delegated to exact-head CI, not claimed from these Linux checks. Historical
 RB03/RB08 receipts remain evidence for their pinned older revisions, not this head.
 All automated tests use isolated data and synthetic provider/review fixtures.
+
+### Local Windows real CLI evidence
+
+On 2026-10-24, isolated loopback Alchemy (`8017`) and Bridge (`8788`) both started
+and reported the explicit `fake-image,codex-image` allowlist. One authorized
+Bridge task used the local `codex-cli 0.163.0` / `gpt-6.1-sol` configuration. Codex
+generated exactly one PNG; its actual 1254x1254 original was 2,199,572 bytes with
+SHA-256 `86fec176ab29efd7fa4ecf0789f858acb98d8a03a68124fff9939a615979078b`.
+The Agent live stream ended before collection, so the task was retained rather
+than regenerated. The completed-rollout recovery then used the same task/attempt
+and an `upload_only` claim to create receipt `receipt_a8463161c37442168c6e39169725db87`.
+The Bridge artifact bytes had the identical SHA-256, size and dimensions; no resize,
+re-encode or second generation occurred. This direct Bridge receipt remained
+`artifacts_ready`: absent a real Veyra-authenticated Alchemy user/project, no Native
+registration or ACK was fabricated. It is evidence for the local Bridge/CLI layer,
+not end-to-end host review, formal delivery, billing or fallback acceptance.
 
 ## Test-authority corrections
 
