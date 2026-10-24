@@ -54,18 +54,37 @@ class LocalMediaStore:
 
     def save_base64_output(
         self, *, job_id: str, output_id: str, b64_json: str, output_format: str,
-        owner_id: int | None = None,
+        owner_id: int | None = None, replay_sha256: str | None = None,
     ) -> str:
         from app.repositories.output_publication import reserve_output
 
         # This must commit before even the original bytes become discoverable.
         # A failed write or interrupted billing step leaves a private reservation.
-        reserve_output(self.root / "repository.sqlite3", output_id=output_id, job_id=job_id, owner_id=owner_id)
+        content = base64.b64decode(b64_json)
+        if replay_sha256 is not None:
+            import hashlib
+            if hashlib.sha256(content).hexdigest() != replay_sha256:
+                raise ValueError("Original image bytes do not match the reservation hash.")
+        reserve_output(self.root / "repository.sqlite3", output_id=output_id, job_id=job_id, owner_id=owner_id, replay_sha256=replay_sha256)
         ext = "jpg" if output_format == "jpeg" else output_format
         output_dir = self.generated_root / job_id
         output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / f"{output_id}.{ext}"
-        path.write_bytes(base64.b64decode(b64_json))
+        if replay_sha256 is not None and path.exists() and path.read_bytes() != content:
+            raise ValueError("An existing original image cannot be overwritten.")
+        if replay_sha256 is None:
+            path.write_bytes(content)
+        elif not path.exists():
+            # Commit a complete original atomically so interrupted writes cannot
+            # leave a truncated file blocking a same-hash recovery.
+            with tempfile.NamedTemporaryFile(dir=output_dir, prefix=".primary-", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(content)
+                handle.flush()
+            try:
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
         from app.repositories.history_index import mark_file_changed
 
         mark_file_changed(self, path)

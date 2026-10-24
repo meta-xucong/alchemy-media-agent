@@ -304,6 +304,7 @@ function initializeBridgeAdmin() {
   const errors = {
     bridge_configuration_missing: "请找管理员完成首次连接，再点击开启。",
     credential_endpoint_mismatch: "连接地址还未准备好，请找管理员确认连接设置。",
+    credential_workspace_mismatch: "工作区与服务器配置不一致，请找管理员确认。",
     bridge_pending_tasks_require_existing_configuration: "还有任务未完成。请先暂停，等已有任务完成后再修改工具或连接设置。",
     bridge_pending_state_unavailable: "暂时无法确认已有任务状态，请稍后重试。",
     invalid_bridge_url: "连接地址不正确，请找管理员检查。",

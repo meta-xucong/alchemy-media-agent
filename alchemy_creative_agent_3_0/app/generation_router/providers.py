@@ -1336,7 +1336,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if index == 0 and type(planned_output_index) is int
                 else {}
             )
+            bridge_provenance = output.get("render_bridge_primary")
+            bridge_provenance = dict(bridge_provenance) if isinstance(bridge_provenance, dict) else {}
             checkpoint_output_id = self._native_output_checkpoint_id(request, output_index=index) or ""
+            if bridge_provenance:
+                from .bridge_primary import output_id as bridge_output_id
+                checkpoint_output_id = bridge_output_id(bridge_provenance)
+                candidate_id = stable_id("candidate", checkpoint_output_id)
             if isinstance(self, McpMaterializationProvider):
                 checkpoint_output_id = str(
                     (mcp_materialization.get("expected_checkpoint") or {}).get("output_id") or ""
@@ -1367,6 +1373,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         refine_round=int(request.metadata.get("refine_round") or 0),
                         retry_attempt=retry_attempt,
                     )
+            if bridge_provenance.get("route") == "bridge":
+                from .bridge_primary import assert_bridge_checkpoint_current
+                _run_async_blocking(assert_bridge_checkpoint_current(app_request), timeout_seconds=15.0)
             record = self.output_store.save_base64_output(
                 job_id=job_id,
                 candidate_id=candidate_id,
@@ -1375,15 +1384,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 model=str(getattr(result, "model", "") or ""),
                 encoded_image=str(encoded),
                 # Provider pixels never author the persisted output identity.
-                # Only a server-issued native checkpoint can resume identity;
-                # ordinary transports still receive a fresh store identity.
+                # Native checkpoints and the server-owned primary transport
+                # journal can resume identity; renderer payloads cannot.
                 output_id=checkpoint_output_id or None,
+                **({"preserve_original_bytes": True} if bridge_provenance.get("route") == "bridge" else {}),
                 mime_type=output.get("mime_type"),
                 output_format=output.get("format") or app_request.prompt_plan.output_format,
                 width=output.get("width"),
                 height=output.get("height"),
                 metadata={
                     "source": self.provider_name,
+                    "render_bridge_primary": bridge_provenance,
+                    "render_bridge_primary_checkpoint_complete": False,
                     "provider_version": self.provider_version,
                     "generation_channel": request.metadata.get("generation_channel", "provider"),
                     "prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
@@ -1468,6 +1480,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     **output_binding,
                 },
             )
+            if bridge_provenance.get("route") == "bridge":
+                _run_async_blocking(assert_bridge_checkpoint_current(app_request), timeout_seconds=15.0)
+            if bridge_provenance:
+                from .bridge_primary import checkpoint
+                _run_async_blocking(checkpoint(app_request, record), timeout_seconds=15.0)
+                if bridge_provenance.get("route") == "bridge":
+                    _run_async_blocking(assert_bridge_checkpoint_current(app_request), timeout_seconds=15.0)
+                record = self.output_store.update_metadata(record.output_id, {"render_bridge_primary_checkpoint_complete": True}) or record
             mcp_handoff_id = str(mcp_materialization.get("handoff_id") or "").strip()
             if mcp_handoff_id and hasattr(self, "handoff_store"):
                 self.handoff_store.mark_output_checkpoint(
@@ -1489,6 +1509,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     is_mock=False,
                     metadata={
                         "runtime_mode": "production_image_generation",
+                        "render_bridge_primary": bridge_provenance,
                         "generation_channel": request.metadata.get("generation_channel", "provider"),
                         "provider_version": self.provider_version,
                         "actual_provider": str(getattr(result, "provider", provider_name)),
@@ -1653,8 +1674,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return None
 
     async def _generate_with_app_provider(self, provider_name: str, app_request):
-        provider = self._app_provider(provider_name)
-        return await provider.generate(app_request)
+        from .bridge_primary import generate
+
+        # Resolve the legacy provider lazily: an unconfigured API key must not
+        # block an otherwise available Bridge transport.
+        async def legacy_generate(frozen_request):
+            return await self._app_provider(provider_name).generate(frozen_request)
+
+        return await generate(app_request, legacy_generate, self.output_store)
 
     def _run_app_provider_with_timeout_retry(
         self,
@@ -2150,7 +2177,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         detail = getattr(exc, "detail", None)
         detail = dict(detail) if isinstance(detail, dict) else {}
         local_contract_failure = str(detail.get("failure_code") or "").strip()
-        if local_contract_failure.startswith("mcp_materialization_"):
+        if local_contract_failure.startswith(("mcp_materialization_", "bridge_")):
             return local_contract_failure
         if local_contract_failure in {
             "remote_creative_brain_prompt_signoff_missing",
@@ -2461,6 +2488,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
             output_compression=materialization.output_compression,
             variables={
                 "generation_prompt": materialization.generation_prompt,
+                "v3_bridge_primary_context": {
+                    "job_id": str(metadata.get("job_id") or ""),
+                    "owner_id": str(metadata.get("veyra_user_id") or metadata.get("owner_user_id") or "server")
+                        + ":" + str(metadata.get("project_id") or "project"),
+                    "unit_id": ":".join(str(value) for value in (
+                        metadata.get("job_id") or "", request.generation_plan.asset_id,
+                        self._frozen_output_index(request), metadata.get("refine_round") or 0,
+                        metadata.get("visual_auto_retry_attempt") or 0,
+                    )),
+                    "strong_identity": bool(self._strong_reference_closure_package(request)),
+                    "reference_fusion": bool(metadata.get("reference_fusion") or metadata.get("strong_reference_fusion")),
+                },
                 "provider_prompt_sha256": materialization.prompt_sha256,
                 "provider_prompt_chars": len(materialization.generation_prompt),
                 "provider_prompt_target_chars": self.max_provider_prompt_chars or self.provider_prompt_target_chars,
@@ -2683,6 +2722,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         self._import_v1_v2_provider_config(settings)
         if settings.openai_api_key:
+            return "openai_gpt_image"
+        from render_bridge_primary import PrimarySettings
+        primary_settings = PrimarySettings.from_env(product="v3")
+        if primary_settings.enabled or (primary_settings.state_dir / "primary.sqlite3").exists():
+            # Configuration is checked only if a proven non-admission selects
+            # the legacy route. Bridge generation does not require an API key.
             return "openai_gpt_image"
         raise ValueError(
             "GPT Image 2 is the sole production renderer for V3 and its OpenAI-compatible "

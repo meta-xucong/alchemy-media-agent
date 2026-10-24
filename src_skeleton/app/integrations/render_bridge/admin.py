@@ -22,6 +22,9 @@ from .routes import HEADERS, PREFIX, install_render_bridge
 from .settings import BridgeSettings
 from .store import TERMINAL
 
+from render_bridge_primary import (PrimarySettings, PrimaryTransport, control_path, state_root,
+                                   pending_count as primary_pending_count)
+
 
 class AdminSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -40,7 +43,10 @@ class BridgeAdminController:
                  project_snapshot, native_gateway_factory=None, client_factory=BridgeClient):
         self.baseline = baseline
         self.config = baseline
-        self.path = baseline.storage / "admin-settings.json"
+        # Shared control-plane configuration is product-neutral. In particular,
+        # V2 never imports this module or reads the V1 preview database.
+        self.path = control_path()
+        self.legacy_path = baseline.storage / "admin-settings.json"
         self.admin_resolver = admin_resolver
         self.session_user, self.auth_enabled = session_user, auth_enabled
         self.project_snapshot, self.native_gateway_factory = project_snapshot, native_gateway_factory
@@ -51,6 +57,41 @@ class BridgeAdminController:
         self.error = None
         self.persisted = False
         self.updated_at = None
+        self.primary_maintenance_task = None
+
+    async def maintain_primary_once(self):
+        # Only reconcile durable post-registration ACKs and cancellation intents.
+        # Never submit, generate, import, or decide a new route in this worker.
+        if not state_root().exists():
+            return
+        for product in ("v1", "lab", "v2", "v3"):
+            transport = None
+            try:
+                config = PrimarySettings.from_env(product=product)
+                if not (config.base_url and config.workspace and config.token):
+                    continue
+                if not primary_pending_count(config):
+                    continue
+                transport = PrimaryTransport(config)
+                async with asyncio.timeout(8):
+                    await transport.reconcile_pending(limit=32)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A transient ACK outage cannot invalidate native pixels or
+                # turn an owned task into another provider generation.
+                continue
+            finally:
+                if transport is not None:
+                    try:
+                        await transport.close()
+                    except Exception:
+                        pass
+
+    async def maintain_primary(self):
+        while True:
+            await asyncio.sleep(5)
+            await self.maintain_primary_once()
 
     def validate(self, body):
         base = body.base_url.strip().rstrip("/")
@@ -74,6 +115,9 @@ class BridgeAdminController:
                 raise ValueError("invalid_bridge_url") from None
         if self.baseline.token and base != self.baseline.base_url:
             raise ValueError("credential_endpoint_mismatch")
+        expected_workspace = os.getenv("ALCHEMY_RENDER_BRIDGE_WORKSPACE", "")
+        if expected_workspace and workspace != expected_workspace:
+            raise ValueError("credential_workspace_mismatch")
         error = None if base and workspace and self.baseline.token else "bridge_configuration_missing"
         if body.mode != "disabled" and error:
             raise ValueError(error)
@@ -83,17 +127,41 @@ class BridgeAdminController:
                        queue_wait_seconds=body.queue_wait_seconds, config_error=error)
 
     def read_saved(self):
-        if not self.path.exists():
+        source = self.path if self.path.exists() else self.legacy_path
+        if not source.exists():
             return
         try:
-            value = json.loads(self.path.read_text(encoding="utf-8"))
+            value = json.loads(source.read_text(encoding="utf-8"))
+            if value.pop("schema_version", "1") != "1":
+                raise ValueError("invalid_control_version")
+            if value.pop("profile", "codex-image") != "codex-image":
+                raise ValueError("invalid_primary_profile")
             self.updated_at = value.pop("updated_at", None)
             self.config = self.validate(AdminSettingsUpdate.model_validate(value))
             self.persisted = True
+            if source != self.path:
+                # One-time migration, never persist the environment token.
+                self._write_control({**value, "updated_at": self.updated_at})
         except (OSError, ValueError, ValidationError, TypeError, AttributeError):
             # A broken admin file never activates the fallback environment config.
             self.config = replace(self.baseline, mode="disabled")
             self.error = "invalid_saved_bridge_settings"
+
+    def _write_control(self, value):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps({**value, "schema_version": "1", "profile": "codex-image"},
+                                        ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.path)
+
+    def publish_environment_defaults(self):
+        if self.path.exists() or self.config.mode == "disabled" or self.config.config_error:
+            return
+        config = self.config
+        value = {key: getattr(config, key) for key in (
+            "mode", "base_url", "workspace", "native_enabled", "auto_fallback_enabled", "queue_wait_seconds")}
+        value.update(profiles=list(config.profiles), native_profiles=list(config.native_profiles))
+        self._write_control(value)
 
     async def activate(self, config):
         if self.application:
@@ -128,6 +196,10 @@ class BridgeAdminController:
 
     def pending_count(self):
         count = 0
+        try:
+            count += primary_pending_count(state_root())
+        except (OSError, sqlite3.Error, ValueError):
+            raise HTTPException(409, detail={"code": "bridge_pending_state_unavailable"}) from None
         for root in (self.config.storage, self.config.storage / "native"):
             path = root / "integration.sqlite3"
             if not path.exists():
@@ -151,6 +223,8 @@ class BridgeAdminController:
             public_url = ""
         native_runtime = getattr(self.application.state, "render_bridge_native", None) if self.application else None
         return {"mode": config.mode, "base_url": public_url,
+                "primary_routing_active": config.mode == "enabled" and "codex-image" in config.profiles and not config.config_error,
+                "primary_routing_policy": "bridge_primary_nonadmission_only_v1",
                 "native_runtime_active": bool(native_runtime and native_runtime["service"]),
                 "native_runtime_error": native_runtime["error"] if native_runtime else None, "workspace": config.workspace,
                 "profiles": list(config.profiles), "native_enabled": config.native_enabled,
@@ -176,10 +250,7 @@ class BridgeAdminController:
             value.update(base_url=config.base_url, workspace=config.workspace,
                          updated_at=datetime.now(timezone.utc).isoformat())
             try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = self.path.with_suffix(".json.tmp")
-                temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-                temporary.replace(self.path)
+                self._write_control(value)
             except OSError:
                 raise HTTPException(503, detail={"code": "bridge_settings_write_failed"}) from None
             self.persisted, self.updated_at = True, value["updated_at"]
@@ -298,12 +369,24 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
     @app.on_event("startup")
     async def start():
         controller.read_saved()
+        controller.primary_maintenance_task = asyncio.create_task(controller.maintain_primary())
         if controller.error:
+            return
+        try:
+            controller.publish_environment_defaults()
+        except OSError:
+            controller.error = "bridge_settings_write_failed"
             return
         await controller.activate(controller.config)
 
     @app.on_event("shutdown")
     async def stop():
+        if controller.primary_maintenance_task:
+            controller.primary_maintenance_task.cancel()
+            try:
+                await controller.primary_maintenance_task
+            except asyncio.CancelledError:
+                pass
         async with controller.lock:
             if controller.application:
                 await controller.lifespan.__aexit__(None, None, None)

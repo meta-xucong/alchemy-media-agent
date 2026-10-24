@@ -9,6 +9,7 @@ if (-not (Test-Path $VenvPython)) {
 
 & $VenvPython -m pip install --upgrade pip
 & $VenvPython -m pip install -r (Join-Path $ProjectRoot "requirements.txt")
+& $VenvPython -m pip install -e (Join-Path (Split-Path -Parent $ProjectRoot) "render_bridge_primary")
 & $VenvPython -m pip check
 
 Write-Host "Custom Media Agent 2.0 venv is ready: $VenvPython"

@@ -24,16 +24,22 @@ PREVIEW_QUALITY = 84
 def save_provider_output(*, job_id: str, output: ImageOutput, encoded: str, output_format: str, mime_type: str, _qr_preservation_enabled: bool = False) -> ImageOutput:
     content = base64.b64decode(encoded)
     private_delivery_contract = output.metadata.get("_reference_delivery_private") if isinstance(output.metadata, dict) else None
-    content, overlay_receipt = apply_deterministic_text_overlay(
-        content,
-        delivery_contract=private_delivery_contract if isinstance(private_delivery_contract, dict) else None,
-        output_format=output_format,
-    )
+    provenance = output.metadata.get("render_bridge_primary")
+    preserve_original = (output.metadata.get("preserve_original_bytes") is True
+                         and isinstance(provenance, dict) and provenance.get("route") == "bridge")
+    if preserve_original:
+        overlay_receipt = {"applied": False, "reason": "bridge_original_bytes"}
+    else:
+        content, overlay_receipt = apply_deterministic_text_overlay(
+            content,
+            delivery_contract=private_delivery_contract if isinstance(private_delivery_contract, dict) else None,
+            output_format=output_format,
+        )
     fmt = _normalize_format(output_format, mime_type)
     # A disabled QR stage does not even call the helper. The normal overlay,
     # storage and derivative-image path remains unchanged.
     qr_result = QrPreservationResult(content=content)
-    if _qr_preservation_enabled is True:
+    if _qr_preservation_enabled is True and not preserve_original:
         try:
             qr_result = preserve_requested_qr_code(
                 content=content, metadata=output.metadata, output_format=fmt,

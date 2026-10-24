@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import threading
+from weakref import WeakValueDictionary
 import logging
 import re
 from dataclasses import dataclass
@@ -688,7 +691,40 @@ async def _prepare_submitted_image_run(job: GenerationJob, request: ImageGenerat
     return job, request.model_copy(update={"prompt_plan": prompt_plan, "asset_plan": request.asset_plan})
 
 
+_primary_job_locks = WeakValueDictionary()
+_primary_job_locks_guard = threading.Lock()
+
+
 async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest, *, edit: bool) -> GenerationJob:
+    # Serialise product checkpoint/billing/ACK, including simultaneous GET polls.
+    with _primary_job_locks_guard:
+        lock = _primary_job_locks.setdefault(job.id, threading.Lock())
+    acquired = False
+    while not acquired:
+        acquired = lock.acquire(blocking=False)
+        if not acquired:
+            await asyncio.sleep(0.05)
+    try:
+        current = repository.get_job(job.id)
+        if current and current.status in TERMINAL_IMAGE_STATUSES:
+            return current
+        try:
+            return await _run_image_request_owned(current or job, request, edit=edit)
+        except Exception:
+            interrupted = repository.get_job(job.id)
+            if not interrupted or not interrupted.raw_response_summary.get("primary_image_transport"):
+                raise
+            if interrupted.status in TERMINAL_IMAGE_STATUSES:
+                return interrupted
+            # A crash after pixels or debit is a checkpoint recovery, not a new execution.
+            interrupted.status = JobStatus.generating
+            interrupted.error = ProviderError(code="primary_reconciliation_required", message="Resume the original image task.", retryable=False)
+            return repository.save_job(interrupted)
+    finally:
+        lock.release()
+
+
+async def _run_image_request_owned(job: GenerationJob, request: ImageGenerationRequest, *, edit: bool) -> GenerationJob:
     job.status = JobStatus.generating
     job.updated_at = now_iso()
     requested_provider = request.provider_preference or settings.default_image_provider
@@ -700,60 +736,93 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
     billing_result = None
     billing_rule = None
     billing_required = False
+    frozen_debit = job.raw_response_summary.get("primary_image_transport", {}).get("debit")
     try:
-        billing_required = _should_check_veyra_billing(request)
-        if billing_required:
+        billing_required = bool(frozen_debit) or _should_check_veyra_billing(request)
+        if billing_required and not frozen_debit:
             billing_rule = await load_billing_rule(settings.veyra_billing_rule_key_v1)
             billing_required = _should_bill_veyra(request, billing_rule)
-        if billing_required and billing_rule:
+        if billing_required and billing_rule and not job.raw_response_summary.get("primary_image_transport"):
             await ensure_sufficient_balance(user_id=int(request.veyra_user_id or 0), amount=billing_rule.charge_amount)
     except (VeyraInsufficientBalance, VeyraAuthError) as exc:
-        job.status = JobStatus.failed
+        # Existing ownership, especially an uncertain debit, must remain resumable.
+        job.status = JobStatus.generating if job.raw_response_summary.get("primary_image_transport") else JobStatus.failed
         job.error = _billing_provider_error(exc)
         job.updated_at = now_iso()
         saved = repository.save_job(job)
         _emit_image_events(saved)
         return saved
 
+    current = repository.get_job(job.id)
+    if current and current.status == JobStatus.canceled:
+        return current
+    from app.services.primary_image_transport import run_primary, finish_primary
     try:
-        provider = await registry.select_image(request.provider_preference)
-        result = await _try_image_provider(job, request, provider, edit=edit)
-        job.raw_response_summary = {**job.raw_response_summary, **result.raw_response_summary}
-        job.status = JobStatus.ready
-    except ProviderRuntimeError as exc:
-        fallback_error = await _try_image_fallback(job, request, edit=edit, primary_error=exc)
-        if fallback_error is None:
-            job.status = JobStatus.ready
-        else:
-            job.provider = fallback_error.provider or job.provider
-            job.status = JobStatus.provider_not_configured if fallback_error.code == "provider_not_configured" else JobStatus.failed
-            job.error = ProviderError(
-                code=fallback_error.code,
-                message=_redact_provider_error_text(str(fallback_error)),
-                provider=fallback_error.provider,
-                retryable=fallback_error.retryable,
-                detail=_redact_provider_error_detail(fallback_error.detail),
-            )
-            if not job.cost_estimate:
-                job.cost_estimate = CostEstimate(provider=fallback_error.provider or "unknown", model="unknown")
-
-    if job.status == JobStatus.ready and billing_required and billing_rule:
+        primary_handled = await run_primary(job, request, edit=edit)
+    except Exception:
+        if not job.raw_response_summary.get("primary_image_transport"):
+            raise
+        latest = repository.get_job(job.id)
+        if latest and latest.status in TERMINAL_IMAGE_STATUSES:
+            return latest
+        # Uncertain transport or checkpoint failures never enter API fallback.
+        logger.exception("Primary image transport needs reconciliation: %s", job.id)
+        job.status = JobStatus.generating
+        job.error = ProviderError(code="primary_reconciliation_required", message="Resume the original image task.", retryable=False)
+        primary_handled = True
+    if not primary_handled:
         try:
-            billing_result = await debit_balance(
-                user_id=int(request.veyra_user_id or 0),
-                amount=billing_rule.charge_amount,
-                idempotency_key=f"{billing_rule.key}:image:{job.id}",
-                source=billing_rule.source,
-                reference_id=job.id,
-            )
+            provider = await registry.select_image(request.provider_preference)
+            result = await _try_image_provider(job, request, provider, edit=edit)
+            job.raw_response_summary = {**job.raw_response_summary, **result.raw_response_summary}
+            job.status = JobStatus.ready
+        except ProviderRuntimeError as exc:
+            fallback_error = await _try_image_fallback(job, request, edit=edit, primary_error=exc)
+            if fallback_error is None:
+                job.status = JobStatus.ready
+            else:
+                job.provider = fallback_error.provider or job.provider
+                job.status = JobStatus.provider_not_configured if fallback_error.code == "provider_not_configured" else JobStatus.failed
+                job.error = ProviderError(
+                    code=fallback_error.code,
+                    message=_redact_provider_error_text(str(fallback_error)),
+                    provider=fallback_error.provider,
+                    retryable=fallback_error.retryable,
+                    detail=_redact_provider_error_detail(fallback_error.detail),
+                )
+                if not job.cost_estimate:
+                    job.cost_estimate = CostEstimate(provider=fallback_error.provider or "unknown", model="unknown")
+
+    current = repository.get_job(job.id) if primary_handled else None
+    if current and current.status in TERMINAL_IMAGE_STATUSES:
+        return current
+    if job.status == JobStatus.ready and billing_required and (billing_rule or frozen_debit):
+        debit_parameters = dict(frozen_debit) if frozen_debit else {
+            "user_id": int(request.veyra_user_id or 0),
+            "amount": billing_rule.charge_amount,
+            "idempotency_key": f"{billing_rule.key}:image:{job.id}",
+            "source": billing_rule.source,
+            "reference_id": job.id,
+        }
+        if primary_handled:
+            debit_parameters = repository.begin_primary_finalization(job.id, debit_parameters)
+            if debit_parameters is None:
+                return repository.get_job(job.id) or job
+            job.raw_response_summary["primary_image_transport"]["billing_finalizing"] = True
+            job.raw_response_summary["primary_image_transport"]["debit"] = debit_parameters
+        try:
+            billing_result = await debit_balance(**debit_parameters)
             job.raw_response_summary = {
                 **job.raw_response_summary,
                 "veyra_billing": _billing_metadata(billing_result),
             }
             _attach_billing_metadata(job, billing_result)
         except (VeyraInsufficientBalance, VeyraAuthError) as exc:
-            _discard_job_outputs(job)
-            job.status = JobStatus.failed
+            if not primary_handled:
+                _discard_job_outputs(job)
+            job.status = JobStatus.generating if primary_handled else JobStatus.failed
+            if primary_handled:
+                job.outputs = []
             job.error = _billing_provider_error(exc)
             job.updated_at = now_iso()
             saved = repository.save_job(job)
@@ -775,6 +844,12 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
                 )
             )
         _persist_history_records(saved)
+        if primary_handled:
+            try:
+                await finish_primary(saved, request)
+            except Exception:
+                # Persisted success remains success; the next authenticated poll retries ACK.
+                logger.exception("Primary image acknowledgement pending: %s", job.id)
     _emit_image_events(saved)
     return saved
 
@@ -844,7 +919,7 @@ async def _try_image_fallback(
 def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request: ImageGenerationRequest) -> list[GenerationOutput]:
     stored: list[GenerationOutput] = []
     for item in provider_outputs:
-        output_id = make_id("out")
+        output_id = item.get("primary_output_id") or make_id("out")
         output_format = item.get("format") or (job.prompt_plan.output_format if job.prompt_plan else "png")
         url = media_store.save_base64_output(
             job_id=job.id,
@@ -852,6 +927,7 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request:
             b64_json=item["b64_json"],
             output_format=output_format,
             owner_id=request.veyra_user_id,
+            **({"replay_sha256": item["sha256"]} if item.get("bridge_original") else {}),
         )
         width = item.get("width")
         height = item.get("height")
@@ -878,7 +954,8 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request:
                 },
             )
         )
-        _apply_advanced_postprocess(job, stored[-1])
+        if not item.get("bridge_original"):
+            _apply_advanced_postprocess(job, stored[-1])
         review = review_image_output(job, stored[-1])
         if review:
             stored[-1].visual_review = review

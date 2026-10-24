@@ -2373,6 +2373,15 @@ async def v3_generate_job_endpoint(job_id: str, request: Request, authorization:
     return await _run_v3_handler_threaded(v3_route_handlers.post_generate, job_id, payload)
 
 
+@app.post("/api/v3/creative-agent/jobs/{job_id}/render-bridge/cancel")
+async def v3_cancel_primary_bridge_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
+    user_id = _require_v3_job_visible(request, job_id, authorization)
+    try:
+        return await v3_route_handlers.service.cancel_primary_bridge_generation(job_id, owner_user_id=user_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."}) from None
+
+
 @app.post("/api/v3/creative-agent/jobs/{job_id}/select")
 async def v3_select_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
     _require_v3_job_visible(request, job_id, authorization)
@@ -2507,7 +2516,26 @@ async def get_rare_style_explorer_session(session_id: str, request: Request, aut
     )
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
+    if session.primary_transport and session.status in {"queued", "running"}:
+        from app.services.alchemy_lab import run_exploration_session
+        session = await run_exploration_session(session.id, veyra_user_id=context.get("user_id"))
     return {"session": public_exploration_session(session), "board": comparison_board(session)}
+
+
+@app.post("/api/lab/rare-style-explorer/sessions/{session_id}/cancel")
+async def cancel_primary_lab_session(session_id: str, request: Request, authorization: str = Header(default="")):
+    context = await _veyra_history_context(request, authorization)
+    session = await _run_sqlite_api_call(get_exploration_session, session_id, veyra_user_id=context.get("user_id"), is_admin=False)
+    if not session or (settings.veyra_auth_enabled and session.veyra_user_id != context.get("user_id")):
+        raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found"})
+    if not session.primary_transport:
+        raise HTTPException(status_code=409, detail={"code": "primary_transport_not_owned"})
+    from app.services.alchemy_lab import cancel_primary_exploration_session
+    from app.services.primary_image_transport import PrimaryFinalizationInProgress
+    try:
+        return {"session": public_exploration_session(await cancel_primary_exploration_session(session.id))}
+    except PrimaryFinalizationInProgress:
+        raise HTTPException(status_code=409, detail={"code": "primary_finalization_in_progress"}) from None
 
 
 @app.post("/api/lab/rare-style-explorer/sessions/{session_id}/favorites")
@@ -3368,7 +3396,8 @@ async def create_image_job_endpoint(
     )
     if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
         background_tasks.add_task(run_submitted_image_job, prepared.job.id, prepared.request, edit=prepared.edit)
-    return prepared.job
+    from app.services.primary_image_transport import public_image_job
+    return public_image_job(prepared.job)
 
 
 def _list_image_history_sync(
@@ -3462,7 +3491,24 @@ async def get_image_job(job_id: str, request: Request, authorization: str = Head
     if not job or job.job_type != "image":
         raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Image job not found."})
     await _require_v1_session_access(request, job.session_id, authorization)
-    return job
+    from app.services.primary_image_transport import public_image_job, resume_primary_job
+    return public_image_job(await resume_primary_job(job.id) or job)
+
+
+@app.post("/v1/image/jobs/{job_id}/cancel")
+async def cancel_primary_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
+    job = repository.get_job(job_id)
+    if not job or job.job_type != "image":
+        raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Image job not found."})
+    await _require_v1_session_access(request, job.session_id, authorization, write=True)
+    from app.services.primary_image_transport import cancel_primary_job
+    if not job.raw_response_summary.get("primary_image_transport"):
+        raise HTTPException(status_code=409, detail={"code": "primary_transport_not_owned"})
+    from app.services.primary_image_transport import PrimaryFinalizationInProgress, public_image_job
+    try:
+        return public_image_job(await cancel_primary_job(job.id))
+    except PrimaryFinalizationInProgress:
+        raise HTTPException(status_code=409, detail={"code": "primary_finalization_in_progress"}) from None
 
 
 @app.post("/v1/image/jobs/{job_id}/revise")
@@ -3488,7 +3534,8 @@ async def revise_image_job_endpoint(
         raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": "Source image output not found."})
     if prepared.request and prepared.job.status not in {"ready", "failed", "provider_not_configured", "rejected", "canceled"}:
         background_tasks.add_task(run_submitted_image_job, prepared.job.id, prepared.request, edit=prepared.edit)
-    return prepared.job
+    from app.services.primary_image_transport import public_image_job
+    return public_image_job(prepared.job)
 
 
 @app.get("/v1/providers")

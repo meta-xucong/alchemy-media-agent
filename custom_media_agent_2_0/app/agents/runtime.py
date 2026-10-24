@@ -82,6 +82,17 @@ class CreativeManagerRuntime:
             return task_queue.restore_success_checkpoint(checkpoint)
         existing = task_queue.get_run_snapshot(run_id) or repository.get_creative_run(run_id)
         try:
+            from app.services import render_bridge_primary as bridge_primary
+            frozen = bridge_primary.load_frozen()
+            if frozen is not None and existing is not None:
+                job = await create_image_job(bridge_primary.frozen_request(frozen),
+                    job_id=frozen["job_id"], created_at=datetime.fromisoformat(frozen["created_at"]),
+                    _qr_preservation_enabled=frozen["qr"])
+                resumed = existing.model_copy(update={
+                    "status": "completed" if job.status == "completed" else "failed",
+                    "generation_jobs": [job], "prompt_plan": job.prompt_plan, "updated_at": utc_now(),
+                    "next_actions": ["Review generated outputs." if job.status == "completed" else _image_job_failure_action(job)]})
+                return task_queue.persist_claimed_operation(lambda: repository.save_creative_run(resumed))
             return await self._run_deterministic_manager(
                 request,
                 run_id=run_id,

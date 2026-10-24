@@ -21,6 +21,7 @@ COPY scripts/fetch_v3_identity_models.py ./scripts/fetch_v3_identity_models.py
 RUN python ./scripts/fetch_v3_identity_models.py --target /app/models/v3_identity
 
 COPY src_skeleton/app ./app
+COPY render_bridge_primary ./render_bridge_primary
 COPY alchemy_creative_agent_3_0/__init__.py ./alchemy_creative_agent_3_0/__init__.py
 COPY alchemy_creative_agent_3_0/app ./alchemy_creative_agent_3_0/app
 

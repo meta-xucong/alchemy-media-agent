@@ -17,14 +17,20 @@ from app.services.history_projection import positive_owner
 PUBLICATION_NAMESPACE = "output_publications"
 
 
-def reserve_output(database_path: Path, *, output_id: str, job_id: str, owner_id: int | None) -> None:
+def reserve_output(database_path: Path, *, output_id: str, job_id: str, owner_id: int | None, replay_sha256: str | None = None) -> None:
     """Commit immutable identity/owner intent before any output bytes exist.
 
     Output IDs are single-use, including after interrupted writes or cleanup.
-    Generation retries already mint fresh IDs. Rejecting repeated reservations
-    avoids requiring a second ever-published state synchronized with deletion.
+    Legacy generation retries mint fresh IDs and cannot reuse reservations.
+    The primary transport may replay only an unpublished reservation with the
+    identical immutable job, owner, and original image hash.
     """
     reservation = {"job_id": str(job_id), "owner_id": positive_owner(owner_id)}
+    if replay_sha256 is not None:
+        import re
+        if not re.fullmatch(r"[0-9a-f]{64}", replay_sha256):
+            raise ValueError("Invalid original image hash.")
+        reservation["original_sha256"] = replay_sha256
     connection = connect(database_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -37,7 +43,10 @@ def reserve_output(database_path: Path, *, output_id: str, job_id: str, owner_id
             (PUBLICATION_NAMESPACE, output_id),
         ).fetchone()
         if existing:
-            raise ValueError("An output publication reservation cannot be reused or reassigned.")
+            # Only an unpublished original with identical immutable owner/job/hash
+            # may recover an interrupted Bridge materialization.
+            if replay_sha256 is None or json.loads(existing[0]) != reservation:
+                raise ValueError("An output publication reservation cannot be reused or reassigned.")
         else:
             connection.execute(
                 "INSERT INTO v1_records(namespace,record_key,payload) VALUES(?,?,?)",

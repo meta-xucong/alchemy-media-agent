@@ -19,6 +19,12 @@ HEADERS = {"X-Alchemy-Bridge-Admin": "1", "Authorization": "Bearer fixture-admin
 SECRET = "synthetic-secret-never-display"
 
 
+@pytest.fixture(autouse=True)
+def neutral_control_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG", str(tmp_path / "neutral-control" / "control.json"))
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT", str(tmp_path / "neutral-ledgers"))
+
+
 def fixture(tmp_path, *, upstream=None, baseline=None):
     calls = []
     constructed = []
@@ -106,7 +112,7 @@ def test_enable_drain_disable_restart_and_explicit_probe(tmp_path):
         assert client.get("/api/integrations/render-bridge/v1/status").status_code == 404
     persisted = controller.path.read_text()
     assert SECRET not in persisted and '"token"' not in persisted
-    assert (controller.path.parent / "integration.sqlite3").exists()
+    assert (controller.config.storage / "integration.sqlite3").exists()
     app, _, calls, constructed = fixture(tmp_path)
     with TestClient(app) as client:
         assert client.get(BASE + "/settings", headers=HEADERS).json()["persisted"] is True
@@ -278,3 +284,106 @@ def test_fallback_settings_strictly_validate(tmp_path, changes):
         response = client.post(BASE + '/settings', headers=HEADERS, json=settings(**changes))
         assert response.status_code == 422
     assert not controller.path.exists() and not calls
+
+
+def test_primary_control_is_neutral_and_legacy_config_migrates(tmp_path):
+    app, controller, calls, _ = fixture(tmp_path)
+    controller.legacy_path.parent.mkdir(parents=True)
+    controller.legacy_path.write_text(json.dumps(settings(profiles=["codex-image"])), encoding="utf-8")
+    with TestClient(app) as client:
+        state = client.get(BASE + "/settings", headers=HEADERS).json()
+        assert state["primary_routing_active"] is True
+        assert state["primary_routing_policy"] == "bridge_primary_nonadmission_only_v1"
+        assert controller.path != controller.legacy_path
+        value = json.loads(controller.path.read_text(encoding="utf-8"))
+        assert value["mode"] == "enabled" and value["profiles"] == ["codex-image"]
+        assert value["schema_version"] == "1"
+        assert value["profile"] == "codex-image"
+        assert SECRET not in controller.path.read_text(encoding="utf-8")
+    assert not calls
+
+
+def test_fake_only_settings_do_not_activate_product_codex(tmp_path):
+    app, _, _, _ = fixture(tmp_path)
+    with TestClient(app) as client:
+        state = client.post(BASE + "/settings", headers=HEADERS, json=settings()).json()
+        assert state["primary_routing_active"] is False
+
+
+def test_primary_pending_blocks_scope_change_but_allows_pause(tmp_path, monkeypatch):
+    import app.integrations.render_bridge.admin as admin
+    app, _, _, _ = fixture(tmp_path)
+    with TestClient(app) as client:
+        assert client.post(BASE + "/settings", headers=HEADERS, json=settings()).status_code == 200
+        monkeypatch.setattr(admin, "primary_pending_count", lambda _: 1)
+        refused = client.post(BASE + "/settings", headers=HEADERS, json=settings(profiles=["codex-image"]))
+        assert refused.status_code == 409
+        paused = client.post(BASE + "/settings", headers=HEADERS, json=settings(mode="draining"))
+        assert paused.status_code == 200
+        assert paused.json()["primary_routing_active"] is False
+
+
+def test_invalid_neutral_control_does_not_restore_old_enabled_settings(tmp_path):
+    app, controller, calls, constructed = fixture(tmp_path)
+    controller.legacy_path.parent.mkdir(parents=True)
+    controller.legacy_path.write_text(json.dumps(settings(profiles=["codex-image"])), encoding="utf-8")
+    controller.path.parent.mkdir(parents=True)
+    controller.path.write_text('{"schema_version":"unknown"}', encoding="utf-8")
+    with TestClient(app) as client:
+        state = client.get(BASE + "/settings", headers=HEADERS).json()
+        assert state["mode"] == "disabled"
+        assert state["primary_routing_active"] is False
+        assert state["configuration_error"] == "invalid_saved_bridge_settings"
+    assert not calls and not constructed
+
+
+def test_enabled_environment_publishes_neutral_control_without_token(tmp_path):
+    baseline = BridgeSettings(mode="enabled", base_url="https://bridge.test", token=SECRET,
+        workspace="fixture-workspace", storage=tmp_path / "bridge", profiles=("codex-image",), poll_seconds=3600)
+    app, controller, _, _ = fixture(tmp_path, baseline=baseline)
+    with TestClient(app):
+        value = json.loads(controller.path.read_text(encoding="utf-8"))
+        assert value["mode"] == "enabled" and value["profiles"] == ["codex-image"]
+        assert "token" not in value and SECRET not in controller.path.read_text(encoding="utf-8")
+
+
+def test_admin_workspace_matches_neutral_credential_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_WORKSPACE", "fixture-workspace")
+    app, controller, _, _ = fixture(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(BASE + "/settings", headers=HEADERS, json=settings(workspace="different-workspace"))
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "credential_workspace_mismatch"
+        assert not controller.path.exists()
+
+
+def test_disabled_mode_still_reconciles_owned_primary_ack_and_cancel_intents(tmp_path, monkeypatch):
+    import asyncio
+    import app.integrations.render_bridge.admin as admin
+    app, controller, _, _ = fixture(tmp_path)
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_TOKEN", SECRET)
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_URL", "https://bridge.test")
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_WORKSPACE", "fixture-workspace")
+    admin.state_root().mkdir(parents=True)
+    controller._write_control(settings(mode="disabled", profiles=["codex-image"]))
+    observed = []
+    class MaintenanceOnly:
+        def __init__(self, config):
+            assert config.enabled is False
+            self.product = config.state_dir.name
+        async def reconcile_pending(self, *, limit):
+            observed.append((self.product, limit))
+        async def close(self):
+            pass
+    monkeypatch.setattr(admin, "PrimaryTransport", MaintenanceOnly)
+    monkeypatch.setattr(admin, "primary_pending_count", lambda _: 1)
+    asyncio.run(controller.maintain_primary_once())
+    assert observed == [(name, 32) for name in ("v1", "lab", "v2", "v3")]
+
+
+def test_no_primary_state_means_no_maintenance_transport(tmp_path, monkeypatch):
+    import asyncio
+    import app.integrations.render_bridge.admin as admin
+    _, controller, _, _ = fixture(tmp_path)
+    monkeypatch.setattr(admin, "PrimaryTransport", lambda _: pytest.fail("unexpected transport"))
+    asyncio.run(controller.maintain_primary_once())
