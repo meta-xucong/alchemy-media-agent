@@ -122,3 +122,7 @@ real rendering parameter support, real billing, cross-VPS/TLS operation and
 production rollout remain unverified. Free-text quality/format instructions
 are not an accepted real-tool parameter contract. This milestone completes only
 the explicitly restricted synthetic developer path, not production readiness.
+
+Current-main integration and terminal-versus-resumable review semantics are recorded
+in `docs/render_bridge_module/RB12_MAINLINE_INTEGRATION_20261024.md`. This receipt
+and its test counts remain historical, not acceptance of the current combined head.

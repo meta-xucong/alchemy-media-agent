@@ -26,8 +26,8 @@ owned, and the UI displays live projected review_pending/review_status.
 Use only synthetic intercepted APIs. Cover unsupported contexts, absent/disabled/
 draining service, owner denial, selection and payload bounds, duplicate submission,
 reload key reuse, stale responses after close/project/account changes, review-only
-status and no select/export controls. Preserve the original createV3Job function
-and ordinary endpoints byte-for-byte. No real providers or accounts run.
+status and no select/export controls. Do not change ordinary Generate semantics from the integrated main baseline;
+retain main's current operation/job recovery and result-projection fixes. No real providers or accounts run.
 
 This phase does not integrate ordinary Generate, V1, V2, Lab/Professional or Video,
 and does not accept production delivery, real renderer fidelity or real billing.
@@ -73,3 +73,6 @@ also passed all five jobs. Local Chromium was not run because its environment
 is restricted. These are revision-specific prior results, not acceptance of
 subsequent changes. No real provider,
 account, production deployment or formal-output acceptance is claimed.
+
+Current-main compatibility and review semantics supersede old fixture assumptions;
+see `docs/render_bridge_module/RB12_MAINLINE_INTEGRATION_20261024.md`.

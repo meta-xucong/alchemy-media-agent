@@ -588,7 +588,8 @@ def test_interrupted_native_review_resumes_same_checkpoint(native_fixture, monke
     assert fixture.debit.call_count == fixture.usage.call_count == 0
 
 
-def test_pending_native_review_updates_projection_without_reimport(native_fixture, monkeypatch):
+@pytest.mark.parametrize("issue_code", ["vision_provider_unavailable", "vision_provider_not_configured"])
+def test_pending_native_review_updates_projection_without_reimport(native_fixture, monkeypatch, issue_code):
     fixture = native_fixture
     receipt = _receipt(fixture)
     original = fixture.service._attach_post_generation_review
@@ -596,7 +597,7 @@ def test_pending_native_review_updates_projection_without_reimport(native_fixtur
     def pending(record, result, request):
         return result.model_copy(update={"metadata": {
             **result.metadata, "post_generation_review_package": {"status": "manual_review", "inspections": [
-                {"status": "manual_review", "evidence": {"provider_error": "review timed out"}}
+                {"status": "manual_review", "issue_codes": [issue_code]}
             ]}
         }})
 
@@ -638,3 +639,101 @@ def test_review_recovery_does_not_revive_changed_target(native_fixture, monkeypa
         fixture.gateway.registration_status(7, fixture.target, import_key=receipt["import_key"])
     assert fixture.reviews == []
     assert len(fixture.outputs.list_by_job(fixture.target.job_id)) == 1
+
+
+@pytest.mark.parametrize("issue_code", ["provider_timeout", "provider_error", "provider_malformed_json"])
+def test_terminal_review_failure_does_not_repeat_review(native_fixture, monkeypatch, issue_code):
+    fixture = native_fixture
+    receipt = _receipt(fixture)
+    calls = []
+
+    def terminal(record, result, request):
+        calls.append(record.job_id)
+        return result.model_copy(update={"metadata": {
+            **result.metadata, "post_generation_review_package": {
+                "status": "manual_review", "inspections": [
+                    {"status": "manual_review", "issue_codes": [issue_code],
+                     "evidence": {"provider_error": "review timed out"}}
+                ]}
+        }})
+
+    monkeypatch.setattr(fixture.service, "_attach_post_generation_review", terminal)
+    outcome = _register(fixture, **receipt)
+    assert outcome["status"] == "registered"
+    assert outcome["review_pending"] is False
+    assert outcome["formal_delivery"] is False
+    for _ in range(3):
+        current = fixture.gateway.registration_status(7, fixture.target, import_key=receipt["import_key"])
+        assert current["native_registration_ref"] == outcome["native_registration_ref"]
+        assert current["review_pending"] is False
+        assert _register(fixture, **receipt)["native_registration_ref"] == outcome["native_registration_ref"]
+    package = fixture.jobs.get(fixture.target.job_id).generation_result.metadata["post_generation_review_package"]
+    assert package["status"] == "manual_review"
+    assert package["inspections"][0]["issue_codes"] == [issue_code]
+    assert len(calls) == 1
+    assert fixture.review_only_calls == [True]
+    assert len(fixture.outputs.list_by_job(fixture.target.job_id)) == 1
+    assert fixture.debit.call_count == fixture.usage.call_count == 0
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_single_bridge_output_never_becomes_mainline_continuity_anchor(native_fixture, monkeypatch, interrupted):
+    """Doc344 resume hook must retain Bridge's review-only delivery boundary."""
+    from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
+
+    f = native_fixture
+    projects = V3ProjectModeService(product_service=f.service, project_store=f.projects)
+    before = projects.get_continuity_anchor(f.target.project_id)
+    assert f.jobs.get(f.target.job_id).request.metadata[PLAN_KEY]["anchor_auto_enabled"] is True
+    original_projection = f.service._public_final_delivery_projection
+    anchor_projection_checks = []
+    original_finalizer = f.service._continuity_anchor_finalizer
+    in_finalizer = [False]
+
+    def finalizer(*args):
+        in_finalizer[0] = True
+        try:
+            return original_finalizer(*args)
+        finally:
+            in_finalizer[0] = False
+
+    def projection(result):
+        value = original_projection(result)
+        if in_finalizer[0]:
+            anchor_projection_checks.append(value[0]["final_delivery_status"])
+            assert value[1] == set()
+        return value
+
+    monkeypatch.setattr(f.service, "_continuity_anchor_finalizer", finalizer)
+    monkeypatch.setattr(f.service, "_public_final_delivery_projection", projection)
+    original = f.service._attach_post_generation_review
+
+    def reviewed(record, result, request):
+        result = original(record, result, request)
+        return result.model_copy(update={"metadata": {
+            **result.metadata,
+            "doc322_auto_anchor_candidate": True,
+            "post_generation_review_package": {"status": "passed", "inspections": [], "test_double": True},
+        }})
+
+    monkeypatch.setattr(f.service, "_attach_post_generation_review", reviewed)
+    receipt = _receipt(f)
+    resume = f.service._resume_finalizing_generation_review
+    if interrupted:
+        monkeypatch.setattr(f.service, "_resume_finalizing_generation_review", Mock(side_effect=RuntimeError("interrupted")))
+        assert _register(f, **receipt)["status"] == "import_unknown"
+        monkeypatch.setattr(f.service, "_resume_finalizing_generation_review", resume)
+        outcome = f.gateway.registration_status(7, f.target, import_key=receipt["import_key"])
+    else:
+        outcome = _register(f, **receipt)
+    assert outcome["status"] == "registered"
+    assert outcome["formal_delivery"] is False
+    assert projects.get_continuity_anchor(f.target.project_id) == before
+    assert anchor_projection_checks  # Reached canonical eligibility, not an earlier guard.
+    output = f.outputs.list_by_job(f.target.job_id)[0]
+    with pytest.raises(ValueError, match="not_formally_accepted"):
+        projects._continuity_output(f.target.project_id, output.output_id, f.target.job_id)
+    assert projects._project_completed_general_suite_role_keys(project=f.projects.get_project(f.target.project_id), mode="creative_exploration") == []
+    assert len(f.reviews) == 1
+    assert f.review_only_calls == [True]
+    assert f.debit.call_count == f.usage.call_count == 0

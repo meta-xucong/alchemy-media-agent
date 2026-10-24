@@ -30,3 +30,13 @@ restore review and prove same output/import/ACK identity, one review continuatio
 no renderer/billing calls, and current UI status. Pending external review remains
 pending without duplicate ACK; completed review stops reconciliation. Previously
 registered mappings recover on owner/project read, while disabled mode stays off.
+
+## Current main review semantics (2026-10-24)
+
+`provider_timeout`, `provider_error` and `provider_malformed_json` are terminal
+manual-review outcomes. A timeout string alone never enables automatic resume.
+`vision_provider_unavailable` / `vision_provider_not_configured` and a genuinely
+interrupted checkpoint may resume the same review-only output. Repeated reads of
+a terminal outcome must not create another review, image or charge. `registered`
+and job status `generated` do not mean the review passed. See RB12 for the current
+main integration and local acceptance boundaries.

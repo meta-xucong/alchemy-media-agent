@@ -452,7 +452,9 @@ def test_clock_jump_cannot_accelerate_recovery_or_refresh_ttl():
 def test_quiet_background_health_restores_future_bridge_requests(tmp_path, monkeypatch):
     import app.integrations.render_bridge.native_service as native_module
     import app.integrations.render_bridge.store as store_module
-    wall, mono = [time.time()], [time.monotonic()]
+    # Exact synthetic clock: the policy separately tests clock-jump boundaries.
+    # Avoid arbitrary wall/monotonic fractions at the exact 60-second threshold.
+    wall, mono = [1_800_000_000.0], [1000.0]
     clock = SimpleNamespace(time=lambda: wall[0], monotonic=lambda: mono[0])
     monkeypatch.setattr(native_module, "time", clock)
     monkeypatch.setattr(store_module, "time", clock)
@@ -507,7 +509,9 @@ def test_official_account_status_evidence_is_supported():
 def test_failed_background_probe_resets_recovery_window(tmp_path, monkeypatch):
     import app.integrations.render_bridge.native_service as native_module
     import app.integrations.render_bridge.store as store_module
-    wall, mono = [time.time()], [time.monotonic()]
+    # Exact synthetic clock: the policy separately tests clock-jump boundaries.
+    # Avoid arbitrary wall/monotonic fractions at the exact 60-second threshold.
+    wall, mono = [1_800_000_000.0], [1000.0]
     clock = SimpleNamespace(time=lambda: wall[0], monotonic=lambda: mono[0])
     monkeypatch.setattr(native_module, "time", clock)
     monkeypatch.setattr(store_module, "time", clock)
@@ -548,6 +552,44 @@ def test_known_auth_denial_invalidates_cache_before_later_outage(tmp_path):
             with pytest.raises(BridgeError):
                 await svc._routing_context(job)
             assert gateway.cloud_calls == 0
+        finally:
+            await svc.close()
+    run(case())
+
+
+def test_unknown_attempt_receipt_reconciles_after_restart_without_fallback(tmp_path):
+    """Bridge aborted-turn reconciliation may publish the original attempt later."""
+    async def case():
+        gateway, bridge = CloudGateway(), RoutingBridge()
+        bridge.ready = False
+        svc, _, _ = make_service(tmp_path, gateway, bridge)
+        svc.settings = replace(svc.settings, auto_fallback_enabled=True, queue_wait_seconds=30)
+        job = await svc.create("101", preferred())
+        await svc.tick()
+        remote = next(iter(bridge.tasks.values()))
+        remote.update(state="execution_unknown")
+        first = await due(svc, job)
+        assert first["state"] == "execution_unknown"
+        identity = (remote["remote_task_id"], remote["attempt_id"], remote["origin_key"])
+        bridge.health = "unavailable"
+        for _ in range(3):
+            assert (await due(svc, job))["state"] == "execution_unknown"
+        assert gateway.cloud_calls == gateway.register_calls == 0
+        assert not bridge.acks
+        await svc.close()
+        svc, _, _ = make_service(tmp_path, gateway, bridge)
+        svc.settings = replace(svc.settings, auto_fallback_enabled=True, queue_wait_seconds=30)
+        try:
+            bridge.ready = True  # Original attempt reconciled, not a new generation.
+            final = await due(svc, job)
+            assert final["state"] == "registered"
+            assert (remote["remote_task_id"], remote["attempt_id"], remote["origin_key"]) == identity
+            for _ in range(3):
+                await svc.tick()
+            assert gateway.create_calls == gateway.register_calls == 1
+            assert gateway.cloud_calls == 0
+            assert len(bridge.tasks) == len(bridge.acks) == 1
+            assert sum(method == "POST" and path == "tasks" for method, path in bridge.calls) == 1
         finally:
             await svc.close()
     run(case())

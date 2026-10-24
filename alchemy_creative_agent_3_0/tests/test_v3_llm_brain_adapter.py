@@ -2043,6 +2043,10 @@ def test_openai_brain_uses_portable_chat_transport_by_default(monkeypatch) -> No
         calls["chat"] += 1
         return '{"remote": true}'
 
+    # Current main routes through the unified gateway; no real credentials.
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "brain-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.delenv("V3_LLM_BRAIN_TRANSPORT", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
@@ -2351,6 +2355,10 @@ def test_openai_chat_protocol_mismatch_remains_typed_and_is_not_rewrapped(monkey
         calls["stream"] += 1
         raise BrainProtocolMismatchError("Chat Completions endpoint returned a Responses API stream event")
 
+    # Current main routes through the unified gateway; no real credentials.
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "brain-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.delenv("V3_LLM_BRAIN_TRANSPORT", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
@@ -2387,6 +2395,10 @@ def test_openai_brain_does_not_switch_protocol_on_auth_failure(monkeypatch) -> N
         calls["chat"] += 1
         return '{"remote": true}'
 
+    # Current main routes through the unified gateway; no real credentials.
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "brain-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
@@ -2622,6 +2634,7 @@ def test_remote_brain_model_id_selects_protocol_and_uses_unified_credentials(mon
 
 
 def test_remote_brain_unknown_model_route_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "custom-unmapped-model")
     provider = V3LLMBrainProvider()
 

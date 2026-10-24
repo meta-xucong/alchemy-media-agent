@@ -23,6 +23,9 @@ env:
   DEFAULT_IMAGE_PROVIDER: mock_image
   DEFAULT_IMAGE_MODEL: mock-image-v1
   MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS: "false"
+  # Main enables real vision by default; this workflow is explicitly synthetic.
+  # Dedicated vision tests opt in with their own mocked transport.
+  V3_VISION_INSPECTION_ENABLED: "false"
   V3_LLM_BRAIN_REMOTE_ENABLED: "false"
   LLM_PROMPT_PLANNING_ENABLED: "false"
   LAB_LLM_ENABLED: "false"
@@ -94,6 +97,18 @@ jobs:
             alchemy_creative_agent_3_0/tests/test_v3_scenario_runtime_and_product_api.py \
             alchemy_creative_agent_3_0/tests/test_v3_generic_export_review_gate.py \
             --junitxml="$RUNNER_TEMP/render-bridge-contracts.xml"
+      - name: Verify current-main review and continuity seams
+        run: |
+          HOME="$RUNNER_TEMP/render-bridge-home" python -m pytest -q \
+            alchemy_creative_agent_3_0/tests/test_v3_llm_brain_adapter.py \
+            alchemy_creative_agent_3_0/tests/test_v3_doc322_reference_plan.py \
+            alchemy_creative_agent_3_0/tests/test_v3_doc322_project_workflow.py \
+            alchemy_creative_agent_3_0/tests/test_v3_doc347_general_variation_continuation.py \
+            alchemy_creative_agent_3_0/tests/test_v3_doc73_first_output_identity_anchor.py \
+            alchemy_creative_agent_3_0/tests/test_v3_post_generation_vision_review.py \
+            alchemy_creative_agent_3_0/tests/test_v3_review_resume_timeout_propagation.py \
+            alchemy_creative_agent_3_0/tests/test_v3_shared_capability_runtime_integration.py
+          node --test tests/v3_doc341_current_job_result_projection.test.mjs tests/v3_frontend_terminal_contract.test.mjs tests/v3_mobile_terminal_contract.test.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
