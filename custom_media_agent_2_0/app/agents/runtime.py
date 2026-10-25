@@ -741,22 +741,31 @@ def _claude_progress_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     if not events:
         return {}
     last = events[-1]
+    # Group fallback notifications describe routing, not model invocations.
+    # Count each leaf attempt once, even if its observer event is delivered twice.
+    unique_events: dict[tuple, dict[str, Any]] = {}
+    for item in events:
+        stage = str(item.get("stage") or "")
+        if item.get("provider") == "claude-code-model-fallback" and not (
+            "_model_fallback_" in stage and stage.rsplit("_model_fallback_", 1)[1].isdigit()
+        ):
+            continue
+        key = (stage, item.get("provider"), item.get("model"), item.get("attempt"), item.get("status"), item.get("created_at"))
+        unique_events.setdefault(key, item)
+    leaf_events = list(unique_events.values())
     completed_events = [
-        item
-        for item in events
+        item for item in leaf_events
         if item.get("status") in {"success", "missing_decision", "error", "failed"}
         and isinstance(item.get("duration_ms"), (int, float))
     ]
     elapsed_ms = _claude_progress_elapsed_ms(events, completed_events)
-    finished_stage_count = len([item for item in completed_events if item.get("status") == "success"])
-    retry_count = len(
-        [
-            item
-            for item in events
-            if "retry" in str(item.get("stage") or "") or item.get("after_compression_retries")
-        ]
+    finished_stage_count = sum(item.get("status") == "success" for item in leaf_events)
+    started_events = [item for item in leaf_events if item.get("status") == "running"]
+    retry_count = sum(
+        "retry" in str(item.get("stage") or "") or bool(item.get("after_compression_retries"))
+        for item in started_events
     )
-    fallback_count = len([item for item in events if item.get("provider") == "claude-code-model-fallback"])
+    fallback_count = sum(item.get("provider") == "claude-code-model-fallback" for item in started_events)
     return {
         "scope": "claude_orchestration",
         "stage": last.get("stage"),

@@ -339,7 +339,7 @@ def _compact_required_remote_creative_schema() -> dict:
         "image_set_plan": {
             "set_goal": "string",
             "image_count": "integer exactly equal to requested_image_count",
-            "size": "canonical provider size 1024x1024|1024x1536|1536x1024|2048x1152, only when explicit in user_input; otherwise null",
+            "size": "exact user-requested pixel dimensions, or an exact aspect-ratio canvas such as 2048x1152 for 16:9; unsupported explicit canvas uses auto; absent canvas uses null",
             "aspect_ratio": "explicit user aspect ratio such as 2.35:1 or 16:9 when present in user_input; otherwise null",
             "shot_plan": ["one original whole-image natural-language direction per requested output"],
             "composition_rules": ["string"],
@@ -884,8 +884,10 @@ def _compact_remote_creative_payload(
         ),
         "canvas_resolution_instructions": (
             "Treat user_input as the only authority for an explicit canvas size or aspect ratio. "
-            "When user_input clearly specifies one, resolve image_set_plan.size to the closest supported "
-            "canonical provider size: 1024x1024, 1024x1536, 1536x1024, or 2048x1152. "
+            "Preserve explicit pixel dimensions exactly. For ratio-only requests choose an exact-ratio canvas, "
+            "never the closest different ratio. GPT Image 2 sizes require both sides divisible by 16, "
+            "maximum side 3840, aspect ratio at most 3:1, and area 655360 to 8294400 pixels. "
+            "For unsupported explicit canvas requirements return size auto, retaining the original user direction. "
             "For an explicit 16:9 request, prefer 2048x1152. "
             "When user_input does not clearly specify size or aspect ratio, return image_set_plan.size as null; "
             "the server will use web_selected_image_size as a fallback. Never copy the web selection into the "
@@ -1056,8 +1058,10 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         "web_selected_image_size": request.metadata.get("web_selected_image_size") or request.requested_image_size,
         "canvas_resolution_instructions": (
             "Treat user_input as the only authority for an explicit canvas size or aspect ratio. "
-            "When user_input clearly specifies one, resolve image_set_plan.size to the closest supported "
-            "canonical provider size: 1024x1024, 1024x1536, 1536x1024, or 2048x1152. "
+            "Preserve explicit pixel dimensions exactly. For ratio-only requests choose an exact-ratio canvas, "
+            "never the closest different ratio. GPT Image 2 sizes require both sides divisible by 16, "
+            "maximum side 3840, aspect ratio at most 3:1, and area 655360 to 8294400 pixels. "
+            "For unsupported explicit canvas requirements return size auto, retaining the original user direction. "
             "For an explicit 16:9 request, prefer 2048x1152. "
             "When user_input does not clearly specify size or aspect ratio, return image_set_plan.size as null; "
             "the server will use web_selected_image_size as a fallback. Never copy the web selection into the "
@@ -1142,7 +1146,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             "image_set_plan": {
                 "set_goal": "string",
                 "image_count": "integer exactly equal to requested_image_count",
-                "size": "canonical provider size 1024x1024|1024x1536|1536x1024|2048x1152, only when explicit in user_input; otherwise null",
+                "size": "exact user-requested pixel dimensions, or an exact aspect-ratio canvas such as 2048x1152 for 16:9; unsupported explicit canvas uses auto; absent canvas uses null",
                 "aspect_ratio": "explicit user aspect ratio such as 2.35:1 or 16:9 when present in user_input; otherwise null",
                 "shot_plan": ["string"],
                 "evidence_dimensions_by_output": [

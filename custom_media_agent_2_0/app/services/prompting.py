@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from app.services.canvas_intent import resolve_prompt_canvas, exact_canvas_size, ambiguous_canvas_text, legacy_canvas_text
+
 from app.schemas import CreativeOrchestratorDecision, ImagePromptPlan, PromptCase, PromptCaseSummary
 from app.services.intent_integrity import compile_prompt_artifact
 from app.services.ids import new_id
@@ -147,7 +149,11 @@ def compose_prompt_plan(
         requested_output=requested_output,
         inferred_size=inferred_prompt_size,
     )
-    aspect_lock = _aspect_lock_from_requested_output(requested_output)
+    explicit_canvas = resolve_prompt_canvas(user_prompt)
+    aspect_lock = (
+        _aspect_lock_from_value(exact_canvas_size(explicit_canvas), source="user_prompt.size")
+        if explicit_canvas else _aspect_lock_from_requested_output(requested_output)
+    )
     if not aspect_lock.get("locked") and inferred_prompt_size:
         aspect_lock = _aspect_lock_from_value(inferred_prompt_size, source="user_prompt.size")
     prompt_transform_request = _prompt_transform_request_from_output(requested_output or {})
@@ -655,6 +661,9 @@ def _build_provider_parameters(
 
 
 def _infer_prompt_size_for_parameters(params: dict, *, user_prompt: str, requested_output: dict) -> str | None:
+    explicit = resolve_prompt_canvas(user_prompt)
+    if explicit:
+        return exact_canvas_size(explicit)
     if _has_manual_dimension(requested_output) or _has_dimension(params):
         return None
     return _infer_size_from_prompt(user_prompt)
@@ -667,6 +676,11 @@ def _apply_prompt_size_inference(
     requested_output: dict,
     inferred_size: str | None = None,
 ) -> dict:
+    explicit = resolve_prompt_canvas(user_prompt)
+    if explicit:
+        next_params = {key: value for key, value in params.items() if key not in {"size", "aspect_ratio", "width", "height"}}
+        next_params["size"] = exact_canvas_size(explicit)
+        return next_params
     if _has_manual_dimension(requested_output) or _has_dimension(params):
         return params
     inferred = inferred_size or _infer_size_from_prompt(user_prompt)
@@ -706,7 +720,12 @@ def _has_dimension(params: dict) -> bool:
 
 
 def _infer_size_from_prompt(prompt: str) -> str | None:
-    prompt_text = prompt or ""
+    explicit = resolve_prompt_canvas(prompt)
+    if explicit:
+        return exact_canvas_size(explicit)
+    if ambiguous_canvas_text(prompt):
+        return None
+    prompt_text = legacy_canvas_text(prompt or "")
     explicit_size = _explicit_size_from_prompt(prompt_text)
     if explicit_size:
         return explicit_size

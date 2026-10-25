@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from app.schemas import ImagePromptPlan, PromptPatch
+from app.services.canvas_intent import resolve_prompt_canvas, exact_canvas_size, ambiguous_canvas_text, legacy_canvas_text
 
 
 A4_PORTRAIT_SIZE = "2400x3392"
@@ -58,8 +59,14 @@ def build_revision_patch(*, output_id: str, feedback: str, preserve: list[str] |
 def apply_patch_to_plan(base_plan: ImagePromptPlan, patch: PromptPatch) -> ImagePromptPlan:
     base_generation_prompt = str((base_plan.variables or {}).get("generation_prompt") or base_plan.main_subject or "").strip()
     revision_prompt = _revision_generation_prompt(base_generation_prompt=base_generation_prompt, patch=patch)
+    canvas = resolve_prompt_canvas(patch.new_prompt_delta)
+    canvas_update = {}
+    if canvas:
+        size = exact_canvas_size(canvas)
+        canvas_update = {"size": size, "composition": _infer_composition(patch.new_prompt_delta, size)}
     return base_plan.model_copy(
         update={
+            **canvas_update,
             "main_subject": revision_prompt,
             "count": 1,
             "variables": {
@@ -90,9 +97,14 @@ def _revision_generation_prompt(*, base_generation_prompt: str, patch: PromptPat
 
 
 def _infer_size(prompt: str, requested_size: str | None) -> str | None:
+    explicit = resolve_prompt_canvas(prompt)
+    if explicit:
+        return exact_canvas_size(explicit)
     if requested_size:
         return requested_size.strip() or None
-    prompt_text = prompt or ""
+    if ambiguous_canvas_text(prompt):
+        return None
+    prompt_text = legacy_canvas_text(prompt or "")
     if _mentions_a4(prompt_text):
         if _mentions_landscape(prompt_text):
             return A4_LANDSCAPE_SIZE
@@ -151,6 +163,8 @@ def _infer_style(prompt: str) -> str | None:
 
 
 def _infer_composition(prompt: str, size: str | None) -> str:
+    if (not size or size == "auto") and ambiguous_canvas_text(prompt):
+        return "Clear subject hierarchy; preserve the requested canvas direction."
     orientation = _orientation_from_size(size)
     if orientation == "portrait":
         return "竖版构图，主体清晰居中，预留安全标题区域。"

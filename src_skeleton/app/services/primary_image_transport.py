@@ -38,7 +38,7 @@ def frozen_request(job):
     return ImageGenerationRequest.model_validate(value) if value else None
 
 
-def primary_request(job, request, index, *, edit=False):
+def _legacy_primary_request(job, request, index, *, edit=False):
     from render_bridge_primary import PrimaryRequest, Reference
     from app.providers.openai_image import OpenAIGPTImageProvider
     plan = request.prompt_plan
@@ -89,6 +89,51 @@ def primary_request(job, request, index, *, edit=False):
     )
 
 
+def primary_request(job, request, index, *, edit=False):
+    from dataclasses import replace
+    from render_bridge_primary import PrimaryError, Reference
+    from render_bridge_primary.codex_adapter import CODEX_ADAPTER_VERSION, codex_cli_adaptation
+
+    version = job.raw_response_summary.get(KEY, {}).get("adapter_version")
+    if version not in {None, CODEX_ADAPTER_VERSION}:
+        raise PrimaryError("unsupported_frozen_adapter_version")
+    unit = _legacy_primary_request(job, request, index, edit=edit)
+    if version is None:
+        return unit  # Existing durable identities retain their exact original digest.
+    plan = request.prompt_plan
+    variables = plan.variables or {}
+    hard = dict(unit.hard_requirements)
+    for key in ("quality", "output_format", "output_compression", "transparent_background",
+                "size", "exact_dimensions", "seed", "input_fidelity"):
+        hard.pop(key, None)
+    if variables.get("input_fidelity_required"):
+        hard["input_fidelity_required"] = True
+    refs = unit.references
+    if edit or request.source_output_id:
+        source = media_store.find_output_file(request.source_output_id) if request.source_output_id else None
+        if source is None:
+            raise PrimaryError("primary_edit_source_unavailable")
+        output = repository.get_output(request.source_output_id)
+        source_job = repository.get_job(output.job_id) if output else None
+        if (not output or not source_job or source_job.session_id != job.session_id
+                or output.metadata.get("veyra_user_id") != request.veyra_user_id
+                or source[2] != source_job.id or media_store.output_publication_blocked(output.id)):
+            raise PrimaryError("primary_edit_source_not_accessible")
+        path = source[0]
+        source_ref = Reference(content=path.read_bytes(), mime_type=mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+        if source_ref not in refs:
+            refs = (source_ref,) + refs
+        hard.pop("edit_source", None)
+    if refs:
+        hard.pop("reference_semantics", None)
+        hard["reference_fusion"] = True
+    params = {key: getattr(plan, key) for key in (
+        "quality", "size", "output_format", "output_compression", "background", "transparent_background", "count")}
+    wire, _ = codex_cli_adaptation(params, len(refs))
+    wire["codex_adapter"] = CODEX_ADAPTER_VERSION
+    return replace(unit, parameters=wire, hard_requirements=hard, references=refs)
+
+
 async def run_primary(job, request, *, edit=False):
     """Return False only for excluded legacy paths; otherwise mutate product job."""
     existing = job.raw_response_summary.get(KEY)
@@ -107,7 +152,9 @@ async def _run_owned(job, request, *, edit, transport, existing):
         request = frozen_request(job)
         edit = bool(existing.get("edit"))
     else:
-        job.raw_response_summary[KEY] = {"request": request.model_dump(mode="json"), "edit": edit, "units": {}}
+        from render_bridge_primary.codex_adapter import CODEX_ADAPTER_VERSION
+        job.raw_response_summary[KEY] = {"adapter_version": CODEX_ADAPTER_VERSION,
+                                         "request": request.model_dump(mode="json"), "edit": edit, "units": {}}
         repository.save_job(job)
     state = job.raw_response_summary[KEY]
     outputs = list(job.outputs) or [GenerationOutput.model_validate(value) for value in state.get("outputs", [])]

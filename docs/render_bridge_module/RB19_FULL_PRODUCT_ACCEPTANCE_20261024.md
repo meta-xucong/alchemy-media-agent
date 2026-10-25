@@ -1,5 +1,9 @@
 # RB19: full-product Bridge-primary implementation and acceptance
 
+Current adapter/canvas candidate handoff: [RB20](RB20_NATIVE_ADAPTER_CANVAS_LOCAL_ACCEPTANCE.md).
+The historical capability limits and test counts below describe their named
+milestones; RB13/RB20 govern the current opt-in adapter and local acceptance.
+
 Date: 2026-10-24. Alchemy baseline: a15ff3e979363e83f678a99bf0ba9dfd33e15bf1.
 Companion: meta-xucong/alchemy-render-bridge PR #1, branch
 codex/bridge-progress-20261023, fff524484fa98845033e21f2d24664a361d09efe.

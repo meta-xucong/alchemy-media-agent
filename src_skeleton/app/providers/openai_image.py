@@ -239,6 +239,9 @@ class OpenAIGPTImageProvider:
             "max_pixels": 8294400,
             "max_aspect_ratio": 3,
         }
+        if self._model().lower() != "gpt-image-2":
+            official_sizes = ["auto", "1024x1024", "1024x1536", "1536x1024"]
+            official_custom_size = None
         return ProviderCapabilities(
             provider=self.name,
             configured=configured,
@@ -1230,7 +1233,7 @@ class OpenAIGPTImageProvider:
                     detail={"output_compression": compression, "output_format": requested_format},
                 )
         if self._uses_square_b64_transport(image_edit=image_edit):
-            requested_size = str(getattr(plan, "size", "") or "").strip().lower()
+            requested_size = str(self._model_supported_size_or_auto(getattr(plan, "size", None), image_edit=image_edit) or "")
             if requested_size and requested_size not in {"auto", "1024x1024"}:
                 raise ProviderCapabilityMismatchError(
                     "Configured OpenAI image transport only supports 1024x1024 images.",
@@ -1257,7 +1260,9 @@ class OpenAIGPTImageProvider:
                     },
                 )
             return {"size": "1024x1024", "response_format": "b64_json"}
-        normalized_size = self._validated_official_size(getattr(plan, "size", None))
+        normalized_size = self._validated_official_size(
+            self._model_supported_size_or_auto(getattr(plan, "size", None), image_edit=image_edit)
+        )
         kwargs = {
             "quality": str(getattr(plan, "quality", "auto") or "auto").strip().lower(),
             "output_format": requested_format,
@@ -1277,6 +1282,27 @@ class OpenAIGPTImageProvider:
         if compression is not None:
             kwargs["output_compression"] = compression
         return kwargs
+
+    def _model_supported_size_or_auto(self, value: object, *, image_edit: bool = False) -> str | None:
+        """Adapt well-formed unsupported canvases, without weakening wire validation.
+
+        The request/plan remains intact: native default is a transport choice,
+        never a claim that the requested aspect ratio was satisfied.
+        """
+        normalized = str(value or "").strip().lower().replace("×", "x").replace(" ", "")
+        if not normalized or normalized == "auto":
+            return normalized or None
+        if not re.fullmatch(r"[1-9]\d{0,5}x[1-9]\d{0,5}", normalized):
+            # Preserve the strict malformed-input failure at the existing guard.
+            return self._validated_official_size(value)
+        if self._uses_square_b64_transport(image_edit=image_edit):
+            return normalized if normalized == "1024x1024" else "auto"
+        if self._model().lower() != "gpt-image-2":
+            return normalized if normalized in {"1024x1024", "1024x1536", "1536x1024"} else "auto"
+        try:
+            return self._validated_official_size(normalized)
+        except ProviderCapabilityMismatchError:
+            return "auto"
 
     def _validated_official_size(self, value: object) -> str | None:
         normalized = str(value or "").strip().lower().replace("\u00d7", "x").replace(" ", "")
@@ -1406,7 +1432,10 @@ class OpenAIGPTImageProvider:
 
     def _outputs_from_response(self, response, plan, *, request_index: int) -> list[dict]:
         outputs: list[dict] = []
-        width, height = self._parse_size(plan.size)
+        # Native-auto transport does not establish actual output dimensions.
+        # Keep the original request on the plan, but do not label returned
+        # bytes with unsupported requested dimensions.
+        width, height = self._parse_size(self._model_supported_size_or_auto(plan.size))
         for item in getattr(response, "data", []) or []:
             item_data = item if isinstance(item, dict) else {}
             if not item_data and hasattr(item, "model_dump"):

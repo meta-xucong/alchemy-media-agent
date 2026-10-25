@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import math
 import mimetypes
 from typing import Any
 from urllib.parse import quote
@@ -20,6 +19,28 @@ from app.providers.images.base import (
     V2ImageProviderRuntimeError,
 )
 from app.services.uploaded_assets import uploaded_asset_path
+
+
+_SUPPORTED_ASPECT_RATIOS = ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9")
+
+
+def _supported_aspect_ratio(size: object) -> str | None:
+    """Use only an exact ratio from this adapter's declared capability set."""
+    text = str(size or "").strip().lower().replace(" ", "").replace("×", "x")
+    parts = text.split(":" if ":" in text else "x")
+    if len(parts) != 2:
+        return None
+    try:
+        width, height = (int(part) for part in parts)
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    for ratio in _SUPPORTED_ASPECT_RATIOS:
+        numerator, denominator = (int(part) for part in ratio.split(":"))
+        if width * denominator == height * numerator:
+            return ratio
+    return None
 
 
 _gemini_generation_lock = asyncio.Lock()
@@ -49,7 +70,7 @@ class V2GeminiImageProvider:
                 "composition_reference",
                 "color_reference",
             ],
-            limits={"max_batch": 4, "max_reference_images": 3, "temporarily_disabled": not settings.gemini_image_generation_enabled},
+            limits={"max_batch": 4, "max_reference_images": 3, "aspect_ratios": list(_SUPPORTED_ASPECT_RATIOS), "temporarily_disabled": not settings.gemini_image_generation_enabled},
             reason=reason,
         )
 
@@ -304,21 +325,8 @@ def _quality(plan) -> str:
 
 
 def _aspect_ratio(plan) -> str | None:
-    size = (plan.provider_parameters or {}).get("size") or (plan.provider_parameters or {}).get("aspect_ratio")
-    if not size or str(size).strip().lower() in {"auto", "default"}:
-        return None
-    if isinstance(size, str) and ":" in size:
-        return size
-    if isinstance(size, str) and "x" in size:
-        try:
-            width_text, height_text = size.lower().split("x", 1)
-            width = int(width_text)
-            height = int(height_text)
-            divisor = math.gcd(width, height)
-            return f"{width // divisor}:{height // divisor}"
-        except (ValueError, AttributeError):
-            return None
-    return None
+    params = plan.provider_parameters or {}
+    return _supported_aspect_ratio(params.get("size") or params.get("aspect_ratio"))
 
 
 def _dimensions(plan) -> tuple[int | None, int | None]:

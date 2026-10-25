@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import copy
 from contextlib import ExitStack
 from typing import Any
 
@@ -17,6 +18,7 @@ from app.providers.images.base import (
 )
 from app.providers.images.response_payloads import outputs_from_image_response
 from app.services.uploaded_assets import uploaded_asset_path
+from app.services.canvas_intent import exact_canvas_size, resolve_prompt_canvas
 
 
 class V2DoubaoImageProvider:
@@ -43,6 +45,7 @@ class V2DoubaoImageProvider:
                 "supports_reference_images": True,
                 "supports_image_edit": True,
                 "api_style": "openai_images_generations",
+                **_canvas_capabilities(),
             },
             reason=None if configured else "V2_DOUBAO_IMAGE_API_KEY or DOUBAO_IMAGE_API_KEY is not configured.",
         )
@@ -202,32 +205,45 @@ def _count(plan) -> int:
     return max(1, min(value, 4))
 
 
+_STANDARD_CANVASES = ("1024x1024", "1024x1536", "1536x1024")
+
+
+def _supports_seedream4_canvas() -> bool:
+    return str(settings.doubao_image_model or "").strip() == "doubao-seedream-4-0-250828"
+
+
+def _canvas_capabilities() -> dict[str, Any]:
+    if not _supports_seedream4_canvas():
+        return {"sizes": list(_STANDARD_CANVASES), "unsupported_size_policy": "omit_native_default"}
+    return {
+        "sizes": ["1K", "2K", "4K", "custom_dimensions"],
+        "custom_size": {"min_pixels": 921600, "max_pixels": 16777216, "min_aspect_ratio": 1 / 16, "max_aspect_ratio": 16},
+        "native_default_size": "2048x2048",
+        "unsupported_size_policy": "omit_native_default",
+    }
+
+
 def _size(plan) -> str | None:
     params = plan.provider_parameters or {}
-    size = params.get("size") or params.get("aspect_ratio")
-    if not size or str(size).strip().lower() in {"auto", "default"}:
+    value = params.get("size") or params.get("aspect_ratio")
+    text = str(value or "").strip().lower().replace(" ", "").replace("×", "x")
+    if text in {"", "auto", "default"}:
         return None
-    text = str(size).strip()
-    mapping = {
-        "1:1": "1024x1024",
-        "2:3": "1024x1536",
-        "3:2": "1536x1024",
-        "3:4": "1024x1536",
-        "4:3": "1536x1024",
-        "9:16": "1024x1536",
-        "16:9": "1536x1024",
-    }
-    if text in {"1024x1024", "1024x1536", "1536x1024"}:
-        return text
-    mapped = mapping.get(text)
-    if mapped:
-        return mapped
+    if _supports_seedream4_canvas() and text in {"1k", "2k", "4k"}:
+        return text.upper()
+    if ":" in text:
+        ratio = resolve_prompt_canvas(text)
+        if not ratio or ":" not in ratio:
+            return None
+        text = exact_canvas_size(ratio)
+    if not _supports_seedream4_canvas():
+        return text if text in _STANDARD_CANVASES else None
     width, height = _dimensions(text)
-    if width and height:
-        if width == height:
-            return "1024x1024"
-        return "1024x1536" if height > width else "1536x1024"
-    return None
+    if not width or not height or min(width, height) <= 0:
+        return None
+    if not 921600 <= width * height <= 16777216 or max(width, height) > 16 * min(width, height):
+        return None
+    return f"{width}x{height}"
 
 
 async def _outputs_from_response(
@@ -238,9 +254,14 @@ async def _outputs_from_response(
     operation: str,
     reference_count: int,
 ) -> list[V2ImageProviderOutput]:
+    # Response dimensions may fall back only to the effective wire canvas,
+    # never to an unsupported request that was omitted. Keep the frozen plan
+    # and prompt untouched.
+    response_plan = copy(plan)
+    response_plan.provider_parameters = {"size": _size(plan)}
     return await outputs_from_image_response(
         data,
-        plan,
+        response_plan,
         provider="doubao_image",
         missing_message="Doubao image response did not include image bytes.",
         index=index,

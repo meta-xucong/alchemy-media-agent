@@ -369,3 +369,74 @@ def test_bindings_active_only_omits_registered_output_and_terminal_units(tmp_pat
     c.create_task=Client.create_task.__get__(c,ReceiptClient)
     asyncio.run(t.resolve(pending))
     assert t.bindings_for('v2','u','job:',route='bridge',active_only=True)==['job:1']
+
+@pytest.mark.parametrize('advertised', [False, True])
+def test_codex_adapter_requires_explicit_capability_before_submission(tmp_path, advertised):
+    class VersionedClient(Client):
+        async def capabilities(self):
+            caps = await super().capabilities()
+            if advertised:
+                caps['profiles'][0]['parameter_contract']['codex_adapter'] = {'values': ['codex_cli_imagegen_v1'],
+                    'image_options_contract': caps['profiles'][0]['image_options_contract']}
+            return caps
+    client = VersionedClient()
+    transport = PrimaryTransport(settings(tmp_path), client=client)
+    unit = replace(request(), parameters={'codex_adapter': 'codex_cli_imagegen_v1'})
+    result = asyncio.run(transport.resolve(unit))
+    assert result.route == ('bridge' if advertised else 'api')
+    assert client.calls == (1 if advertised else 0)
+    if advertised:
+        assert client.payload['parameters'] == unit.parameters
+    else:
+        assert result.reason == 'bridge_capability_unsupported'
+
+
+def test_candidate_match_is_exact_read_only_and_preserves_semantic_guard(tmp_path):
+    transport = PrimaryTransport(settings(tmp_path), client=Client())
+    old = replace(request(), parameters={'width': 1024, 'height': 1024})
+    assert transport.match_existing_request((old, request())) is None
+    assert not transport.path.exists()
+    transport._start(old)
+    before = transport._read(old)
+    assert transport.match_existing_request((request(), old)) == old
+    after = transport._read(old)
+    assert dict(before) == dict(after)
+    with pytest.raises(PrimaryError, match='request_semantics_changed'):
+        transport.match_existing_request((request(),))
+    with pytest.raises(PrimaryError, match='request_semantics_changed'):
+        asyncio.run(transport.resolve(request()))
+
+
+def test_native_and_legacy_options_use_distinct_advertised_contracts(tmp_path):
+    caps = asyncio.run(Client().capabilities())
+    profile = caps['profiles'][0]
+    profile['parameter_contract']['codex_adapter'] = {'values': ['codex_cli_imagegen_v1'],
+        'image_options_contract': {'references': {'max_count': 5},
+                                   'transparent_background': {'values': [True]}}}
+    legacy = replace(request(), parameters={'image_options': {
+        'schema_version': '1', 'quality': 'auto', 'output_format': 'jpeg'}})
+    native = replace(request(), parameters={'codex_adapter': 'codex_cli_imagegen_v1'})
+    assert PrimaryTransport._supported(legacy, caps, 'codex-image')
+    assert PrimaryTransport._supported(native, caps, 'codex-image')
+    assert not PrimaryTransport._supported(replace(legacy, parameters={**legacy.parameters,
+        'codex_adapter': 'codex_cli_imagegen_v1'}), caps, 'codex-image')
+    profile['parameter_contract']['codex_adapter'].pop('image_options_contract')
+    assert not PrimaryTransport._supported(native, caps, 'codex-image')
+
+
+@pytest.mark.parametrize('directory', ['state#1', 'state?1'])
+def test_candidate_match_uri_escapes_state_directory_without_writes(tmp_path, directory):
+    import os
+    if '?' in directory and os.name == 'nt':
+        pytest.skip('Windows filenames cannot contain question marks')
+    transport = PrimaryTransport(settings(tmp_path / directory), client=Client())
+    unit = request()
+    transport._start(unit)
+    before_files = {path.relative_to(tmp_path): path.read_bytes()
+                    for path in tmp_path.rglob('*') if path.is_file()}
+    before_stat = transport.path.stat()
+    assert transport.match_existing_request((unit,)) == unit
+    after_files = {path.relative_to(tmp_path): path.read_bytes()
+                   for path in tmp_path.rglob('*') if path.is_file()}
+    assert after_files == before_files
+    assert transport.path.stat().st_mtime_ns == before_stat.st_mtime_ns

@@ -7599,13 +7599,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if asset is None:
             return ""
         requested_size = self._size_for_request(request)
-        explicit_ratio = {
-            "1024x1024": "1:1",
-            "1024x1536": "2:3",
-            "1536x1024": "3:2",
-            "2048x1152": "16:9",
-        }.get(requested_size)
-        aspect_ratio = explicit_ratio or asset.aspect_ratio
+        if requested_size == "auto":
+            return f"Platform: {asset.platform.value}"
+        try:
+            width, height = (int(part) for part in requested_size.split("x"))
+            divisor = math.gcd(width, height)
+            aspect_ratio = f"{width // divisor}:{height // divisor}"
+        except (ValueError, ZeroDivisionError):
+            aspect_ratio = asset.aspect_ratio
         return f"Platform: {asset.platform.value}; aspect ratio: {aspect_ratio}"
 
     def _quality_for_request(self, request: GenerationRequest) -> str:

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.services.canvas_intent import resolve_prompt_canvas, exact_canvas_size
 from app.schemas import CostEstimate, ImageGenerationRequest, ImageGenerationResult
 from app.providers.base import ProviderCapabilities, ProviderNotConfiguredError, ProviderRuntimeError
 
@@ -49,7 +50,7 @@ class DoubaoImageProvider:
             limits={
                 "max_batch": 4,
                 "formats": ["png"],
-                "sizes": ["1024x1024", "1024x1536", "1536x1024"],
+                **_canvas_capabilities(),
                 "supports_reference_images": False,
                 "supports_image_edit": False,
             },
@@ -166,29 +167,37 @@ def _prompt(plan) -> str:
     )
 
 
+def _seedream4_canvas_contract() -> bool:
+    return str(settings.doubao_image_model or "").strip().lower() == "doubao-seedream-4-0-250828"
+
+
+def _canvas_capabilities() -> dict[str, Any]:
+    limits: dict[str, Any] = {"sizes": ["1024x1024", "1024x1536", "1536x1024"]}
+    if _seedream4_canvas_contract():
+        limits["sizes"] += ["1K", "2K", "4K", "custom_dimensions"]
+        limits["custom_size"] = {"min_pixels": 921600, "max_pixels": 16777216,
+                                 "min_aspect_ratio": 1 / 16, "max_aspect_ratio": 16}
+        limits["native_default_size"] = "2048x2048"
+    return limits
+
+
 def _size(value: str | None) -> str | None:
     if not value or str(value).strip().lower() in {"auto", "default"}:
         return None
-    text = str(value).strip()
-    mapping = {
-        "1:1": "1024x1024",
-        "2:3": "1024x1536",
-        "3:2": "1536x1024",
-        "3:4": "1024x1536",
-        "4:3": "1536x1024",
-        "9:16": "1024x1536",
-        "16:9": "1536x1024",
-    }
-    if text in {"1024x1024", "1024x1536", "1536x1024"}:
-        return text
-    mapped = mapping.get(text)
-    if mapped:
-        return mapped
+    text = str(value).strip().lower().replace("×", "x")
+    if _seedream4_canvas_contract() and text in {"1k", "2k", "4k"}:
+        return text.upper()
+    if ":" in text:
+        intent = resolve_prompt_canvas(text)
+        if not intent:
+            return None
+        text = exact_canvas_size(intent)
+    if not _seedream4_canvas_contract():
+        return text if text in {"1024x1024", "1024x1536", "1536x1024"} else None
     width, height = _dimensions(text)
-    if width and height:
-        if width == height:
-            return "1024x1024"
-        return "1024x1536" if height > width else "1536x1024"
+    if width and height and width > 0 and height > 0:
+        if 921600 <= width * height <= 16777216 and 1 / 16 <= width / height <= 16:
+            return f"{width}x{height}"
     return None
 
 
@@ -203,7 +212,7 @@ def _outputs_from_response(data: dict[str, Any], plan, *, index: int) -> list[di
         if not encoded:
             continue
         fmt = _format(plan.output_format)
-        width, height = _dimensions(item.get("size") or plan.size)
+        width, height = _dimensions(item.get("size") or _size(plan.size))
         outputs.append(
             {
                 "b64_json": _normalize_b64(encoded),

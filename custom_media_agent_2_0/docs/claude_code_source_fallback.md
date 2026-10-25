@@ -8,14 +8,14 @@ Core rule:
 Claude Code remains the creative brain.
 Text-only orchestration uses the fast text source.
 Uploaded-image / visual-understanding orchestration uses the multimodal source.
-Kimi K3 is the first text fallback, followed by GPT-6.1-sol.
+The default text fallback queue is Kimi K3, then GPT-6.1-sol; explicit configuration overrides it.
 ```
 
 ## Why This Exists
 
 V2 depends on Claude Code for creative orchestration. The app must not bypass Claude and continue with a deterministic creative fallback when any upstream source is overloaded, out of quota, or slow.
 
-Primary routing still calls `claude -p`. On an eligible route failure, V2 attempts Kimi K3 and then GPT-6.1-sol through the unified gateway key, using protocol-correct adapters and the same checkpoint JSON schema.
+Primary routing still calls `claude -p`. On an eligible route failure, V2 attempts the configured ordered fallback queue (by default Kimi K3 and then GPT-6.1-sol) through the unified gateway key, using protocol-correct adapters and the same checkpoint JSON schema.
 
 ## Runtime Strategy
 
@@ -26,7 +26,7 @@ Primary routing:
 3. Requests with uploaded assets that require visual understanding or hard input-image preservation use `V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL`, currently `doubao-seed-2-0-lite-260428`.
 4. V2 writes `claude_source_selection.json` into the Claude workspace, so every checkpoint stage and single-stage call uses the same selected source for that request.
 5. A stage soft timeout first triggers shorter compression/retry stages on the same selected source.
-6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries Kimi K3, then GPT-6.1-sol after an eligible Kimi failure.
+6. If the selected text source is unavailable, returns an upstream/API boundary error, or still cannot produce a valid checkpoint after compression retries, V2 preserves checkpoint state and tries the configured fallback queue, advancing only after an eligible candidate failure.
 7. If the selected multimodal source is required for uploaded-image understanding, V2 must fail closed when that source is unavailable. It must not continue with a text-only fallback that cannot inspect uploaded images.
 
 Current production intent:
@@ -34,10 +34,10 @@ Current production intent:
 ```text
 text source: deepseek-v4-pro-260425
 multimodal source: doubao-seed-2-0-lite-260428
-fallback source: gpt-5.6-terra -> kimi-k2.6 -> kimi-for-coding
+default fallback source: kimi-k3 -> gpt-6.1-sol
 ```
 
-DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. Kimi K3 is the first text fallback and GPT-6.1-sol follows when the primary route is unavailable. DeepSeek is never used for required uploaded-image understanding because it is not a multimodal source.
+DeepSeek is used for fast text reasoning. Doubao is used when uploaded images, products, copy, QR codes, logos, faces, or required backgrounds must be understood. The default text fallback queue is Kimi K3 then GPT-6.1-sol; custom queues retain their explicit order. DeepSeek is never used for required uploaded-image understanding because it is not a multimodal source.
 
 ## Configuration
 
@@ -50,9 +50,9 @@ V2_CLAUDE_ORCHESTRATOR_MODEL=deepseek-v4-pro-260425
 V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL=doubao-seed-2-0-lite-260428
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL=https://aiself.vip
 V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN=<private fallback API key>
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=gpt-5.6-terra,kimi-k2.6,kimi-for-coding
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=1
-V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=120
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS=kimi-k3,gpt-6.1-sol
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_MAX_MODELS_PER_STAGE=3
+V2_CLAUDE_ORCHESTRATOR_FALLBACK_STAGE_TIMEOUT_SECONDS=90
 ```
 
 The primary token should allow Anthropic-compatible `/v1/messages` dispatch for the text and multimodal models. GPT fallback uses `V2_OPENAI_API_KEY` / `V2_OPENAI_BASE_URL` or the shared OpenAI settings. Kimi backup uses `V2_CLAUDE_ORCHESTRATOR_FALLBACK_AUTH_TOKEN` / `V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL`.
@@ -222,3 +222,12 @@ Claude user settings with tokens
 ```
 
 Only commit code, docs, tests, and example environment keys without secret values.
+
+## Failover execution boundaries (2026-10-25)
+
+- Defaults come from `config.DEFAULT_CLAUDE_CODE_FALLBACK_MODELS`. Runtime queues preserve explicit order, trim/deduplicate entries, exclude the selected primary, and append only an explicitly configured legacy single fallback. An explicitly empty list with no legacy fallback remains empty; runtime must not inject built-in models.
+- The configured fallback timeout now bounds **one complete relay chain**, not each candidate independently. At relay entry the deadline is the earlier of the parent-stage deadline and `now + configured fallback timeout`; candidates divide the remaining budget. With 90 seconds and three exhausted candidates, the allocated request-wait budgets total at most 90 seconds, not the previous 30 + 45 + 90 seconds. This is not an end-to-end wall-clock promise: finite process cleanup and local processing can add overhead. A shorter parent deadline remains authoritative. This is a deliberate budget clarification, not a claim that every slow response is faulty; the primary-stage soft/hard bounds and checkpoint compression continuation remain unchanged.
+- `StaleTaskClaim` is a control signal, never an optional observer failure. It propagates to the runtime; subprocess and OpenAI transport check the existing claim immediately before execution. The threaded OpenAI path carries the caller's context. Ordinary progress-observer exceptions remain best-effort. Losing a claim prevents subsequent dispatch; it does not promise instant cancellation of an already in-flight request.
+- Progress counts represent leaf invocation starts and completed leaf events, excluding group routing notifications and duplicate delivery. Event timestamps distinguish repeated relay chains that reuse stage names. Attempts are controller-stage attempts, not proof of an upstream HTTP call.
+- Policy refusal is displayed neutrally and is not a reason to bypass policy. Explicitly terminal fallback errors propagate out of the relay instead of silently restarting the primary.
+- CLI timeout cleanup drains output for at most two 5-second waits after the existing tree-termination step (Windows `taskkill` retains its existing 10-second timeout). If cleanup cannot be confirmed, `claude_process_cleanup_unconfirmed` is terminal and no new model is launched. It does not claim the process was successfully terminated.

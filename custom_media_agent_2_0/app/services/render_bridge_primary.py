@@ -71,7 +71,8 @@ def freeze(request: CreateImageJobRequest, job_id: str, created_at: datetime, qr
     delivery = variables.get("reference_delivery") or {}
     if qr or (isinstance(delivery, dict) and (delivery.get("deterministic_text_overlay") or {}).get("items")):
         requirements["deterministic_postprocess"] = True
-    record = {"request": request.model_dump(mode="json"), "job_id": job_id,
+    record = {"adapter_version": "codex_cli_imagegen_v1",
+              "request": request.model_dump(mode="json"), "job_id": job_id,
               "created_at": created_at.isoformat(), "qr": qr, "references": references,
               "requirements": requirements, "queue_task_id": task_queue.current_claim().task_id if task_queue.current_claim() else None}
     def persist():
@@ -133,39 +134,79 @@ def ensure_not_cancelled(job_id: str):
 
 
 def _codex_cli_adaptation(params: dict, reference_count: int) -> tuple[dict, dict]:
-    # Codex's imagegen tool exposes only prompt, up to five local references,
-    # and transparent_background. All other Alchemy provider controls are
-    # deliberately normalized to the native tool/model defaults on this copy;
-    # the frozen request remains untouched for a proven pre-admission API route.
-    background = str(params.get("background") or "").strip().lower()
-    transparent = params.get("transparent_background") is True or background == "transparent"
-    wire = {}
-    if transparent:
-        wire["image_options"] = {"schema_version": "1", "transparent_background": True}
-    adaptation = {
-        "adapter": "codex_cli_imagegen_v1",
-        "defaults_applied": {
-            key: ("per_unit" if key == "count" else "profile" if key == "provider_hint" else "native_default")
-            for key, value in params.items()
-            if value is not None and key not in {"background", "transparent_background"}
-        },
-        "transparent_background_requested": transparent,
-        "transparent_background_mapping": "codex_cli_version_gated_or_default",
-        "reference_count": reference_count,
-    }
-    return wire, adaptation
+    from render_bridge_primary.codex_adapter import codex_cli_adaptation
+    return codex_cli_adaptation(params, reference_count)
+
+def _legacy_unit_request(record: dict, index: int):
+    request = primary_request(record)
+    params = dict(request.parameters)
+    requirements = dict(request.hard_requirements)
+    width, height = params.get("width", 1024), params.get("height", 1024)
+    size = str(params.get("size") or "")
+    if "x" in size:
+        try:
+            width, height = (int(value) for value in size.split("x", 1))
+        except ValueError:
+            requirements["size"] = size
+    elif size and size not in {"auto", "default"}:
+        requirements["size"] = size
+    if params.get("aspect_ratio"):
+        requirements["aspect_ratio"] = params["aspect_ratio"]
+    if any(params.get(key) not in {None, "", "auto", "default"} for key in ("size", "width", "height")):
+        requirements["exact_dimensions"] = True
+    # Never discard meaningful provider options merely because the wire lacks them.
+    for key, value in params.items():
+        if key not in {"count", "width", "height", "size", "seed", "provider_hint", "aspect_ratio"} and value is not None:
+            requirements[key] = value
+    wire = {"width": int(width), "height": int(height)}
+    if "seed" in params:
+        wire["seed"] = params["seed"]
+    if "output_format" in params or "quality" in params:
+        wire["image_options"] = {"schema_version": "1", "quality": params.get("quality", "auto"),
+                                 "output_format": params.get("output_format", "png")}
+    return replace(request, unit_id=f"{record['job_id']}:{index}", parameters=wire, hard_requirements=requirements)
 
 
-def _unit_request(record: dict, index: int):
+def _normalized_unit_request(record: dict, index: int, *, versioned: bool):
     request = primary_request(record)
     requirements = dict(request.hard_requirements)
-    requirements.pop("input_fidelity", None)  # gpt-image-2 uses high input fidelity by default.
-    # Reference fusion is represented by the actual localImage inputs, not by a
-    # separate Codex CLI flag. More than five references remain untruncated and
-    # are rejected by the advertised profile limit before Bridge submission.
+    requirements.pop("input_fidelity", None)
     wire, _ = _codex_cli_adaptation(dict(request.parameters), len(request.references))
+    if versioned:
+        wire["codex_adapter"] = "codex_cli_imagegen_v1"
     return replace(request, unit_id=f"{record['job_id']}:{index}", parameters=wire,
                    hard_requirements=requirements)
+
+
+def _unit_request(record: dict, index: int, client=None):
+    """Reconstruct frozen semantics, never upgrade an already journaled unit."""
+    from render_bridge_primary import PrimaryError
+    version = record.get("adapter_version")
+    if version == "codex_cli_imagegen_v1":
+        return _normalized_unit_request(record, index, versioned=True)
+    if version is not None:
+        raise PrimaryError("unsupported_frozen_adapter_version")
+    # PR38 and PR39 both wrote unversioned frozen records. Their existing
+    # journal digest, not current capabilities, is the authority for recovery.
+    try:
+        legacy = _legacy_unit_request(record, index)
+    except (ValueError, TypeError):
+        # PR39 normalization accepted some values that PR38 could not parse.
+        # They may resume only if their exact PR39 digest was already journaled.
+        if client is not None:
+            matched = client.match_existing_request((
+                _normalized_unit_request(record, index, versioned=False),))
+            if matched is not None:
+                return matched
+        raise PrimaryError("legacy_request_invalid") from None
+    if client is not None:
+        matched = client.match_existing_request((legacy,
+            _normalized_unit_request(record, index, versioned=False)))
+        if matched is not None:
+            return matched
+    # No journal means no known admission. Preserve the older strict contract
+    # rather than silently weakening an unversioned request's original intent.
+    return legacy
 
 
 def _count(record: dict) -> int:
@@ -193,7 +234,11 @@ async def _generate(record: dict, select_provider, client):
     for index in range(_count(record)):
         task_queue.ensure_current_claim()
         ensure_not_cancelled(record["job_id"])
-        unit = _unit_request(record, index)
+        from render_bridge_primary import PrimaryError
+        try:
+            unit = _unit_request(record, index, client)
+        except PrimaryError as exc:
+            raise BridgeWait(exc.code, terminal=True) from exc
         cache = _cache_path(record, index)
         if cache.exists():
             result = V2ImageProviderResult.model_validate_json(cache.read_text(encoding="utf-8"))
@@ -214,7 +259,10 @@ async def _generate(record: dict, select_provider, client):
                 if decision.image is None:
                     terminal = decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
                     raise BridgeWait(decision.state, terminal=terminal)
-                _, adaptation = _codex_cli_adaptation(dict(request.prompt_plan.provider_parameters), len(unit.references))
+                adaptation = None
+                if (unit.parameters.get("codex_adapter") == "codex_cli_imagegen_v1" or
+                        unit.digest == _normalized_unit_request(record, index, versioned=False).digest):
+                    _, adaptation = _codex_cli_adaptation(dict(request.prompt_plan.provider_parameters), len(unit.references))
                 result = provider_result(decision, parameter_adaptation=adaptation)
             else:
                 required = [image for image in request.input_images if image.provider_input_required]
@@ -272,7 +320,7 @@ async def _acknowledge(record: dict):
         for index in range(_count(record)):
             task_queue.ensure_current_claim()
             cached = V2ImageProviderResult.model_validate_json(_cache_path(record, index).read_text(encoding="utf-8"))
-            unit = _unit_request(record, index)
+            unit = _unit_request(record, index, client)
             if cached.provider == "render_bridge":
                 await client.acknowledge(unit, registration_ref=f"v2:{record['job_id']}:{index}")
             else:
@@ -285,7 +333,7 @@ async def cancel(record: dict):
     client = transport()
     try:
         for index in range(_count(record)):
-            unit = _unit_request(record, index)
+            unit = _unit_request(record, index, client)
             if client.has_binding(unit):
                 await client.cancel(unit)
     finally:

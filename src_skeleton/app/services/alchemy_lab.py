@@ -2168,9 +2168,13 @@ def _exception_variant(variant: GenerationVariant, exc: Exception, *, attempt: i
 
 
 def _size_from_aspect_ratio(aspect_ratio: str | None) -> str | None:
-    if aspect_ratio in {"portrait", "9:16", "2:3"}:
+    if aspect_ratio == "9:16":
+        return "864x1536"
+    if aspect_ratio == "16:9":
+        return "1536x864"
+    if aspect_ratio in {"portrait", "2:3"}:
         return "1024x1536"
-    if aspect_ratio in {"landscape", "16:9", "3:2"}:
+    if aspect_ratio in {"landscape", "3:2"}:
         return "1536x1024"
     if aspect_ratio in {"square", "1:1"}:
         return "1024x1024"

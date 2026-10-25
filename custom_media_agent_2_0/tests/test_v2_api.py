@@ -5326,7 +5326,7 @@ def test_creative_run_infers_a4_size_when_output_aspect_is_auto() -> None:
     assert "aspect_ratio" not in params
 
 
-def test_creative_run_manual_aspect_overrides_prompt_a4_inference() -> None:
+def test_creative_run_explicit_prompt_a4_overrides_manual_aspect() -> None:
     client = fresh_client()
 
     response = client.post(
@@ -5340,8 +5340,9 @@ def test_creative_run_manual_aspect_overrides_prompt_a4_inference() -> None:
     assert response.status_code == 202
     run = response.json()
     params = run["prompt_plan"]["provider_parameters"]
-    assert params["aspect_ratio"] == "1536x1024"
-    assert "size" not in params
+    assert params["size"] == "2400x3392"
+    assert "aspect_ratio" not in params
+    assert run["prompt_plan"]["user_variables"]["aspect_lock"]["source"] == "user_prompt.size"
 
 
 def test_exploration_mode_preserves_manual_aspect_ratio_and_adds_prompt_fallback(monkeypatch) -> None:
@@ -5740,7 +5741,7 @@ def test_claude_code_fallback_model_queue_uses_configured_selection() -> None:
 
     queue = claude_orchestrator_service._claude_code_model_fallback_queue()
 
-    assert queue == ["kimi-k3", "gpt-custom-backup", "gpt-6.1-sol"]
+    assert queue == ["gpt-custom-backup", "gpt-6.1-sol"]
 
 
 def test_selected_openai_model_fallback_uses_openai_compatible_checkpoint_lane(monkeypatch, tmp_path: Path) -> None:
@@ -5799,7 +5800,7 @@ def test_selected_openai_model_fallback_uses_openai_compatible_checkpoint_lane(m
             return FakeResponse()
 
     def unexpected_claude_stage(**kwargs):
-        raise AssertionError("Kimi fallback should use the OpenAI-compatible checkpoint lane")
+        raise AssertionError("GPT fallback should use the OpenAI-compatible checkpoint lane")
 
     monkeypatch.setattr(claude_orchestrator_service.httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", unexpected_claude_stage)
@@ -5815,10 +5816,10 @@ def test_selected_openai_model_fallback_uses_openai_compatible_checkpoint_lane(m
     assert result is not None
     assert result["stage"] == "intent"
     assert result["mode"] == "smart_enhance"
-    assert meta["model"] == "kimi-k3"
+    assert meta["model"] == "gpt-6.1-sol"
     assert captured["url"] == "https://aiself.example.test/v1/chat/completions"
-    assert captured["payload"]["model"] == "kimi-k3"
-    assert captured["payload"]["reasoning_effort"] == "high"
+    assert captured["payload"]["model"] == "gpt-6.1-sol"
+    assert captured["payload"]["reasoning_effort"] == "medium"
     assert not {"temperature", "top_p", "top_k", "n", "presence_penalty", "frequency_penalty"} & set(captured["payload"])
     assert captured["payload"]["response_format"] == {"type": "json_object"}
     assert captured["headers"]["authorization"] == "Bearer one-unified-test-key"
@@ -6267,6 +6268,7 @@ def test_checkpoint_stage_uses_claude_code_model_fallback_after_kimi_exhaustion(
     object.__setattr__(settings, "llm_gateway_api_key", "one-unified-test-key")
     object.__setattr__(settings, "llm_gateway_base_url", "https://aiself.vip/v1")
     object.__setattr__(settings, "claude_orchestrator_model", "claude-sonnet-5-5")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("kimi-k3", "gpt-6.1-sol"))
     calls: list[dict[str, object]] = []
 
     def fake_claude_stage(**kwargs):
@@ -6340,6 +6342,7 @@ def test_checkpoint_stage_uses_model_fallback_after_compressed_kimi_retries_exha
     object.__setattr__(settings, "llm_gateway_api_key", "one-unified-test-key")
     object.__setattr__(settings, "llm_gateway_base_url", "https://aiself.vip/v1")
     object.__setattr__(settings, "claude_orchestrator_model", "claude-sonnet-5-5")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("kimi-k3", "gpt-6.1-sol"))
     calls: list[dict[str, object]] = []
 
     def fake_claude_stage(**kwargs):

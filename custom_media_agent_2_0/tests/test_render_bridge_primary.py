@@ -15,6 +15,11 @@ from app.services import generation, render_bridge_primary as bridge, output_sto
 from app.providers.images.base import V2ImageProviderOutput, V2ImageProviderResult
 
 
+CODEX_ADAPTER_CONTRACT = {"values": ["codex_cli_imagegen_v1"], "image_options_contract": {
+    "quality": {"values": ["auto"]}, "output_format": {"values": ["png", "jpeg"]},
+    "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}
+
+
 def request(count=1):
     return CreateImageJobRequest(prompt_plan=ImagePromptPlan(plan_id="p", mode="smart_enhance",
         prompt="A blue vase", provider_parameters={"count": count, "quality": "auto"}))
@@ -163,7 +168,8 @@ def test_reference_bytes_are_frozen_and_strong_fusion_is_hard(isolated, tmp_path
 def test_codex_reference_limit_accepts_five_and_rejects_six_without_truncation():
     from render_bridge_primary import PrimaryRequest, PrimaryTransport, Reference
     caps = {"profiles": [{"execution_profile_id": "codex-image", "execution_profile_revision": "1",
-        "parameter_contract": {"dimension_semantics": "original_dimensions_recorded"},
+        "parameter_contract": {"dimension_semantics": "original_dimensions_recorded",
+                        "codex_adapter": CODEX_ADAPTER_CONTRACT},
         "image_options_contract": {"references": {"max_count": 5}}}],
         "limits": {"max_dimension": 40000, "max_image_pixels": 40000000, "max_input_bytes": 1048576}}
     refs = tuple(Reference(content=image_bytes(), mime_type="image/png") for _ in range(5))
@@ -251,7 +257,8 @@ def test_codex_adapter_defaults_unsupported_provider_controls_and_keeps_bridge_p
             return {"admission": {"accepting_new_tasks": True}, "routing_availability_v1": {"profiles": [
                 {"profile_id": "codex-image", "health": "available", "valid_until": "2099-01-01T00:00:00+00:00"}]},
                 "profiles": [{"execution_profile_id": "codex-image", "execution_profile_revision": "1",
-                    "parameter_contract": {"dimension_semantics": "original_dimensions_recorded"},
+                    "parameter_contract": {"dimension_semantics": "original_dimensions_recorded",
+                        "codex_adapter": CODEX_ADAPTER_CONTRACT},
                     "image_options_contract": {"quality": {"values": ["auto"]}, "output_format": {"values": ["png", "jpeg"]},
                         "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}]}
         async def create_task(self, payload):
@@ -278,7 +285,7 @@ def test_codex_adapter_defaults_unsupported_provider_controls_and_keeps_bridge_p
     high = asyncio.run(generation.create_image_job(req, job_id="high"))
     assert high.error["error_code"] == "bridge_wait" and client.calls == 2
     assert seen == []
-    assert client.payload["parameters"] == {"image_options": {"schema_version": "1", "transparent_background": True}}
+    assert client.payload["parameters"] == {"codex_adapter": "codex_cli_imagegen_v1", "image_options": {"schema_version": "1", "transparent_background": True}}
     assert client.payload["references"] == []
 
 
@@ -291,7 +298,8 @@ def test_explicit_queue_rejection_uses_untouched_original_provider_parameters(is
             return {"admission": {"accepting_new_tasks": True}, "routing_availability_v1": {"profiles": [
                 {"profile_id": "codex-image", "health": "available", "valid_until": "2099-01-01T00:00:00+00:00"}]},
                 "profiles": [{"execution_profile_id": "codex-image", "execution_profile_revision": "1",
-                    "parameter_contract": {"dimension_semantics": "original_dimensions_recorded"},
+                    "parameter_contract": {"dimension_semantics": "original_dimensions_recorded",
+                        "codex_adapter": CODEX_ADAPTER_CONTRACT},
                     "image_options_contract": {"quality": {"values": ["auto"]}, "output_format": {"values": ["png", "jpeg"]},
                         "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}]}
         async def create_task(self, payload):
@@ -599,3 +607,113 @@ def test_uncertain_billing_retains_nonconsuming_finalization_wait(isolated, monk
     assert waiting.error["error_code"] == "bridge_finalization_wait"
     assert _job_retry_directive(waiting.error).consume_attempt is False
     assert len(isolated.calls) == 1
+
+
+@pytest.mark.parametrize("version", ["pr38", "pr39"])
+@pytest.mark.parametrize("operation", ["resume", "cancel", "ack", "api", "downloaded"])
+def test_unversioned_frozen_units_preserve_journal_semantics(isolated, tmp_path, monkeypatch, version, operation):
+    import json
+    from render_bridge_primary import PrimarySettings, PrimaryTransport
+    frozen = bridge.freeze(request(), "upgrade", generation.utc_now(), False)
+    frozen.pop("adapter_version")
+    # These are the two exact historical adaptations, not migration of a row.
+    unit = (bridge._legacy_unit_request(frozen, 0) if version == "pr38" else
+            bridge._normalized_unit_request(frozen, 0, versioned=False))
+    class Client:
+        calls = []
+        async def by_origin(self, origin):
+            self.calls.append("lookup")
+            return {"origin_key": origin, "request": payload, "remote_task_id": "old-task", "state": "queued"}
+        async def cancel(self, task): self.calls.append("cancel")
+        async def accept_registered_receipt(self, receipt, **kwargs): self.calls.append("ack")
+        async def close(self): pass
+    client = Client()
+    core = PrimaryTransport(PrimarySettings(enabled=True, base_url="http://localhost:9999", token="fake",
+                            state_dir=tmp_path / "core"), client=client)
+    data = json.loads(core._start(unit)["data"])
+    payload = {"parameters": unit.parameters}
+    data.update(payload=payload, task_id="old-task", state="queued")
+    if operation == "api":
+        core._api(unit, data, "bridge_unavailable")
+        assert core.claim_api(unit)
+        data = json.loads(core._read(unit)["data"])
+    else:
+        core._save(unit, data)
+    digest = core._read(unit)["digest"]
+    monkeypatch.setattr(bridge, "transport", lambda *a: core)
+    async def forbidden(*args): raise AssertionError("must not execute API")
+    if operation == "resume":
+        with pytest.raises(bridge.BridgeWait, match="queued"):
+            asyncio.run(bridge.generate(frozen, forbidden))
+        assert client.calls == ["lookup"]
+    elif operation == "cancel":
+        asyncio.run(bridge.cancel(frozen))
+        assert "cancel" in client.calls
+    else:
+        if operation in {"ack", "downloaded"}:
+            data.update(receipt_id="receipt", image={"sha256": hashlib.sha256(image_bytes()).hexdigest(),
+                        "mime_type": "image/png", "width": 23, "height": 19})
+            core._save(unit, data, state="artifacts_ready", image=image_bytes())
+            result = bridge.provider_result(core._result(core._read(unit)))
+        else:
+            result = V2ImageProviderResult(provider="native_api", model="fixture", outputs=[
+                V2ImageProviderOutput(b64_json=base64.b64encode(image_bytes()).decode())])
+        cache = bridge._cache_path(frozen, 0)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        if operation != "downloaded":
+            cache.write_text(result.model_dump_json(), encoding="utf-8")
+        recovered = asyncio.run(bridge.generate(frozen, forbidden))
+        assert recovered.outputs[0].b64_json == result.outputs[0].b64_json
+        if operation == "downloaded":
+            provenance = recovered.outputs[0].metadata["render_bridge_primary"]
+            assert ("parameter_adaptation" in provenance) == (version == "pr39")
+        assert asyncio.run(bridge.acknowledge(frozen)) is True
+        assert core._read(unit)["state"] == ("acked" if operation in {"ack", "downloaded"} else "api_completed")
+    assert core._read(unit)["digest"] == digest
+    assert json.loads(core._read(unit)["data"])["payload"] == payload
+
+
+def test_new_frozen_adapter_is_versioned_and_old_without_ledger_stays_strict(isolated, tmp_path):
+    from render_bridge_primary import PrimarySettings, PrimaryTransport
+    frozen = bridge.freeze(request(), "new-version", generation.utc_now(), False)
+    assert bridge.load_frozen("new-version")["adapter_version"] == "codex_cli_imagegen_v1"
+    core = PrimaryTransport(PrimarySettings(state_dir=tmp_path / "no-ledger"), client=isolated)
+    assert bridge._unit_request(frozen, 0, core).parameters == {"codex_adapter": "codex_cli_imagegen_v1"}
+    frozen.pop("adapter_version")
+    assert bridge._unit_request(frozen, 0, core).parameters == {"width": 1024, "height": 1024,
+        "image_options": {"schema_version": "1", "quality": "auto", "output_format": "png"}}
+    assert not core.path.exists()
+
+
+@pytest.mark.parametrize("field", ["prompt", "owner", "references"])
+def test_historical_reconstruction_does_not_relax_digest_guard(isolated, tmp_path, field):
+    from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryError
+    frozen = bridge.freeze(request(), "tamper", generation.utc_now(), False)
+    frozen.pop("adapter_version")
+    core = PrimaryTransport(PrimarySettings(state_dir=tmp_path / "core"), client=isolated)
+    old = bridge._legacy_unit_request(frozen, 0)
+    core._start(old)
+    if field == "prompt": frozen["request"]["prompt_plan"]["prompt"] = "changed"
+    elif field == "references": frozen["references"] = [{"content": base64.b64encode(image_bytes()).decode(), "mime_type": "image/png"}]
+    else:
+        # Explicit different-owner candidate cannot be used to search another key.
+        from dataclasses import replace
+        with pytest.raises(PrimaryError, match="invalid_request_candidates"):
+            core.match_existing_request((old, replace(old, owner_id="other")))
+        return
+    with pytest.raises(PrimaryError, match="request_semantics_changed"):
+        bridge._unit_request(frozen, 0, core)
+
+
+def test_pr39_unparseable_legacy_parameters_resume_only_exact_existing_digest(isolated, tmp_path):
+    from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryError
+    req = request()
+    req.prompt_plan.provider_parameters['width'] = 'native'
+    frozen = bridge.freeze(req, 'pr39-only', generation.utc_now(), False)
+    frozen.pop('adapter_version')
+    core = PrimaryTransport(PrimarySettings(state_dir=tmp_path / 'core'), client=isolated)
+    with pytest.raises(PrimaryError, match='legacy_request_invalid'):
+        bridge._unit_request(frozen, 0, core)
+    old = bridge._normalized_unit_request(frozen, 0, versioned=False)
+    core._start(old)
+    assert bridge._unit_request(frozen, 0, core).digest == old.digest

@@ -7,6 +7,7 @@ import hashlib
 import mimetypes
 import sqlite3
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from app.providers.base import ProviderRuntimeError
@@ -86,7 +87,7 @@ def _error(code, provenance=None):
     )
 
 
-def request_for(app_request):
+def _source_request(app_request, *, native_defaults=False):
     from render_bridge_primary import PrimaryRequest, Reference
 
     plan = app_request.prompt_plan
@@ -105,7 +106,7 @@ def request_for(app_request):
     if any(item.get("provider_input_mode") == "reference_image" and not reference_image_paths({"assets": [item]}, max_images=1)
            for item in assets):
         raise _error("bridge_reference_materialization_missing")
-    size = str(plan.size or "1024x1024").split("x")
+    size = str("1024x1024" if native_defaults else plan.size or "1024x1024").split("x")
     if len(size) != 2 or not all(part.isdigit() for part in size):
         raise _error("bridge_invalid_frozen_dimensions")
     input_plan = asset_plan.get("provider_input_plan") or {}
@@ -146,6 +147,55 @@ def request_for(app_request):
     )
 
 
+def request_for(app_request, transport=None):
+    """New units opt in; durable legacy digests remain authoritative on replay.
+
+    Only optional rendering controls use native defaults. Fidelity guarantees,
+    masks and unknown operations are not equivalent to a prompt/reference hint.
+    """
+    from render_bridge_primary.codex_adapter import CODEX_ADAPTER_VERSION, codex_cli_adaptation
+
+    source = _source_request(app_request, native_defaults=True)
+    plan = app_request.prompt_plan
+    options = dict(plan.variables.get("provider_image_options") or {})
+    params = {**options, "background": plan.background,
+              "transparent_background": bool(plan.transparent_background or
+                  options.get("transparent_background") is True or
+                  plan.background == "transparent")}
+    wire, _ = codex_cli_adaptation(params, len(source.references))
+    wire["codex_adapter"] = CODEX_ADAPTER_VERSION
+    optional = {"quality", "size", "width", "height", "aspect_ratio", "output_format",
+                "output_compression", "seed", "input_fidelity", "background",
+                "transparent_background"}
+    requirements = {key: value for key, value in source.hard_requirements.items()
+                    if key not in optional and not (key.startswith("option_") and key[7:] in optional)}
+    asset_plan = app_request.asset_plan or plan.variables.get("asset_plan") or {}
+    assets = asset_plan.get("assets", [])
+    if ((asset_plan.get("requirements") or {}).get("needs_postprocess") or
+            (asset_plan.get("provider_input_plan") or {}).get("requires_postprocess") or
+            any(item.get("provider_input_mode") == "postprocess_only" or item.get("postprocess_steps")
+                for item in assets)):
+        requirements["deterministic_postprocess"] = True
+    if any(item.get("provider_input_mode") == "mask_edit_source" for item in assets):
+        requirements["mask_edit"] = True
+    native = replace(source, parameters=wire, hard_requirements=requirements)
+    if transport is not None:
+        # Invalid legacy dimensions had no admissible legacy request. Still
+        # allow exact recovery of a previously normalized native unit.
+        try:
+            legacy = _source_request(app_request)
+        except ProviderRuntimeError as exc:
+            if exc.detail.get("failure_code") != "bridge_invalid_frozen_dimensions":
+                raise
+            candidates = (native,)
+        else:
+            candidates = (legacy, native)
+        matched = transport.match_existing_request(candidates)
+        if matched is not None:
+            return matched
+    return native
+
+
 def output_id(provenance):
     key = str(provenance.get("execution_key") or provenance.get("origin_key") or "")
     if not key:
@@ -173,9 +223,9 @@ async def generate(app_request, legacy_generate, output_store):
     # Preserve disabled legacy behavior, but never hide an existing durable unit.
     if not settings.enabled and not (settings.state_dir / "primary.sqlite3").exists():
         return await legacy_generate(app_request)
-    request = request_for(app_request)
     transport = PrimaryTransport(settings)
     try:
+        request = request_for(app_request, transport)
         deadline = time.monotonic() + POLL_BUDGET_SECONDS
         context = dict(app_request.prompt_plan.variables.get(CONTEXT) or {})
         async with _gate_for(settings, app_request) as gate:
@@ -235,7 +285,7 @@ async def checkpoint(app_request, record):
         return
     transport = PrimaryTransport(PrimarySettings.from_env(product="v3"))
     try:
-        request = request_for(app_request)
+        request = request_for(app_request, transport)
         if provenance["route"] == "api":
             transport.complete_api(request)
         else:
@@ -255,7 +305,7 @@ async def assert_bridge_checkpoint_current(app_request):
     settings = PrimarySettings.from_env(product="v3")
     transport = PrimaryTransport(settings)
     try:
-        request = request_for(app_request)
+        request = request_for(app_request, transport)
         async with _gate_for(settings, app_request) as gate:
             gate.assert_current()
         if not transport.has_unit(request):

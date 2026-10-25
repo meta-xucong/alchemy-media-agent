@@ -667,10 +667,10 @@ def test_openai_image_provider_rejects_official_option_combinations_and_bad_cust
         provider._image_kwargs(  # noqa: SLF001
             ImagePromptPlan(main_subject="image", output_format="jpeg", background="transparent")
         )
+    assert provider._image_kwargs(ImagePromptPlan(main_subject="image", size="1000x1000"))["size"] == "auto"
+    # The strict wire guard remains intact; adaptation is not relaxed validation.
     with pytest.raises(ProviderCapabilityMismatchError, match="custom size limits"):
-        provider._image_kwargs(  # noqa: SLF001
-            ImagePromptPlan(main_subject="image", size="1000x1000")
-        )
+        provider._validated_official_size("1000x1000")
 
 
 def test_openai_image_provider_generation_only_square_transport_is_explicit(monkeypatch):
@@ -685,8 +685,7 @@ def test_openai_image_provider_generation_only_square_transport_is_explicit(monk
     capabilities = asyncio.run(provider.capabilities())
     assert capabilities.operations == ["generate"]
     assert capabilities.limits["sizes"] == ["1024x1024"]
-    with pytest.raises(ProviderCapabilityMismatchError, match="1024x1024 images"):
-        provider._image_kwargs(ImagePromptPlan(main_subject="咖啡海报", count=1, size="1024x1536"))  # noqa: SLF001
+    assert provider._image_kwargs(ImagePromptPlan(main_subject="咖啡海报", count=1, size="1024x1536"))["size"] == "1024x1024"
     with pytest.raises(ProviderCapabilityMismatchError, match="text-to-image generation only"):
         provider._assert_reference_transport_supported(1)  # noqa: SLF001
 
@@ -983,9 +982,9 @@ def test_v1_prompting_infers_size_from_default_prompt_language():
     assert "竖版构图" in a4_plan.composition
     assert landscape_a4_plan.size == "3392x2400"
     assert portrait_plan.size == "1024x1536"
-    assert landscape_plan.size == "1536x1024"
+    assert landscape_plan.size == "1536x864"
     assert square_plan.size == "1024x1024"
-    assert explicit_plan.size == "1024x1024"
+    assert explicit_plan.size == "2400x3392"
 
 
 def test_openai_image_provider_uses_edit_endpoint_for_reference_images(tmp_path):

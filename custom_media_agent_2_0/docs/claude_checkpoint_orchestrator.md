@@ -302,17 +302,11 @@ MAX_THINKING_TOKENS=0
 
 ### Claude Code Model Fallback
 
-When the Claude Code route is available, it remains the primary creative brain that V2 calls. On eligible failure, Kimi K3 is attempted first and GPT-6.1-sol follows if needed, using the unified gateway key and protocol-correct adapters for the same JSON schema.
+Current execution authority: [Claude Code Source Routing](claude_code_source_fallback.md#failover-execution-boundaries-2026-10-25). Earlier timeout/model examples above are historical tuning context, not runtime defaults.
 
-This keeps the external V2 framework unchanged: same Claude checkpoint prompts, same JSON schema, same visual grammar lock, same uploaded-asset fusion policy, same output caps, and same selected-template priority. Model order is deliberately strongest-first:
+The default fallback order comes from `config.DEFAULT_CLAUDE_CODE_FALLBACK_MODELS`: `kimi-k3`, then `gpt-6.1-sol`. Explicit custom or empty queues are authoritative; runtime does not inject models. Eligible route failures still use the same compact checkpoint schema and preserve uploaded-asset, visual-grammar, and selected-template constraints.
 
-```text
-gpt-5.6-terra
-kimi-k2.6
-kimi-for-coding
-```
-
-If the selected primary text source returns a failover-eligible upstream failure such as quota exhaustion, no available accounts, 502, context cancellation, timeout, or structured-output exhaustion, the controller tries Kimi K3 and advances to GPT-6.1-sol after an eligible Kimi failure. Both use the same configured gateway key; secrets must not be committed.
+As of 2026-10-25, the configured fallback timeout bounds a whole relay chain, also capped by the remaining parent-stage deadline. It no longer refreshes for each candidate. Primary thinking, soft/hard stage boundaries, and micro/ultra-micro checkpoint continuation are unchanged. A policy refusal, explicitly terminal fallback failure, unconfirmed CLI cleanup, or lost task claim stops further execution rather than restarting the primary or another model. Progress counts deduplicate group/leaf notifications and count actual candidate starts; these are not proof of upstream request execution.
 
 ## Workspace 文件布局
 
@@ -547,3 +541,11 @@ The old single-shot Claude orchestrator remains available until checkpoint mode 
 - Stage 超限时只拆成一个 micro stage，不做复杂树状规划。
 - raw thinking 不保存，只保存 stdout summary 和 final JSON/checkpoint。
 - 如果 checkpoint mode 连续失败，回退 single-shot Claude 一次，而不是跳过 Claude。
+
+## Prompt canvas cache policy (v13)
+
+The `claude_decision_v13_prompt_canvas_authority` schema invalidates v12 exact
+and semantic planning-cache matches after changing canvas precedence to explicit
+current-prompt canvas > structured output controls > template/default. It does
+not rewrite frozen jobs, provider requests, Bridge ledgers, or historical outputs.
+New planning can therefore not inherit an old decision's conflicting canvas.
