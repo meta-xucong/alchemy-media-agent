@@ -25,6 +25,9 @@ def _prepared_release(tmp_path: Path) -> tuple[Path, object]:
     (v2_root / ".venv" / "bin").mkdir(parents=True)
     (v2_root / ".venv" / "bin" / "python").write_bytes(b"python")
     (v2_root / "requirements.txt").write_text("httpx>=0.28.0\nhttpcore>=1.0.0,<2\n", encoding="utf-8")
+    bridge = release / "render_bridge_primary"
+    bridge.mkdir()
+    (bridge / "__init__.py").write_text("# transport\n")
     return release, runtime_paths(release)
 
 
@@ -145,3 +148,50 @@ def test_v3_brain_route_is_explicit_in_all_runtime_bootstraps() -> None:
         else:
             assert f"{key}=${{{key}:-{value}}}" in direct_deploy
     assert "retired and performs no changes" in migration
+
+
+def test_runtime_preflight_imports_lazy_bridge_dependency(tmp_path, monkeypatch):
+    release, paths = _prepared_release(tmp_path)
+    calls = []
+    monkeypatch.setattr(_MODULE, "_run", lambda args, **kwargs: calls.append((args, kwargs)))
+    _MODULE.verify_bridge_install(paths)
+    assert "import render_bridge_primary" in calls[0][0][2]
+    assert calls[0][1]["cwd"] == paths.v2_root
+
+
+def test_actual_workflows_install_bridge_before_manifest():
+    root = Path(__file__).parents[1]
+    for name in ("candidate", "activate"):
+        body = (root / ".github/workflows" / f"guarded-vps-{name}.yml").read_text()
+        assert '--no-deps --force-reinstall' in body
+        assert body.index('--no-deps --force-reinstall') < body.index('--write-manifest')
+
+
+@pytest.mark.parametrize('workflow,function', [('candidate','prepare_v2_runtime'), ('activate','prepare_v2_runtime_for_release')])
+def test_guarded_update_executes_neutral_install_before_manifest(tmp_path, workflow, function):
+    """Exercise the actual workflow function with no-network command doubles."""
+    import os
+    import subprocess
+    root = Path(__file__).parents[1]
+    source = (root / '.github/workflows' / f'guarded-vps-{workflow}.yml').read_text()
+    start = source.index(f'          {function}() {{')
+    end = source.index('\n          }', start) + len('\n          }')
+    body = '\n'.join(line[10:] for line in source[start:end].splitlines())
+    release, paths = _prepared_release(tmp_path)
+    guard = release / 'ops/vps-release/v2_runtime_guard.py'
+    guard.parent.mkdir(parents=True); guard.write_text('# fixture\n')
+    log = tmp_path / 'commands.log'
+    fake = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_LOG"\nexit 0\n'
+    paths.python.write_text(fake); paths.python.chmod(0o755)
+    bin_path = tmp_path / 'bin'; bin_path.mkdir()
+    (bin_path / 'python3').write_text(fake); (bin_path / 'python3').chmod(0o755)
+    (bin_path / 'id').write_text('#!/bin/sh\nexit 1\n'); (bin_path / 'id').chmod(0o755)
+    call = function if workflow == 'candidate' else f'{function} "$candidate_release" "$candidate_release/ops/vps-release/v2_runtime_guard.py"'
+    script = f'set -Eeuo pipefail\nstop() {{ return 1; }}\ncandidate_release="$TEST_RELEASE"\n{body}\n{call}\n'
+    env = {**os.environ, 'PATH': str(bin_path) + ':' + os.environ['PATH'], 'TEST_LOG': str(log), 'TEST_RELEASE': str(release)}
+    result = subprocess.run(['bash'], input=script, text=True, capture_output=True, env=env)
+    assert result.returncode == 0, result.stderr
+    commands = log.read_text()
+    assert '--no-deps --force-reinstall ' + str(release / 'render_bridge_primary') in commands
+    assert commands.index('--no-deps --force-reinstall') < commands.index('--write-manifest')
+    assert commands.index('--write-manifest') < commands.index('--verify')

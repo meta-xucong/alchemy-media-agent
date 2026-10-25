@@ -440,3 +440,61 @@ def test_candidate_match_uri_escapes_state_directory_without_writes(tmp_path, di
                    for path in tmp_path.rglob('*') if path.is_file()}
     assert after_files == before_files
     assert transport.path.stat().st_mtime_ns == before_stat.st_mtime_ns
+
+
+def test_retirement_intent_preserved_until_confirmed_ack_then_reconciled(tmp_path):
+    import json
+    c = ReceiptClient(); t = PrimaryTransport(settings(tmp_path), client=c)
+    result = asyncio.run(t.resolve(request()))
+    stale = json.loads(t._read(request())['data'])
+    assert t.request_retirement([request()])
+    assert t.cached_result(request()).image.content == c.content
+    # An older poll cannot overwrite the product's durable retirement intent.
+    t._save(request(), stale)
+    assert json.loads(t._read(request())['data'])['cache_retirement_requested']
+    original_ack = c.accept_registered_receipt
+    async def lose(*args, **kwargs): raise BridgeError('bridge_unreachable')
+    c.accept_registered_receipt = lose
+    with pytest.raises(BridgeError):
+        asyncio.run(t.acknowledge(request(), 'native:verified'))
+    assert t._read(request())['image'] == c.content
+    assert 'payload' in json.loads(t._read(request())['data'])
+    c.accept_registered_receipt = original_ack
+    restarted = PrimaryTransport(settings(tmp_path), client=c)
+    assert asyncio.run(restarted.reconcile_pending())['acked'] == 1
+    row = restarted._read(request()); data = json.loads(row['data'])
+    assert row['image'] is None and data['cache_retired']
+    assert 'payload' not in data and data['image']['sha256'] == hashlib.sha256(c.content).hexdigest()
+    assert restarted.cached_result(request()).state == 'acked'
+    t._save(request(), stale, image=c.content)
+    assert t._read(request())['image'] is None
+    assert c.calls == 1
+
+
+def test_retirement_intent_batch_rejects_pending_and_wrong_digest_atomically(tmp_path):
+    import json
+    c = ReceiptClient(); t = PrimaryTransport(settings(tmp_path), client=c)
+    asyncio.run(t.resolve(request()))
+    pending = replace(request(), unit_id='job:second')
+    t._start(pending)
+    assert not t.request_retirement([request(), pending])
+    assert not json.loads(t._read(request())['data']).get('cache_retirement_requested')
+    with pytest.raises(PrimaryError, match='request_semantics_changed'):
+        t.request_retirement([replace(request(), prompt='other')])
+    assert t._read(request())['image'] == c.content
+
+
+def test_retirement_intent_after_ack_retires_immediately(tmp_path):
+    c = ReceiptClient(); t = PrimaryTransport(settings(tmp_path), client=c)
+    asyncio.run(t.resolve(request()))
+    asyncio.run(t.acknowledge(request(), 'native:verified'))
+    assert t.request_retirement([request()])
+    assert t._read(request())['image'] is None
+    asyncio.run(t.acknowledge(request(), 'native:verified'))
+    assert len(c.acks) == 1
+
+
+def test_cached_result_absent_does_not_create_ledger(tmp_path):
+    t = PrimaryTransport(settings(tmp_path), client=Client())
+    assert t.cached_result(request()) is None
+    assert not t.path.exists()

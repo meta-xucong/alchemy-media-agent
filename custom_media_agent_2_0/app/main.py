@@ -1020,16 +1020,44 @@ async def history_reference_asset(
     return asset
 
 
+def _require_image_job_owner(job, user_id: int | None, *, frozen_record=None) -> None:
+    """Use server-persisted provenance, never request fields, for all job routes."""
+    if not settings.veyra_auth_enabled:
+        return
+    owners = []
+    if job is not None:
+        owners.append(job.veyra_user_id)
+        owners.extend(output.metadata.get("veyra_user_id") for output in job.outputs)
+    if frozen_record is not None:
+        frozen_request = frozen_record.get("request") if isinstance(frozen_record, dict) else None
+        frozen_owner = frozen_request.get("veyra_user_id") if isinstance(frozen_request, dict) else None
+        # A frozen request is also the future billing identity; a job owner
+        # must not make an ownerless frozen request safe to execute.
+        owners.append(frozen_owner if frozen_owner is not None else False)
+    resolved = set()
+    for owner in owners:
+        if owner is None:
+            continue
+        # Legacy JSON metadata may contain a decimal string, but booleans and
+        # fractional values must never be coerced into another account's ID.
+        if type(owner) is int and owner > 0:
+            resolved.add(owner)
+        elif isinstance(owner, str) and len(owner) <= 20 and owner.isascii() and owner.isdecimal() and int(owner) > 0:
+            resolved.add(int(owner))
+        else:
+            resolved.add(None)
+    if resolved != {user_id} or user_id is None:
+        raise HTTPException(status_code=404, detail={"error_code": "job_not_found", "message": "Image job not found."})
+
+
 def _bridge_job_request(job_id: str, request: Request, authorization: str, *, allow_completed: bool = False, allow_queue_cancel: bool = False):
     from app.services import render_bridge_primary
     user_id = _require_veyra_user_if_enabled(request, authorization)
     record = render_bridge_primary.load_frozen(job_id)
     if record is None:
         raise HTTPException(status_code=404, detail={"error_code": "bridge_job_not_found"})
-    owner = record["request"].get("veyra_user_id")
-    if settings.veyra_auth_enabled and (not owner or int(owner) != int(user_id or 0)):
-        raise HTTPException(status_code=404, detail={"error_code": "bridge_job_not_found"})
     existing = repository.get_image_job(job_id)
+    _require_image_job_owner(existing, user_id, frozen_record=record)
     if record.get("queue_task_id") and not allow_queue_cancel and not (allow_completed and existing is not None and existing.status == "completed"):
         raise HTTPException(status_code=409, detail={"error_code": "bridge_job_queue_owned"})
     return record
@@ -1076,10 +1104,13 @@ async def cancel_bridge_image_job(job_id: str, request: Request, authorization: 
 
 @app.get("/api/v2/image/jobs/{job_id}")
 def get_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    user_id = _require_veyra_user_if_enabled(request, authorization)
     job = repository.get_image_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error_code": "job_not_found", "message": "Image job not found."})
+    if settings.veyra_auth_enabled:
+        from app.services import render_bridge_primary
+        _require_image_job_owner(job, user_id, frozen_record=render_bridge_primary.load_frozen(job_id))
     return job
 
 

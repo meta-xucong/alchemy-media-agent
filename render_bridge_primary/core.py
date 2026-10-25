@@ -206,6 +206,10 @@ class PrimaryTransport:
             old=db.execute('SELECT data FROM units WHERE key=?',(key,)).fetchone()
             if old:
                 previous=json.loads(old['data'])
+                # A product has durably published this unit and retired only its
+                # duplicate transport bytes. A stale poll/ACK cannot resurrect it.
+                if previous.get('cache_retired'):
+                    return
                 for name in ('task_id','receipt_id','attempt_id','image','registration_ref'):
                     if previous.get(name) is not None:
                         if data.get(name) is not None and data[name]!=previous[name]:
@@ -213,12 +217,21 @@ class PrimaryTransport:
                         data[name]=previous[name]
                 if previous.get('cancel_requested'): data['cancel_requested']=True
                 if previous.get('cancel_reconciled'): data['cancel_reconciled']=True
+                if previous.get('cache_retirement_requested'):
+                    data['cache_retirement_requested'] = True
                 order={'preflight':0,'bridge_submission_unknown':1,'queued':2,'running':3,'execution_unknown':4,'awaiting_user':4,'canceled':5,'failed':5,'expired':5,'artifacts_ready':6,'acked':7}
                 if previous['route']=='bridge' and order.get(previous['state'],0)>order.get(state,0):
                     state=previous['state']
                     data['state']=state
-            db.execute('UPDATE units SET state=?,data=?,image=COALESCE(?,image) WHERE key=?',
-                       (state, _json(data), image, key))
+            if data.get('cache_retirement_requested') and (
+                    (state == 'acked' and data.get('registration_ref')) or state == 'api_completed'):
+                data['cache_retired'] = True
+                data.pop('payload', None)
+                db.execute('UPDATE units SET state=?,data=?,image=NULL WHERE key=?',
+                           (state, _json(data), key))
+            else:
+                db.execute('UPDATE units SET state=?,data=?,image=COALESCE(?,image) WHERE key=?',
+                           (state, _json(data), image, key))
 
     def _start(self, request):
         data = dict(product=request.product, owner_hash=_hash(request.owner_id.encode()), unit_id=request.unit_id, route='bridge', state='preflight', reason='bridge_primary', origin_key='rb_'+request.key,
@@ -247,6 +260,16 @@ class PrimaryTransport:
 
     def has_binding(self, request):
         return self._read(request) is not None
+
+    def cached_result(self, request):
+        """Inspect an existing exact binding without HTTP or new admission."""
+        if not self.path.exists(): return None
+        with sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
+        if row and row['digest'] != request.digest:
+            raise PrimaryError('request_semantics_changed')
+        return self._result(row) if row is not None else None
 
     has_unit = has_binding
 
@@ -443,16 +466,79 @@ class PrimaryTransport:
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
-            if not row or row['image'] is None: raise PrimaryError('artifact_not_registered')
+            if not row: raise PrimaryError('artifact_not_registered')
             data=json.loads(row['data'])
             if data.get('registration_ref') not in {None, registration_ref}:
                 raise PrimaryError('native_registration_mismatch')
             if data.get('cancel_requested'): raise PrimaryError('bridge_cancel_requested')
             if row['state']=='acked': return
+            if row['image'] is None: raise PrimaryError('artifact_not_registered')
             self._check_scope(data)
             data['registration_ref']=registration_ref
             db.execute('UPDATE units SET data=? WHERE key=?', (_json(data), request.key))
         await self._ack_saved(request.key, data)
+
+    def retire_units(self, requests):
+        """Drop duplicate bytes only after the owning product confirms publication.
+
+        All units must be ACKed/API-completed. Keep semantic digests and receipt
+        identities permanently; absent bytes never authorize a new execution.
+        This is an explicit product lifecycle hook, not an age-based sweep.
+        """
+        requests = tuple(requests)
+        if not requests or not self.path.exists(): return False
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            rows = []
+            for request in requests:
+                row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
+                if row is None: return False
+                if row['digest'] != request.digest:
+                    raise PrimaryError('request_semantics_changed')
+                data = json.loads(row['data'])
+                if row['state'] not in {'acked', 'api_completed'}: return False
+                if row['state'] == 'acked' and not data.get('registration_ref'): return False
+                rows.append((request.key, data))
+            for key, data in rows:
+                data['cache_retired'] = True
+                # The digest remains authoritative; no replay needs raw prompt
+                # or reference bindings after the remote receipt is ACKed.
+                data.pop('payload', None)
+                db.execute('UPDATE units SET data=?, image=NULL WHERE key=?', (_json(data), key))
+        return True
+
+    def request_retirement(self, requests):
+        """Record product-confirmed native completion without losing pending ACK bytes.
+
+        The caller must verify all native outputs before invoking this hook.
+        Existing ACK reconciliation can retire the duplicate BLOB atomically,
+        but an intent never counts as ACK confirmation or authorizes new work.
+        """
+        requests = tuple(requests)
+        if not requests or not self.path.exists(): return False
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            rows = []
+            for request in requests:
+                row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
+                if row is None: return False
+                if row['digest'] != request.digest:
+                    raise PrimaryError('request_semantics_changed')
+                data = json.loads(row['data'])
+                if row['state'] not in {'artifacts_ready', 'acked', 'api_completed'}: return False
+                if data.get('cancel_requested'): return False
+                if row['state'] == 'artifacts_ready' and row['image'] is None: return False
+                if row['state'] == 'acked' and not data.get('registration_ref'): return False
+                rows.append((request.key, row['state'], data))
+            for key, state, data in rows:
+                data['cache_retirement_requested'] = True
+                if state in {'acked', 'api_completed'}:
+                    data['cache_retired'] = True
+                    data.pop('payload', None)
+                    db.execute('UPDATE units SET data=?,image=NULL WHERE key=?', (_json(data), key))
+                else:
+                    db.execute('UPDATE units SET data=? WHERE key=?', (_json(data), key))
+        return True
 
     async def reconcile_pending(self, limit=32):
         """Retry durable ACK/cancel intents only; never create, render or import."""

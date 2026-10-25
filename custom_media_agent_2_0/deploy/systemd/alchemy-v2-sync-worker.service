@@ -8,6 +8,8 @@ Type=simple
 User=alchemy
 Group=alchemy
 WorkingDirectory=__ALCHEMY_RELEASE_LINK__/custom_media_agent_2_0
+Environment=ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=/var/lib/alchemy/render-bridge-primary/control.json
+Environment=ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT=/var/lib/alchemy/render-bridge-primary/ledgers
 EnvironmentFile=/etc/alchemy/alchemy-v2.env
 ExecStartPre=/usr/bin/python3 /usr/local/lib/alchemy/v2_runtime_guard.py --release __ALCHEMY_RELEASE_LINK__ --verify
 ExecStart=__ALCHEMY_RELEASE_LINK__/custom_media_agent_2_0/.venv/bin/python -m app.workers.resource_sync_worker --mode auto

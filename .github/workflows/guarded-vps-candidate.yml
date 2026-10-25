@@ -268,6 +268,7 @@ jobs:
               python3 -m venv "$v2_dir/.venv" || stop candidate_v2_venv_create_failed
             fi
             "$v2_python" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "$v2_dir/requirements.txt" >/dev/null || stop candidate_v2_requirements_install_failed
+            "$v2_python" -m pip install --disable-pip-version-check --no-input --no-deps --force-reinstall "$candidate_release/render_bridge_primary" >/dev/null || stop candidate_bridge_install_failed
             "$v2_python" -m pip check >/dev/null || stop candidate_v2_pip_check_failed
             (cd "$v2_dir" && "$v2_python" -c 'import app.main; import httpx, httpcore') || stop candidate_v2_import_failed
             python3 "$guard" --release "$candidate_release" --write-manifest || stop candidate_v2_manifest_failed
@@ -316,6 +317,9 @@ jobs:
             cp -p -- "$live_env" "$candidate_release/src_skeleton/.env"
           fi
           configure_candidate_env
+          python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-bridge-storage-configuration \
+            --v1-environment "$candidate_release/src_skeleton/.env" --v2-environment /etc/alchemy/alchemy-v2.env \
+            --release-root "$active_release" --release-root "$candidate_release" || stop candidate_bridge_paths_invalid
 
           for runtime_entry in .v2_data .v2_storage; do
             source_path="$active_release/custom_media_agent_2_0/$runtime_entry"

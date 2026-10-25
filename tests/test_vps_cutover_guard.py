@@ -937,3 +937,125 @@ def test_v2_write_access_probe_cli_returns_verified_json(tmp_path, capsys):
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out)["status"] == "verified"
+
+
+def test_bridge_paths_default_and_custom_are_consistent(tmp_path):
+    v1, v2 = tmp_path / 'v1.env', tmp_path / 'v2.env'
+    for p in (v1, v2): p.write_text('VEYRA_SECRET=untouched\n')
+    assert _MODULE.verify_bridge_storage_configuration(v1, v2)['state_root'].endswith('/ledgers')
+    config = tmp_path / 'persistent' / 'control.json'
+    state = tmp_path / 'persistent' / 'state'
+    text = f'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG={config}\nALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT={state}\n'
+    for p in (v1, v2): p.write_text(text)
+    result = _MODULE.verify_bridge_storage_configuration(v1, v2)
+    assert result['control_path'] == str(config)
+    v2.write_text('')
+    with pytest.raises(_MODULE.CutoverBlocked, match='path_conflict'):
+        _MODULE.verify_bridge_storage_configuration(v1, v2)
+    assert v1.read_text() == text
+
+
+def test_bridge_paths_reject_checkout_or_relative(tmp_path):
+    v1, v2 = tmp_path / 'v1.env', tmp_path / 'v2.env'
+    for value in ('relative', str(tmp_path / 'release' / 'control.json')):
+        for p in (v1, v2): p.write_text(f'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG={value}\n')
+        with pytest.raises(_MODULE.CutoverBlocked):
+            _MODULE.verify_bridge_storage_configuration(v1, v2, (tmp_path / 'release',))
+
+
+def _bridge_inventory_fixture(tmp_path, state, native_status='completed', cancel=False, reconciled=False):
+    root = tmp_path / 'ledgers'
+    (root / 'v2').mkdir(parents=True)
+    db = sqlite3.connect(root / 'v2' / 'primary.sqlite3')
+    db.execute('CREATE TABLE units(state TEXT, data TEXT)')
+    db.execute('INSERT INTO units VALUES (?,?)', (state, json.dumps(dict(product='v2', unit_id='job1:0', route='api' if state.startswith('api') else 'bridge', cancel_requested=cancel, cancel_reconciled=reconciled))))
+    db.commit(); db.close()
+    frozen = tmp_path / 'requests'; frozen.mkdir()
+    (frozen / 'job.json').write_text(json.dumps({'job_id': 'job1', 'request': {}}))
+    (frozen / 'task.json').write_text(json.dumps({'job_id': 'job1', 'request': {}}))
+    (frozen / 'result.json').write_text(json.dumps({'provider':'render_bridge', 'outputs':[]}))
+    repository = tmp_path / 'repository.sqlite3'
+    db = sqlite3.connect(repository)
+    db.execute('CREATE TABLE v2_records(namespace TEXT,payload TEXT)')
+    db.execute('INSERT INTO v2_records VALUES (?,?)', ('image_jobs', json.dumps({'job_id':'job1','status':native_status})))
+    db.commit(); db.close()
+    return root, frozen, repository
+
+
+@pytest.mark.parametrize('state', ['acked','api_completed','canceled','failed','expired'])
+def test_bridge_completed_inventory_is_idle(tmp_path, state):
+    args = _bridge_inventory_fixture(tmp_path,state)
+    assert sum(_MODULE.inspect_bridge_work(*args).values()) == 0
+
+
+@pytest.mark.parametrize('state', ['preflight','api_ready','api_execution_unknown','bridge_submission_unknown','running','artifacts_ready'])
+def test_bridge_pending_units_prevent_cutover(tmp_path, state):
+    args = _bridge_inventory_fixture(tmp_path,state)
+    assert _MODULE.inspect_bridge_work(*args)['bridge_unresolved_units'] == 1
+
+
+def test_direct_job_and_frozen_without_neutral_unit_blocks(tmp_path):
+    root,frozen,repository = _bridge_inventory_fixture(tmp_path,'acked',native_status='running')
+    counts = _MODULE.inspect_bridge_work(root,frozen,repository)
+    assert counts['v2_direct_active_jobs'] == 1
+    assert counts['bridge_unresolved_frozen_jobs'] == 1  # job + task files deduplicated
+
+
+def test_cancel_pending_vs_reconciled_inventory(tmp_path):
+    root,frozen,repository = _bridge_inventory_fixture(tmp_path,'canceled',cancel=True)
+    assert _MODULE.inspect_bridge_work(root,frozen,repository)['bridge_unresolved_units'] == 1
+    with sqlite3.connect(root/'v2'/'primary.sqlite3') as db:
+        db.execute('UPDATE units SET data=?',(json.dumps({'cancel_requested':True,'cancel_reconciled':True}),))
+    assert _MODULE.inspect_bridge_work(root,frozen,repository)['bridge_unresolved_units'] == 0
+
+
+def _bridge_control_envs(tmp_path, control):
+    dedicated = tmp_path/'bridge'; dedicated.mkdir()
+    path = dedicated/'control.json'; path.write_text(control)
+    envs = (tmp_path/'v1.env', tmp_path/'v2.env')
+    for env in envs:
+        env.write_text(f'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG={path}\nALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT={dedicated}/ledgers\n')
+    return envs, dedicated
+
+
+def test_bridge_valid_disabled_control_and_malformed_control(tmp_path):
+    envs, directory = _bridge_control_envs(tmp_path,json.dumps({'schema_version':'1','mode':'disabled','profiles':['codex-image']}))
+    assert _MODULE.verify_bridge_storage_configuration(*envs)['status'] == 'verified'
+    (directory/'control.json').write_text('{bad')
+    with pytest.raises(_MODULE.CutoverBlocked,match='configuration_invalid'):
+        _MODULE.verify_bridge_storage_configuration(*envs)
+
+
+def test_bridge_control_directory_cannot_expose_unrelated_secrets(tmp_path):
+    envs, directory = _bridge_control_envs(tmp_path,json.dumps({'schema_version':'1','mode':'disabled','profiles':['codex-image']}))
+    (directory/'veyra.env').write_text('PRIVATE=do-not-expose\n')
+    with pytest.raises(_MODULE.CutoverBlocked,match='not_dedicated'):
+        _MODULE.verify_bridge_storage_configuration(*envs)
+
+
+def test_bridge_control_https_root_and_environment_binding(tmp_path):
+    control = {'schema_version':'1','mode':'enabled','profiles':['codex-image'],'base_url':'https://bridge.example','workspace':'production'}
+    envs,directory = _bridge_control_envs(tmp_path,json.dumps(control))
+    assert _MODULE.verify_bridge_storage_configuration(*envs)['status'] == 'verified'
+    for url in ['http://bridge.example','https://bridge.example/prefix','https://user:password@bridge.example']:
+        (directory/'control.json').write_text(json.dumps({**control,'base_url':url}))
+        with pytest.raises(_MODULE.CutoverBlocked,match='configuration_invalid'):
+            _MODULE.verify_bridge_storage_configuration(*envs)
+    (directory/'control.json').write_text(json.dumps(control))
+    for env in envs:
+        env.write_text(env.read_text()+'ALCHEMY_RENDER_BRIDGE_URL=https://other.example\n')
+    with pytest.raises(_MODULE.CutoverBlocked,match='endpoint_conflict'):
+        _MODULE.verify_bridge_storage_configuration(*envs)
+
+
+def test_bridge_effective_runtime_paths_and_mounts(tmp_path):
+    control = tmp_path/'bridge'/'control.json'; state = tmp_path/'bridge'/'ledgers'
+    env = {'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG':str(control),'ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT':str(state)}
+    container = [{'Config':{'Env':[f'{k}={v}' for k,v in env.items()]},'Mounts':[
+        {'Type':'bind','Source':str(p),'Destination':str(p),'RW':True} for p in (control.parent,state)]}]
+    assert _MODULE.verify_bridge_runtime(container,[env,env,env],control,state)['status'] == 'verified'
+    with pytest.raises(_MODULE.CutoverBlocked,match='path_mismatch'):
+        _MODULE.verify_bridge_runtime(container,[{}],control,state)
+    container[0]['Mounts'][0]['RW'] = False
+    with pytest.raises(_MODULE.CutoverBlocked,match='mount_mismatch'):
+        _MODULE.verify_bridge_runtime(container,[env],control,state)
