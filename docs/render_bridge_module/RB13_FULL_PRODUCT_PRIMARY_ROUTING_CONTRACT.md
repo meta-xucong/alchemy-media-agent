@@ -50,13 +50,43 @@ task.
 
 ## Capability and queue admission
 
-Bridge must be asked with the original frozen request.  Required masks,
-transparent background, explicit output format/compression, required input
-fidelity, provider-required identity/reference treatment, and other hard
-controls may use the API-key route only when negotiated Bridge capabilities do
-not support them.  No code may silently strip or turn a hard control into a
-prompt hint.  Advisory controls may use Bridge only when the product contract
-defines their equivalence.
+Alchemy freezes the original product/provider request before route selection.
+For `codex-image`, the Bridge adapter sends a separate, deterministic native
+request copy; it never mutates the frozen request used by a proven
+pre-admission API fallback. Source-provider controls absent from the Codex
+ImageGen tool normalize to its native defaults instead of rejecting the Bridge
+route. The normalized mapping is recorded in safe result provenance.
+
+Codex ImageGen's native request contract is `prompt`, up to five explicit
+`referenced_image_paths` (or, alternatively, a recent-image window), and
+`transparent_background` (default false). The Alchemy adapter uses explicit
+paths, never the ambiguous recent-image window. Alchemy's `count` remains one
+frozen Bridge task per output. Current normalization is:
+
+| Alchemy control | Codex ImageGen mapping |
+| --- | --- |
+| `quality` | `auto` / native default |
+| `size`, `width`, `height`, `aspect_ratio` | `auto` / native default |
+| `seed` | omitted |
+| `output_format`, `output_compression` | native default; preserve and publish returned original bytes/MIME |
+| `input_fidelity` | omitted; GPT Image 2 model default is high |
+| `background=transparent` / `transparent_background=true` | 0.163.0: instruct native `transparent_background=true`; 0.157.1: normalize to the CLI's `background=auto` default |
+| `input_images` | validated local files mapped to `referenced_image_paths` (maximum 5) |
+| `count` | one output per task unit |
+| `provider_hint` | configured Bridge execution profile |
+
+Unsupported product operations that are not mere optional rendering controls
+(for example required downstream deterministic post-processing) remain subject
+to their owning product contract. No reference is silently truncated: more
+than five references are rejected before Bridge submission. Once Bridge has
+accepted or may have accepted a task, normalization cannot authorize an API
+retry or new task identity.
+
+Codex's app-server does not expose a Bridge-side structured imagegen call
+parameter object. The executor passes an explicit tool-use instruction and
+`localImage` inputs; Codex itself emits the imagegen tool invocation. Therefore
+these are version-aware normalized instructions, not a claim that Bridge
+directly injects or independently verifies the generated function-call JSON.
 
 The Bridge database is the only queue admission authority.  Its transaction
 must resolve an existing origin before counting active work, atomically compare

@@ -88,6 +88,8 @@ def test_bridge_entry_without_api_credentials_preserves_original_and_replay(isol
     output = result.outputs[0]
     assert output_storage.read_output_content(output.output_id)[0] == image_bytes()
     assert output.metadata["original_sha256"] == hashlib.sha256(image_bytes()).hexdigest()
+    assert output.metadata["render_bridge_primary"]["parameter_adaptation"]["adapter"] == "codex_cli_imagegen_v1"
+    assert output.metadata["render_bridge_primary"]["parameter_adaptation"]["defaults_applied"]["quality"] == "native_default"
     assert (output.metadata["width"], output.metadata["height"]) == (23, 19)
     again = asyncio.run(generation.create_image_job(request(), job_id=running.job_id))
     assert again.outputs[0].output_id == output.output_id
@@ -158,6 +160,21 @@ def test_reference_bytes_are_frozen_and_strong_fusion_is_hard(isolated, tmp_path
     assert primary.hard_requirements["reference_fusion"] is True
 
 
+def test_codex_reference_limit_accepts_five_and_rejects_six_without_truncation():
+    from render_bridge_primary import PrimaryRequest, PrimaryTransport, Reference
+    caps = {"profiles": [{"execution_profile_id": "codex-image", "execution_profile_revision": "1",
+        "parameter_contract": {"dimension_semantics": "original_dimensions_recorded"},
+        "image_options_contract": {"references": {"max_count": 5}}}],
+        "limits": {"max_dimension": 40000, "max_image_pixels": 40000000, "max_input_bytes": 1048576}}
+    refs = tuple(Reference(content=image_bytes(), mime_type="image/png") for _ in range(5))
+    request_with_five = PrimaryRequest(product="v2", owner_id="owner", unit_id="five",
+        prompt="A blue vase", parameters={}, references=refs)
+    request_with_six = PrimaryRequest(product="v2", owner_id="owner", unit_id="six",
+        prompt="A blue vase", parameters={}, references=refs + (Reference(content=image_bytes(), mime_type="image/png"),))
+    assert PrimaryTransport._supported(request_with_five, caps, "codex-image")
+    assert not PrimaryTransport._supported(request_with_six, caps, "codex-image")
+
+
 def test_queue_wait_does_not_consume_attempts():
     from app.services.queue_worker import _job_retry_directive
     directive = _job_retry_directive({"provider": "render_bridge", "error_code": "bridge_wait"})
@@ -226,7 +243,7 @@ def test_stale_claim_after_bridge_response_cannot_debit_or_store(isolated, monke
     assert isolated.acks == []
 
 
-def test_actual_core_negotiates_auto_and_rejects_high(isolated, tmp_path, monkeypatch):
+def test_codex_adapter_defaults_unsupported_provider_controls_and_keeps_bridge_primary(isolated, tmp_path, monkeypatch):
     from render_bridge_primary import PrimarySettings, PrimaryTransport
     class Client:
         calls = 0
@@ -236,9 +253,10 @@ def test_actual_core_negotiates_auto_and_rejects_high(isolated, tmp_path, monkey
                 "profiles": [{"execution_profile_id": "codex-image", "execution_profile_revision": "1",
                     "parameter_contract": {"dimension_semantics": "original_dimensions_recorded"},
                     "image_options_contract": {"quality": {"values": ["auto"]}, "output_format": {"values": ["png", "jpeg"]},
-                        "references": {"max_count": 8}}}]}
+                        "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}]}
         async def create_task(self, payload):
             self.calls += 1
+            self.payload = payload
             return {"remote_task_id": "task", "origin_key": payload["origin_key"], "request": payload, "state": "queued"}
         async def close(self): pass
     client = Client()
@@ -247,7 +265,9 @@ def test_actual_core_negotiates_auto_and_rejects_high(isolated, tmp_path, monkey
     auto = asyncio.run(generation.create_image_job(request(), job_id="auto"))
     assert auto.error["error_code"] == "bridge_wait" and client.calls == 1
     req = request()
-    req.prompt_plan.provider_parameters["quality"] = "high"
+    req.prompt_plan.provider_parameters.update({"quality": "high", "output_format": "webp",
+        "size": "1024x1536", "aspect_ratio": "2:3", "seed": 41, "input_fidelity": "high",
+        "background": "transparent", "count": 1})
     seen = []
     class Provider:
         async def generate(self, req):
@@ -256,9 +276,48 @@ def test_actual_core_negotiates_auto_and_rejects_high(isolated, tmp_path, monkey
     async def select(_): return Provider()
     monkeypatch.setattr(generation, "get_v2_image_provider", select)
     high = asyncio.run(generation.create_image_job(req, job_id="high"))
-    assert high.status == "completed" and client.calls == 1
-    assert seen[0]["quality"] == "high"
-    assert high.outputs[0].metadata["render_bridge_primary"]["reason"] == "bridge_capability_unsupported"
+    assert high.error["error_code"] == "bridge_wait" and client.calls == 2
+    assert seen == []
+    assert client.payload["parameters"] == {"image_options": {"schema_version": "1", "transparent_background": True}}
+    assert client.payload["references"] == []
+
+
+def test_explicit_queue_rejection_uses_untouched_original_provider_parameters(isolated, tmp_path, monkeypatch):
+    from render_bridge_primary import PrimarySettings, PrimaryTransport
+    from render_bridge_primary.http import BridgeError
+    class Full:
+        calls = 0
+        async def capabilities(self):
+            return {"admission": {"accepting_new_tasks": True}, "routing_availability_v1": {"profiles": [
+                {"profile_id": "codex-image", "health": "available", "valid_until": "2099-01-01T00:00:00+00:00"}]},
+                "profiles": [{"execution_profile_id": "codex-image", "execution_profile_revision": "1",
+                    "parameter_contract": {"dimension_semantics": "original_dimensions_recorded"},
+                    "image_options_contract": {"quality": {"values": ["auto"]}, "output_format": {"values": ["png", "jpeg"]},
+                        "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}]}
+        async def create_task(self, payload):
+            self.calls += 1
+            self.payload = payload
+            raise BridgeError("queue_capacity", status=429)
+        async def close(self): pass
+    client = Full()
+    core = PrimaryTransport(PrimarySettings(enabled=True, base_url="http://localhost:9999", token="fixture", state_dir=tmp_path / "core"), client=client)
+    monkeypatch.setattr(bridge, "transport", lambda *args: core)
+    req = request()
+    req.prompt_plan.provider_parameters.update({"quality": "high", "output_format": "webp",
+        "size": "1024x1536", "aspect_ratio": "2:3", "seed": 41, "background": "transparent"})
+    seen = []
+    class Provider:
+        async def generate(self, value):
+            seen.append(value.prompt_plan.provider_parameters)
+            return V2ImageProviderResult(provider="native_api", model="test", outputs=[V2ImageProviderOutput(
+                b64_json=base64.b64encode(image_bytes()).decode())])
+    async def select(_): return Provider()
+    monkeypatch.setattr(generation, "get_v2_image_provider", select)
+    result = asyncio.run(generation.create_image_job(req, job_id="api-original"))
+    assert result.status == "completed"
+    assert seen[0]["quality"] == "high" and seen[0]["output_format"] == "webp"
+    assert seen[0]["size"] == "1024x1536" and seen[0]["seed"] == 41
+    assert result.outputs[0].metadata["render_bridge_primary"]["reason"] == "bridge_queue_capacity"
 
 
 def test_direct_controls_require_matching_owner_and_reject_queue_owned(isolated, monkeypatch):

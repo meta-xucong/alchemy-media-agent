@@ -146,3 +146,25 @@ The companion Windows guide remains useful for Bridge/Agent/Hatchet setup, but i
 older Alchemy fake/native trial settings do not enable ordinary product-primary
 routing. RB15 and the shared absolute control/state configuration above are the
 authority for this new route. No live-account acceptance is inferred from CI.
+
+## 2026-10-25 Codex ImageGen parameter-adapter amendment
+
+The capability-limit section above records the pre-adapter behavior and is
+superseded for optional Alchemy provider controls by the `codex_cli_imagegen_v1`
+adapter documented in RB13. The original V2 provider request stays frozen for
+the proven pre-admission API route. The Bridge copy defaults quality, dimensions
+/ aspect ratio, output format/compression, seed, and fidelity to Codex
+ImageGen/GPT Image 2 native defaults; `count` remains one output per unit.
+Transparent background is version-gated: 0.163.0 receives an explicit native
+tool-use instruction; 0.157.1 normalizes it to that CLI's `background=auto`
+default because the older tool schema has no transparency argument. The
+app-server has Codex emit the structured imagegen call, so Bridge supplies a
+version-aware instruction rather than directly injecting tool-call JSON.
+Codex ImageGen accepts at most five explicit references; excess references are
+not truncated or submitted. Returned artifact bytes and MIME remain original
+and authoritative; requested source-provider output format is not an artifact
+postcondition on the Codex profile.
+
+This amendment does not change Bridge ownership/recovery, queue admission,
+product review, storage, or billing authority. It does not certify live Codex
+account health or real image generation; those still require local acceptance.

@@ -106,9 +106,11 @@ def primary_request(record: dict):
         hard_requirements=requirements)
 
 
-def provider_result(result) -> V2ImageProviderResult:
+def provider_result(result, *, parameter_adaptation: dict | None = None) -> V2ImageProviderResult:
     image = result.image
     provenance = {key: getattr(result, key, None) for key in ("route", "state", "reason", "origin_key", "task_id", "receipt_id", "execution_key")}
+    if parameter_adaptation:
+        provenance["parameter_adaptation"] = parameter_adaptation
     return V2ImageProviderResult(provider="render_bridge", model="render-bridge-primary",
         outputs=[V2ImageProviderOutput(b64_json=base64.b64encode(image.content).decode(),
             mime_type=image.mime_type, format=image.mime_type.split("/")[-1], width=image.width, height=image.height,
@@ -130,34 +132,40 @@ def ensure_not_cancelled(job_id: str):
         raise BridgeWait("canceled", terminal=True)
 
 
+def _codex_cli_adaptation(params: dict, reference_count: int) -> tuple[dict, dict]:
+    # Codex's imagegen tool exposes only prompt, up to five local references,
+    # and transparent_background. All other Alchemy provider controls are
+    # deliberately normalized to the native tool/model defaults on this copy;
+    # the frozen request remains untouched for a proven pre-admission API route.
+    background = str(params.get("background") or "").strip().lower()
+    transparent = params.get("transparent_background") is True or background == "transparent"
+    wire = {}
+    if transparent:
+        wire["image_options"] = {"schema_version": "1", "transparent_background": True}
+    adaptation = {
+        "adapter": "codex_cli_imagegen_v1",
+        "defaults_applied": {
+            key: ("per_unit" if key == "count" else "profile" if key == "provider_hint" else "native_default")
+            for key, value in params.items()
+            if value is not None and key not in {"background", "transparent_background"}
+        },
+        "transparent_background_requested": transparent,
+        "transparent_background_mapping": "codex_cli_version_gated_or_default",
+        "reference_count": reference_count,
+    }
+    return wire, adaptation
+
+
 def _unit_request(record: dict, index: int):
     request = primary_request(record)
-    params = dict(request.parameters)
     requirements = dict(request.hard_requirements)
-    width, height = params.get("width", 1024), params.get("height", 1024)
-    size = str(params.get("size") or "")
-    if "x" in size:
-        try:
-            width, height = (int(value) for value in size.split("x", 1))
-        except ValueError:
-            requirements["size"] = size
-    elif size and size not in {"auto", "default"}:
-        requirements["size"] = size
-    if params.get("aspect_ratio"):
-        requirements["aspect_ratio"] = params["aspect_ratio"]
-    if any(params.get(key) not in {None, "", "auto", "default"} for key in ("size", "width", "height")):
-        requirements["exact_dimensions"] = True
-    # Never discard meaningful provider options merely because the wire lacks them.
-    for key, value in params.items():
-        if key not in {"count", "width", "height", "size", "seed", "provider_hint", "aspect_ratio"} and value is not None:
-            requirements[key] = value
-    wire = {"width": int(width), "height": int(height)}
-    if "seed" in params:
-        wire["seed"] = params["seed"]
-    if "output_format" in params or "quality" in params:
-        wire["image_options"] = {"schema_version": "1", "quality": params.get("quality", "auto"),
-                                 "output_format": params.get("output_format", "png")}
-    return replace(request, unit_id=f"{record['job_id']}:{index}", parameters=wire, hard_requirements=requirements)
+    requirements.pop("input_fidelity", None)  # gpt-image-2 uses high input fidelity by default.
+    # Reference fusion is represented by the actual localImage inputs, not by a
+    # separate Codex CLI flag. More than five references remain untruncated and
+    # are rejected by the advertised profile limit before Bridge submission.
+    wire, _ = _codex_cli_adaptation(dict(request.parameters), len(request.references))
+    return replace(request, unit_id=f"{record['job_id']}:{index}", parameters=wire,
+                   hard_requirements=requirements)
 
 
 def _count(record: dict) -> int:
@@ -206,7 +214,8 @@ async def _generate(record: dict, select_provider, client):
                 if decision.image is None:
                     terminal = decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
                     raise BridgeWait(decision.state, terminal=terminal)
-                result = provider_result(decision)
+                _, adaptation = _codex_cli_adaptation(dict(request.prompt_plan.provider_parameters), len(unit.references))
+                result = provider_result(decision, parameter_adaptation=adaptation)
             else:
                 required = [image for image in request.input_images if image.provider_input_required]
                 if len(required) != len(record["references"]):

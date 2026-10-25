@@ -280,9 +280,10 @@ class PrimaryTransport:
         if set(request.parameters)-{'width','height','seed','image_options'}: return False
         options=request.parameters.get('image_options')
         if options is not None:
-            if not isinstance(options,dict) or set(options)!={'schema_version','quality','output_format'} or options['schema_version']!='1': return False
-            if options['quality'] not in ic.get('quality',{}).get('values',[]): return False
-            if options['output_format'] not in ic.get('output_format',{}).get('values',[]): return False
+            if not isinstance(options,dict) or options.get('schema_version')!='1' or set(options)-{'schema_version','quality','output_format','transparent_background'}: return False
+            if 'quality' in options and options['quality'] not in ic.get('quality',{}).get('values',[]): return False
+            if 'output_format' in options and options['output_format'] not in ic.get('output_format',{}).get('values',[]): return False
+            if 'transparent_background' in options and options['transparent_background'] not in ic.get('transparent_background',{}).get('values',[]): return False
         if len(request.references)>ic.get('references',{}).get('max_count',0): return False
         if any(r.mime_type not in {'image/png','image/jpeg'} or len(r.content)<1 or len(r.content)>caps.get('limits',{}).get('max_input_bytes',1048576) for r in request.references): return False
         for key,value in request.hard_requirements.items():
@@ -290,6 +291,7 @@ class PrimaryTransport:
             if key=='output_format' and value in ic.get('output_format',{}).get('values',[]) and options and options.get('output_format')==value: continue
             if key=='quality' and value=='auto': continue
             if key=='exact_dimensions' and pc.get('dimension_semantics')=='exact_output_match': continue
+            if key=='reference_fusion' and request.references and len(request.references)<=ic.get('references',{}).get('max_count',0): continue
             if key=='reference_semantics' and value==pc.get('reference_semantics'): continue
             return False
         return True
