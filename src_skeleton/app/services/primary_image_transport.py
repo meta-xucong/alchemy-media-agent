@@ -220,17 +220,47 @@ async def _run_owned(job, request, *, edit, transport, existing):
 
 
 async def finish_primary(job, request):
+    from render_bridge_primary.http import BridgeError
     state = job.raw_response_summary.get(KEY)
     if not state:
         return
     async with transport_for(product_for(job)) as transport:
+        units, results = [], []
+        durable = repository.get_job(job.id)
+        may_retire = durable is not None and durable.status == JobStatus.ready
+        native_outputs = {output.id: output for output in durable.outputs} if durable else {}
         for index in range(request.prompt_plan.count):
             unit = primary_request(job, request, index, edit=bool(state.get("edit")))
+            units.append(unit)
             result = await transport.resolve(unit)
-            if result.route == "bridge":
-                await transport.acknowledge(unit, registration_ref=f"{job.id}:{index}")
-            else:
+            results.append(result)
+            if result.route == "api":
                 transport.complete_api(unit)
+            output_id = "out_" + hashlib.sha256(f"{job.id}:primary:{index}".encode()).hexdigest()[:32]
+            native = media_store.find_output_file(output_id) if output_id in native_outputs else None
+            if native is None or native[2] != job.id:
+                may_retire = False
+            elif result.route == "bridge":
+                expected = result.provenance.get("image", {}).get("sha256")
+                if not expected or hashlib.sha256(native[0].read_bytes()).hexdigest() != expected:
+                    may_retire = False
+        # Persist explicit owning-product proof before ACK, so the existing
+        # ACK-only maintenance can finish cleanup after a lost response/restart.
+        # All native batch outputs must be durable; partial jobs never authorize it.
+        if may_retire:
+            transport.request_retirement(units)
+        first_error = None
+        for index, (unit, result) in enumerate(zip(units, results)):
+            if result.route == "bridge":
+                try:
+                    await transport.acknowledge(unit, registration_ref=f"{job.id}:{index}")
+                except BridgeError as exc:
+                    # Record every unit's ACK intent even when an earlier reply
+                    # is lost. Never turn a ready batch into fresh generation.
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error
 
 async def resume_primary_job(job_id):
     from app.services.image_service import _run_image_request

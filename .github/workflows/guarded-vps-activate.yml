@@ -107,6 +107,9 @@ jobs:
           v2_history_path=""
           v2_history_dir=""
           v2_queue_db=""
+          bridge_control=""
+          bridge_control_dir=""
+          bridge_state=""
           nginx_config_backup=""
           runtime_contract_backup=""
           api_runtime_env="/etc/alchemy/alchemy-v2-api-runtime.env"
@@ -231,12 +234,16 @@ jobs:
 
           require_backup_capacity() {
             local inventory_file="$1" estimate_json backup_required data_required directory available
+            local bridge_sources=(--source "$bridge_control")
+            if [ -d "$v2_data/render_bridge_primary" ]; then
+              while IFS= read -r -d '' path; do bridge_sources+=(--source "$path"); done < <(find "$v2_data/render_bridge_primary" -type f -name '*.json' -print0)
+            fi
             [ -d "$maintenance_backup_root" ] || return 1
             estimate_json="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" estimate-space \
               --inventory-file "$inventory_file" --reserve-bytes "$minimum_free_bytes" \
               --source "$v1_media/history/outputs.jsonl" \
               --source "$v1_media/favorites/image_favorites.json" \
-              --source "$v2_history_path" --source "$v2_data/image_favorites.json")" || return 1
+              --source "$v2_history_path" --source "$v2_data/image_favorites.json" "${bridge_sources[@]}")" || return 1
             backup_required="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["required_backup_bytes"])' <<<"$estimate_json")" || return 1
             data_required="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["required_data_bytes"])' <<<"$estimate_json")" || return 1
             [[ "$backup_required" =~ ^[0-9]+$ && "$data_required" =~ ^[0-9]+$ ]] || return 1
@@ -250,11 +257,15 @@ jobs:
 
           require_post_backup_data_capacity() {
             local inventory_file="$1" estimate_json data_required directory available
+            local bridge_sources=(--source "$bridge_control")
+            if [ -d "$v2_data/render_bridge_primary" ]; then
+              while IFS= read -r -d '' path; do bridge_sources+=(--source "$path"); done < <(find "$v2_data/render_bridge_primary" -type f -name '*.json' -print0)
+            fi
             estimate_json="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" estimate-space \
               --inventory-file "$inventory_file" --reserve-bytes "$minimum_free_bytes" \
               --source "$v1_media/history/outputs.jsonl" \
               --source "$v1_media/favorites/image_favorites.json" \
-              --source "$v2_history_path" --source "$v2_data/image_favorites.json")" || return 1
+              --source "$v2_history_path" --source "$v2_data/image_favorites.json" "${bridge_sources[@]}")" || return 1
             data_required="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["required_data_bytes"])' <<<"$estimate_json")" || return 1
             [[ "$data_required" =~ ^[0-9]+$ ]] || return 1
             for directory in "$v1_media" "$v2_data" "$v2_history_dir"; do
@@ -265,7 +276,7 @@ jobs:
 
           inventory_databases() {
             local root
-            for root in "$v1_media" "$v2_data" "$v2_history_dir"; do
+            for root in "$v1_media" "$v2_data" "$v2_history_dir" "$bridge_state"; do
               [ -d "$root" ] || return 1
               find "$root" -type f \( -name '*.sqlite3' -o -name '*.sqlite' -o -name '*.db' \) -print0
             done | sort -zu
@@ -276,7 +287,7 @@ jobs:
             inventory_databases > "$inventory_file" || return 1
             require_backup_capacity "$inventory_file" || return 1
             local args=(backup --backup-dir "$maintenance_backup/stores"
-              --allowed-root "$v1_media" --allowed-root "$v2_data" --allowed-root "$v2_history_dir")
+              --allowed-root "$v1_media" --allowed-root "$v2_data" --allowed-root "$v2_history_dir" --allowed-root "$bridge_control_dir" --allowed-root "$bridge_state")
             while IFS= read -r -d '' path; do args+=(--database "$path"); done < "$inventory_file"
             # Include indexes that may not exist yet. If a failed preparation
             # created one, the pre-start restore manifest must remove it.
@@ -288,6 +299,10 @@ jobs:
                          "$v2_history_path" "$v2_data/image_favorites.json"; do
               args+=(--source "$path")
             done
+            args+=(--source "$bridge_control")
+            if [ -d "$v2_data/render_bridge_primary" ]; then
+              while IFS= read -r -d '' path; do args+=(--source "$path"); done < <(find "$v2_data/render_bridge_primary" -type f -name '*.json' -print0)
+            fi
             python3 "$candidate_release/scripts/vps_cutover_guard.py" "${args[@]}"
           }
 
@@ -392,13 +407,20 @@ jobs:
           compose_for() {
             local release="$1"
             shift
+            local bridge_compose=()
+            if [ -f "$release/ops/vps-release/bridge-compose.yml" ]; then
+              bridge_compose=(-f "$release/ops/vps-release/bridge-compose.yml")
+            fi
             (
               cd "$release"
+              ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG="$bridge_control" \
+              ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT="$bridge_state" \
+              ALCHEMY_RENDER_BRIDGE_CONTROL_DIR="$bridge_control_dir" \
               APP_PORT=8017 \
               V2_API_PROXY_BASE_URL=http://127.0.0.1:8020 \
               V1_MEDIA_STORAGE_DIR="$v1_media" \
               V2_STORAGE_DIR="$v2_storage" \
-              "${compose_cmd[@]}" -f "$release/docker-compose.yml" "$@"
+              "${compose_cmd[@]}" -f "$release/docker-compose.yml" "${bridge_compose[@]}" "$@"
             )
           }
 
@@ -413,6 +435,7 @@ jobs:
               python3 -m venv "$v2_dir/.venv" || return 1
             fi
             "$v2_python" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "$v2_dir/requirements.txt" >/dev/null || return 1
+            "$v2_python" -m pip install --disable-pip-version-check --no-input --no-deps --force-reinstall "$release/render_bridge_primary" >/dev/null || return 1
             "$v2_python" -m pip check >/dev/null || return 1
             (cd "$v2_dir" && "$v2_python" -c 'import app.main; import httpx, httpcore') || return 1
             python3 "$guard" --release "$release" --write-manifest || return 1
@@ -615,7 +638,7 @@ jobs:
               [ -f "$maintenance_backup/stores/manifest.json" ] || { keep_closed backup_manifest_missing; exit 1; }
               python3 "$candidate_release/scripts/vps_cutover_guard.py" restore \
                 --manifest "$maintenance_backup/stores/manifest.json" \
-                --allowed-root "$v1_media" --allowed-root "$v2_data" --allowed-root "$v2_history_dir" \
+                --allowed-root "$v1_media" --allowed-root "$v2_data" --allowed-root "$v2_history_dir" --allowed-root "$bridge_control_dir" --allowed-root "$bridge_state" \
                 || { keep_closed store_restore_failed; exit 1; }
             fi
             [ -n "$runtime_contract_backup" ] && [ -d "$runtime_contract_backup" ] || { keep_closed runtime_backup_missing; exit 1; }
@@ -710,6 +733,26 @@ jobs:
           v2_queue_db="$(v2_env_value V2_TASK_QUEUE_DB_PATH)" || stop_pre v2_queue_path_ambiguous
           [ -n "$v2_queue_db" ] || v2_queue_db="$v2_data/task_queue.sqlite3"
           v2_history_dir="$(dirname "$v2_history_path")"
+          bridge_paths="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-bridge-storage-configuration \
+            --v1-environment "$candidate_release/src_skeleton/.env" --v2-environment /etc/alchemy/alchemy-v2.env \
+            --release-root "$old_release" --release-root "$candidate_release")" || stop_pre bridge_paths_invalid
+          bridge_control="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["control_path"])' <<<"$bridge_paths")"
+          bridge_control_dir="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["control_dir"])' <<<"$bridge_paths")"
+          bridge_state="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' <<<"$bridge_paths")"
+          # Provision only new deployment directories. Existing ownership/modes
+          # and credentials are never rewritten; incompatible access stops cutover.
+          for directory in "$bridge_control_dir" "$bridge_state"; do
+            if [ ! -e "$directory" ]; then install -d -o alchemy -g alchemy -m 750 "$directory"; fi
+            runuser -u alchemy -- test -w "$directory" || stop_pre bridge_storage_not_writable
+          done
+          # Legacy checkout-local journals must be explicitly reconciled, never
+          # silently abandoned when switching to persistent production paths.
+          for directory in "$old_release/.render_bridge_primary" "$old_release"/custom_media_agent_2_0/.venv/lib/python*/site-packages/.render_bridge_primary; do
+            if [ -d "$directory" ] && [ -n "$(find "$directory" -type f -print -quit)" ]; then
+              stop_pre legacy_bridge_state_requires_reconciliation
+            fi
+          done
+          docker exec "$v1_container" sh -c 'test ! -d /app/.render_bridge_primary || [ -z "$(find /app/.render_bridge_primary -type f -print -quit)" ]' || stop_pre legacy_container_bridge_state_requires_reconciliation
           verify_v2_runtime_roots || stop_pre v2_process_storage_roots_unverified
           [ -d "$v1_media" ] && [ -d "$v2_data" ] && [ -d "$v2_history_dir" ] || stop_pre storage_root_missing
           [ -f "$v1_media/repository.sqlite3" ] && [ -f "$v2_queue_db" ] || stop_pre authoritative_database_missing
@@ -723,6 +766,8 @@ jobs:
           before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
+            --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
+            --v2-repository "$v2_data/repository.sqlite3" \
             --v3-projects-root "$v1_media/v3_projects" \
             --v3-container-started-at "$v1_container_started_at" || stop_pre active_or_unknown_work_requires_drain
           systemctl is-active --quiet alchemy-v3-storage-maintenance.service && stop_pre storage_maintenance_service_active
@@ -780,6 +825,8 @@ jobs:
           verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || stop_pre candidate_v3_storage_roots_changed_while_fencing
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
+            --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
+            --v2-repository "$v2_data/repository.sqlite3" \
             --v3-projects-root "$v1_media/v3_projects" \
             --v3-container-started-at "$v1_container_started_at" || stop_pre durable_work_changed_while_fencing
           backup_stores || stop_pre consistent_store_backup_failed
@@ -841,6 +888,13 @@ jobs:
           systemctl is-active --quiet alchemy-v2-sync-worker.service || fail_post v2_sync_worker_not_active
           verify_v2_runtime_roots || fail_post candidate_v2_storage_roots_unverified
           verify_v2_unit_contract || fail_post candidate_v2_unit_contract_unverified
+          bridge_runtime_args=(verify-bridge-runtime --control-path "$bridge_control" --state-root "$bridge_state")
+          for unit in alchemy-v2-api.service alchemy-v2-worker.service alchemy-v2-sync-worker.service; do
+            pid="$(systemctl show "$unit" --property=MainPID --value)"
+            [[ "$pid" =~ ^[1-9][0-9]*$ ]] || fail_post bridge_runtime_pid_unavailable
+            bridge_runtime_args+=(--pid "$pid")
+          done
+          docker inspect "$v1_container" | python3 "$candidate_release/scripts/vps_cutover_guard.py" "${bridge_runtime_args[@]}" || fail_post bridge_runtime_paths_unverified
           api_pid="$(systemctl show alchemy-v2-api.service --property=MainPID --value)"
           [[ "$api_pid" =~ ^[1-9][0-9]*$ ]] || fail_post candidate_v2_api_pid_unavailable_after_admission
           python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-no-background-writers \

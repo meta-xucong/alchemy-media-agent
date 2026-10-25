@@ -405,7 +405,12 @@ def test_receipt_ack_loss_keeps_original_checkpoint_and_can_retry(rig):
         rig.client.acks.append(kwargs)
     rig.client.accept_registered_receipt = ack
     first = rig.provider.generate(rig.request)
+    transport = core.PrimaryTransport(rig.cfg)
+    with transport._db() as db:
+        assert db.execute('SELECT image FROM units').fetchone()[0] is not None
     second = rig.provider.generate(rig.request)
+    with transport._db() as db:
+        assert db.execute('SELECT image FROM units').fetchone()[0] is None
     assert first.candidates[0].metadata['output_id'] == second.candidates[0].metadata['output_id']
     assert len(attempts) == 2 and len(rig.client.acks) == 1
     assert len(rig.store.list_outputs()) == 1 and rig.client.calls == 1 and not rig.api_calls
@@ -635,3 +640,95 @@ def test_optional_non_numeric_size_uses_native_defaults(rig):
     assert rig.client.payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
     transport = core.PrimaryTransport(rig.cfg)
     assert adapter.request_for(app_request, transport).parameters == rig.client.payload['parameters']
+
+
+def test_complete_native_checkpoint_retires_duplicate_and_replays(rig):
+    import json
+    from pathlib import Path
+    first = rig.provider.generate(rig.request)
+    record = rig.store.get_output(first.candidates[0].metadata['output_id'])
+    transport = core.PrimaryTransport(rig.cfg)
+    with transport._db() as db:
+        row = db.execute('SELECT state,data,image FROM units').fetchone()
+    assert row['state'] == 'acked' and row['image'] is None
+    assert json.loads(row['data'])['cache_retired'] is True
+    assert Path(record.file_path).read_bytes() == rig.client.content
+    again = rig.provider.generate(rig.request)
+    assert again.candidates[0].candidate_id == first.candidates[0].candidate_id
+    assert rig.client.calls == 1 and not rig.api_calls
+
+
+@pytest.mark.parametrize('damage', ['missing', 'corrupt', 'incomplete'])
+def test_retired_checkpoint_invalid_native_original_never_regenerates(rig, damage):
+    from pathlib import Path
+    first = rig.provider.generate(rig.request)
+    record = rig.store.get_output(first.candidates[0].metadata['output_id'])
+    if damage == 'missing':
+        Path(record.file_path).unlink()
+    elif damage == 'corrupt':
+        Path(record.file_path).write_bytes(b'not the original')
+    else:
+        rig.store.update_metadata(record.output_id, {'render_bridge_primary_checkpoint_complete': False})
+    with pytest.raises(ProviderRuntimeError):
+        rig.provider.generate(rig.request)
+    assert rig.client.calls == 1 and not rig.api_calls
+
+
+def test_retirement_refuses_incomplete_native_checkpoint(rig):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    async def no_api(request):
+        raise AssertionError('no provider fallback')
+    result = asyncio.run(adapter.generate(app_request, no_api, rig.store))
+    provenance = result.outputs[0][adapter.PROVENANCE]
+    record = rig.store.save_base64_output(job_id='job_v3_prod', candidate_id='candidate_test', asset_id='asset_test',
+        provider='render_bridge', model='codex-image', encoded_image=result.outputs[0]['b64_json'],
+        output_id=adapter.output_id(provenance), preserve_original_bytes=True,
+        metadata={adapter.PROVENANCE: provenance, 'render_bridge_primary_checkpoint_complete': False})
+    asyncio.run(adapter.checkpoint(app_request, record))
+    assert asyncio.run(adapter.retire_checkpoint(app_request, record)) is False
+    transport = core.PrimaryTransport(rig.cfg)
+    with transport._db() as db:
+        assert db.execute('SELECT image FROM units').fetchone()[0] is not None
+
+
+@pytest.mark.parametrize('state', ['cancel_requested', 'canceled', 'failed', 'expired'])
+def test_retired_native_checkpoint_cannot_override_terminal_or_cancel_state(rig, state):
+    import json
+    rig.provider.generate(rig.request)
+    transport = core.PrimaryTransport(rig.cfg)
+    with transport._db() as db:
+        row = db.execute('SELECT key,data FROM units').fetchone()
+        data = json.loads(row['data'])
+        data['state'] = state
+        if state == 'cancel_requested':
+            data['cancel_requested'] = True
+        db.execute('UPDATE units SET state=?,data=? WHERE key=?', (state, json.dumps(data), row['key']))
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    async def no_api(request):
+        raise AssertionError('terminal task cannot switch provider')
+    with pytest.raises(ProviderRuntimeError):
+        asyncio.run(adapter.generate(app_request, no_api, rig.store))
+    with pytest.raises(ProviderRuntimeError):
+        asyncio.run(adapter.assert_bridge_checkpoint_current(app_request, rig.store))
+    assert rig.client.calls == 1 and not rig.api_calls
+
+
+def test_ack_maintenance_retires_only_explicit_completed_checkpoint_without_resume(rig):
+    original = rig.client.accept_registered_receipt
+    async def lost(*args, **kwargs):
+        raise BridgeError('bridge_unreachable')
+    rig.client.accept_registered_receipt = lost
+    first = rig.provider.generate(rig.request)
+    record = rig.store.get_output(first.candidates[0].metadata['output_id'])
+    assert record.metadata['render_bridge_primary_checkpoint_complete'] is True
+    transport = core.PrimaryTransport(rig.cfg)
+    with transport._db() as db:
+        assert db.execute('SELECT image FROM units').fetchone()[0] is not None
+    rig.client.accept_registered_receipt = original
+    asyncio.run(transport.reconcile_pending())
+    with transport._db() as db:
+        row = db.execute('SELECT state,image FROM units').fetchone()
+    assert row['state'] == 'acked' and row['image'] is None
+    assert rig.client.calls == 1 and not rig.api_calls
+    again = rig.provider.generate(rig.request)
+    assert again.candidates[0].metadata['output_id'] == record.output_id

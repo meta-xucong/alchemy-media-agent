@@ -622,6 +622,8 @@ class FavoriteReferenceAssetRequest(BaseModel):
 
 
 class ImageJob(BaseModel):
+    # Server-stamped identity survives running/failed jobs without output metadata.
+    veyra_user_id: int | None = Field(default=None, strict=True, gt=0)
     job_id: str
     run_id: str | None = None
     status: Literal["queued", "running", "completed", "failed", "cancelled"]

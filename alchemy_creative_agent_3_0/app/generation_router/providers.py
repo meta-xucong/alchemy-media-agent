@@ -1375,7 +1375,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     )
             if bridge_provenance.get("route") == "bridge":
                 from .bridge_primary import assert_bridge_checkpoint_current
-                _run_async_blocking(assert_bridge_checkpoint_current(app_request), timeout_seconds=15.0)
+                _run_async_blocking(assert_bridge_checkpoint_current(app_request, self.output_store), timeout_seconds=15.0)
             record = self.output_store.save_base64_output(
                 job_id=job_id,
                 candidate_id=candidate_id,
@@ -1481,13 +1481,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 },
             )
             if bridge_provenance.get("route") == "bridge":
-                _run_async_blocking(assert_bridge_checkpoint_current(app_request), timeout_seconds=15.0)
+                _run_async_blocking(assert_bridge_checkpoint_current(app_request, self.output_store), timeout_seconds=15.0)
             if bridge_provenance:
                 from .bridge_primary import checkpoint
                 _run_async_blocking(checkpoint(app_request, record), timeout_seconds=15.0)
                 if bridge_provenance.get("route") == "bridge":
-                    _run_async_blocking(assert_bridge_checkpoint_current(app_request), timeout_seconds=15.0)
+                    _run_async_blocking(assert_bridge_checkpoint_current(app_request, self.output_store), timeout_seconds=15.0)
                 record = self.output_store.update_metadata(record.output_id, {"render_bridge_primary_checkpoint_complete": True}) or record
+                try:
+                    from .bridge_primary import retire_checkpoint
+                    _run_async_blocking(retire_checkpoint(app_request, record), timeout_seconds=15.0)
+                except Exception:
+                    # Cleanup cannot invalidate a durable native checkpoint.
+                    pass
             mcp_handoff_id = str(mcp_materialization.get("handoff_id") or "").strip()
             if mcp_handoff_id and hasattr(self, "handoff_store"):
                 self.handoff_store.mark_output_checkpoint(

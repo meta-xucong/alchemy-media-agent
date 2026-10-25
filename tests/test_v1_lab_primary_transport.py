@@ -202,6 +202,9 @@ def test_lab_real_entry_high_quality_uses_versioned_native_defaults(runtime):
     job = repository.list_jobs()[0]
     assert job.raw_response_summary[primary.KEY]['request']['prompt_plan']['quality'] == 'high'
     assert next(iter(bridge.tasks.values()))['request']['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
+    with primary.transport_for('lab')._db() as db:
+        row = db.execute('SELECT state,image FROM units').fetchone()
+    assert row['state'] == 'acked' and row['image'] is None
     asyncio.run(lab.run_exploration_session(session.id))
     assert api.calls == 0 and bridge.creates == 1
 
@@ -763,3 +766,64 @@ def test_revision_does_not_duplicate_source_already_in_references(runtime, monke
     monkeypatch.setattr(media_store, 'find_asset_file', lambda asset_id: path)
     done = asyncio.run(images.run_submitted_image_job(prepared.job.id, prepared.request, edit=True))
     assert done.status == JobStatus.ready and len(bridge.inputs) == 1 and bridge.creates == 2 and not api.calls
+
+
+def test_completed_native_outputs_retire_only_duplicate_bytes(runtime):
+    import json
+    bridge, api = runtime
+    job = asyncio.run(submit(count=2))
+    transport = primary.transport_for('v1')
+    with transport._db() as db:
+        rows = db.execute('SELECT state,data,image FROM units').fetchall()
+    assert len(rows) == 2
+    assert all(row['state'] == 'acked' and row['image'] is None and json.loads(row['data'])['cache_retired'] for row in rows)
+    for output in job.outputs:
+        native = media_store.find_output_file(output.id)[0]
+        assert native.read_bytes() == bridge.content
+    asyncio.run(primary.resume_primary_job(job.id))
+    assert bridge.creates == 2 and api.calls == 0
+    # Deleting native media never revives the already completed execution.
+    media_store.find_output_file(job.outputs[0].id)[0].unlink()
+    asyncio.run(primary.resume_primary_job(job.id))
+    assert bridge.creates == 2 and api.calls == 0
+
+
+def test_failed_ack_keeps_duplicate_until_native_resume(runtime, monkeypatch):
+    bridge, api = runtime
+    original = bridge.accept_registered_receipt
+    async def lost(*args, **kwargs):
+        raise BridgeError('bridge_unreachable')
+    monkeypatch.setattr(bridge, 'accept_registered_receipt', lost)
+    job = asyncio.run(submit())
+    assert job.status == JobStatus.ready
+    transport = primary.transport_for('v1')
+    with transport._db() as db:
+        assert db.execute('SELECT image FROM units').fetchone()[0] is not None
+    monkeypatch.setattr(bridge, 'accept_registered_receipt', original)
+    asyncio.run(primary.resume_primary_job(job.id))
+    with transport._db() as db:
+        assert db.execute('SELECT image FROM units').fetchone()[0] is None
+    assert bridge.creates == 1 and api.calls == 0
+
+
+def test_native_batch_ack_maintenance_retires_without_product_resume(runtime, monkeypatch):
+    import json
+    bridge, api = runtime
+    original = bridge.accept_registered_receipt
+    async def lost(*args, **kwargs):
+        raise BridgeError('bridge_unreachable')
+    monkeypatch.setattr(bridge, 'accept_registered_receipt', lost)
+    job = asyncio.run(submit(count=2))
+    assert job.status == JobStatus.ready
+    transport = primary.transport_for('v1')
+    with transport._db() as db:
+        rows = db.execute('SELECT data,image FROM units').fetchall()
+    assert len(rows) == 2 and all(row['image'] is not None for row in rows)
+    assert all(json.loads(row['data']).get('registration_ref') for row in rows)
+    monkeypatch.setattr(bridge, 'accept_registered_receipt', original)
+    asyncio.run(transport.reconcile_pending())
+    with transport._db() as db:
+        rows = db.execute('SELECT state,image FROM units').fetchall()
+    assert all(row['state'] == 'acked' and row['image'] is None for row in rows)
+    assert bridge.creates == 2 and api.calls == 0
+    assert all(media_store.find_output_file(output.id)[0].read_bytes() == bridge.content for output in job.outputs)

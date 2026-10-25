@@ -4,7 +4,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
+import sqlite3
+import time
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -217,6 +221,89 @@ def _cache_path(record: dict, index: int) -> Path:
     return _path(f"result:{record['job_id']}:{index}")
 
 
+@contextmanager
+def _cleanup_db():
+    path = settings.data_dir / 'render_bridge_primary' / 'cleanup.sqlite3'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=1)
+    try:
+        with db:
+            db.execute('CREATE TABLE IF NOT EXISTS cleanup (job_id TEXT PRIMARY KEY, checked_at REAL NOT NULL DEFAULT 0)')
+            yield db
+    finally:
+        db.close()
+
+
+def request_cache_cleanup(job_id: str):
+    """Durable intent, not permission to erase pending generation/settlement."""
+    if not _path(f'job:{job_id}').exists(): return
+    with _cleanup_db() as db:
+        db.execute('INSERT OR IGNORE INTO cleanup(job_id) VALUES(?)', (job_id,))
+
+
+def _retire_completed_cache(record, client):
+    job = repository.get_image_job(record['job_id'])
+    if job is None or job.status != 'completed': return False
+    if not record.get('cache_retired'):
+        # Synthetic test transports need not implement storage lifecycle hooks.
+        retire = getattr(client, 'retire_units', None)
+        if retire is None or not retire(tuple(_unit_request(record, i, client) for i in range(_count(record)))):
+            return False
+    record = dict(record, cache_retired=True, references=[])
+    keys = [f"job:{record['job_id']}"]
+    if record.get('queue_task_id'): keys.append(f"task:{record['queue_task_id']}")
+    for key in keys:
+        path = _path(key)
+        temporary = path.with_suffix(f'.{os.getpid()}.retire.tmp')
+        with temporary.open('w', encoding='utf-8') as handle:
+            json.dump(record, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    for index in range(_count(record)):
+        _cache_path(record, index).unlink(missing_ok=True)
+    with _cleanup_db() as db:
+        db.execute('DELETE FROM cleanup WHERE job_id=?', (record['job_id'],))
+    return True
+
+
+def cleanup_published_job_cache(job_id: str):
+    """No-network deletion hook; pending ACK keeps bytes for later maintenance."""
+    record = load_frozen(job_id)
+    if record is None: return False
+    request_cache_cleanup(job_id)
+    from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryError
+    try:
+        client = PrimaryTransport(PrimarySettings.from_env(product='v2'), client=object())
+        return _retire_completed_cache(record, client)
+    except PrimaryError:
+        logging.getLogger(__name__).warning('V2 Bridge completed-cache cleanup deferred by its safety guard')
+        return False
+
+
+async def maintain_completed_caches(limit=8):
+    """Bounded existing-worker maintenance; ACK only, never render or bill."""
+    path = settings.data_dir / 'render_bridge_primary' / 'cleanup.sqlite3'
+    if not path.exists(): return 0
+    with _cleanup_db() as db:
+        jobs = db.execute('SELECT job_id FROM cleanup ORDER BY checked_at, job_id LIMIT ?',
+                          (max(0, min(int(limit), 32)),)).fetchall()
+    completed = 0
+    for (job_id,) in jobs:
+        with _cleanup_db() as db:
+            db.execute('UPDATE cleanup SET checked_at=? WHERE job_id=?', (time.time(), job_id))
+        try:
+            record = load_frozen(job_id)
+            job = repository.get_image_job(job_id)
+            if record is None or job is None or job.status != 'completed': continue
+            if await acknowledge(record): completed += 1
+        except (ValueError, KeyError, TypeError):
+            # A malformed historical cache stays protected. It cannot stop the
+            # ordinary queue worker or authorize a fresh image/debit attempt.
+            logging.getLogger(__name__).warning('V2 Bridge malformed completed cache retained for inspection')
+    return completed
+
+
 async def generate(record: dict, select_provider):
     """Per-output routing; earlier accepted/completed units are never regenerated."""
     client = transport(record["job_id"])
@@ -228,6 +315,8 @@ async def generate(record: dict, select_provider):
 
 async def _generate(record: dict, select_provider, client):
     from app.providers.images import V2ImageProviderRequest
+    if record.get('cache_retired'):
+        raise BridgeWait('bridge_cache_retired', terminal=True)
     request = frozen_request(record)
     all_outputs = []
     providers = []
@@ -307,8 +396,9 @@ async def acknowledge(record: dict):
     from render_bridge_primary import PrimaryError
     from render_bridge_primary.http import BridgeError
     try:
+        request_cache_cleanup(record['job_id'])
         await _acknowledge(record)
-    except (PrimaryError, BridgeError, OSError):
+    except (PrimaryError, BridgeError, OSError, sqlite3.Error):
         # Native output/debit is already durable; ACK outage cannot undo success.
         return False
     return True
@@ -317,6 +407,9 @@ async def acknowledge(record: dict):
 async def _acknowledge(record: dict):
     client = transport()
     try:
+        if record.get('cache_retired'):
+            _retire_completed_cache(record, client)
+            return
         for index in range(_count(record)):
             task_queue.ensure_current_claim()
             cached = V2ImageProviderResult.model_validate_json(_cache_path(record, index).read_text(encoding="utf-8"))
@@ -325,6 +418,7 @@ async def _acknowledge(record: dict):
                 await client.acknowledge(unit, registration_ref=f"v2:{record['job_id']}:{index}")
             else:
                 client.complete_api(unit)
+        _retire_completed_cache(record, client)
     finally:
         await client.close()
 

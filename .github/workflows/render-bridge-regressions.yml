@@ -9,6 +9,11 @@ on:
       - "alchemy_creative_agent_3_0/**"
       - "tests/**"
       - "scripts/verify_render_bridge_primary_contract.py"
+      - "scripts/verify_render_bridge_remote_contract.py"
+      - "scripts/vps_cutover_guard.py"
+      - "scripts/vps_prepare_v2_runtime.sh"
+      - "ops/vps-release/**"
+      - ".github/workflows/guarded-vps-*.yml"
       - ".github/workflows/render-bridge-regressions.yml"
   push:
     branches: ["feature/render-bridge-preview", "feature/render-bridge-primary"]
@@ -108,6 +113,8 @@ jobs:
             alchemy_creative_agent_3_0/tests/test_v3_scenario_runtime_and_product_api.py \
             alchemy_creative_agent_3_0/tests/test_v3_generic_export_review_gate.py \
             --junitxml="$RUNNER_TEMP/render-bridge-contracts.xml"
+      - name: Verify future VPS update and persistent-state contracts (offline only)
+        run: python -m pytest -q tests/test_vps_release_runtime.py tests/test_vps_cutover_guard.py tests/test_guarded_vps_cutover_contract.py
       - name: Verify current-main review and continuity seams
         run: |
           HOME="$RUNNER_TEMP/render-bridge-home" python -m pytest -q \
@@ -171,7 +178,7 @@ jobs:
         working-directory: custom_media_agent_2_0
         env:
           PYTHONPATH: .
-        run: python -m pytest -q tests/test_render_bridge_primary*.py tests/test_claude_*.py tests/test_unified_llm_gateway_failover.py tests/test_prompt_canvas_authority.py tests/test_*_exact_canvas.py
+        run: python -m pytest -q tests/test_veyra_auth.py tests/test_image_job_owner_isolation.py tests/test_bridge_cache_retention.py tests/test_render_bridge_primary*.py tests/test_claude_*.py tests/test_unified_llm_gateway_failover.py tests/test_prompt_canvas_authority.py tests/test_*_exact_canvas.py
 
   primary-wire:
     runs-on: ubuntu-latest
@@ -204,7 +211,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: meta-xucong/alchemy-render-bridge
-          ref: 80f155d4e1217d1f7f9304bfb9154d16071ec67d
+          ref: 16e020e82f90da7f6f739642cf2fd66d7bcd926f
           path: .bridge-native-counterpart
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -214,6 +221,8 @@ jobs:
         run: python -m pip install --require-hashes -r .bridge-native-counterpart/requirements-test.txt
       - name: Verify native adapter wire with synthetic pixels only (not CLI acceptance)
         run: python scripts/verify_render_bridge_primary_contract.py --bridge-checkout .bridge-native-counterpart --require-codex-adapter
+      - name: Verify cross-process TCP and response-loss recovery (synthetic only)
+        run: python scripts/verify_render_bridge_remote_contract.py --bridge-checkout .bridge-native-counterpart
 
   preview-browser:
     runs-on: ubuntu-latest

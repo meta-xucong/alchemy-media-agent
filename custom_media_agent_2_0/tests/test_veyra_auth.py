@@ -30,6 +30,18 @@ from app.services.veyra_auth import (
 )
 
 
+@pytest.fixture(autouse=True)
+def restore_auth_test_settings():
+    """Tests mutate a frozen global directly; restore it for later suites."""
+    original = vars(settings).copy()
+    try:
+        yield
+    finally:
+        for name, value in original.items():
+            object.__setattr__(settings, name, value)
+        reset_billing_settings_cache()
+
+
 def test_veyra_transport_dependency_is_declared() -> None:
     requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
     assert "httpcore==1.0.9" in requirements

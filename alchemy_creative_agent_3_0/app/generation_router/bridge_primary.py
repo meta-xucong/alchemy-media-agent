@@ -216,6 +216,46 @@ def _cached_result(record, provenance):
                   "width": record.width, "height": record.height, PROVENANCE: provenance}])
 
 
+def _durable_original(record, result, *, allow_pending_ack=False):
+    allowed_states = {"acked"} if result.route == "bridge" else {"api_completed"}
+    if allow_pending_ack and result.route == "bridge":
+        allowed_states.add("artifacts_ready")
+    if result.state not in allowed_states:
+        return False
+    metadata = record.metadata or {}
+    if metadata.get("render_bridge_primary_checkpoint_complete") is not True:
+        return False
+    if metadata.get(PROVENANCE, {}).get("execution_key") != result.execution_key:
+        return False
+    try:
+        content_hash = hashlib.sha256(Path(record.file_path).read_bytes()).hexdigest()
+    except OSError:
+        return False
+    expected = metadata.get("content_sha256")
+    if not expected or content_hash != expected:
+        return False
+    if result.route == "bridge":
+        return content_hash == result.provenance.get("image", {}).get("sha256")
+    return True
+
+
+async def retire_checkpoint(app_request, record):
+    """Best-effort duplicate cleanup, never a new execution or native deletion."""
+    from render_bridge_primary import PrimarySettings, PrimaryTransport
+    if not (record.metadata or {}).get(PROVENANCE):
+        return False
+    transport = PrimaryTransport(PrimarySettings.from_env(product="v3"))
+    try:
+        request = request_for(app_request, transport)
+        # No resolve/network here: cleanup must not admit an unbound task.
+        result = transport.cached_result(request)
+        if result is None:
+            return False
+        return _durable_original(record, result, allow_pending_ack=True) and transport.request_retirement([request])
+    finally:
+        await transport.close()
+
+
 async def generate(app_request, legacy_generate, output_store):
     from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryError
 
@@ -241,13 +281,18 @@ async def generate(app_request, legacy_generate, output_store):
             await asyncio.sleep(POLL_SECONDS)
             result = await transport.resolve(request)
         provenance = _projection(result)
-        if result.route == "bridge" and result.image is None:
-            raise _error(result.state, provenance)
         existing = output_store.get_output(output_id(provenance))
         if existing is not None:
             if (existing.metadata or {}).get(PROVENANCE, {}).get("execution_key") != result.execution_key:
                 raise _error("bridge_checkpoint_binding_mismatch")
+            if result.route == "bridge" and result.image is None:
+                # Retirement is legal only after the owning native checkpoint
+                # completed. Missing/deleted/corrupt originals never re-render.
+                if not _durable_original(existing, result):
+                    raise _error("bridge_checkpoint_original_unavailable", provenance)
             return _cached_result(existing, provenance)
+        if result.route == "bridge" and result.image is None:
+            raise _error(result.state, provenance)
         if result.route == "api":
             async with _gate_for(settings, app_request) as gate:
                 gate.assert_current()
@@ -298,7 +343,7 @@ async def checkpoint(app_request, record):
         await transport.close()
 
 
-async def assert_bridge_checkpoint_current(app_request):
+async def assert_bridge_checkpoint_current(app_request, output_store=None):
     """Reconcile the durable cancellation latch without submitting a new unit."""
     from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryError
 
@@ -311,8 +356,12 @@ async def assert_bridge_checkpoint_current(app_request):
         if not transport.has_unit(request):
             raise _error("bridge_checkpoint_binding_missing")
         result = await transport.resolve(request)
-        if result.route != "bridge" or result.image is None:
+        if result.route != "bridge":
             raise _error("bridge_checkpoint_not_current", _projection(result))
+        if result.image is None:
+            native = output_store.get_output(output_id(_projection(result))) if output_store is not None else None
+            if native is None or not _durable_original(native, result):
+                raise _error("bridge_checkpoint_not_current", _projection(result))
     except PrimaryError as exc:
         raise _error(exc.code) from None
     finally:

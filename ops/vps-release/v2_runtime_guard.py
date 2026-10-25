@@ -55,6 +55,14 @@ def requirements_sha256(requirements: Path) -> str:
     return hashlib.sha256(requirements.read_bytes()).hexdigest()
 
 
+def verify_bridge_install(paths: RuntimePaths) -> None:
+    # V2 runs outside the repository root. Check the installed dependency here
+    # so app.main's lazy imports cannot hide a missing transport until generation.
+    _run([str(paths.python), "-c",
+          "import render_bridge_primary; from app.services.render_bridge_primary import enabled; assert callable(enabled)"],
+         cwd=paths.v2_root)
+
+
 def build_manifest(paths: RuntimePaths) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -101,6 +109,7 @@ def verify_runtime(paths: RuntimePaths) -> None:
     validate_manifest(paths, manifest)
     _run([str(paths.python), "-m", "pip", "check"], cwd=paths.v2_root)
     _run([str(paths.python), "-c", "import app.main; import httpx, httpcore"], cwd=paths.v2_root)
+    verify_bridge_install(paths)
 
 
 def write_manifest(paths: RuntimePaths) -> None:
@@ -108,6 +117,7 @@ def write_manifest(paths: RuntimePaths) -> None:
         raise RuntimeGuardError("Cannot prepare a V2 runtime without its release virtual environment.")
     _run([str(paths.python), "-m", "pip", "check"], cwd=paths.v2_root)
     _run([str(paths.python), "-c", "import app.main; import httpx, httpcore"], cwd=paths.v2_root)
+    verify_bridge_install(paths)
     paths.manifest.write_text(
         json.dumps(build_manifest(paths), ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",

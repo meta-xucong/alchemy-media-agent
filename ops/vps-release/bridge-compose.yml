@@ -1,0 +1,9 @@
+# VPS-only override. Local docker-compose.yml and Windows launchers stay unchanged.
+services:
+  alchemy-media-agent:
+    environment:
+      ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG: ${ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG:?validated VPS control path required}
+      ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT: ${ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT:?validated VPS ledger path required}
+    volumes:
+      - ${ALCHEMY_RENDER_BRIDGE_CONTROL_DIR:?validated control directory required}:${ALCHEMY_RENDER_BRIDGE_CONTROL_DIR}
+      - ${ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT}:${ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT}

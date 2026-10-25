@@ -73,6 +73,7 @@ async def create_running_image_job(request: CreateImageJobRequest) -> ImageJob:
             )
         provider_name = provider.name
     job = ImageJob(
+        veyra_user_id=request.veyra_user_id,
         job_id=new_id("job"),
         run_id=request.run_id,
         status="running",
@@ -148,6 +149,7 @@ async def create_image_job(
         task_queue.persist_claimed_operation(
             lambda: repository.save_image_job(
                 ImageJob(
+                    veyra_user_id=request.veyra_user_id,
                     job_id=job_id,
                     run_id=request.run_id,
                     status="running",
@@ -365,6 +367,7 @@ def _job_from_result(
             )
         )
     return ImageJob(
+        veyra_user_id=request.veyra_user_id,
         job_id=job_id,
         run_id=request.run_id,
         status="completed",
@@ -388,6 +391,7 @@ def _failed_job(
 ) -> ImageJob:
     now = utc_now()
     return ImageJob(
+        veyra_user_id=request.veyra_user_id,
         job_id=job_id,
         run_id=request.run_id,
         status="failed",

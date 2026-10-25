@@ -55,6 +55,7 @@ class QueueWorker:
     worker_id: str = field(default_factory=_worker_instance_id)
 
     async def run_forever(self, stop_event: asyncio.Event) -> None:
+        next_cache_maintenance = 0.0
         while not stop_event.is_set():
             try:
                 await task_queue.initialize_task_queue_async()
@@ -62,6 +63,13 @@ class QueueWorker:
             except task_queue.QueueStorageBusy:
                 await asyncio.sleep(max(0.1, settings.task_queue_poll_interval_seconds))
         while not stop_event.is_set():
+            if time.monotonic() >= next_cache_maintenance:
+                next_cache_maintenance = time.monotonic() + 60.0
+                from app.services.render_bridge_primary import maintain_completed_caches
+                try:
+                    await asyncio.wait_for(maintain_completed_caches(), timeout=5.0)
+                except (TimeoutError, OSError, sqlite3.Error, ValueError):
+                    logger.warning('V2 Bridge completed-cache maintenance deferred')
             try:
                 processed = await asyncio.to_thread(process_next_task_once, self.runtime, self.worker_id)
             except task_queue.QueueStorageBusy:
@@ -251,6 +259,7 @@ def _veyra_balance_failed_run(request: CreateCreativeRunRequest, run_id: str) ->
         explanation="Stopped before creative orchestration because the linked Veyra account balance is insufficient.",
     )
     job = ImageJob(
+        veyra_user_id=request.veyra_user_id,
         job_id=new_id("job"),
         run_id=run_id,
         status="failed",

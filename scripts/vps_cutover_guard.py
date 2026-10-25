@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 import uuid
+from urllib.parse import urlsplit
 
 
 V1_ACTIVE = {
@@ -75,14 +76,14 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     )}
 
 
-def _read_v3_bootstrap_environment(path: Path | None) -> dict[str, str]:
+def _read_v3_bootstrap_environment(path: Path | None, relevant: set[str] | None = None) -> dict[str, str]:
     if path is None:
         return {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError):
         raise CutoverBlocked("v3_bootstrap_environment_unreadable") from None
-    relevant = {
+    relevant = relevant or {
         "ALCHEMY_V3_PROJECT_DIR", "ALCHEMY_V3_JOB_DIR", "MEDIA_STORAGE_ROOT",
         "MEDIA_AGENT_RUNTIME_ENV_FILE", "ALCHEMY_MEDIA_AGENT_ENV_FILE",
         "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
@@ -247,12 +248,178 @@ def _parse_cutover_timestamp(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+BRIDGE_ROOT = Path("/var/lib/alchemy/render-bridge-primary")
+BRIDGE_PATHS = {
+    "ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG": str(BRIDGE_ROOT / "control.json"),
+    "ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT": str(BRIDGE_ROOT / "ledgers"),
+}
+
+
+def verify_bridge_storage_configuration(v1_environment: Path, v2_environment: Path,
+                                        release_roots: tuple[Path, ...] = ()) -> dict:
+    keys = set(BRIDGE_PATHS) | {"ALCHEMY_RENDER_BRIDGE_URL", "ALCHEMY_RENDER_BRIDGE_WORKSPACE"}
+    environments = [_read_v3_bootstrap_environment(p, keys) for p in (v1_environment, v2_environment)]
+    effective = []
+    for env in environments:
+        paths = {}
+        for key, default in BRIDGE_PATHS.items():
+            value = env.get(key, default)
+            if not value or not Path(value).is_absolute():
+                raise CutoverBlocked("bridge_persistent_path_not_absolute")
+            resolved = Path(value).resolve()
+            if resolved == Path("/") or any(resolved.is_relative_to(root.resolve()) for root in release_roots):
+                raise CutoverBlocked("bridge_path_not_persistent")
+            paths[key] = str(resolved)
+        effective.append(paths)
+    if effective[0] != effective[1]:
+        raise CutoverBlocked("bridge_persistent_path_conflict")
+    for key in ("ALCHEMY_RENDER_BRIDGE_URL", "ALCHEMY_RENDER_BRIDGE_WORKSPACE"):
+        values = {env[key] for env in environments if env.get(key)}
+        if len(values) > 1:
+            raise CutoverBlocked("bridge_source_scope_conflict")
+    config = Path(effective[0]["ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG"])
+    state = Path(effective[0]["ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT"])
+    if config.parent == Path("/") or config == state or config.is_relative_to(state):
+        raise CutoverBlocked("bridge_storage_layout_invalid")
+    # Admin updates control.json with atomic rename, so a directory bind is
+    # required. Never bind an unrelated config/secret directory into the container.
+    if config.parent.is_dir():
+        for path in config.parent.rglob("*"):
+            resolved = path.resolve()
+            if resolved == config or resolved == state or resolved.is_relative_to(state):
+                continue
+            if path.is_dir() and state.is_relative_to(resolved):
+                continue
+            raise CutoverBlocked("bridge_control_directory_not_dedicated")
+    if config.exists():
+        try:
+            control = json.loads(config.read_text(encoding="utf-8"))
+            if not isinstance(control, dict) or control.get("schema_version") != "1":
+                raise ValueError()
+            if control.get("mode") not in {"disabled", "enabled", "draining"}:
+                raise ValueError()
+            profiles = control.get("profiles")
+            if (not isinstance(profiles, list) or not profiles or
+                any(not isinstance(p, str) or p not in {"fake-image", "codex-image", "midjourney-manual"} for p in profiles) or
+                len(profiles) != len(set(profiles))):
+                raise ValueError()
+            base = control.get("base_url", "")
+            workspace = control.get("workspace", "")
+            if not isinstance(base, str) or not isinstance(workspace, str):
+                raise ValueError()
+            if base:
+                parsed = urlsplit(base.rstrip("/"))
+                if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or
+                    parsed.query or parsed.fragment or parsed.path not in {"", "/"}):
+                    raise ValueError()
+                _ = parsed.port
+            elif control["mode"] != "disabled":
+                raise ValueError()
+        except (OSError, ValueError, TypeError):
+            raise CutoverBlocked("bridge_control_configuration_invalid") from None
+        for env in environments:
+            expected_url = env.get("ALCHEMY_RENDER_BRIDGE_URL", "").rstrip("/")
+            expected_workspace = env.get("ALCHEMY_RENDER_BRIDGE_WORKSPACE", "")
+            if expected_url and base and expected_url != base.rstrip("/"):
+                raise CutoverBlocked("bridge_control_endpoint_conflict")
+            if expected_workspace and workspace and expected_workspace != workspace:
+                raise CutoverBlocked("bridge_control_workspace_conflict")
+    return {"status": "verified", "scope": "bridge_persistent_paths",
+            "control_path": str(config), "control_dir": str(config.parent), "state_root": str(state)}
+
+
+def verify_bridge_runtime(container: object, processes: list[dict[str, str]],
+                          control_path: Path, state_root: Path) -> dict:
+    if not isinstance(container, list) or len(container) != 1:
+        raise CutoverBlocked("bridge_container_inspect_invalid")
+    item = container[0]
+    expected = {"ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG": str(control_path.resolve()),
+                "ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT": str(state_root.resolve())}
+    env = {}
+    for entry in item.get("Config", {}).get("Env", []):
+        key, separator, value = entry.partition("=")
+        if key in expected and separator:
+            if key in env: raise CutoverBlocked("bridge_container_environment_ambiguous")
+            env[key] = value
+    for actual in [env, *processes]:
+        if any(not actual.get(key) or str(Path(actual[key]).resolve()) != value for key, value in expected.items()):
+            raise CutoverBlocked("bridge_runtime_path_mismatch")
+    for root in (control_path.resolve().parent, state_root.resolve()):
+        matches = [m for m in item.get("Mounts", []) if m.get("Destination") == str(root)]
+        if (len(matches) != 1 or matches[0].get("Type") != "bind" or not matches[0].get("RW") or
+            Path(matches[0].get("Source", "")).resolve() != root):
+            raise CutoverBlocked("bridge_runtime_mount_mismatch")
+    return {"status": "verified", "scope": "bridge_runtime_paths_and_mounts"}
+
+
+def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
+                        v2_repository: Path | None = None) -> dict[str, int]:
+    counts = {"bridge_unresolved_units": 0, "bridge_unresolved_frozen_jobs": 0,
+              "v2_direct_active_jobs": 0}
+    if root.exists() and not root.is_dir():
+        raise CutoverBlocked("bridge_state_root_invalid")
+    native_terminal = set()
+    if v2_repository is not None and v2_repository.exists():
+        db = _readonly(v2_repository)
+        try:
+            for raw, in db.execute("SELECT payload FROM v2_records WHERE namespace='image_jobs'"):
+                job = json.loads(raw)
+                if not isinstance(job, dict) or not isinstance(job.get("job_id"), str):
+                    raise ValueError()
+                if job.get("status") in {"completed", "failed", "cancelled"}:
+                    native_terminal.add(job["job_id"])
+                else:
+                    counts["v2_direct_active_jobs"] += 1
+        except (sqlite3.Error, ValueError, TypeError):
+            raise CutoverBlocked("v2_direct_job_state_unreadable") from None
+        finally:
+            db.close()
+    for path in sorted(root.glob("*/primary.sqlite3")):
+        db = _readonly(path)
+        try:
+            for state, raw in db.execute("SELECT state,data FROM units"):
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    raise ValueError()
+                # api_ready is NOT terminal: a direct request can still dispatch.
+                terminal = state in {"acked", "api_completed"}
+                if state in {"canceled", "failed", "expired"}:
+                    terminal = not data.get("cancel_requested") or bool(data.get("cancel_reconciled"))
+                counts["bridge_unresolved_units"] += not terminal
+        except (sqlite3.Error, ValueError, TypeError):
+            raise CutoverBlocked("bridge_ledger_unreadable") from None
+        finally:
+            db.close()
+    if frozen_root and frozen_root.exists():
+        pending = set()
+        for path in frozen_root.glob("*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(record, dict):
+                    raise ValueError()
+                # The same directory stores result caches; only request records
+                # and their compact retirement tombstones carry job_id.
+                if "request" not in record and "job_id" not in record:
+                    continue
+                if not isinstance(record.get("job_id"), str):
+                    raise ValueError()
+            except (ValueError, OSError):
+                raise CutoverBlocked("bridge_frozen_request_unreadable") from None
+            if record["job_id"] not in native_terminal:
+                pending.add(record["job_id"])
+        counts["bridge_unresolved_frozen_jobs"] = len(pending)
+    return counts
+
+
 def inspect_active_work(
     v1_database: Path,
     v2_queue_database: Path,
     v3_projects: Path,
     *,
     v3_container_started_at: str | None = None,
+    bridge_state_root: Path | None = None,
+    bridge_frozen_root: Path | None = None,
+    v2_repository: Path | None = None,
 ) -> dict:
     container_started = _parse_cutover_timestamp(v3_container_started_at)
     if v3_container_started_at is not None and container_started is None:
@@ -384,6 +551,8 @@ def inspect_active_work(
                 else:
                     counts["v3_active_jobs"] += normalized_status in V3_ACTIVE
 
+    if bridge_state_root is not None:
+        counts.update(inspect_bridge_work(bridge_state_root, bridge_frozen_root, v2_repository))
     active = sum(value for key, value in counts.items() if key != "v3_preserved_planned_jobs")
     return {"status": "idle" if active == 0 else "blocked", "scope": "durable_active_work_inventory",
             "counts": counts, "active_work_items": active}
@@ -941,6 +1110,17 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--v2-queue-database", required=True, type=Path)
     inspect.add_argument("--v3-projects-root", required=True, type=Path)
     inspect.add_argument("--v3-container-started-at", required=True)
+    inspect.add_argument("--bridge-state-root", type=Path)
+    inspect.add_argument("--bridge-frozen-root", type=Path)
+    inspect.add_argument("--v2-repository", type=Path)
+    bridge_paths = subparsers.add_parser("verify-bridge-storage-configuration")
+    bridge_paths.add_argument("--v1-environment", required=True, type=Path)
+    bridge_paths.add_argument("--v2-environment", required=True, type=Path)
+    bridge_paths.add_argument("--release-root", action="append", default=[], type=Path)
+    bridge_runtime = subparsers.add_parser("verify-bridge-runtime")
+    bridge_runtime.add_argument("--control-path", required=True, type=Path)
+    bridge_runtime.add_argument("--state-root", required=True, type=Path)
+    bridge_runtime.add_argument("--pid", required=True, action="append", type=int)
     verify_v3_roots = subparsers.add_parser("verify-v3-storage-roots")
     verify_v3_roots.add_argument("--v1-media-root", required=True, type=Path)
     verify_v3_roots.add_argument("--bootstrap-env-file", required=True, type=Path)
@@ -989,7 +1169,15 @@ def main(argv: list[str] | None = None) -> int:
                 args.v2_queue_database,
                 args.v3_projects_root,
                 v3_container_started_at=args.v3_container_started_at,
+                bridge_state_root=args.bridge_state_root,
+                bridge_frozen_root=args.bridge_frozen_root,
+                v2_repository=args.v2_repository,
             )
+        elif args.command == "verify-bridge-runtime":
+            result = verify_bridge_runtime(json.load(sys.stdin), [read_process_environment(pid) for pid in args.pid],
+                                           args.control_path, args.state_root)
+        elif args.command == "verify-bridge-storage-configuration":
+            result = verify_bridge_storage_configuration(args.v1_environment, args.v2_environment, tuple(args.release_root))
         elif args.command == "verify-v3-storage-roots":
             try:
                 container_inspect = json.load(sys.stdin)

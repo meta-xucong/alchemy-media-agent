@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import logging
 import sqlite3
 import threading
 import tempfile
@@ -274,6 +275,16 @@ def delete_image_history_item(output_id: str) -> dict[str, Any]:
     output = repository.delete_output(output_id)
     metadata = dict(newest_removed.metadata if newest_removed else output.metadata if output else {})
     storage_result = delete_output_storage(output_id, metadata)
+    job_id = newest_removed.job_id if newest_removed else output.job_id if output else None
+    if job_id:
+        # Duplicate transport copies are not published images. Retire only after
+        # native completion and final ACK; unavailable/config-invalid cleanup is
+        # deferred, never treated as permission to drop an unresolved ledger.
+        from app.services.render_bridge_primary import cleanup_published_job_cache
+        try:
+            cleanup_published_job_cache(job_id)
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).warning('V2 Bridge cache cleanup deferred for a deleted output')
     removed_output = bool(output)
     if not removed_records and not removed_output and not any(storage_result.values()):
         return {
