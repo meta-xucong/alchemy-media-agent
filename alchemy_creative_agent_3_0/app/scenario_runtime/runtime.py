@@ -7,7 +7,9 @@ from ..reference_input_plan import PLAN_KEY, plan_from_metadata
 from ..llm_brain.context_digest import compact_brand_visual_context
 
 from copy import deepcopy
+from fractions import Fraction
 import hashlib
+import math
 import os
 import re
 from typing import Any, Callable
@@ -175,26 +177,26 @@ _BRAIN_IMAGE_SIZE_ALIASES = {
     "1:1": "1024x1024",
     "2:3": "1024x1536",
     "3:2": "1536x1024",
-    "4:5": "1024x1536",
-    "3:4": "1024x1536",
-    "9:16": "1024x1536",
-    "4:3": "1536x1024",
-    "5:4": "1536x1024",
+    "4:5": "1024x1280",
+    "3:4": "1152x1536",
+    "9:16": "1152x2048",
+    "4:3": "1536x1152",
+    "5:4": "1280x1024",
     "16:9": "2048x1152",
 }
 _BRAIN_ASPECT_RATIO_ALIASES = {
     "1:1": "1024x1024",
     "2:3": "1024x1536",
     "3:2": "1536x1024",
-    "4:5": "1024x1536",
-    "3:4": "1024x1536",
-    "9:16": "1024x1536",
-    "4:3": "1536x1024",
-    "5:4": "1536x1024",
+    "4:5": "1024x1280",
+    "3:4": "1152x1536",
+    "9:16": "1152x2048",
+    "4:3": "1536x1152",
+    "5:4": "1280x1024",
     "16:9": "2048x1152",
-    "2.35:1": "1536x1024",
-    "2.39:1": "1536x1024",
-    "2.40:1": "1536x1024",
+    "2.35:1": "3008x1280",
+    "2.39:1": "3824x1600",
+    "2.40:1": "1536x640",
 }
 def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
     """Whitelist remote Brain transport diagnostics for blocked status metadata."""
@@ -4550,7 +4552,26 @@ class ScenarioRuntime:
     def _canonical_brain_aspect_ratio(value: object) -> tuple[str, str] | None:
         normalized = " ".join(str(value or "").strip().lower().split()).replace("：", ":")
         size = _BRAIN_ASPECT_RATIO_ALIASES.get(normalized)
-        return (normalized, size) if size else None
+        if size:
+            return normalized, size
+        # Parse only Brain's structured ratio, never the user's prose. Find
+        # an exact integer canvas within the documented GPT Image 2 bounds.
+        try:
+            numerator, denominator = normalized.split(":")
+            ratio = Fraction(numerator) / Fraction(denominator)
+            if ratio <= 0 or ratio > 3 or ratio < Fraction(1, 3):
+                return None
+            width, height = ratio.numerator * 16, ratio.denominator * 16
+            if max(width, height) > 3840:
+                return None
+            scale = math.isqrt(655360 // (width * height))
+            scale = max(1, scale)
+            while width * height * scale * scale < 655360:
+                scale += 1
+            size = ScenarioRuntime._canonical_brain_image_size(f"{width * scale}x{height * scale}")
+            return (normalized, size) if size else None
+        except (ValueError, ZeroDivisionError):
+            return None
 
     def _apply_brain_image_size_precedence(
         self,
@@ -4560,27 +4581,35 @@ class ScenarioRuntime:
     ) -> NormalizedV3JobIntent:
         """Let the Brain resolve explicit user canvas intent before UI fallback."""
 
-        typed_options = request.metadata.get("provider_image_options")
-        if isinstance(typed_options, dict) and typed_options.get("size"):
-            # A typed product option is already frozen before the Brain runs;
-            # the Brain may describe the image but cannot replace its canvas.
+        # A resumed job consumes its trusted frozen canvas, never a new Brain
+        # interpretation. Ordinary requests cannot set this internal flag.
+        if getattr(request, "trusted_capability_plan_reuse", False):
             return normalized_intent
 
         brain_plan = brain_result.image_set_plan
-        brain_size = self._canonical_brain_image_size(getattr(brain_plan, "size", None))
-        ratio_resolution = self._canonical_brain_aspect_ratio(getattr(brain_plan, "aspect_ratio", None))
-        # The Brain may echo the browser canvas while also resolving an
-        # explicit ratio from the user's prompt.  The ratio is the stronger
-        # user-owned signal; the browser value is only a fallback.
-        if ratio_resolution is not None:
-            _, brain_size = ratio_resolution
-        if not brain_size:
+        raw_size = getattr(brain_plan, "size", None)
+        raw_ratio = getattr(brain_plan, "aspect_ratio", None)
+        if not raw_size and not raw_ratio:
             return normalized_intent
-        if brain_size == normalized_intent.effective_image_size:
-            if ratio_resolution is not None:
-                request.metadata["requested_image_aspect_ratio"] = ratio_resolution[0]
-                request.metadata["requested_image_aspect_ratio_source"] = "remote_brain_user_intent"
-            return normalized_intent
+        brain_size = self._canonical_brain_image_size(raw_size)
+        ratio_resolution = self._canonical_brain_aspect_ratio(raw_ratio)
+        if raw_ratio and (not raw_size or brain_size):
+            # Keep exact explicit dimensions when coherent with the ratio.
+            # A stale browser echo must not defeat the semantic ratio signal.
+            try:
+                width, height = (int(part) for part in (brain_size or "").split("x"))
+                numerator, denominator = str(raw_ratio).replace("：", ":").split(":")
+                coherent = Fraction(width, height) == Fraction(numerator) / Fraction(denominator)
+            except (ValueError, ZeroDivisionError):
+                coherent = False
+            if not coherent:
+                brain_size = ratio_resolution[1] if ratio_resolution else None
+        # Unsupported explicit intent falls back to native defaults, not a
+        # conflicting manual canvas or a nearest-but-wrong aspect ratio.
+        brain_size = brain_size or "auto"
+        typed_options = request.metadata.get("provider_image_options")
+        typed_options = dict(typed_options) if isinstance(typed_options, dict) else {}
+        original_size = request.metadata.get("requested_image_size")
         updated = normalized_intent.model_copy(
             update={
                 "intent_id": stable_id(
@@ -4603,7 +4632,10 @@ class ScenarioRuntime:
                         "field": "size",
                         "resolved_value": brain_size,
                         "precedence": "explicit_user_prompt_over_web_selection",
-                        "web_selected_image_size": request.metadata.get("requested_image_size"),
+                        "web_selected_image_size": original_size,
+                        "manual_provider_image_size": typed_options.get("size"),
+                        "requested_canvas_size": raw_size,
+                        "requested_canvas_aspect_ratio": raw_ratio,
                     },
                 ],
             }
@@ -4612,12 +4644,21 @@ class ScenarioRuntime:
             **dict(request.metadata or {}),
             "requested_image_size": brain_size,
             "requested_image_size_source": "remote_brain_user_intent",
-            "web_selected_image_size": request.metadata.get("requested_image_size"),
+            "web_selected_image_size": original_size,
+            "manual_provider_image_size": typed_options.get("size"),
+            "provider_image_options": {**typed_options, "size": brain_size},
             "normalized_v3_job_intent": updated.model_dump(mode="json"),
             "normalized_v3_job_intent_id": updated.intent_id,
         }
-        if ratio_resolution is not None:
-            request.metadata["requested_image_aspect_ratio"] = ratio_resolution[0]
+        # This field also authorizes output-store cropping. Native auto must
+        # not inherit an unsupported ratio as a post-generation requirement;
+        # the original request remains lossless in prompt and provenance.
+        request.metadata.pop("requested_image_aspect_ratio", None)
+        request.metadata.pop("requested_image_aspect_ratio_source", None)
+        if brain_size != "auto":
+            width, height = (int(part) for part in brain_size.split("x"))
+            divisor = math.gcd(width, height)
+            request.metadata["requested_image_aspect_ratio"] = str(raw_ratio or f"{width // divisor}:{height // divisor}")
             request.metadata["requested_image_aspect_ratio_source"] = "remote_brain_user_intent"
         return updated
 
@@ -7687,11 +7728,16 @@ class ScenarioRuntime:
             {
                 "requested_image_count": preparation.normalized_job_intent.effective_image_count,
                 "requested_image_size": preparation.normalized_job_intent.effective_image_size,
+                "requested_image_size_source": request.metadata.get("requested_image_size_source"),
             }
         )
         typed_options = request.metadata.get("provider_image_options")
         if isinstance(typed_options, dict):
             frozen_provider_metadata["provider_image_options"] = dict(typed_options)
+        if request.metadata.get("requested_image_size_source") == "remote_brain_user_intent":
+            # Explicit auto clears stale planned ratio/crop requirements too.
+            frozen_provider_metadata["requested_image_aspect_ratio"] = request.metadata.get("requested_image_aspect_ratio")
+            frozen_provider_metadata["requested_image_aspect_ratio_source"] = request.metadata.get("requested_image_aspect_ratio_source")
         explicit_aspect_ratio = str(
             request.metadata.get("requested_image_aspect_ratio") or ""
         ).strip()

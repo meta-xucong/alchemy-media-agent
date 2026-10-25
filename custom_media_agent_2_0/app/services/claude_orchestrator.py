@@ -7,6 +7,7 @@ import re
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import shutil
 import signal
 import subprocess
@@ -34,6 +35,8 @@ from app.schemas import (
     StageCommand,
 )
 from app.services.ids import new_id
+from app.services import task_queue
+from app.services.task_queue import StaleTaskClaim
 from app.services.asset_binding import build_asset_context
 from app.services.uploaded_assets import get_uploaded_asset
 from app.services.visual_signals import build_case_visual_signals
@@ -42,7 +45,7 @@ from app.services.visual_grammar_lock import build_visual_grammar_contract
 
 _RECENT_INVOCATIONS: list[OrchestratorInvocationRecord] = []
 _MAX_RECENT_INVOCATIONS = 30
-_NON_RETRYABLE_CLAUDE_FAILURES = {"claude_output_token_limit", "claude_timeout"}
+_NON_RETRYABLE_CLAUDE_FAILURES = {"claude_output_token_limit", "claude_timeout", "claude_process_cleanup_unconfirmed"}
 _CHECKPOINT_RETRYABLE_CLAUDE_FAILURES = {
     "claude_output_token_limit",
     "claude_soft_timeout",
@@ -70,7 +73,7 @@ _CLAUDE_CODE_IMMEDIATE_MODEL_FALLBACK_FAILURES = {
     "kimi_upstream_error",
     "upstream_context_canceled",
 }
-_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v12_template_visual_grammar"
+_CLAUDE_DECISION_CACHE_SCHEMA = "claude_decision_v13_prompt_canvas_authority"
 _DECISION_CACHE_MAX_ENTRIES = 128
 _DECISION_CACHE_MAX_BYTES = 8 * 1024 * 1024
 _DECISION_CACHE_MAX_ENTRY_BYTES = 64 * 1024
@@ -357,6 +360,8 @@ def orchestrate_creative_request(
         raw_decision = None
         errors: list[str] = []
         used_attempts = 0
+        # Controller-stage attempts, not proof that a subprocess or HTTP request started.
+        checkpoint_diagnostics: dict[str, Any] = {"attempts": 0, "trace": []}
         try:
             raw_decision, checkpoint_meta = _invoke_claude_checkpoint_mode(
                 request=request,
@@ -364,8 +369,11 @@ def orchestrate_creative_request(
                 candidate_cases=candidate_cases,
                 candidate_case_details=candidate_case_details or [],
                 progress_callback=progress_callback,
+                diagnostics=checkpoint_diagnostics,
             )
             used_attempts = int(checkpoint_meta.get("attempts") or 0)
+        except StaleTaskClaim:
+            raise
         except ClaudeInvocationError as exc:
             errors.append(f"claude_checkpoint_error:{exc}")
         except Exception as exc:
@@ -392,6 +400,8 @@ def orchestrate_creative_request(
             _record_invocation(decision)
             return decision
 
+        if errors:
+            used_attempts = int(checkpoint_diagnostics["attempts"])
         decision = fallback.model_copy(
             update={
                 "fallback_reason": errors[-1] if errors else "claude_checkpoint_missing_decision",
@@ -400,7 +410,7 @@ def orchestrate_creative_request(
                 "attempts": used_attempts,
                 "cache_key": cache_key,
                 "workspace_id": workspace_id,
-                "claude_stage_trace": checkpoint_meta.get("trace") if "checkpoint_meta" in locals() else [],
+                "claude_stage_trace": checkpoint_diagnostics["trace"] if errors else checkpoint_meta.get("trace", []),
             }
         )
         _record_invocation(decision)
@@ -423,6 +433,8 @@ def orchestrate_creative_request(
             if raw_decision:
                 break
             errors.append("claude_missing_decision")
+        except StaleTaskClaim:
+            raise
         except ClaudeInvocationError as exc:
             failure_code = str(exc)
             errors.append(f"claude_invoke_error:{failure_code}")
@@ -551,6 +563,7 @@ def _invoke_claude_checkpoint_mode(
     candidate_cases: list[PromptCaseSummary],
     candidate_case_details: list[PromptCase],
     progress_callback: ClaudeProgressCallback | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     command = _resolve_claude_command()
     if not command:
@@ -561,7 +574,8 @@ def _invoke_claude_checkpoint_mode(
         candidate_cases=candidate_cases,
         candidate_case_details=candidate_case_details,
     )
-    trace: list[dict[str, Any]] = []
+    # Shared only within this invocation, so exceptions cannot discard completed stages.
+    trace: list[dict[str, Any]] = diagnostics["trace"] if diagnostics is not None else []
     attempts = 0
 
     intent, attempt_count = _invoke_checkpoint_stage_with_micro(
@@ -574,6 +588,7 @@ def _invoke_claude_checkpoint_mode(
         ultra_micro_prompt=_build_checkpoint_stage_prompt(workspace, stage_name="intent_ultra_micro"),
         trace=trace,
         progress_callback=progress_callback,
+        diagnostics=diagnostics,
     )
     attempts += attempt_count
     if not intent:
@@ -596,6 +611,7 @@ def _invoke_claude_checkpoint_mode(
         ),
         trace=trace,
         progress_callback=progress_callback,
+        diagnostics=diagnostics,
     )
     attempts += attempt_count
     if not visual:
@@ -621,6 +637,7 @@ def _invoke_claude_checkpoint_mode(
             ),
             trace=trace,
             progress_callback=progress_callback,
+            diagnostics=diagnostics,
         )
         attempts += attempt_count
         visual = _visual_strategy_from_partial(intent=intent, raw_decision=decision or {}, fallback=fallback)
@@ -667,6 +684,7 @@ def _invoke_claude_checkpoint_mode(
         ),
         trace=trace,
         progress_callback=progress_callback,
+        diagnostics=diagnostics,
     )
     attempts += attempt_count
     if not decision:
@@ -711,6 +729,7 @@ def _invoke_checkpoint_stage_with_micro(
     trace: list[dict[str, Any]],
     stop_on_soft_timeout: bool = False,
     progress_callback: ClaudeProgressCallback | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, int]:
     attempts = 0
     stage_deadline = time.perf_counter() + _checkpoint_stage_hard_timeout_seconds()
@@ -749,6 +768,8 @@ def _invoke_checkpoint_stage_with_micro(
             last_failure = "claude_timeout"
             break
         timeout_seconds = min(_checkpoint_stage_timeout_seconds(attempt_stage_name), remaining_stage_seconds)
+        if diagnostics is not None:
+            diagnostics["attempts"] += 1
         _emit_claude_progress(
             progress_callback,
             stage=attempt_stage_name,
@@ -846,6 +867,7 @@ def _invoke_checkpoint_stage_with_micro(
                     schema=schema,
                     deadline=stage_deadline,
                     progress_callback=progress_callback,
+                    diagnostics=diagnostics,
                 )
                 attempts += int(fallback_meta.get("attempts") or 0)
                 fallback_duration_ms = _elapsed_ms(fallback_started)
@@ -978,6 +1000,7 @@ def _invoke_checkpoint_stage_with_micro(
                 schema=schema,
                 deadline=stage_deadline,
                 progress_callback=progress_callback,
+                diagnostics=diagnostics,
             )
             attempts += int(fallback_meta.get("attempts") or 0)
             fallback_duration_ms = _elapsed_ms(fallback_started)
@@ -1114,6 +1137,8 @@ def _emit_claude_progress(callback: ClaudeProgressCallback | None, **payload: An
     event["message"] = _claude_progress_message(event)
     try:
         callback({key: value for key, value in event.items() if value not in (None, "", [])})
+    except StaleTaskClaim:
+        raise
     except Exception:
         pass
 
@@ -1189,7 +1214,7 @@ def _claude_failure_label(failure_code: str) -> str:
     if failure_code == "claude_output_token_limit":
         return "输出超限，进入压缩续跑"
     if failure_code == "claude_policy_refusal":
-        return "策略误拒，准备备用源接力"
+        return "策略拒绝，已停止当前请求"
     if failure_code in {"kimi_context_canceled", "kimi_sub2api_502", "kimi_no_available_accounts", "kimi_upstream_error"}:
         return "上游不可用，准备备用源接力"
     if failure_code:
@@ -1215,17 +1240,10 @@ def _claude_code_model_fallback_queue(*, exclude_model: str | None = None) -> li
     # Keep the configured, user-selectable queue authoritative. The legacy
     # single fallback remains readable, but trails the current ordered queue.
     configured_models = getattr(settings, "claude_orchestrator_fallback_models", ())
-    # Preserve the canonical recovery order even when an older saved setting
-    # contains only GPT or a custom model: Kimi gets the first backup attempt,
-    # GPT remains the final built-in route.
-    configured = [
-        _text_value(model)
-        for model in (configured_models or ())
-        if _text_value(model).lower() not in {"kimi-k3", "gpt-6.1-sol"}
-    ]
-    models = ["kimi-k3", *configured, "gpt-6.1-sol"]
+    # Defaults belong to config; explicit empty/custom queues must stay authoritative.
+    models = [_text_value(model) for model in (configured_models or ())]
     legacy_model = _text_value(getattr(settings, "claude_orchestrator_fallback_model", None))
-    if legacy_model and legacy_model.lower() not in {"kimi-k3", "gpt-6.1-sol"}:
+    if legacy_model:
         models.append(legacy_model)
     primary = _text_value(exclude_model) or _text_value(settings.claude_orchestrator_model)
     return _dedupe(
@@ -1272,6 +1290,7 @@ def _invoke_claude_code_model_fallbacks(
     schema: dict[str, Any],
     deadline: float | None = None,
     progress_callback: ClaudeProgressCallback | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = 0
     last_failure = "claude_code_model_fallback_unavailable"
@@ -1280,15 +1299,19 @@ def _invoke_claude_code_model_fallbacks(
         : settings.claude_orchestrator_fallback_max_models_per_stage
     ]
     env_overrides = _claude_code_fallback_env_overrides()
+    # One bounded relay budget, not a fresh allowance for each candidate.
+    relay_deadline = time.perf_counter() + settings.claude_orchestrator_fallback_stage_timeout_seconds
+    if deadline is not None:
+        relay_deadline = min(relay_deadline, deadline)
     for index, model in enumerate(queue):
-        remaining_budget = settings.claude_orchestrator_fallback_stage_timeout_seconds
-        if deadline is not None:
-            remaining_budget = min(remaining_budget, deadline - time.perf_counter())
+        remaining_budget = relay_deadline - time.perf_counter()
         remaining = remaining_budget / max(1, len(queue) - index)
         if remaining < 5.0:
             last_failure = "claude_stage_budget_exhausted"
             break
         attempts += 1
+        if diagnostics is not None:
+            diagnostics["attempts"] += 1
         next_model = queue[index + 1] if index + 1 < len(queue) else None
         fallback_stage_name = f"{stage_name}_model_fallback_{index + 1}"
         fallback_started = time.perf_counter()
@@ -1347,7 +1370,8 @@ def _invoke_claude_code_model_fallbacks(
             )
             if _is_openai_fallback_failure_retryable(exc):
                 continue
-            break
+            # A terminal candidate failure ends this stage, not just the relay loop.
+            raise
         if result:
             _emit_claude_progress(
                 progress_callback,
@@ -1438,6 +1462,7 @@ def _invoke_openai_compatible_stage_json(
         async def send_request() -> dict[str, Any]:
             async with asyncio.timeout(timeout_seconds):
                 async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=min(8.0, timeout_seconds))) as client:
+                    task_queue.ensure_current_claim()
                     response = await client.post(
                         _openai_chat_completions_url(settings.llm_gateway_base_url),
                         headers=headers,
@@ -1454,7 +1479,10 @@ def _invoke_openai_compatible_stage_json(
             # The orchestrator is synchronous and may be called from an async
             # worker. Run the bounded async transport on a dedicated thread.
             with ThreadPoolExecutor(max_workers=1) as executor:
-                data = executor.submit(asyncio.run, send_request()).result(timeout=timeout_seconds + 1.0)
+                context = copy_context()
+                data = executor.submit(context.run, asyncio.run, send_request()).result(timeout=timeout_seconds + 1.0)
+    except StaleTaskClaim:
+        raise
     except (httpx.TimeoutException, TimeoutError) as exc:
         raise ClaudeInvocationError("openai_fallback_timeout", retryable=True) from exc
     except httpx.RequestError as exc:
@@ -1564,6 +1592,7 @@ def _run_claude_subprocess(
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         popen_kwargs["start_new_session"] = True
+    task_queue.ensure_current_claim()
     process = subprocess.Popen(
         command_line,
         stdin=subprocess.PIPE,
@@ -1580,12 +1609,16 @@ def _run_claude_subprocess(
         stdout, stderr = process.communicate(input=input_text, timeout=timeout_seconds)
         return subprocess.CompletedProcess(command_line, process.returncode, stdout, stderr)
     except subprocess.TimeoutExpired as exc:
-        _terminate_process_tree(process)
         try:
-            stdout, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate()
+            _terminate_process_tree(process)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate(timeout=5)
+        except Exception as cleanup_error:
+            # Do not launch another candidate while the previous process may still run.
+            raise ClaudeInvocationError("claude_process_cleanup_unconfirmed", retryable=False) from cleanup_error
         raise subprocess.TimeoutExpired(
             command_line,
             timeout_seconds,
@@ -3128,7 +3161,7 @@ def _build_workspace(
                 "- candidate_case_details.json 中的 visual_signal_brief 是系统提炼出的视觉 DNA，优先关注强调色、材质、光影、构图和审美方向。",
                 "- 不要只迁移背景主色；如果案例有小面积但关键的金色、墨绿、玻璃高光、金属边缘或深色对比，也要判断是否应抽象迁移。",
                 "- context.prompt_transform_profile 定义本次提示词转换档位：enhanced/strict 需要更强保真和硬约束保护；stable/original 需要轻整理、贴近原意；exploration/off 必须主动给出可见差异化的创意替代方案，例如改变角度、姿态、光影情绪、背景层次、裁切、色彩对比、材质氛围或场景调度中的至少一类，但仍必须服从安全、模板优先级、上传硬引用、精确文字/Logo约束和用户明确禁项。",
-                "- context.request.output 若含非 auto/default 的 size/aspect_ratio，即手动画幅锁；可在该画幅内探索，但不得改写尺寸/比例。",
+                "- 当前用户提示词明确要求的输出画布尺寸/比例优先于 context.request.output、模板和默认值；仅当提示词没有明确输出画布要求时，context.request.output 的非 auto/default 尺寸/比例才作为画幅锁。不得把参考图或物体尺寸当作输出画布，也不得追加与用户明确要求冲突的尺寸/比例；是否支持该规格由后续 Provider 能力适配决定，不支持时使用原生默认，不擅自改成近似比例。",
                 "- 你必须直接输出 final_prompt、negative_prompt、provider_parameters 和 prompt_rationale。",
                 "- final_prompt 是给 gpt-image-2 或兼容 ImageProvider 的最终输入，不要让下游再猜你的审美意图。",
                 "- final_prompt 不得包含内部 case_id、asset_id、provider_id、source_url、API 或仓库工程标识。",

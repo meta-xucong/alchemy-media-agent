@@ -145,13 +145,7 @@ class V2OpenAIGPTImage2Provider:
             limits={
                 "max_batch": 8,
                 "max_reference_images": 5,
-                "sizes": ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"],
-                "custom_size": {
-                    "min_width": 1024,
-                    "min_height": 1024,
-                    "max_width": 3840,
-                    "max_height": 3840,
-                },
+                **_canvas_capabilities(),
                 "local_max_requests_per_minute": settings.openai_image_local_max_requests_per_minute,
                 "local_max_outputs_per_minute": settings.openai_image_local_max_outputs_per_minute,
                 "local_queue_timeout_seconds": settings.openai_image_local_queue_timeout_seconds,
@@ -611,23 +605,57 @@ def _requires_high_resolution_timeout(plan) -> bool:
     return False
 
 
+_STANDARD_CANVASES = ("1024x1024", "1024x1536", "1536x1024")
+_EXACT_RATIO_CANVASES = {
+    "1:1": "1024x1024", "2:3": "1024x1536", "3:2": "1536x1024",
+    "3:4": "1152x1536", "4:3": "1536x1152", "4:5": "1024x1280",
+    "5:4": "1280x1024", "9:16": "864x1536", "16:9": "1536x864",
+}
+
+
+def _supports_official_custom_canvas() -> bool:
+    # The configured GPT Image2 OpenAI-compatible route already declares the
+    # custom-canvas contract. Host identity alone cannot narrow that contract.
+    model = str(settings.openai_image_model or "").strip().lower()
+    return model == "gpt-image-2" or model.startswith("gpt-image-2-")
+
+
+def _canvas_capabilities() -> dict[str, Any]:
+    result: dict[str, Any] = {"sizes": ["auto", *_STANDARD_CANVASES]}
+    if _supports_official_custom_canvas():
+        result["sizes"].append("custom_dimensions")
+        result["custom_size"] = {
+            "max_width": 3840, "max_height": 3840, "edge_multiple": 16,
+            "min_pixels": 655360, "max_pixels": 8294400, "max_aspect_ratio": 3,
+        }
+    return result
+
+
 def _size(plan) -> str | None:
+    """Materialize an exact supported canvas, otherwise use native default.
+
+    A requested ratio is never approximated to a different aspect. In
+    particular, 16:9 is not the legacy 1536x1024 (3:2) canvas.
+    """
     params = plan.provider_parameters or {}
-    size = params.get("size") or params.get("aspect_ratio")
-    if not size or str(size).strip().lower() in {"auto", "default"}:
+    requested = params.get("size") or params.get("aspect_ratio")
+    size = str(requested or "").strip().lower().replace(" ", "").replace("×", "x")
+    if size in {"", "auto", "default"}:
         return None
-    if isinstance(size, str) and "x" in size:
+    size = _EXACT_RATIO_CANVASES.get(size, size)
+    if size in _STANDARD_CANVASES:
         return size
-    mapping = {
-        "1:1": "1024x1024",
-        "2:3": "1024x1536",
-        "3:2": "1536x1024",
-        "3:4": "1024x1536",
-        "4:3": "1536x1024",
-        "9:16": "1024x1536",
-        "16:9": "1536x1024",
-    }
-    return mapping.get(str(size))
+    if not _supports_official_custom_canvas():
+        return None
+    match = re.fullmatch(r"([1-9]\d*)x([1-9]\d*)", size)
+    if match is None:
+        return None
+    width, height = map(int, match.groups())
+    if (max(width, height) > 3840 or width % 16 or height % 16
+            or not 655360 <= width * height <= 8294400
+            or max(width, height) > 3 * min(width, height)):
+        return None
+    return size
 
 
 def _dimensions(plan) -> tuple[int | None, int | None]:

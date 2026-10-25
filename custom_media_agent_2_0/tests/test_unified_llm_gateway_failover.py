@@ -25,8 +25,8 @@ def test_v2_fallback_uses_selected_model_and_unified_gateway(monkeypatch) -> Non
         ),
     )
 
-    assert claude_orchestrator._claude_code_model_fallback_queue() == ["kimi-k3", "gpt-custom-backup", "gpt-6.1-sol"]  # noqa: SLF001
-    assert claude_orchestrator._claude_code_model_fallback_queue(exclude_model="gpt-6.1-sol") == ["kimi-k3", "gpt-custom-backup"]  # noqa: SLF001
+    assert claude_orchestrator._claude_code_model_fallback_queue() == ["gpt-6.1-sol", "gpt-custom-backup"]  # noqa: SLF001
+    assert claude_orchestrator._claude_code_model_fallback_queue(exclude_model="gpt-6.1-sol") == ["gpt-custom-backup"]  # noqa: SLF001
     assert claude_orchestrator._is_openai_compatible_fallback_model("gpt-custom-backup")  # noqa: SLF001
     assert claude_orchestrator._is_openai_compatible_fallback_model("kimi-for-coding")  # noqa: SLF001
     assert not claude_orchestrator._is_openai_compatible_fallback_model("claude-sonnet-5-5")  # noqa: SLF001
@@ -60,7 +60,7 @@ def test_v2_claude_primary_requires_unified_gateway_before_cli_dispatch(monkeypa
         )
 
 
-def test_v2_legacy_fallback_keeps_kimi_before_gpt_default(monkeypatch) -> None:
+def test_v2_legacy_fallback_appends_only_explicit_legacy_model(monkeypatch) -> None:
     monkeypatch.setattr(
         claude_orchestrator,
         "settings",
@@ -72,7 +72,6 @@ def test_v2_legacy_fallback_keeps_kimi_before_gpt_default(monkeypatch) -> None:
     )
 
     assert claude_orchestrator._claude_code_model_fallback_queue() == [  # noqa: SLF001
-        "kimi-k3",
         "gpt-6.1-sol",
         "gpt-4.1-legacy",
     ]
@@ -234,11 +233,18 @@ def test_v2_model_fallback_stops_on_terminal_status_and_continues_on_transient(
         return {"checkpoint": True}
 
     monkeypatch.setattr(claude_orchestrator, "_invoke_openai_compatible_stage_json", invoke)
-    result, _meta = claude_orchestrator._invoke_claude_code_model_fallbacks(  # noqa: SLF001
-        command=[], workspace=tmp_path, stage_name="test", prompt="x", schema={"type": "object"}
-    )
+    if failure.retryable is False:
+        with pytest.raises(claude_orchestrator.ClaudeInvocationError) as caught:
+            claude_orchestrator._invoke_claude_code_model_fallbacks(  # noqa: SLF001
+                command=[], workspace=tmp_path, stage_name="test", prompt="x", schema={"type": "object"}
+            )
+        assert caught.value is failure
+    else:
+        result, _meta = claude_orchestrator._invoke_claude_code_model_fallbacks(  # noqa: SLF001
+            command=[], workspace=tmp_path, stage_name="test", prompt="x", schema={"type": "object"}
+        )
+        assert result == {"checkpoint": True}
     assert calls == expected_calls
-    assert bool(result) is (len(expected_calls) == 2)
 
 
 @pytest.mark.parametrize(

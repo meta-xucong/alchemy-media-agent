@@ -177,6 +177,24 @@ class PrimaryTransport:
             raise PrimaryError('request_semantics_changed')
         return row
 
+    def match_existing_request(self, candidates):
+        """Select an exact historical digest without modifying the journal.
+
+        Callers supply known versioned reconstructions, never arbitrary saved
+        payloads. A known key with no matching digest remains a hard failure.
+        """
+        candidates = tuple(candidates)
+        if not candidates or len({request.key for request in candidates}) != 1:
+            raise PrimaryError('invalid_request_candidates')
+        if not self.path.exists(): return None
+        with sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            row = db.execute('SELECT digest FROM units WHERE key=?', (candidates[0].key,)).fetchone()
+        if row is None: return None
+        for request in candidates:
+            if request.digest == row[0]:
+                return request
+        raise PrimaryError('request_semantics_changed')
+
     def _save(self, request, data, *, state=None, image=None):
         return self._save_key(request.key, data, state=state, image=image)
 
@@ -277,12 +295,18 @@ class PrimaryTransport:
         if max(width,height)>limits.get('max_dimension',40000) or width*height>limits.get('max_image_pixels',40000000): return False
         if type(seed) is not int or not 0<=seed<=2**32-1: return False
         if request.binding_id is not None and (not isinstance(request.binding_id,str) or not 1<=len(request.binding_id)<=256): return False
-        if set(request.parameters)-{'width','height','seed','image_options'}: return False
+        if set(request.parameters)-{'width','height','seed','image_options','codex_adapter'}: return False
+        adapter = request.parameters.get('codex_adapter')
+        if 'codex_adapter' in request.parameters and (profile != 'codex-image' or adapter != 'codex_cli_imagegen_v1' or adapter not in pc.get('codex_adapter', {}).get('values', [])): return False
+        if adapter is not None:
+            ic = pc['codex_adapter'].get('image_options_contract')
+            if not isinstance(ic, dict): return False
         options=request.parameters.get('image_options')
         if options is not None:
-            if not isinstance(options,dict) or set(options)!={'schema_version','quality','output_format'} or options['schema_version']!='1': return False
-            if options['quality'] not in ic.get('quality',{}).get('values',[]): return False
-            if options['output_format'] not in ic.get('output_format',{}).get('values',[]): return False
+            if not isinstance(options,dict) or options.get('schema_version')!='1' or set(options)-{'schema_version','quality','output_format','transparent_background'}: return False
+            if 'quality' in options and options['quality'] not in ic.get('quality',{}).get('values',[]): return False
+            if 'output_format' in options and options['output_format'] not in ic.get('output_format',{}).get('values',[]): return False
+            if 'transparent_background' in options and options['transparent_background'] not in ic.get('transparent_background',{}).get('values',[]): return False
         if len(request.references)>ic.get('references',{}).get('max_count',0): return False
         if any(r.mime_type not in {'image/png','image/jpeg'} or len(r.content)<1 or len(r.content)>caps.get('limits',{}).get('max_input_bytes',1048576) for r in request.references): return False
         for key,value in request.hard_requirements.items():
@@ -290,6 +314,7 @@ class PrimaryTransport:
             if key=='output_format' and value in ic.get('output_format',{}).get('values',[]) and options and options.get('output_format')==value: continue
             if key=='quality' and value=='auto': continue
             if key=='exact_dimensions' and pc.get('dimension_semantics')=='exact_output_match': continue
+            if key=='reference_fusion' and request.references and len(request.references)<=ic.get('references',{}).get('max_count',0): continue
             if key=='reference_semantics' and value==pc.get('reference_semantics'): continue
             return False
         return True

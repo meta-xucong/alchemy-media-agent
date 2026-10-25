@@ -26,6 +26,7 @@ class Client:
         self.content = stream.getvalue()
         self.calls = 0
         self.acks = []
+        self.uploads = []
         self.state = 'artifacts_ready'
         self.error = None
 
@@ -33,9 +34,17 @@ class Client:
         return {'admission': {'accepting_new_tasks': True},
             'routing_availability_v1': {'profiles': [{'profile_id': 'codex-image', 'health': 'available', 'valid_until': '2099-01-01T00:00:00+00:00'}]},
             'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
-            'parameter_contract': {'accepted_parameters': ['width', 'height', 'image_options'], 'dimension_semantics': 'original_dimensions_recorded'},
+            'parameter_contract': {'accepted_parameters': ['width', 'height', 'image_options'], 'dimension_semantics': 'original_dimensions_recorded',
+                'codex_adapter': {'values': ['codex_cli_imagegen_v1'], 'image_options_contract': {
+                    'transparent_background': {'values': [True, False]}, 'references': {'max_count': 5}}}},
             'image_options_contract': {'quality': {'values': ['auto']}, 'output_format': {'values': ['png', 'jpeg']}, 'references': {'max_count': 8}},
             'limits': {'max_output_bytes': 16777216}}]}
+
+    async def create_input(self, payload):
+        return {'input_id': payload['input_key']}
+
+    async def upload_input(self, ref_id, content, mime_type):
+        self.uploads.append((ref_id, content, mime_type))
 
     async def create_task(self, payload):
         self.calls += 1
@@ -113,19 +122,25 @@ def test_actual_entrance_preserves_original_and_replays_checkpoint(rig):
     assert a.metadata['runtime_mode'] == 'production_image_generation'
 
 
-@pytest.mark.parametrize('hard_options', [
-    {'quality': 'high'}, {'quality': 'auto', 'background': 'transparent'},
+@pytest.mark.parametrize('optional_controls', [
+    {'quality': 'medium'}, {'quality': 'high'},
+    {'quality': 'auto', 'background': 'transparent'},
     {'quality': 'auto', 'output_compression': 80}, {'quality': 'auto', 'output_format': 'webp'},
 ])
-def test_unsupported_hard_controls_fallback_once_before_admission(rig, hard_options):
-    rig.request.metadata['provider_image_options'] = hard_options
+def test_optional_controls_use_native_bridge_defaults(rig, optional_controls):
+    rig.request.metadata['provider_image_options'] = optional_controls
     response = rig.provider.generate(rig.request)
-    assert response.candidates[0].provider == 'legacy'
-    assert rig.client.calls == 0
-    assert len(rig.api_calls) == 1
-    assert response.candidates[0].metadata[adapter.PROVENANCE]['reason'] == 'bridge_capability_unsupported'
+    assert response.candidates[0].provider == 'render_bridge'
+    assert rig.client.calls == 1 and not rig.api_calls
+    params = rig.client.payload['parameters']
+    assert params.get('codex_adapter') == 'codex_cli_imagegen_v1'
+    assert not {'width', 'height', 'seed'} & params.keys()
+    if optional_controls.get('background') == 'transparent':
+        assert params['image_options'] == {'schema_version': '1', 'transparent_background': True}
+    else:
+        assert 'image_options' not in params
     rig.provider.generate(rig.request)
-    assert len(rig.api_calls) == 1
+    assert rig.client.calls == 1
 
 
 def test_create_loss_restart_and_unknown_never_legacy(rig):
@@ -473,3 +488,150 @@ def test_batch_cancel_serializes_with_inflight_unit_admission(rig):
             await adapter.generate(following, no_api, rig.store)
     asyncio.run(run())
     assert rig.client.calls == 1 and rig.client.cancels == ['task_1']
+
+
+def test_new_native_normalization_does_not_mutate_api_fallback(rig):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    plan = app_request.prompt_plan
+    plan.quality = 'high'
+    plan.size = '1536x1024'
+    plan.output_format = 'webp'
+    plan.output_compression = 73
+    plan.variables['provider_image_options'] = {'seed': 42, 'aspect_ratio': '3:2', 'input_fidelity': 'high'}
+    before = app_request.model_dump(mode='json')
+    rig.client.error = BridgeError('queue_capacity', status=429)
+    seen = []
+    async def legacy(actual):
+        seen.append(actual)
+        return ImageGenerationResult(provider='legacy', model='fixture', outputs=[{'b64_json': base64.b64encode(rig.client.content).decode()}])
+    asyncio.run(adapter.generate(app_request, legacy, rig.store))
+    assert seen == [app_request] and seen[0] is app_request
+    assert app_request.model_dump(mode='json') == before
+    assert rig.client.payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
+
+
+@pytest.mark.parametrize('operation', ['mask', 'deterministic_postprocess', 'unknown_operation'])
+def test_essential_and_unknown_operations_never_bridge(rig, tmp_path, operation):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    if operation == 'mask':
+        path = tmp_path / 'mask.png'
+        path.write_bytes(rig.client.content)
+        app_request.prompt_plan.variables['identity_repair_mask_path'] = str(path)
+    else:
+        app_request.prompt_plan.variables['provider_image_options'][operation] = True
+    async def legacy(actual):
+        return ImageGenerationResult(provider='legacy', model='fixture', outputs=[{'b64_json': base64.b64encode(rig.client.content).decode()}])
+    result = asyncio.run(adapter.generate(app_request, legacy, rig.store))
+    assert result.provider == 'legacy' and rig.client.calls == 0
+
+
+@pytest.mark.parametrize('route', ['bridge', 'api'])
+@pytest.mark.parametrize('disabled', [False, True])
+def test_legacy_journal_exact_digest_recovery_and_checkpoint(rig, monkeypatch, route, disabled):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    if route == 'api':
+        app_request.prompt_plan.quality = 'high'
+    legacy = adapter._source_request(app_request)
+    transport = core.PrimaryTransport(rig.cfg)
+    result = asyncio.run(transport.resolve(legacy))
+    assert result.route == route
+    assert adapter.request_for(app_request, transport).digest == legacy.digest
+    if disabled:
+        monkeypatch.setattr(core.PrimarySettings, 'from_env', classmethod(lambda cls, product: replace(rig.cfg, enabled=False)))
+    calls = []
+    async def api(actual):
+        calls.append(actual)
+        return ImageGenerationResult(provider='legacy', model='fixture', outputs=[{'b64_json': base64.b64encode(rig.client.content).decode()}])
+    recovered = asyncio.run(adapter.generate(app_request, api, rig.store))
+    assert recovered.provider == ('render_bridge' if route == 'bridge' else 'legacy')
+    provenance = recovered.outputs[0][adapter.PROVENANCE]
+    record = SimpleNamespace(metadata={adapter.PROVENANCE: provenance}, output_id='fixture-output')
+    asyncio.run(adapter.checkpoint(app_request, record))
+    assert adapter.request_for(app_request, transport).digest == legacy.digest
+    assert len(calls) == (route == 'api')
+    assert rig.client.calls == (route == 'bridge')
+    assert bool(rig.client.acks) == (route == 'bridge')
+
+
+@pytest.mark.parametrize('count', [5, 6])
+def test_reference_limit_preserves_order_and_never_truncates(rig, tmp_path, count):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    paths = []
+    for index in range(count):
+        path = tmp_path / f'{index}.png'
+        path.write_bytes(rig.client.content + bytes([index]))
+        paths.append(path)
+    app_request.asset_plan = {'assets': [
+        {'provider_input_mode': 'reference_image', 'storage_path': str(path)} for path in paths]}
+    native = adapter.request_for(app_request)
+    assert [ref.content for ref in native.references] == [path.read_bytes() for path in paths]
+    async def api(actual):
+        return ImageGenerationResult(provider='legacy', model='fixture', outputs=[{'b64_json': base64.b64encode(rig.client.content).decode()}])
+    result = asyncio.run(adapter.generate(app_request, api, rig.store))
+    assert result.provider == ('render_bridge' if count == 5 else 'legacy')
+    assert rig.client.calls == (count == 5)
+    assert [item[1] for item in rig.client.uploads] == ([path.read_bytes() for path in paths] if count == 5 else [])
+
+
+def test_legacy_cancel_keeps_frozen_payload_and_blocks_recovery(rig):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    legacy = adapter._source_request(app_request)
+    rig.client.state = 'running'
+    transport = core.PrimaryTransport(rig.cfg)
+    asyncio.run(transport.resolve(legacy))
+    original = dict(rig.client.payload)
+    rig.client.cancel = lambda task_id: asyncio.sleep(0)
+    service, _ = _cancel_service(rig)
+    asyncio.run(service.cancel_primary_bridge_generation('job_v3_prod', owner_user_id=7))
+    assert adapter.request_for(app_request, transport).digest == legacy.digest
+    with pytest.raises(ProviderRuntimeError):
+        rig.provider.generate(rig.request)
+    assert rig.client.calls == 1 and not rig.api_calls
+    assert rig.client.payload == original
+
+
+@pytest.mark.parametrize('mode', ['postprocess_only', 'mask_edit_source'])
+def test_asset_plan_essential_operations_do_not_become_reference_hints(rig, mode):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    app_request.asset_plan = {'assets': [{'provider_input_mode': mode}]}
+    async def api(actual):
+        return ImageGenerationResult(provider='legacy', model='fixture', outputs=[{'b64_json': base64.b64encode(rig.client.content).decode()}])
+    result = asyncio.run(adapter.generate(app_request, api, rig.store))
+    assert result.provider == 'legacy' and rig.client.calls == 0
+
+
+def test_missing_reference_is_not_silently_removed(rig, monkeypatch):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    app_request.asset_plan = {'assets': [{'provider_input_mode': 'reference_image'}]}
+    monkeypatch.setattr(adapter, 'reference_image_paths', lambda *args, **kwargs: [])
+    with pytest.raises(ProviderRuntimeError) as caught:
+        adapter.request_for(app_request)
+    assert caught.value.detail['failure_code'] == 'bridge_reference_materialization_missing'
+    assert not rig.api_calls and rig.client.calls == 0
+
+
+def test_missing_native_contract_never_assumes_outer_legacy_contract(rig):
+    original = rig.client.capabilities
+    async def old_caps():
+        caps = await original()
+        del caps['profiles'][0]['parameter_contract']['codex_adapter']
+        return caps
+    rig.client.capabilities = old_caps
+    result = rig.provider.generate(rig.request)
+    assert result.candidates[0].provider == 'legacy'
+    assert rig.client.calls == 0 and len(rig.api_calls) == 1
+
+
+def test_optional_non_numeric_size_uses_native_defaults(rig):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    app_request.prompt_plan.size = 'auto'
+    app_request.prompt_plan.variables['provider_image_options'] = {
+        'seed': 42, 'aspect_ratio': '3:2', 'width': 1536, 'height': 1024,
+        'input_fidelity': 'high', 'size': 'auto', 'output_compression': 80}
+    async def no_api(actual):
+        raise AssertionError('Optional controls must not force fallback')
+    result = asyncio.run(adapter.generate(app_request, no_api, rig.store))
+    assert result.provider == 'render_bridge'
+    assert rig.client.payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
+    transport = core.PrimaryTransport(rig.cfg)
+    assert adapter.request_for(app_request, transport).parameters == rig.client.payload['parameters']

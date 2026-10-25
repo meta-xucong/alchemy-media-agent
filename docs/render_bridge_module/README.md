@@ -7,6 +7,7 @@
 - [RB17](RB17_V2_PRIMARY_TRANSPORT.md): isolated V2 transport and queue lifecycle.
 - [RB18](RB18_V3_PRIMARY_TRANSPORT.md): canonical V3 transport, original checkpoints and review/slot isolation.
 - [RB19](RB19_FULL_PRODUCT_ACCEPTANCE_20261024.md): this implementation's evidence and local acceptance handoff.
+- [RB20](RB20_NATIVE_ADAPTER_CANVAS_LOCAL_ACCEPTANCE.md): current native-adapter/canvas candidate, exact paired Bridge pin and bounded local acceptance instructions.
 
 RB00–RB12 and the integration package's older native/preview documents describe
 historical experimental milestones. Their evidence remains pinned to those

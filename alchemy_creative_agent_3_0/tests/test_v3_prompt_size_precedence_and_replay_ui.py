@@ -1,4 +1,9 @@
 import json
+import pytest
+from copy import deepcopy
+from fractions import Fraction
+from alchemy_creative_agent_3_0.app.generation_router import ProductionImageGenerationProvider
+from alchemy_creative_agent_3_0.tests.test_v3_provider_output_production import _generation_request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,7 +130,7 @@ def test_brain_aspect_ratio_resolves_to_supported_landscape_canvas() -> None:
         brain_result,
     )
 
-    assert resolved.effective_image_size == "1536x1024"
+    assert resolved.effective_image_size == "3008x1280"
     assert request.metadata["requested_image_aspect_ratio"] == "2.35:1"
     assert request.metadata["requested_image_size_source"] == "remote_brain_user_intent"
 
@@ -142,7 +147,7 @@ def test_brain_aspect_ratio_overrides_echoed_browser_canvas() -> None:
         brain_result,
     )
 
-    assert resolved.effective_image_size == "1536x1024"
+    assert resolved.effective_image_size == "3008x1280"
     assert request.metadata["requested_image_aspect_ratio_source"] == "remote_brain_user_intent"
 
 
@@ -236,3 +241,146 @@ def test_desktop_continuation_preserves_project_image_count() -> None:
     )[0]
     assert "setV3ContinuationGenerationDefaults();" in continuation
     assert continuation.index("setV3ContinuationGenerationDefaults();") < continuation.index("els.v3PromptInput.value")
+
+
+@pytest.mark.parametrize("initial_size", ["1024x1536", "2048x1152"])
+def test_prompt_canvas_synchronizes_typed_option_and_frozen_provider_plan(initial_size, monkeypatch):
+    runtime = ScenarioRuntime()
+    request = SimpleNamespace(metadata={
+        "requested_image_size": initial_size,
+        "provider_image_options": {"size": "1024x1536", "quality": "high"},
+    })
+    resolved = runtime._apply_brain_image_size_precedence(
+        request, _normalized_intent(initial_size),
+        SimpleNamespace(image_set_plan=SimpleNamespace(size="2048x1152", aspect_ratio="16:9")),
+    )
+    assert resolved.effective_image_size == "2048x1152"
+    assert request.metadata["provider_image_options"] == {"size": "2048x1152", "quality": "high"}
+    assert request.metadata["manual_provider_image_size"] == "1024x1536"
+    assert resolved.provenance[-1]["manual_provider_image_size"] == "1024x1536"
+
+    # Exercise the real planning freeze with dependency outputs stubbed, then
+    # consume its per-output metadata at the real provider size boundary.
+    class Record(SimpleNamespace):
+        def model_copy(self, *, update):
+            return Record(**{**vars(self), **update})
+    generation = _generation_request()
+    result = Record(creative_job=Record(metadata={}), generation_plans=[generation.generation_plan], metadata={})
+    monkeypatch.setattr(runtime, "_activation_metadata", lambda _: {})
+    monkeypatch.setattr(runtime, "_specialized_metadata", lambda _: {})
+    preparation = SimpleNamespace(normalized_job_intent=resolved, activation_plan=None)
+    frozen = runtime._enrich_activation_result(result, preparation, request)
+    generation.generation_plan = frozen.generation_plans[0]
+    generation.metadata = {}
+    provider = ProductionImageGenerationProvider()
+    assert generation.generation_plan.metadata["requested_image_size"] == "2048x1152"
+    assert generation.generation_plan.metadata["requested_image_size_source"] == "remote_brain_user_intent"
+    assert provider._size_for_request(generation) == "2048x1152"
+    assert "aspect ratio: 16:9" in provider._asset_canvas_instruction(generation, generation.asset_spec)
+    assert "2:3" not in provider._asset_canvas_instruction(generation, generation.asset_spec)
+
+
+@pytest.mark.parametrize("size,ratio,expected", [
+    ("1536x864", "16:9", "1536x864"),
+    ("2048x1152", "16:9", "2048x1152"),
+    ("1920x1080", "16:9", "auto"),
+    ("auto", "16:9", "auto"),
+    ("1024x1536", "16:9", "2048x1152"),
+    (None, "4:1", "auto"),
+    ("17x17", None, "auto"),
+])
+def test_explicit_canvas_preserves_exact_dimensions_or_uses_auto(size, ratio, expected):
+    request = SimpleNamespace(metadata={"provider_image_options": {"size": "1024x1536"}})
+    resolved = ScenarioRuntime()._apply_brain_image_size_precedence(
+        request, _normalized_intent("1024x1536"),
+        SimpleNamespace(image_set_plan=SimpleNamespace(size=size, aspect_ratio=ratio)),
+    )
+    assert resolved.effective_image_size == expected
+    generation = _generation_request()
+    generation.generation_plan.metadata.update(request.metadata)
+    provider = ProductionImageGenerationProvider()
+    assert provider._size_for_request(generation) == expected
+    hint = provider._asset_canvas_instruction(generation, generation.asset_spec)
+    if expected == "auto":
+        assert "aspect ratio" not in hint
+        assert "requested_image_aspect_ratio" not in request.metadata
+        assert resolved.provenance[-1]["requested_canvas_aspect_ratio"] == ratio
+    elif ratio == "16:9":
+        assert "16:9" in hint
+
+
+@pytest.mark.parametrize("ratio", ["2.35:1", "2.39:1", "9:16", "4:5", "7:5", "11:8"])
+def test_structured_ratio_resolution_is_exact_not_nearest(ratio):
+    _, size = ScenarioRuntime._canonical_brain_aspect_ratio(ratio)
+    width, height = map(int, size.split("x"))
+    numerator, denominator = ratio.split(":")
+    assert Fraction(width, height) == Fraction(numerator) / Fraction(denominator)
+    assert ScenarioRuntime._canonical_brain_image_size(size) == size
+
+
+def test_absent_prompt_canvas_keeps_manual_options_unchanged():
+    metadata = {"requested_image_size": "1024x1536", "provider_image_options": {"size": "1024x1536"}}
+    request = SimpleNamespace(metadata=deepcopy(metadata))
+    normalized = _normalized_intent("1024x1536")
+    assert ScenarioRuntime()._apply_brain_image_size_precedence(
+        request, normalized, SimpleNamespace(image_set_plan=SimpleNamespace(size=None, aspect_ratio=None)),
+    ) is normalized
+    assert request.metadata == metadata
+
+
+def test_trusted_frozen_replay_never_reinterprets_historical_canvas():
+    normalized = _normalized_intent("1024x1536")
+    metadata = {"normalized_v3_job_intent": normalized.model_dump(mode="json"),
+                "provider_image_options": {"size": "1024x1536"}}
+    request = SimpleNamespace(metadata=deepcopy(metadata), trusted_capability_plan_reuse=True)
+    assert ScenarioRuntime()._apply_brain_image_size_precedence(
+        request, normalized, SimpleNamespace(image_set_plan=SimpleNamespace(size="2048x1152", aspect_ratio="16:9")),
+    ) is normalized
+    assert request.metadata == metadata
+
+
+@pytest.mark.parametrize("size,expected", [("2048x1152", "2048x1152"), ("1920x1080", "auto")])
+def test_prompt_owned_canvas_reaches_materialization_without_rewriting_prompt(size, expected):
+    user_prompt = f"Create a landscape image at exactly {size}, 16:9."
+    request = SimpleNamespace(metadata={"requested_image_size": "1024x1536",
+                                        "provider_image_options": {"size": "1024x1536"}})
+    ScenarioRuntime()._apply_brain_image_size_precedence(
+        request, _normalized_intent("1024x1536"),
+        SimpleNamespace(image_set_plan=SimpleNamespace(size=size, aspect_ratio="16:9")),
+    )
+    generation = _generation_request()
+    generation.metadata["user_input"] = user_prompt
+    generation.metadata["llm_brain"]["canonical_provider_prompts"][0]["prompt"] = user_prompt
+    generation.generation_plan.metadata.update(request.metadata)
+    materialized = ProductionImageGenerationProvider().materialize_final_prompt(generation)
+    assert materialized.size == expected
+    assert materialized.generation_prompt == user_prompt
+
+
+def test_native_auto_clears_stale_frozen_plan_crop_requirement(monkeypatch):
+    runtime = ScenarioRuntime()
+    request = SimpleNamespace(metadata={
+        "requested_image_size": "1024x1536",
+        "requested_image_aspect_ratio": "2:3",
+        "provider_image_options": {"size": "1024x1536"},
+    })
+    resolved = runtime._apply_brain_image_size_precedence(
+        request, _normalized_intent("1024x1536"),
+        SimpleNamespace(image_set_plan=SimpleNamespace(size="1920x1080", aspect_ratio="16:9")),
+    )
+    class Record(SimpleNamespace):
+        def model_copy(self, *, update):
+            return Record(**{**vars(self), **update})
+    generation = _generation_request()
+    generation.generation_plan.metadata["requested_image_aspect_ratio"] = "2:3"
+    generation.generation_plan.metadata["requested_image_aspect_ratio_source"] = "remote_brain_user_intent"
+    result = Record(creative_job=Record(metadata={}), generation_plans=[generation.generation_plan], metadata={})
+    monkeypatch.setattr(runtime, "_activation_metadata", lambda _: {})
+    monkeypatch.setattr(runtime, "_specialized_metadata", lambda _: {})
+    frozen = runtime._enrich_activation_result(
+        result, SimpleNamespace(normalized_job_intent=resolved, activation_plan=None), request,
+    )
+    metadata = frozen.generation_plans[0].metadata
+    assert metadata["provider_image_options"]["size"] == "auto"
+    assert not metadata["requested_image_aspect_ratio"]
+    assert not metadata["requested_image_aspect_ratio_source"]

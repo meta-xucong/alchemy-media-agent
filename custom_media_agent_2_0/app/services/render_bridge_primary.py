@@ -71,7 +71,8 @@ def freeze(request: CreateImageJobRequest, job_id: str, created_at: datetime, qr
     delivery = variables.get("reference_delivery") or {}
     if qr or (isinstance(delivery, dict) and (delivery.get("deterministic_text_overlay") or {}).get("items")):
         requirements["deterministic_postprocess"] = True
-    record = {"request": request.model_dump(mode="json"), "job_id": job_id,
+    record = {"adapter_version": "codex_cli_imagegen_v1",
+              "request": request.model_dump(mode="json"), "job_id": job_id,
               "created_at": created_at.isoformat(), "qr": qr, "references": references,
               "requirements": requirements, "queue_task_id": task_queue.current_claim().task_id if task_queue.current_claim() else None}
     def persist():
@@ -106,9 +107,11 @@ def primary_request(record: dict):
         hard_requirements=requirements)
 
 
-def provider_result(result) -> V2ImageProviderResult:
+def provider_result(result, *, parameter_adaptation: dict | None = None) -> V2ImageProviderResult:
     image = result.image
     provenance = {key: getattr(result, key, None) for key in ("route", "state", "reason", "origin_key", "task_id", "receipt_id", "execution_key")}
+    if parameter_adaptation:
+        provenance["parameter_adaptation"] = parameter_adaptation
     return V2ImageProviderResult(provider="render_bridge", model="render-bridge-primary",
         outputs=[V2ImageProviderOutput(b64_json=base64.b64encode(image.content).decode(),
             mime_type=image.mime_type, format=image.mime_type.split("/")[-1], width=image.width, height=image.height,
@@ -130,7 +133,11 @@ def ensure_not_cancelled(job_id: str):
         raise BridgeWait("canceled", terminal=True)
 
 
-def _unit_request(record: dict, index: int):
+def _codex_cli_adaptation(params: dict, reference_count: int) -> tuple[dict, dict]:
+    from render_bridge_primary.codex_adapter import codex_cli_adaptation
+    return codex_cli_adaptation(params, reference_count)
+
+def _legacy_unit_request(record: dict, index: int):
     request = primary_request(record)
     params = dict(request.parameters)
     requirements = dict(request.hard_requirements)
@@ -160,6 +167,48 @@ def _unit_request(record: dict, index: int):
     return replace(request, unit_id=f"{record['job_id']}:{index}", parameters=wire, hard_requirements=requirements)
 
 
+def _normalized_unit_request(record: dict, index: int, *, versioned: bool):
+    request = primary_request(record)
+    requirements = dict(request.hard_requirements)
+    requirements.pop("input_fidelity", None)
+    wire, _ = _codex_cli_adaptation(dict(request.parameters), len(request.references))
+    if versioned:
+        wire["codex_adapter"] = "codex_cli_imagegen_v1"
+    return replace(request, unit_id=f"{record['job_id']}:{index}", parameters=wire,
+                   hard_requirements=requirements)
+
+
+def _unit_request(record: dict, index: int, client=None):
+    """Reconstruct frozen semantics, never upgrade an already journaled unit."""
+    from render_bridge_primary import PrimaryError
+    version = record.get("adapter_version")
+    if version == "codex_cli_imagegen_v1":
+        return _normalized_unit_request(record, index, versioned=True)
+    if version is not None:
+        raise PrimaryError("unsupported_frozen_adapter_version")
+    # PR38 and PR39 both wrote unversioned frozen records. Their existing
+    # journal digest, not current capabilities, is the authority for recovery.
+    try:
+        legacy = _legacy_unit_request(record, index)
+    except (ValueError, TypeError):
+        # PR39 normalization accepted some values that PR38 could not parse.
+        # They may resume only if their exact PR39 digest was already journaled.
+        if client is not None:
+            matched = client.match_existing_request((
+                _normalized_unit_request(record, index, versioned=False),))
+            if matched is not None:
+                return matched
+        raise PrimaryError("legacy_request_invalid") from None
+    if client is not None:
+        matched = client.match_existing_request((legacy,
+            _normalized_unit_request(record, index, versioned=False)))
+        if matched is not None:
+            return matched
+    # No journal means no known admission. Preserve the older strict contract
+    # rather than silently weakening an unversioned request's original intent.
+    return legacy
+
+
 def _count(record: dict) -> int:
     return max(1, min(int(frozen_request(record).prompt_plan.provider_parameters.get("count", 1)), 8))
 
@@ -185,7 +234,11 @@ async def _generate(record: dict, select_provider, client):
     for index in range(_count(record)):
         task_queue.ensure_current_claim()
         ensure_not_cancelled(record["job_id"])
-        unit = _unit_request(record, index)
+        from render_bridge_primary import PrimaryError
+        try:
+            unit = _unit_request(record, index, client)
+        except PrimaryError as exc:
+            raise BridgeWait(exc.code, terminal=True) from exc
         cache = _cache_path(record, index)
         if cache.exists():
             result = V2ImageProviderResult.model_validate_json(cache.read_text(encoding="utf-8"))
@@ -206,7 +259,11 @@ async def _generate(record: dict, select_provider, client):
                 if decision.image is None:
                     terminal = decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
                     raise BridgeWait(decision.state, terminal=terminal)
-                result = provider_result(decision)
+                adaptation = None
+                if (unit.parameters.get("codex_adapter") == "codex_cli_imagegen_v1" or
+                        unit.digest == _normalized_unit_request(record, index, versioned=False).digest):
+                    _, adaptation = _codex_cli_adaptation(dict(request.prompt_plan.provider_parameters), len(unit.references))
+                result = provider_result(decision, parameter_adaptation=adaptation)
             else:
                 required = [image for image in request.input_images if image.provider_input_required]
                 if len(required) != len(record["references"]):
@@ -263,7 +320,7 @@ async def _acknowledge(record: dict):
         for index in range(_count(record)):
             task_queue.ensure_current_claim()
             cached = V2ImageProviderResult.model_validate_json(_cache_path(record, index).read_text(encoding="utf-8"))
-            unit = _unit_request(record, index)
+            unit = _unit_request(record, index, client)
             if cached.provider == "render_bridge":
                 await client.acknowledge(unit, registration_ref=f"v2:{record['job_id']}:{index}")
             else:
@@ -276,7 +333,7 @@ async def cancel(record: dict):
     client = transport()
     try:
         for index in range(_count(record)):
-            unit = _unit_request(record, index)
+            unit = _unit_request(record, index, client)
             if client.has_binding(unit):
                 await client.cancel(unit)
     finally:

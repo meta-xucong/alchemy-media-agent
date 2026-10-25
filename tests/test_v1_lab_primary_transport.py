@@ -22,15 +22,23 @@ class Bridge:
         stream = io.BytesIO()
         Image.new('RGB', (7, 11), (20, 60, 80)).save(stream, format='PNG')
         self.content = stream.getvalue()
-        self.tasks = {}; self.creates = 0; self.acks = []; self.cancels = []
-        self.state = 'artifacts_ready'; self.error = None; self.healthy = True
+        self.tasks = {}; self.creates = 0; self.acks = []; self.cancels = []; self.inputs = []
+        self.state = 'artifacts_ready'; self.error = None; self.healthy = True; self.native = True
 
     async def capabilities(self):
         return {'admission': {'accepting_new_tasks': True}, 'routing_availability_v1': {'profiles': [
             {'profile_id': 'codex-image', 'health': 'available' if self.healthy else 'unavailable', 'valid_until': '2099-01-01T00:00:00Z'}]},
             'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
-            'parameter_contract': {'accepted_parameters': ['width', 'height', 'seed', 'image_options'], 'dimension_semantics': 'original_dimensions_recorded'},
+            'parameter_contract': {'accepted_parameters': ['width', 'height', 'seed', 'image_options'], 'dimension_semantics': 'original_dimensions_recorded',
+                **({'codex_adapter': {'values': ['codex_cli_imagegen_v1'], 'image_options_contract': {
+                    'transparent_background': {'values': [True, False]}, 'references': {'max_count': 5}}}} if self.native else {})},
             'image_options_contract': {'quality': {'values': ['auto']}, 'output_format': {'values': ['png', 'jpeg']}, 'references': {'max_count': 8}}}]}
+
+    async def create_input(self, payload):
+        return {"input_id": payload["input_key"]}
+
+    async def upload_input(self, input_id, content, mime_type):
+        self.inputs.append((input_id, content, mime_type))
 
     async def create_task(self, payload):
         self.creates += 1
@@ -140,7 +148,7 @@ def test_v1_proven_nonadmission_uses_exact_api_request_once(runtime, reason):
     kwargs = {}
     if reason == 'queue': bridge.error = BridgeError('queue_capacity', status=429)
     if reason == 'health': bridge.healthy = False
-    if reason == 'capability': kwargs = {'background': 'transparent', 'output_compression': 0, 'quality': 'high'}
+    if reason == 'capability': bridge.native = False; kwargs = {'background': 'transparent', 'output_compression': 0, 'quality': 'high'}
     job = asyncio.run(submit(**kwargs))
     assert job.status == JobStatus.ready and api.calls == 1
     if reason == 'capability':
@@ -185,23 +193,21 @@ def make_lab_session():
     return session
 
 
-def test_lab_real_entry_high_quality_is_not_silently_downgraded(runtime):
+def test_lab_real_entry_high_quality_uses_versioned_native_defaults(runtime):
     bridge, api = runtime
     session = make_lab_session()
     result = asyncio.run(lab.run_exploration_session(session.id))
     assert result.status == 'completed' and result.variants[0].status == 'succeeded'
-    assert api.calls == 1 and api.requests[0].prompt_plan.quality == 'high' and bridge.creates == 0
+    assert api.calls == 0 and bridge.creates == 1
     job = repository.list_jobs()[0]
-    assert job.raw_response_summary[primary.KEY]['units']['0']['reason'] == 'bridge_capability_unsupported'
+    assert job.raw_response_summary[primary.KEY]['request']['prompt_plan']['quality'] == 'high'
+    assert next(iter(bridge.tasks.values()))['request']['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
     asyncio.run(lab.run_exploration_session(session.id))
-    assert api.calls == 1
+    assert api.calls == 0 and bridge.creates == 1
 
 
 def test_lab_real_entry_pending_restart_keeps_variant_job(runtime, monkeypatch):
     bridge, api = runtime
-    # Synthetic capable transport demonstrates the caller lifecycle. Actual Codex
-    # high-quality capability rejection is asserted separately above.
-    monkeypatch.setattr(PrimaryTransport, '_supported', staticmethod(lambda *args: True))
     bridge.state = 'execution_unknown'
     session = make_lab_session()
     first = asyncio.run(lab.run_exploration_session(session.id))
@@ -603,3 +609,157 @@ def test_lab_public_projection_preserves_strict_schema_and_private_recovery_flag
     schema = json.loads(Path('specs/alchemy_lab/rare_style_explorer.schema.json').read_text(encoding='utf-8'))
     jsonschema.Draft202012Validator(schema).validate({'session': public, 'board': lab.comparison_board(session).model_dump(mode='json')})
     assert lab.lab_store.get(session.id).primary_transport is True
+
+
+def test_v1_native_defaults_preserve_prompt_and_original_request(runtime):
+    from app.providers.openai_image import OpenAIGPTImageProvider
+    bridge, api = runtime
+    job = asyncio.run(submit(quality='high', size='1536x1024', output_format='webp',
+                             output_compression=17, background='transparent'))
+    assert job.status == JobStatus.ready and not api.calls and bridge.creates == 1
+    frozen = primary.frozen_request(job)
+    payload = next(iter(bridge.tasks.values()))['request']
+    assert payload['prompt'] == OpenAIGPTImageProvider()._render_prompt(frozen.prompt_plan)
+    assert payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1',
+        'image_options': {'schema_version': '1', 'transparent_background': True}}
+    assert frozen.prompt_plan.quality == 'high' and frozen.prompt_plan.output_format == 'webp'
+    assert frozen.prompt_plan.output_compression == 17 and frozen.prompt_plan.size == '1536x1024'
+
+
+def test_unmarked_legacy_ledger_recovers_without_digest_change(runtime):
+    bridge, api = runtime
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Legacy landscape',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        job, request = prepared.job, prepared.request
+        job.raw_response_summary[primary.KEY] = {'request': request.model_dump(mode='json'), 'edit': False, 'units': {}}
+        repository.save_job(job)
+        unit = primary.primary_request(job, request, 0)
+        bridge.state = 'queued'
+        async with primary.transport_for('v1') as transport:
+            await transport.resolve(unit)
+        original_payload = next(iter(bridge.tasks.values()))['request']
+        assert 'codex_adapter' not in original_payload['parameters']
+        bridge.state = 'artifacts_ready'
+        done = await primary.resume_primary_job(job.id)
+        assert done.status == JobStatus.ready and bridge.creates == 1 and not api.calls
+        assert primary.primary_request(done, primary.frozen_request(done), 0).digest == unit.digest
+        assert 'adapter_version' not in done.raw_response_summary[primary.KEY]
+    asyncio.run(run())
+
+
+def test_v1_revision_entry_bridges_exact_source_bytes(runtime):
+    from app.schemas import ReviseImageRequest
+    bridge, api = runtime
+    source = asyncio.run(submit())
+    source_bytes = media_store.find_output_file(source.outputs[0].id)[0].read_bytes()
+    prepared = asyncio.run(images.submit_revise_image_job(source.id, ReviseImageRequest(
+        output_id=source.outputs[0].id, feedback='Make the sky blue', provider_preference='fixture_api')))
+    done = asyncio.run(images.run_submitted_image_job(prepared.job.id, prepared.request, edit=True))
+    assert done.status == JobStatus.ready and bridge.creates == 2 and not api.calls
+    assert len(bridge.inputs) == 1 and bridge.inputs[0][1] == source_bytes
+    assert bridge.inputs[0][2] == 'image/png'
+
+
+@pytest.mark.parametrize('count', [5, 6])
+def test_v1_references_preserve_order_and_never_truncate(runtime, tmp_path, monkeypatch, count):
+    bridge, api = runtime
+    paths = []
+    for index in range(count):
+        path = tmp_path / f'reference_{index}.png'
+        path.write_bytes(bridge.content + bytes([index]))
+        paths.append(path)
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Use all references',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(update={'asset_ids': [str(i) for i in range(count)]})
+        monkeypatch.setattr(media_store, 'find_asset_file', lambda asset_id: paths[int(asset_id)])
+        done = await images.run_submitted_image_job(prepared.job.id, request)
+        assert done.status == JobStatus.ready
+        if count == 5:
+            assert bridge.creates == 1 and not api.calls
+            assert [item[1] for item in bridge.inputs] == [path.read_bytes() for path in paths]
+        else:
+            assert bridge.creates == 0 and api.calls == 1 and not bridge.inputs
+            assert api.requests[0].asset_ids == request.asset_ids
+        unit = primary.primary_request(done, primary.frozen_request(done), 0)
+        assert len(unit.references) == count
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('variable', ['mask', 'input_fidelity_required'])
+def test_required_operations_are_not_optional_native_controls(runtime, variable):
+    bridge, api = runtime
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Required operation',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        request.prompt_plan.variables[variable] = True
+        done = await images.run_submitted_image_job(prepared.job.id, request)
+        assert done.status == JobStatus.ready and not bridge.creates and api.calls == 1
+        assert api.requests[0].prompt_plan.variables[variable] is True
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("problem", ["foreign", "missing"])
+def test_revision_missing_or_foreign_source_never_admits(runtime, problem):
+    from app.schemas import ReviseImageRequest
+    bridge, api = runtime
+    source = asyncio.run(submit())
+    prepared = asyncio.run(images.submit_revise_image_job(source.id, ReviseImageRequest(
+        output_id=source.outputs[0].id, feedback='Blue sky', provider_preference='fixture_api')))
+    if problem == "foreign":
+        prepared.request.veyra_user_id = 99
+    else:
+        media_store.find_output_file(source.outputs[0].id)[0].unlink()
+    done = asyncio.run(images.run_submitted_image_job(prepared.job.id, prepared.request, edit=True))
+    assert done.status == JobStatus.generating and done.error.code == 'primary_reconciliation_required'
+    assert bridge.creates == 1 and not api.calls and not bridge.inputs
+
+
+def test_optional_variable_controls_use_defaults_but_frozen_request_is_untouched(runtime):
+    bridge, api = runtime
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Native controls',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        controls = {'seed': 123, 'input_fidelity': 'high', 'exact_dimensions': True, 'aspect_ratio': '16:9'}
+        request.prompt_plan.variables.update(controls)
+        done = await images.run_submitted_image_job(prepared.job.id, request)
+        assert done.status == JobStatus.ready and bridge.creates == 1 and not api.calls
+        assert next(iter(bridge.tasks.values()))['request']['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
+        assert all(primary.frozen_request(done).prompt_plan.variables[key] == value for key, value in controls.items())
+    asyncio.run(run())
+
+
+def test_unknown_checkpoint_version_never_resubmits_or_falls_back(runtime):
+    bridge, api = runtime
+    bridge.state = 'queued'
+    job = asyncio.run(submit())
+    job.raw_response_summary[primary.KEY]['adapter_version'] = 'future_adapter'
+    repository.save_job(job)
+    done = asyncio.run(primary.resume_primary_job(job.id))
+    assert done.status == JobStatus.generating and done.error.code == 'primary_reconciliation_required'
+    assert bridge.creates == 1 and not api.calls and not bridge.acks
+
+
+def test_lab_old_bridge_capabilities_keep_original_high_quality_api(runtime):
+    bridge, api = runtime
+    bridge.native = False
+    session = make_lab_session()
+    done = asyncio.run(lab.run_exploration_session(session.id))
+    assert done.status == 'completed' and bridge.creates == 0 and api.calls == 1
+    assert api.requests[0].prompt_plan.quality == 'high'
+
+
+def test_revision_does_not_duplicate_source_already_in_references(runtime, monkeypatch):
+    from app.schemas import ReviseImageRequest
+    bridge, api = runtime
+    source = asyncio.run(submit())
+    path = media_store.find_output_file(source.outputs[0].id)[0]
+    prepared = asyncio.run(images.submit_revise_image_job(source.id, ReviseImageRequest(
+        output_id=source.outputs[0].id, feedback='Blue sky', provider_preference='fixture_api')))
+    prepared.request.asset_ids = ['existing_source']
+    monkeypatch.setattr(media_store, 'find_asset_file', lambda asset_id: path)
+    done = asyncio.run(images.run_submitted_image_job(prepared.job.id, prepared.request, edit=True))
+    assert done.status == JobStatus.ready and len(bridge.inputs) == 1 and bridge.creates == 2 and not api.calls
