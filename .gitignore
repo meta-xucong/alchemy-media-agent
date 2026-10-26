@@ -18,6 +18,7 @@
 /alchemy_creative_agent_3_0/docs/293_V3_UNIFIED_PROMPT_COMPRESSION_AND_BRAIN_FINALIZATION_SPEC.main-untracked-before-integration.md
 
 # Runtime-generated media, history, and logs
+.runtime/
 .media_storage/
 .render_bridge_preview/
 .render_bridge_primary/
