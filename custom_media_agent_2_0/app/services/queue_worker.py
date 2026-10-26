@@ -25,6 +25,7 @@ _UPSTREAM_BALANCE_WAIT_SECONDS = 300.0
 _PROVIDER_RATE_LIMIT_WAIT_SECONDS = 180.0
 _GENERIC_RETRYABLE_WAIT_SECONDS = 120.0
 _MAX_WAIT_SECONDS = 900.0
+_BRIDGE_RECONCILIATION_WAIT_SECONDS = 120.0
 _FINALIZATION_RETRIES = 3
 _FINALIZATION_RETRY_DELAY_SECONDS = 0.05
 logger = logging.getLogger(__name__)
@@ -186,6 +187,10 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                     consume_attempt=retry_directive.consume_attempt,
                 )
                 return True
+            if _bridge_reconciliation_required(run):
+                message = run.next_actions[0] if run.next_actions else "Render Bridge reconciliation deadline elapsed."
+                task_queue.fail_task(record, message, run, force_terminal=True)
+                return True
             _complete_task_with_bounded_retry(record, run)
         except GenerationCapacityStorageBusy:
             snapshot = task_queue.get_run_snapshot(record.run_id)
@@ -316,6 +321,15 @@ def _queued_run_retry_directive(run: CreativeRun) -> QueueRetryDirective | None:
     return None
 
 
+def _bridge_reconciliation_required(run: CreativeRun) -> bool:
+    return any(
+        (job.error or {}).get("provider") == "render_bridge"
+        and isinstance((job.error or {}).get("detail"), dict)
+        and (job.error or {})["detail"].get("queue_reconciliation_required") is True
+        for job in run.generation_jobs
+    )
+
+
 def _job_retry_directive(error: dict) -> QueueRetryDirective | None:
     code = str(error.get("error_code") or "")
     message = str(error.get("message") or "")
@@ -326,8 +340,14 @@ def _job_retry_directive(error: dict) -> QueueRetryDirective | None:
         return QueueRetryDirective(message="Completing the existing image and billing transaction; no new image will be generated.",
                                    retry_delay_seconds=120.0, consume_attempt=False)
     if provider == "render_bridge" and code == "bridge_wait":
-        return QueueRetryDirective(message="Image task retained; recovering the same Render Bridge task.",
-                                   retry_delay_seconds=5.0, consume_attempt=False)
+        if not bool(error.get("retryable")):
+            return None
+        return QueueRetryDirective(
+            message=("Render Bridge has not confirmed a final result. The same task will be queried "
+                     "until its persisted Bridge deadline; no API fallback or new image is allowed."),
+            retry_delay_seconds=_BRIDGE_RECONCILIATION_WAIT_SECONDS,
+            consume_attempt=False,
+        )
     if provider == "veyra_billing" and code == "veyra_insufficient_balance":
         return None
     if "sub2api balance is insufficient" in lowered:
@@ -371,10 +391,31 @@ def _waiting_run_snapshot(run: CreativeRun, message: str) -> CreativeRun:
 
 def _retry_exhausted_run_snapshot(run: CreativeRun, retry_message: str) -> CreativeRun:
     now = utc_now()
-    final_message = _retry_exhausted_message(retry_message)
+    bridge_unresolved = any(
+        (job.error or {}).get("provider") == "render_bridge"
+        and (job.error or {}).get("error_code") == "bridge_wait"
+        for job in run.generation_jobs
+    )
+    if bridge_unresolved:
+        final_message = (
+            "Render Bridge 未在有限恢复窗口内返回最终结果；任务已停止自动轮询并移出活跃队列。"
+            "原 Bridge 任务、attempt 和对账账本仍保留；后续只能对原任务恢复，不会转 API 或重新生图。"
+        )
+    else:
+        final_message = _retry_exhausted_message(retry_message)
+    jobs = []
+    for job in run.generation_jobs:
+        error = dict(job.error or {})
+        if error.get("provider") == "render_bridge" and error.get("error_code") == "bridge_wait":
+            detail = dict(error.get("detail") or {})
+            detail["queue_reconciliation_required"] = True
+            error.update({"retryable": False, "detail": detail})
+            job = job.model_copy(update={"status": "failed", "error": error, "updated_at": now})
+        jobs.append(job)
     return run.model_copy(
         update={
             "status": "failed",
+            "generation_jobs": jobs,
             "next_actions": [final_message],
             "updated_at": now,
         }

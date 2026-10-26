@@ -114,6 +114,12 @@ def primary_request(record: dict):
 def provider_result(result, *, parameter_adaptation: dict | None = None) -> V2ImageProviderResult:
     image = result.image
     provenance = {key: getattr(result, key, None) for key in ("route", "state", "reason", "origin_key", "task_id", "receipt_id", "execution_key")}
+    transport_provenance = getattr(result, "provenance", {})
+    if isinstance(transport_provenance, dict):
+        for key in ("attempt_id", "deadline"):
+            value = transport_provenance.get(key)
+            if value is not None:
+                provenance[key] = value
     if parameter_adaptation:
         provenance["parameter_adaptation"] = parameter_adaptation
     return V2ImageProviderResult(provider="render_bridge", model="render-bridge-primary",
@@ -126,8 +132,8 @@ def provider_result(result, *, parameter_adaptation: dict | None = None) -> V2Im
 
 
 class BridgeWait(Exception):
-    def __init__(self, state: str, *, terminal: bool = False):
-        self.state, self.terminal = state, terminal
+    def __init__(self, state: str, *, terminal: bool = False, deadline: str | None = None):
+        self.state, self.terminal, self.deadline = state, terminal, deadline
         super().__init__(state)
 
 
@@ -347,7 +353,9 @@ async def _generate(record: dict, select_provider, client):
             if decision.route == "bridge":
                 if decision.image is None:
                     terminal = decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
-                    raise BridgeWait(decision.state, terminal=terminal)
+                    provenance = getattr(decision, "provenance", {})
+                    raise BridgeWait(decision.state, terminal=terminal,
+                                     deadline=provenance.get("deadline") if isinstance(provenance, dict) else None)
                 adaptation = None
                 if (unit.parameters.get("codex_adapter") == "codex_cli_imagegen_v1" or
                         unit.digest == _normalized_unit_request(record, index, versioned=False).digest):

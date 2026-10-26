@@ -247,6 +247,8 @@ class PrimaryTransport:
         if row['image'] is not None and not data.get('cancel_requested'):
             meta=data['image']; image=OriginalImage(bytes(row['image']),meta['mime_type'],meta['sha256'],meta['width'],meta['height'])
         provenance={k:v for k,v in data.items() if k in {'product','profile','route','state','reason','origin_key','execution_key','task_id','receipt_id','attempt_id','image','queue_active_count','queue_limit','queue_observed_at'}}
+        deadline = (data.get('payload') or {}).get('deadline')
+        if isinstance(deadline, str): provenance['deadline'] = deadline
         if data.get('cancel_requested') and data['state'] not in {'canceled','failed','expired'}:
             data['state']='cancel_requested'
         provenance['policy_version']='rb14'
@@ -343,12 +345,18 @@ class PrimaryTransport:
         return True
 
     @staticmethod
-    def _healthy(health):
-        if not health or health.get('health')!='available': return False
+    def _health_state(health):
+        """Classify execution evidence without treating missing evidence as downtime."""
+        if not isinstance(health, dict): return 'unknown'
+        state=health.get('health')
+        if state=='unavailable': return 'unavailable'
+        if state!='available': return 'unknown'
         try:
-            deadline=datetime.fromisoformat(health['valid_until'].replace('Z','+00:00'))
-            return deadline.tzinfo is not None and deadline>datetime.now(timezone.utc)
-        except (KeyError, ValueError, TypeError): return False
+            valid_until=health['valid_until']
+            if not isinstance(valid_until,str): return 'unknown'
+            deadline=datetime.fromisoformat(valid_until.replace('Z','+00:00'))
+            return 'available' if deadline.tzinfo is not None and deadline>datetime.now(timezone.utc) else 'unknown'
+        except (KeyError, ValueError, TypeError): return 'unknown'
 
     async def resolve(self, request):
         row=self._read(request)
@@ -374,8 +382,14 @@ class PrimaryTransport:
             if not self._supported(request,caps,self.settings.profile): return self._api(request,data,'bridge_capability_unsupported')
             if caps.get('admission',{}).get('accepting_new_tasks') is False: return self._api(request,data,'bridge_unavailable')
             availability=caps.get('routing_availability_v1',{}).get('profiles',[])
-            health=next((h for h in availability if h.get('profile_id')==self.settings.profile),None)
-            if not self._healthy(health): return self._api(request,data,'bridge_unavailable')
+            health=next((h for h in availability if isinstance(h,dict) and h.get('profile_id')==self.settings.profile),None)
+            health_state=self._health_state(health)
+            if health_state=='unavailable': return self._api(request,data,'bridge_unavailable')
+            # Unknown/expired profile health is not proof of non-admission. The
+            # authenticated Bridge endpoint has accepted this preflight and is
+            # accepting tasks, so keep the request bridge_only and let Bridge
+            # report a recoverable executor/account state instead of silently
+            # selecting a second, potentially billable provider.
             # Input uploads cannot execute a renderer. A failure here proves this unit was not submitted.
             references=[]
             try:

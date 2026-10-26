@@ -35,18 +35,28 @@ class Transport:
     settings = SimpleNamespace(enabled=True)
     def __init__(self):
         self.calls, self.acks, self.claims, self.cancelled = [], [], [], []
+        self.created_units = set()
         self.pending = False
         self.api = False
         self.owned = set()
+        self.bindings = {}
         self.before_resolve = None
     async def resolve(self, unit):
         self.calls.append(unit)
         if self.before_resolve:
             self.before_resolve(unit)
+        self.created_units.add(unit.key)
+        identity = self.bindings.setdefault(unit.key, {
+            "origin_key": "origin-" + unit.key[:12],
+            "task_id": "bridge-task-" + unit.unit_id,
+            "receipt_id": "receipt-" + unit.unit_id,
+            "attempt_id": "attempt-" + unit.unit_id,
+        })
         content = image_bytes()
         return SimpleNamespace(route="api" if self.api else "bridge", state="queued" if self.pending else "receipt_ready",
-            reason="queue_capacity" if self.api else "bridge_primary", origin_key=unit.key,
-            execution_key=unit.key, task_id="task", receipt_id="receipt",
+            reason="queue_capacity" if self.api else "bridge_primary", origin_key=identity["origin_key"],
+            execution_key=unit.key, task_id=identity["task_id"], receipt_id=identity["receipt_id"],
+            provenance={"attempt_id": identity["attempt_id"], "deadline": "2026-10-27T00:00:00+00:00"},
             image=None if self.pending or self.api else SimpleNamespace(content=content, mime_type="image/png",
                 sha256=hashlib.sha256(content).hexdigest(), width=23, height=19))
     def claim_api(self, unit):
@@ -181,10 +191,140 @@ def test_codex_reference_limit_accepts_five_and_rejects_six_without_truncation()
     assert not PrimaryTransport._supported(request_with_six, caps, "codex-image")
 
 
-def test_queue_wait_does_not_consume_attempts():
+def test_bridge_unknown_reconciliation_uses_finite_retry_budget():
     from app.services.queue_worker import _job_retry_directive
-    directive = _job_retry_directive({"provider": "render_bridge", "error_code": "bridge_wait"})
+    directive = _job_retry_directive({"provider": "render_bridge", "error_code": "bridge_wait",
+                                      "retryable": True, "detail": {"state": "execution_unknown"}})
     assert directive.consume_attempt is False
+    assert directive.retry_delay_seconds == 120
+
+
+def test_bridge_reconciliation_deadline_is_authoritative_and_timezone_aware():
+    from datetime import datetime, timezone
+    expired = "2026-10-25T00:00:00+00:00"
+    future = "2026-10-27T00:00:00+00:00"
+    assert generation._bridge_reconciliation_deadline_elapsed(expired,
+        now=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    assert not generation._bridge_reconciliation_deadline_elapsed(future,
+        now=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    assert not generation._bridge_reconciliation_deadline_elapsed("invalid",
+        now=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    assert not generation._bridge_reconciliation_deadline_valid("2026-10-27T00:00:00")
+
+
+def test_bridge_wait_without_valid_deadline_fails_to_manual_reconciliation_not_infinite_retry(isolated, monkeypatch):
+    async def no_deadline(*args, **kwargs):
+        raise bridge.BridgeWait("execution_unknown")
+    monkeypatch.setattr(bridge, "generate", no_deadline)
+    failed = asyncio.run(generation.create_image_job(request(), job_id="bridge-no-deadline"))
+    assert failed.status == "failed"
+    assert failed.error["retryable"] is False
+    assert failed.error["detail"]["queue_reconciliation_required"] is True
+    assert failed.error["detail"]["state"] == "bridge_reconciliation_deadline_missing_or_invalid"
+
+
+def test_unknown_bridge_task_keeps_same_queue_identity_until_bridge_deadline(isolated, monkeypatch, tmp_path):
+    from dataclasses import replace
+    from app.schemas import CreativeRun, ImageJob
+    from app.services import queue_worker
+    monkeypatch.setattr(task_queue, "settings", replace(settings,
+        task_queue_db_path=tmp_path / "queue.sqlite3", task_queue_max_attempts=2))
+    now = generation.utc_now()
+    req = request().model_copy(update={"run_id": "bridge-unknown-budget"})
+    job = ImageJob(job_id="bridge-unknown-job", run_id=req.run_id, status="failed",
+        provider_id="render_bridge", model="render-bridge-primary", prompt_plan=req.prompt_plan,
+        error={"provider": "render_bridge", "error_code": "bridge_wait",
+               "message": "not final", "retryable": True,
+               "detail": {"state": "execution_unknown"}}, created_at=now, updated_at=now)
+    run = CreativeRun(run_id=req.run_id, status="generating", mode="smart_enhance",
+        intent_summary="offline", trace_id="trace-unknown-budget", created_at=now,
+        updated_at=now, generation_jobs=[job])
+    repository.save_creative_run(run)
+    task_id = task_queue.enqueue_creative_task(kind="creative_run",
+        request_payload={"user_prompt": "offline"}, queued_run=run)
+    directive = queue_worker._job_retry_directive(job.error)
+    first_claim = task_queue.claim_next_task("bridge-unknown-1")
+    assert first_claim and first_claim.task_id == task_id
+    assert task_queue.retry_task(first_claim, directive.message, run,
+        retry_delay_seconds=0, consume_attempt=directive.consume_attempt)
+    with task_queue._connect() as conn:
+        conn.execute("UPDATE v2_tasks SET not_before=NULL WHERE task_id=?", (task_id,))
+    second_claim = task_queue.claim_next_task("bridge-unknown-2")
+    assert second_claim and second_claim.task_id == task_id
+    waiting = queue_worker._waiting_run_snapshot(run, directive.message)
+    assert task_queue.retry_task(second_claim, directive.message, waiting,
+        retry_delay_seconds=0, consume_attempt=directive.consume_attempt)
+    snapshot = task_queue.get_run_snapshot(req.run_id)
+    assert snapshot.status == "generating"
+    with task_queue._connect() as conn:
+        row = conn.execute("SELECT status,attempts FROM v2_tasks WHERE task_id=?", (task_id,)).fetchone()
+        assert row[0] == "queued" and row[1] == 0
+    assert isolated.calls == []
+
+
+def test_expired_bridge_task_is_terminal_but_same_queue_task_can_resume(isolated, monkeypatch, tmp_path):
+    from dataclasses import replace
+    from app import main
+    from app.schemas import CreativeRun, ImageJob
+    from fastapi import HTTPException
+    monkeypatch.setattr(task_queue, "settings", replace(settings,
+        task_queue_db_path=tmp_path / "queue-resume.sqlite3", task_queue_max_pending=4))
+    now = generation.utc_now()
+    req = request().model_copy(update={"run_id": "bridge-resume-run", "veyra_user_id": 17})
+    job = ImageJob(job_id="bridge-resume-job", run_id=req.run_id, veyra_user_id=17, status="failed",
+        provider_id="render_bridge", model="render-bridge-primary", prompt_plan=req.prompt_plan,
+        outputs=[], error={"provider": "render_bridge", "error_code": "bridge_wait",
+            "retryable": False, "detail": {"state": "bridge_reconciliation_deadline_elapsed",
+                "queue_reconciliation_required": True}}, created_at=now, updated_at=now)
+    run = CreativeRun(run_id=req.run_id, status="failed", mode="smart_enhance", intent_summary="offline",
+        trace_id="trace-resume", created_at=now, updated_at=now, generation_jobs=[job])
+    repository.save_creative_run(run)
+    repository.save_image_job(job)
+    task_id = task_queue.enqueue_creative_task(kind="creative_run", request_payload={"user_prompt": "offline"}, queued_run=run)
+    with task_queue._connect() as conn:
+        conn.execute("UPDATE v2_tasks SET status='failed', result_json=?, error_json=? WHERE task_id=?",
+            (task_queue._json_dumps(run.model_dump(mode="json")), task_queue._json_dumps({"message": "deadline", "retryable": False}), task_id))
+    frozen = {"adapter_version": "codex_cli_imagegen_v1", "job_id": job.job_id, "request": req.model_dump(mode="json"),
+        "created_at": now.isoformat(), "qr": False, "references": [], "requirements": {},
+        "queue_task_id": task_id}
+    isolated.pending = True
+    original_bridge_state = asyncio.run(isolated.resolve(bridge._unit_request(frozen, 0, isolated)))
+    frozen["bridge_origin_key"] = original_bridge_state.origin_key
+    frozen["bridge_task_id"] = original_bridge_state.task_id
+    frozen["bridge_attempt_id"] = original_bridge_state.provenance["attempt_id"]
+    isolated.pending = False
+    monkeypatch.setattr(bridge, "load_frozen", lambda job_id=None: frozen)
+    monkeypatch.setattr(main, "settings", replace(settings, veyra_auth_enabled=True))
+    monkeypatch.setattr(main, "_require_veyra_user_if_enabled", lambda *args: 22)
+    with pytest.raises(HTTPException) as forbidden:
+        asyncio.run(main.resume_bridge_image_job(job.job_id, object(), ""))
+    assert forbidden.value.status_code == 404
+    monkeypatch.setattr(main, "_require_veyra_user_if_enabled", lambda *args: 17)
+    resumed = asyncio.run(main.resume_bridge_image_job(job.job_id, object(), ""))
+    assert resumed.status == "queued"
+    with task_queue._connect() as conn:
+        row = conn.execute("SELECT task_id,status,attempts FROM v2_tasks WHERE task_id=?", (task_id,)).fetchone()
+        assert tuple(row) == (task_id, "queued", 0)
+    claim = task_queue.claim_next_task("same-task-recovery")
+    assert claim and claim.task_id == task_id
+    assert claim.run_id == req.run_id
+    assert frozen["job_id"] == job.job_id and frozen["queue_task_id"] == task_id
+    with task_queue.claimed_task(claim):
+        completed_job = asyncio.run(generation.create_image_job(req, job_id=job.job_id))
+    assert completed_job.status == "completed"
+    metadata = completed_job.outputs[0].metadata["render_bridge_primary"]
+    assert metadata["origin_key"] == frozen["bridge_origin_key"]
+    assert metadata["task_id"] == frozen["bridge_task_id"]
+    assert metadata["receipt_id"] == original_bridge_state.receipt_id
+    assert metadata["attempt_id"] == frozen["bridge_attempt_id"]
+    assert len(isolated.calls) == 2
+    assert isolated.calls[0].key == isolated.calls[1].key
+    assert isolated.calls[0].unit_id == isolated.calls[1].unit_id
+    assert len(isolated.created_units) == 1
+    completed_run = run.model_copy(update={"status": "completed", "generation_jobs": [completed_job]})
+    assert task_queue.complete_task(claim, completed_run)
+    with task_queue._connect() as conn:
+        assert conn.execute("SELECT status FROM v2_tasks WHERE task_id=?", (task_id,)).fetchone()[0] == "completed"
 
 
 def test_cancel_addresses_same_unit_only(isolated):

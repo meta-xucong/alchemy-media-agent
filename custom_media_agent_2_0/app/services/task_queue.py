@@ -579,7 +579,7 @@ def update_task_snapshot(run: CreativeRun, *, claim: QueuedTask | None = None) -
         return conn.total_changes == 1
 
 
-def fail_task(claim: QueuedTask, error: str, run: CreativeRun | None = None) -> bool:
+def fail_task(claim: QueuedTask, error: str, run: CreativeRun | None = None, *, force_terminal: bool = False) -> bool:
     now = utc_now().isoformat()
     run_json = _json_dumps(run.model_dump(mode="json")) if run else None
     with _connect() as conn:
@@ -594,7 +594,7 @@ def fail_task(claim: QueuedTask, error: str, run: CreativeRun | None = None) -> 
         if row is None:
             conn.commit()
             return False
-        can_retry = int(row["attempts"]) < int(row["max_attempts"])
+        can_retry = not force_terminal and int(row["attempts"]) < int(row["max_attempts"])
         status = "queued" if can_retry else "failed"
         cursor = conn.execute(
             """
@@ -697,6 +697,69 @@ def retry_task(
         )
         conn.commit()
     return cursor.rowcount == 1
+
+
+def resume_bridge_owned_task(*, task_id: str, run_id: str, job_id: str):
+    """Requeue one expired Bridge reconciliation without changing task identity."""
+    from app.repositories import repository
+
+    now = utc_now()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM v2_tasks WHERE task_id=? AND run_id=?", (task_id, run_id)).fetchone()
+        if row is None:
+            raise ValueError("bridge_queue_binding_missing")
+        job = repository.get_image_job(job_id)
+        if job is None:
+            raise ValueError("bridge_queue_job_missing")
+        if row["kind"] != "creative_run":
+            raise ValueError("bridge_queue_kind_mismatch")
+        if row["status"] not in {"queued", "running", "failed"}:
+            raise ValueError("bridge_reconciliation_not_resumable")
+        if row["status"] == "failed" and row["success_checkpoint_json"]:
+            raise ValueError("bridge_reconciliation_not_resumable")
+        snapshot = CreativeRun.model_validate(_json_loads(row["result_json"] or row["queued_run_json"]))
+        matching = [item for item in snapshot.generation_jobs if item.job_id == job_id]
+        if len(matching) != 1:
+            raise ValueError("bridge_queue_job_mismatch")
+        frozen_job = matching[0]
+        if row["status"] in {"queued", "running"}:
+            conn.commit()
+            return job
+        error = dict(frozen_job.error or {})
+        detail = dict(error.get("detail") or {})
+        if (frozen_job.provider_id != "render_bridge" or frozen_job.status != "failed"
+                or frozen_job.outputs or not isinstance(detail, dict)
+                or detail.get("queue_reconciliation_required") is not True
+                or job.status in {"completed", "cancelled"} or job.outputs):
+            raise ValueError("bridge_reconciliation_not_resumable")
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_bridge_finalizations'").fetchone():
+            if conn.execute("SELECT 1 FROM v2_bridge_finalizations WHERE job_id=?", (job_id,)).fetchone():
+                raise ValueError("bridge_finalization_started")
+        pending = int(conn.execute("SELECT COUNT(*) FROM v2_tasks WHERE status='queued'").fetchone()[0])
+        if pending >= settings.task_queue_max_pending:
+            raise QueueCapacityExceeded("V2 task queue is full.")
+        detail.pop("queue_reconciliation_required", None)
+        error.update({"retryable": True, "detail": detail})
+        queued_job = job.model_copy(update={"status": "queued", "error": error, "updated_at": now})
+        queued_run = snapshot.model_copy(update={
+            "status": "generating",
+            "generation_jobs": [queued_job if item.job_id == job_id else item for item in snapshot.generation_jobs],
+            "next_actions": ["Reconciling the original Render Bridge task; no new image or provider route will be created."],
+            "updated_at": now,
+        })
+        cursor = conn.execute("""
+            UPDATE v2_tasks SET status='queued', queued_run_json=?, result_json=NULL,
+                error_json=NULL, locked_by=NULL, locked_at=NULL, claim_token=NULL, not_before=NULL,
+                updated_at=? WHERE task_id=? AND run_id=? AND status='failed'
+        """, (_json_dumps(queued_run.model_dump(mode="json")), now.isoformat(), task_id, run_id))
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError("bridge_reconciliation_state_changed")
+        repository.save_image_job(queued_job)
+        repository.save_creative_run(queued_run)
+        conn.commit()
+        return queued_job
 
 
 def get_run_snapshot(run_id: str) -> CreativeRun | None:

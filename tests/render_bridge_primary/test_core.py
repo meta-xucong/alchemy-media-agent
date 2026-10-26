@@ -138,7 +138,7 @@ def test_receipt_metadata_mismatch_fails_closed(tmp_path):
         asyncio.run(PrimaryTransport(settings(tmp_path),client=Bad()).resolve(request()))
 
 
-def test_health_expired_no_create(tmp_path):
+def test_expired_profile_health_does_not_silently_select_api(tmp_path):
     class Stale(Client):
         async def capabilities(self):
             caps=await super().capabilities()
@@ -146,7 +146,42 @@ def test_health_expired_no_create(tmp_path):
             return caps
     c=Stale()
     result=asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(request()))
-    assert result.reason=='bridge_unavailable' and c.calls==0
+    assert result.route=='bridge' and result.state=='queued' and c.calls==1
+
+
+def test_unknown_profile_health_does_not_silently_select_api(tmp_path):
+    class Unverified(Client):
+        async def capabilities(self):
+            caps=await super().capabilities()
+            caps['routing_availability_v1']['profiles'][0].update(
+                health='unknown', reason_code='unverified', valid_until=None)
+            return caps
+    c=Unverified()
+    result=asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(request()))
+    assert result.route=='bridge' and result.state=='queued' and c.calls==1
+
+
+def test_explicitly_unavailable_profile_can_select_api_before_submission(tmp_path):
+    class Unavailable(Client):
+        async def capabilities(self):
+            caps=await super().capabilities()
+            caps['routing_availability_v1']['profiles'][0].update(
+                health='unavailable', reason_code='auth_unavailable')
+            return caps
+    c=Unavailable()
+    result=asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(request()))
+    assert result.route=='api' and result.reason=='bridge_unavailable' and c.calls==0
+
+
+def test_malformed_available_health_does_not_silently_select_api(tmp_path):
+    class Malformed(Client):
+        async def capabilities(self):
+            caps=await super().capabilities()
+            caps['routing_availability_v1']['profiles'][0]['valid_until']=123
+            return caps
+    c=Malformed()
+    result=asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(request()))
+    assert result.route=='bridge' and result.state=='queued' and c.calls==1
 
 
 def test_cancel_unknown_does_not_create_again(tmp_path):

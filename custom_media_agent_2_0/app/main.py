@@ -1050,7 +1050,7 @@ def _require_image_job_owner(job, user_id: int | None, *, frozen_record=None) ->
         raise HTTPException(status_code=404, detail={"error_code": "job_not_found", "message": "Image job not found."})
 
 
-def _bridge_job_request(job_id: str, request: Request, authorization: str, *, allow_completed: bool = False, allow_queue_cancel: bool = False):
+def _bridge_job_request(job_id: str, request: Request, authorization: str, *, allow_completed: bool = False, allow_queue_cancel: bool = False, allow_queue_resume: bool = False):
     from app.services import render_bridge_primary
     user_id = _require_veyra_user_if_enabled(request, authorization)
     record = render_bridge_primary.load_frozen(job_id)
@@ -1058,15 +1058,25 @@ def _bridge_job_request(job_id: str, request: Request, authorization: str, *, al
         raise HTTPException(status_code=404, detail={"error_code": "bridge_job_not_found"})
     existing = repository.get_image_job(job_id)
     _require_image_job_owner(existing, user_id, frozen_record=record)
-    if record.get("queue_task_id") and not allow_queue_cancel and not (allow_completed and existing is not None and existing.status == "completed"):
+    if record.get("queue_task_id") and not allow_queue_cancel and not allow_queue_resume and not (allow_completed and existing is not None and existing.status == "completed"):
         raise HTTPException(status_code=409, detail={"error_code": "bridge_job_queue_owned"})
     return record
 
 
 @app.post("/api/v2/image/jobs/{job_id}/resume")
 async def resume_bridge_image_job(job_id: str, request: Request, authorization: str = Header(default="")):
-    from app.services import render_bridge_primary
-    record = _bridge_job_request(job_id, request, authorization, allow_completed=True)
+    from app.services import render_bridge_primary, task_queue
+    record = _bridge_job_request(job_id, request, authorization, allow_completed=True, allow_queue_resume=True)
+    if record.get("queue_task_id"):
+        try:
+            return await _run_sqlite_api_call(task_queue.resume_bridge_owned_task,
+                task_id=record["queue_task_id"], run_id=record["request"]["run_id"], job_id=job_id)
+        except QueueCapacityExceeded as exc:
+            raise _task_queue_capacity_http_error() from exc
+        except QueueStorageBusy as exc:
+            raise _local_database_busy_http_error() from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail={"error_code": str(exc)}) from None
     try:
         return await run_with_generation_capacity(lambda: create_image_job(
             render_bridge_primary.frozen_request(record), job_id=job_id))

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 
 from app.config import settings
@@ -177,12 +177,23 @@ async def create_image_job(
         try:
             result = await bridge_primary.generate(frozen, get_v2_image_provider)
         except bridge_primary.BridgeWait as exc:
+            detail = {"state": exc.state}
+            deadline = exc.deadline
+            if isinstance(deadline, str) and deadline:
+                detail["reconciliation_deadline"] = deadline
+            deadline_elapsed = _bridge_reconciliation_deadline_elapsed(deadline)
+            deadline_invalid = not exc.terminal and not _bridge_reconciliation_deadline_valid(deadline)
+            needs_reconciliation = not exc.terminal and (deadline_elapsed or deadline_invalid)
+            if needs_reconciliation:
+                detail["queue_reconciliation_required"] = True
+                detail["state"] = ("bridge_reconciliation_deadline_elapsed" if deadline_elapsed
+                                   else "bridge_reconciliation_deadline_missing_or_invalid")
             error = V2ImageProviderError("The same image task is retained for recovery.",
-                provider="render_bridge", detail={"state": exc.state})
+                provider="render_bridge", detail=detail)
             error.code = "bridge_terminal" if exc.terminal else "bridge_wait"
-            error.retryable = not exc.terminal
+            error.retryable = not exc.terminal and not needs_reconciliation
             waiting = _failed_job(request, provider_id="render_bridge", error=error, job_id=job_id, created_at=created_at)
-            if not exc.terminal and task_queue.current_claim() is None:
+            if not exc.terminal and not needs_reconciliation and task_queue.current_claim() is None:
                 waiting = waiting.model_copy(update={"status": "queued"})
             return _save_job(waiting)
         except V2ImageProviderError as exc:
@@ -213,6 +224,8 @@ async def create_image_job(
                 fallback_error = exc
             else:
                 return _save_job(_failed_job(request, provider_id=exc.provider or provider.name, error=exc, job_id=job_id, created_at=created_at))
+
+
         except V2ImageProviderError as exc:
             if _can_fallback_to_mock(request.provider_hint):
                 fallback_provider = await get_v2_image_provider("mock_image")
@@ -300,6 +313,27 @@ async def create_image_job(
     except task_queue.StaleTaskClaim:
         _discard_uncommitted_running_job(job_id)
         raise
+
+
+def _bridge_reconciliation_deadline_valid(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        deadline = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return deadline.tzinfo is not None and deadline.utcoffset() is not None
+
+
+def _bridge_reconciliation_deadline_elapsed(value: object, *, now=None) -> bool:
+    """Stop polling only at the exact deadline frozen into the Bridge request."""
+    if not _bridge_reconciliation_deadline_valid(value):
+        return False
+    deadline = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    current = now or utc_now()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current >= deadline
 
 
 def _job_from_result(
