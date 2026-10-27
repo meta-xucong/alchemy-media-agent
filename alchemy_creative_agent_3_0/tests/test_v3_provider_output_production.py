@@ -1315,7 +1315,7 @@ def test_production_provider_keeps_high_resolution_timeout_above_v1_provider_dea
     ordinary_request = SimpleNamespace(prompt_plan=ImagePromptPlan(main_subject="product", quality="medium"))
     high_resolution_request = SimpleNamespace(prompt_plan=ImagePromptPlan(main_subject="product", quality="high"))
 
-    assert provider._app_provider_timeout_seconds([], app_request=ordinary_request) == 255.0  # noqa: SLF001
+    assert provider._app_provider_timeout_seconds([], app_request=ordinary_request) == 300.0  # noqa: SLF001
     assert provider._app_provider_timeout_seconds([], app_request=high_resolution_request) == 915.0  # noqa: SLF001
 
 

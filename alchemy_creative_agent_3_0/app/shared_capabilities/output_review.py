@@ -18,7 +18,16 @@ class OutputReviewModule(SharedCapabilityModule):
         candidates = capability_input.metadata.get("candidates", [])
         issues: list[dict] = []
         if not candidates:
-            issues.append({"code": "metadata_only_review", "message": "No candidate pixels supplied; review is metadata-only."})
+            if evaluation_checks:
+                issues.append({"code": "evaluation_obligations_present", "message": f"{len(evaluation_checks)} review obligation(s) should be checked."})
+            return CapabilityResult(
+                module_id=self.module_id,
+                version=self.version,
+                status=CapabilityStatus.SKIPPED,
+                confidence=0.0,
+                facts={"output_review": {"issues": issues, "evaluation_check_count": len(evaluation_checks)}},
+                audit_trail=["skipped because no candidate pixels were supplied"],
+            )
         if evaluation_checks:
             issues.append({"code": "evaluation_obligations_present", "message": f"{len(evaluation_checks)} review obligation(s) should be checked."})
         warnings = [

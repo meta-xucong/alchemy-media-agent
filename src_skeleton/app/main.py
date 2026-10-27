@@ -1353,6 +1353,9 @@ def _v3_background_generation_timeout_plan(
         provider_timeout = float(settings.openai_image_edit_request_timeout_seconds)
     else:
         provider_timeout = float(settings.openai_image_request_timeout_seconds)
+    # Bridge-primary uses a bounded 285-second task wait plus the existing
+    # 15-second provider finalization margin.
+    provider_timeout = max(provider_timeout, 285.0)
     provider_request_budget = render_count * (1 + retry_count)
     brain_budget = _v3_background_brain_budget_seconds(payload)
     return max(1.0, brain_budget + (provider_timeout * provider_request_budget) + 15.0), "direct_provider"

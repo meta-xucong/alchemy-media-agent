@@ -1811,7 +1811,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "executed_count": max(0, attempt - 1),
                         "max_attempts": max_attempts,
                         "fresh_upstream_requests": attempt,
-                        "final_status": "failed",
+                        "final_status": (
+                            "pending"
+                            if failure_code == "bridge_wait_budget_exhausted"
+                            else "failed"
+                        ),
                         "attempts": attempts,
                         "reference_asset_count": len(reference_assets),
                         "provider_prompt_chars": provider_prompt_chars,
@@ -7663,7 +7667,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 return max(660.0, float(value)) + 5.0
         except Exception:
             value = 240.0
-        return max(30.0, float(value) + 15.0)
+        # A Bridge-primary call can spend up to 285 seconds resolving its
+        # durable task; retain the same 15-second finalization margin as API.
+        return max(300.0, float(value) + 15.0)
 
     def _app_provider_max_attempts(self) -> int:
         try:

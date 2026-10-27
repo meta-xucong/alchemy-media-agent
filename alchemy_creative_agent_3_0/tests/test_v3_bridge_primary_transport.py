@@ -157,6 +157,40 @@ def test_create_loss_restart_and_unknown_never_legacy(rig):
     assert response.candidates and rig.client.calls == 1
 
 
+def test_wait_budget_expiry_keeps_same_bridge_task_for_recovery(rig):
+    rig.client.state = 'running'
+    with pytest.raises(ProviderRuntimeError) as caught:
+        rig.provider.generate(rig.request)
+    assert caught.value.detail['transport_retry_terminal'] is True
+    assert caught.value.detail['failure_code'] == 'bridge_wait_budget_exhausted'
+    assert caught.value.provider_failure_retry['final_status'] == 'pending'
+    assert rig.client.calls == 1 and not rig.api_calls
+
+    from alchemy_creative_agent_3_0.app.product_api.service import (
+        ProductJobStatusValue,
+        V3ProductApiService,
+    )
+
+    service, blocked_record = _cancel_service(rig)
+    blocked_record.status = ProductJobStatusValue.BLOCKED
+    blocked_record.planning_result = SimpleNamespace()
+    assert not V3ProductApiService._blocked_planning_reentry_requires_explicit_resume(
+        blocked_record,
+        resume_finalizing_review=False,
+        resume_interrupted_mcp_materialization=False,
+    )
+
+    rig.client.state = 'artifacts_ready'
+    response = rig.provider.generate(rig.request)
+    assert response.candidates[0].provider == 'render_bridge'
+    assert rig.client.calls == 1 and not rig.api_calls
+
+
+def test_bridge_poll_and_v3_provider_finalization_fit_300_second_budget():
+    assert adapter.POLL_BUDGET_SECONDS == 285.0
+    assert adapter.POLL_BUDGET_SECONDS + 15.0 == 300.0
+
+
 def test_queue_full_then_same_unit_api_is_single_claim(rig):
     rig.client.error = BridgeError('queue_capacity', status=429)
     rig.provider.generate(rig.request)

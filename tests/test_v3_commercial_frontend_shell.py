@@ -1307,7 +1307,7 @@ def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(mo
     assert app_main._v3_background_generation_timeout_plan(
         None,
         {"quality_mode": "standard", "metadata": {"require_real_images": True, "requested_image_count": 2}},
-    ) == (3175.0, "direct_provider")
+    ) == (3355.0, "direct_provider")
     assert app_main._v3_background_generation_timeout_plan(
         None,
         {
@@ -1335,6 +1335,18 @@ def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(mo
         None,
         {"quality_mode": "standard", "metadata": {"requested_image_count": 1}},
     ) == (None, None)
+
+    assert app_main._v3_background_generation_timeout_plan(
+        None,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "require_real_images": True,
+                "requested_image_count": 1,
+                "disable_visual_auto_retry": True,
+            },
+        },
+    ) == (2500.0, "direct_provider")
 
 
 def test_v3_direct_provider_background_queue_does_not_start_watchdog_before_worker(tmp_path, monkeypatch) -> None:

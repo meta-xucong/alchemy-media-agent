@@ -464,7 +464,8 @@ def test_output_review_and_history_reference_are_metadata_safe(tmp_path) -> None
 
     review = result.results[2]
     history = result.results[3]
-    assert review.status == CapabilityStatus.WARNING
+    assert review.status == CapabilityStatus.SKIPPED
+    assert not review.warnings
     assert review.facts["output_review"]["evaluation_check_count"] == 1
     assert history.status == CapabilityStatus.SUCCESS
     assert history.facts["history_reference"]["rejected_style_tags"] == ["dark clutter"]

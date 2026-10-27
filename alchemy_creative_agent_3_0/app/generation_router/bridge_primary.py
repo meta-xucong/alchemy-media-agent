@@ -17,7 +17,9 @@ from app.services.asset_planning import reference_image_paths
 CONTEXT = "v3_bridge_primary_context"
 PROVENANCE = "render_bridge_primary"
 POLL_SECONDS = 1.0
-POLL_BUDGET_SECONDS = 180.0
+# V3 gives each provider request a 300-second outer budget, including the
+# existing 15-second finalization margin. Keep Bridge polling inside it.
+POLL_BUDGET_SECONDS = 285.0
 
 
 
@@ -292,6 +294,10 @@ async def generate(app_request, legacy_generate, output_store):
                     raise _error("bridge_checkpoint_original_unavailable", provenance)
             return _cached_result(existing, provenance)
         if result.route == "bridge" and result.image is None:
+            if result.state in {
+                "queued", "running", "bridge_submission_unknown", "execution_unknown", "awaiting_user",
+            }:
+                raise _error("bridge_wait_budget_exhausted", provenance)
             raise _error(result.state, provenance)
         if result.route == "api":
             async with _gate_for(settings, app_request) as gate:
