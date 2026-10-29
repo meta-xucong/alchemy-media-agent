@@ -550,7 +550,7 @@ class PrimaryTransport:
             if not won: return self._result(self._read(request))
             try: task=await self.client.create_task(payload)
             except BridgeError as error:
-                if (error.code,error.status) in {('queue_capacity',429),('bridge_draining',503)}:
+                if (error.code,error.status) in {('queue_capacity',429),('bridge_draining',503),('node_unavailable',503)}:
                     return self._api(request,data,'bridge_queue_capacity' if error.code=='queue_capacity' else 'bridge_unavailable', first_create=True)
                 return self._result(self._read(request))
         else:
