@@ -218,6 +218,41 @@ def test_required_remote_photography_contract_uses_compact_schema() -> None:
     assert "ecommerce_creative_context" not in payload
     assert "compact schema" in payload["remote_response_contract"]
     assert "strictly valid JSON" in payload["remote_response_contract"]
+    assert "applicability to exactly `applicable`" not in payload["remote_response_contract"]
+
+
+def test_reference_inputs_make_remote_ownership_applicability_explicit() -> None:
+    request = BrainRunRequest(
+        user_input="Continue from the selected project image.",
+        scenario_id="general_creative",
+        template_id="general_template",
+        selected_output_assets=[{"output_id": "continuity_anchor"}],
+        metadata={
+            "require_real_images": True,
+            "reference_input_summary": {"logical_continuity_reference_count": 1},
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+    recovery_request = request.model_copy(
+        update={
+            "metadata": {
+                **request.metadata,
+                "remote_semantic_contract_recovery": {
+                    "contract_version": "v3_remote_semantic_contract_recovery_v1",
+                    "attempt": 1,
+                    "rejected_sections": ["visual_task_profile"],
+                    "same_frozen_request": True,
+                },
+            }
+        },
+        deep=True,
+    )
+    recovery_payload = json.loads(build_remote_payload(recovery_request))
+
+    for candidate in (payload, recovery_payload):
+        assert "applicability to exactly `applicable`" in candidate["remote_response_contract"]
+        assert "remote Brain still owns the semantic decision" in candidate["remote_response_contract"]
 
 
 def test_required_remote_specialized_payload_keeps_only_relevant_evidence() -> None:
@@ -1252,6 +1287,68 @@ def test_required_remote_visual_task_profile_contract_passes_without_validation_
     assert result.audit["remote_visual_task_profile_received"] is True
     assert "remote_contract_validation_audit" not in result.audit
     assert result.audit["remote_semantic_contract_recovery_attempted"] is False
+
+
+@pytest.mark.parametrize("initial_applicability", ["ambiguous", "not_applicable"])
+def test_reference_anchor_requires_applicable_remote_ownership_and_uses_bounded_recovery(
+    monkeypatch,
+    initial_applicability: str,
+) -> None:
+    from copy import deepcopy
+
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    class ReferenceOwnershipRecoveryProvider:
+        provider = "openai"
+        model = "remote-reference-ownership-recovery-test"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            self.requests.append(request)
+            response = deepcopy(_complete_required_remote_response(request))
+            intent = response["visual_task_profile"]["reference_channel_ownership_intent"]
+            intent["applicability"] = initial_applicability if len(self.requests) == 1 else "applicable"
+            if len(self.requests) > 1:
+                intent["reference_owned_channels"] = ["identity_geometry"]
+                intent["current_request_owned_channels"] = ["camera_composition", "scene_background"]
+                intent["evidence_ids"] = ["continuity_anchor"]
+            return response
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    provider = ReferenceOwnershipRecoveryProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = adapter.build_request(
+        user_input="Create one real product image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={"requested_image_count": 1, "real_image_generation": True},
+        template_capability_policy=ecommerce_capability_policy(),
+    ).model_copy(update={"selected_output_assets": [{"output_id": "continuity_anchor"}]}, deep=True)
+
+    result = adapter.run(request)
+
+    assert len(provider.requests) == 2
+    recovery_marker = provider.requests[1].metadata["remote_semantic_contract_recovery"]
+    assert recovery_marker["same_frozen_request"] is True
+    assert recovery_marker["rejected_sections"] == ["visual_task_profile"]
+    assert provider.requests[1].selected_output_assets == request.selected_output_assets
+    assert result.llm_used is True
+    assert result.fallback_used is False
+    assert result.visual_task_profile is not None
+    assert result.visual_task_profile.reference_channel_ownership_intent.applicability == "applicable"
+    assert result.audit["remote_semantic_contract_recovery_attempted"] is True
+    assert result.audit["remote_semantic_contract_recovery_succeeded"] is True
+    audit = result.audit["remote_semantic_contract_recovery_initial_validation_audit"]
+    assert audit["sections"]["visual_task_profile"]["validation_error_paths"] == [
+        "visual_task_profile.reference_channel_ownership_intent.applicability"
+    ]
+    assert audit["sections"]["visual_task_profile"]["validation_error_types"] == ["literal_error"]
 
 
 @pytest.mark.parametrize(

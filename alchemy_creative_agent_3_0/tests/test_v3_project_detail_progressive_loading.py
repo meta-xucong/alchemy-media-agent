@@ -67,6 +67,53 @@ def test_summary_view_skips_reconciliation_and_full_context() -> None:
     assert response.project.memory_summary.job_count == 0
 
 
+def test_summary_view_does_not_resolve_jobs_or_verify_continuity_source() -> None:
+    service, project = _service()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("summary view must not load Jobs or verify continuity image bytes")
+
+    service._continuity_state = unexpected
+    service._continuity_output = unexpected
+    service._current_job_direct_reference_ids = unexpected
+
+    response = service.get_project(project.project_id, owner_user_id=7, view="summary")
+
+    assert response.project is not None
+    assert response.metadata["continuity_anchor"]["project_id"] == project.project_id
+
+
+def test_summary_view_projects_active_anchor_without_reading_source_output() -> None:
+    service, project = _service()
+    bindings = service._anchor_bindings()
+    bindings.resolve_output = lambda *_args: {
+        "job_id": "anchor-job",
+        "candidate_id": "anchor-candidate",
+        "asset_id": "anchor-asset",
+        "source_asset_id": "anchor-asset",
+        "content_sha256": "a" * 64,
+    }
+    current_version = bindings.state(project.project_id, verify_source=False)["version"]
+    bindings.change(
+        project.project_id,
+        output_id="anchor-output",
+        expected_version=current_version,
+        expected_job_id="anchor-job",
+    )
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("summary view must not resolve or hash the continuity source image")
+
+    bindings.resolve_output = unexpected
+    service._continuity_state = unexpected
+    service._current_job_direct_reference_ids = unexpected
+
+    response = service.get_project(project.project_id, owner_user_id=7, view="summary")
+
+    assert response.metadata["continuity_anchor"]["state"] == "active"
+    assert response.metadata["continuity_anchor"]["active_continuity_anchor"]["output_id"] == "anchor-output"
+
+
 def test_delivery_preview_surface_skips_reconciliation_and_review_items() -> None:
     service, project = _service()
 
@@ -180,7 +227,34 @@ def test_desktop_and_mobile_use_summary_preview_and_background_detail_contract()
     assert "The existing full project response remains the default compatibility path." in spec
 
 
-def test_desktop_releases_project_mask_after_first_preview_while_history_is_slow() -> None:
+def test_project_summary_and_preview_reads_do_not_block_the_api_event_loop() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src_skeleton" / "app" / "main.py").read_text(encoding="utf-8")
+    outputs_start = source.index("async def v3_project_outputs_endpoint(")
+    outputs_end = source.index("@app.post(\"/api/v3/creative-agent/projects\")", outputs_start)
+    project_start = source.index("async def v3_get_project_endpoint(")
+    project_end = source.index("@app.get(\"/api/v3/creative-agent/projects/{project_id}/planning-operations", project_start)
+    outputs_endpoint = source[outputs_start:outputs_end]
+    project_endpoint = source[project_start:project_end]
+
+    assert 'in {"home_preview", "delivery_preview"}' in outputs_endpoint
+    assert "return await _run_v3_handler_threaded(" in outputs_endpoint
+    assert '== "summary"' in project_endpoint
+    assert "response = await _run_v3_handler_threaded(" in project_endpoint
+
+
+def test_v3_job_planning_runs_outside_the_api_event_loop() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src_skeleton" / "app" / "main.py").read_text(encoding="utf-8")
+    start = source.index("async def v3_create_job_endpoint(")
+    end = source.index('@app.get("/api/v3/creative-agent/jobs/{job_id}")', start)
+    endpoint = source[start:end]
+
+    assert "return await _run_v3_handler_threaded(v3_route_handlers.post_jobs, payload)" in endpoint
+    assert "return _run_v3_handler(v3_route_handlers.post_jobs, payload)" not in endpoint
+
+
+def test_desktop_releases_project_mask_after_summary_while_history_is_slow() -> None:
     project = {
         "project_id": "progressive-project",
         "title": "Progressive project",
@@ -215,7 +289,11 @@ def test_desktop_releases_project_mask_after_first_preview_while_history_is_slow
                 async ({ project, template, preview }) => {
                   const requests = [];
                   const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-                  const projectPayload = { project, templates: [template], metadata: {} };
+                  const projectPayload = {
+                    project,
+                    templates: [template],
+                    metadata: { project_detail_view: "summary", project_outputs: [], review_items: [] },
+                  };
                   const outputsPayload = { items: [preview], review_items: [] };
                   window.fetch = async (input, init = {}) => {
                     const url = String(input);
@@ -248,7 +326,7 @@ def test_desktop_releases_project_mask_after_first_preview_while_history_is_slow
                   const releaseSnapshot = {
                     releasedMs: released,
                     maskHidden: Boolean(mask?.hidden),
-                    firstPreviewCount: document.querySelectorAll("img[data-v3-project-first-preview='true']").length,
+                    currentProjectId: v3State.currentProject?.project_id || "",
                     opening: Boolean(v3State.projectOpening),
                     backgroundRequests: requests.filter(({ url }) =>
                       url.includes("/timeline") || url.includes("surface=delivery_preview") || url.includes("/visual-asset-bindings") ||
@@ -259,25 +337,281 @@ def test_desktop_releases_project_mask_after_first_preview_while_history_is_slow
                       url.includes("/project-outputs") && !url.includes("surface=delivery_preview")
                     ).length,
                   };
-                  const legacyStarted = performance.now();
-                  await Promise.all([
-                    request("/api/v3/creative-agent/projects/progressive-project"),
-                    request("/api/v3/creative-agent/projects/progressive-project/timeline"),
-                    request("/api/v3/creative-agent/project-outputs?limit=80&compact=true&project_id=progressive-project"),
-                    request("/api/v3/creative-agent/projects/progressive-project/visual-asset-bindings"),
-                  ]);
-                  return { ...releaseSnapshot, legacyMs: performance.now() - legacyStarted };
+                  return releaseSnapshot;
                 }
                 """,
                 {"project": project, "template": template, "preview": preview},
             )
             assert result["maskHidden"] is True
-            assert result["firstPreviewCount"] == 1
+            assert result["currentProjectId"] == project["project_id"]
             assert result["opening"] is False
             assert result["backgroundRequests"] >= 2
             assert result["backgroundTimelineRequests"] >= 1
-            assert result["backgroundFullOutputRequests"] >= 1
-            assert result["releasedMs"] < result["legacyMs"] * 0.5
+        finally:
+            browser.close()
+
+
+def test_desktop_opens_project_before_preview_finishes() -> None:
+    project = {
+        "project_id": "summary-before-preview",
+        "title": "Summary before preview",
+        "user_goal": "Create a useful project preview.",
+        "short_summary": "Create a useful project preview.",
+        "primary_template_id": "general_template",
+        "job_ids": [],
+        "reference_assets": [],
+        "metadata": {},
+    }
+    template = {
+        "template_id": "general_template",
+        "display_name": "通用创意",
+        "project_can_create_jobs": True,
+    }
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            result = page.evaluate(
+                """
+                async ({ project, template }) => {
+                  let releasePreview;
+                  const previewGate = new Promise(resolve => { releasePreview = resolve; });
+                  const requests = [];
+                  const projectPayload = { project, templates: [template], metadata: {} };
+                  window.fetch = async input => {
+                    const url = String(input);
+                    requests.push(url);
+                    if (url.includes("view=summary")) {
+                      return new Response(JSON.stringify(projectPayload), { status: 200 });
+                    }
+                    if (url.includes("surface=delivery_preview")) {
+                      await previewGate;
+                      return new Response(JSON.stringify({ items: [], review_items: [] }), { status: 200 });
+                    }
+                    if (url.includes("/timeline")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+                    return new Response(JSON.stringify({ items: [], review_items: [] }), { status: 200 });
+                  };
+                  v3State.projects = [project];
+                  v3State.templates = [template];
+                  v3State.templateCatalogStatus = "ready";
+                  v3State.currentProject = null;
+                  v3State.currentJob = null;
+                  v3State.projectOpening = false;
+                  const started = performance.now();
+                  const opening = openV3Project(project.project_id);
+                  const returnedBeforePreview = await Promise.race([
+                    opening.then(() => true),
+                    new Promise(resolve => window.setTimeout(() => resolve(false), 1000)),
+                  ]);
+                  const snapshot = {
+                    returnedBeforePreview,
+                    currentProjectId: v3State.currentProject?.project_id || "",
+                    opening: Boolean(v3State.projectOpening),
+                    maskHidden: Boolean(document.querySelector("#v3PageLoadingOverlay")?.hidden),
+                    elapsedMs: performance.now() - started,
+                    previewRequested: requests.some(url => url.includes("surface=delivery_preview")),
+                  };
+                  const fullItems = [
+                    { output_id: "full-output-1", project_id: project.project_id },
+                    { output_id: "full-output-2", project_id: project.project_id },
+                  ];
+                  const reviewItems = [{ output_id: "review-output", project_id: project.project_id }];
+                  syncV3ProjectOutputsFromList(fullItems, project.project_id, reviewItems);
+                  releasePreview();
+                  await new Promise(resolve => window.setTimeout(resolve, 0));
+                  return {
+                    ...snapshot,
+                    outputs: v3State.projectOutputs.map(item => item.output_id),
+                    reviewOutputs: v3State.projectReviewOutputs.map(item => item.output_id),
+                    outputSurface: v3State.projectOutputsSurface,
+                  };
+                }
+                """,
+                {"project": project, "template": template},
+            )
+            assert result["returnedBeforePreview"] is True
+            assert result["currentProjectId"] == project["project_id"]
+            assert result["opening"] is False
+            assert result["maskHidden"] is True
+            assert result["elapsedMs"] < 1000
+            assert result["previewRequested"] is True
+            assert result["outputs"] == ["full-output-1", "full-output-2"]
+            assert result["reviewOutputs"] == ["review-output"]
+            assert result["outputSurface"] == "full"
+        finally:
+            browser.close()
+
+
+def test_summary_refresh_does_not_clear_full_project_outputs_or_review() -> None:
+    project = {
+        "project_id": "summary-refresh-project",
+        "title": "Summary refresh project",
+        "user_goal": "Keep loaded results.",
+        "short_summary": "Keep loaded results.",
+        "primary_template_id": "general_template",
+        "job_ids": [],
+        "reference_assets": [],
+        "metadata": {},
+    }
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            result = page.evaluate(
+                """
+                ({ project }) => {
+                  const fullItems = [{ output_id: "full-output", project_id: project.project_id }];
+                  const reviewItems = [{ output_id: "review-output", project_id: project.project_id }];
+                  v3State.currentProject = project;
+                  v3State.projectOutputs = fullItems;
+                  v3State.projectReviewOutputs = reviewItems;
+                  v3State.projectOutputsSurface = "full";
+                  syncV3ProjectOutputsFromPayload({
+                    metadata: {
+                      project_detail_view: "summary",
+                      project_outputs: [],
+                      review_items: [],
+                    },
+                  });
+                  return {
+                    outputs: v3State.projectOutputs.map(item => item.output_id),
+                    reviewOutputs: v3State.projectReviewOutputs.map(item => item.output_id),
+                    surface: v3State.projectOutputsSurface,
+                  };
+                }
+                """,
+                {"project": project},
+            )
+            assert result["outputs"] == ["full-output"]
+            assert result["reviewOutputs"] == ["review-output"]
+            assert result["surface"] == "full"
+        finally:
+            browser.close()
+
+
+def test_failed_project_switch_restores_previous_detail_owner() -> None:
+    project_a = {
+        "project_id": "preserved-project-a",
+        "title": "Project A",
+        "user_goal": "Keep this project open.",
+        "short_summary": "Keep this project open.",
+        "primary_template_id": "general_template",
+        "job_ids": ["existing-job"],
+        "reference_assets": [],
+        "metadata": {},
+    }
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            result = page.evaluate(
+                """
+                async ({ projectA }) => {
+                  let releaseJob;
+                  const jobGate = new Promise(resolve => { releaseJob = resolve; });
+                  const requests = [];
+                  window.fetch = async (input, init = {}) => {
+                    const url = String(input);
+                    const method = String(init.method || "GET").toUpperCase();
+                    requests.push({ url, method });
+                    if (url.includes("/projects/unavailable-project?view=summary")) {
+                      return new Response(JSON.stringify({ detail: "unavailable" }), { status: 503 });
+                    }
+                    if (url.includes("/jobs/existing-job")) {
+                      await jobGate;
+                      return new Response(JSON.stringify({ job_id: "existing-job", status: "failed" }), { status: 200 });
+                    }
+                    if (url.includes("/timeline")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+                    if (url.includes("/project-outputs")) return new Response(JSON.stringify({ items: [], review_items: [] }), { status: 200 });
+                    return new Response(JSON.stringify({}), { status: 200 });
+                  };
+                  v3State.currentProject = projectA;
+                  v3State.currentJob = null;
+                  v3State.projectOpening = false;
+                  v3State.view = "workspace";
+                  const controllerA = new AbortController();
+                  v3State.projectDetailAbortController = controllerA;
+                  v3State.projectDetailProjectId = projectA.project_id;
+                  v3State.projectDetailEpoch = 7;
+                  v3State.templates = [{ template_id: "general_template", project_can_create_jobs: true }];
+                  v3State.templateCatalogStatus = "ready";
+                  v3State.selectedTemplate = "general_template";
+                  v3State.selectedScenario = "general_creative";
+                  await openV3Project("unavailable-project");
+                  const whileRestoring = {
+                    currentProjectId: v3State.currentProject?.project_id || "",
+                    detailProjectId: v3State.projectDetailProjectId,
+                    controllerLive: Boolean(v3State.projectDetailAbortController && !v3State.projectDetailAbortController.signal.aborted),
+                    previousControllerAborted: controllerA.signal.aborted,
+                    view: v3State.view,
+                    workspaceVisible: document.querySelector("#v3WorkspaceView")?.hidden === false,
+                    opening: Boolean(v3State.projectOpening),
+                    loading: Boolean(v3State.loading),
+                    createDisabled: Boolean(document.querySelector("#v3CreateJobBtn")?.disabled),
+                    jobGetPending: requests.some(item => item.url.includes("/jobs/existing-job") && item.method === "GET"),
+                    generatePosts: requests.filter(item => item.method === "POST" && item.url.includes("/generate")).length,
+                  };
+                  releaseJob();
+                  await new Promise(resolve => window.setTimeout(resolve, 20));
+                  return {
+                    ...whileRestoring,
+                    loadingAfterJobRead: Boolean(v3State.loading),
+                    createDisabledAfterJobRead: Boolean(document.querySelector("#v3CreateJobBtn")?.disabled),
+                  };
+                }
+                """,
+                {"projectA": project_a},
+            )
+            assert result["currentProjectId"] == project_a["project_id"]
+            assert result["detailProjectId"] == project_a["project_id"]
+            assert result["controllerLive"] is True
+            assert result["previousControllerAborted"] is True
+            assert result["view"] == "workspace"
+            assert result["workspaceVisible"] is True
+            assert result["opening"] is False
+            assert result["loading"] is True
+            assert result["createDisabled"] is True
+            assert result["jobGetPending"] is True
+            assert result["generatePosts"] == 0
+            assert result["loadingAfterJobRead"] is False
+            assert result["createDisabledAfterJobRead"] is False
+        finally:
+            browser.close()
+
+
+def test_desktop_first_open_failure_returns_to_project_home() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            result = page.evaluate(
+                """
+                async () => {
+                  window.fetch = async () => new Response(JSON.stringify({ detail: { code: "unavailable" } }), { status: 503 });
+                  v3State.currentProject = null;
+                  v3State.projectOpening = false;
+                  v3State.view = "home";
+                  await openV3Project("unavailable-project");
+                  return {
+                    view: v3State.view,
+                    currentProjectId: v3State.currentProject?.project_id || "",
+                    opening: Boolean(v3State.projectOpening),
+                    workspaceVisible: document.querySelector("#v3WorkspaceView")?.hidden === false,
+                    homeVisible: document.querySelector("#v3HomeView")?.hidden === false,
+                    explicitHome: Boolean(v3State.explicitHome),
+                  };
+                }
+                """,
+            )
+            assert result["view"] == "home"
+            assert result["currentProjectId"] == ""
+            assert result["opening"] is False
+            assert result["workspaceVisible"] is False
+            assert result["homeVisible"] is True
+            assert result["explicitHome"] is True
         finally:
             browser.close()
 

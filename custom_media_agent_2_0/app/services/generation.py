@@ -188,7 +188,12 @@ async def create_image_job(
                 detail["queue_reconciliation_required"] = True
                 detail["state"] = ("bridge_reconciliation_deadline_elapsed" if deadline_elapsed
                                    else "bridge_reconciliation_deadline_missing_or_invalid")
-            error = V2ImageProviderError("The same image task is retained for recovery.",
+            message = (
+                "Bridge input storage stayed busy; no remote image task was created and no API fallback was started."
+                if exc.state == "bridge_store_busy"
+                else "The same image task is retained for recovery."
+            )
+            error = V2ImageProviderError(message,
                 provider="render_bridge", detail=detail)
             error.code = "bridge_terminal" if exc.terminal else "bridge_wait"
             error.retryable = not exc.terminal and not needs_reconciliation

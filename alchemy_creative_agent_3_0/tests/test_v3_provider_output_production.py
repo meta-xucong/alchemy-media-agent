@@ -2595,3 +2595,89 @@ def test_product_api_withholds_legacy_output_store_restore_without_closure(tmp_p
     assert history.items[0].job_id == "job_restored_from_outputs"
     assert history.items[0].status == "blocked"
     assert history.items[0].metadata["restored_from_output_store"] is True
+
+
+def test_product_api_history_keeps_newer_orphan_ahead_of_full_job_page() -> None:
+    from alchemy_creative_agent_3_0.app.product_api.contracts import V3JobHistoryItem
+
+    service = object.__new__(V3ProductApiService)
+    records = [SimpleNamespace(
+        job_id="job_authoritative_old",
+        request=SimpleNamespace(metadata={}),
+        status="generated",
+        created_at="2026-10-28T00:01:00+00:00",
+        updated_at="2026-10-28T00:01:00+00:00",
+    )]
+    service.job_store = SimpleNamespace(iter_recent_records=lambda: iter(records))
+    service._history_item_from_record = lambda record: V3JobHistoryItem(  # type: ignore[method-assign]
+        job_id=record.job_id,
+        status="generated",
+        user_input="test",
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        route="/api/v3/creative-agent/history",
+    )
+    restored = V3JobHistoryItem(
+        job_id="job_newer_orphan",
+        status="generated",
+        user_input="restored output",
+        created_at="2026-10-28T00:02:00+00:00",
+        updated_at="2026-10-28T00:02:00+00:00",
+        route="/api/v3/creative-agent/history",
+        metadata={"restored_from_output_store": True},
+    )
+    service._history_items_from_output_store = lambda *_args, **_kwargs: [restored]  # type: ignore[method-assign]
+
+    history = service.list_history(limit=1)
+
+    assert [item.job_id for item in history.items] == ["job_newer_orphan"]
+
+
+def test_product_api_history_batches_partial_recovery_lookup() -> None:
+    from alchemy_creative_agent_3_0.app.product_api.contracts import V3JobHistoryItem
+
+    service = object.__new__(V3ProductApiService)
+    records = [
+        SimpleNamespace(
+            job_id=f"job_partial_{index}",
+            request=SimpleNamespace(metadata={}),
+            status="blocked",
+            generation_result=None,
+            created_at=f"2026-10-28T00:0{index}:00+00:00",
+            updated_at=f"2026-10-28T00:0{index}:00+00:00",
+        )
+        for index in range(2)
+    ]
+    service.job_store = SimpleNamespace(iter_recent_records=lambda: iter(records))
+    batch_calls: list[set[str]] = []
+
+    catalog_snapshot = object()
+
+    def list_by_jobs(job_ids, *, catalog_snapshot=None):
+        batch_calls.append(set(job_ids))
+        assert catalog_snapshot is not None
+        return {job_id: [] for job_id in job_ids}
+
+    service.output_store = SimpleNamespace(
+        list_by_jobs=list_by_jobs,
+        list_outputs_with_snapshot=lambda limit: ([], catalog_snapshot),
+    )
+
+    def history_item(record, *, output_records=None):
+        assert output_records == []
+        return V3JobHistoryItem(
+            job_id=record.job_id,
+            status="blocked",
+            user_input="test",
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            route="/api/v3/creative-agent/history",
+        )
+
+    service._history_item_from_record = history_item  # type: ignore[method-assign]
+    service._history_items_from_output_store = lambda *_args, **_kwargs: []  # type: ignore[method-assign]
+
+    history = service.list_history(limit=2)
+
+    assert len(history.items) == 2
+    assert batch_calls == [{"job_partial_0", "job_partial_1"}]

@@ -24,6 +24,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
     ActivatedCapability,
     CapabilityActivationPlan,
     ecommerce_capability_policy,
+    VisualTaskProfile,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import active_review_contract
 
@@ -100,6 +101,33 @@ def test_runtime_dedupes_explicit_reference_sources_before_freezing_metadata() -
 
     assert len(references) == 1
     assert references[0]["asset_id"] == "same_uploaded_product"
+
+
+def test_brain_task_profile_uses_canonical_product_job_id() -> None:
+    runtime = ScenarioRuntime()
+    request = ScenarioRuntimeRequest(
+        user_input="Create one still life",
+        metadata={"v3_job_instance_id": "instance-1"},
+    )
+    resolution = runtime.scenario_registry.resolve(request.scenario_selection)
+    profile = VisualTaskProfile(
+        profile_id="brain-profile",
+        job_id="brain-placeholder-job",
+        template_id="general_template",
+        scenario_id="general_creative",
+    )
+    class BrainResultStub:
+        visual_task_profile = profile
+
+        def model_copy(self, *, update):
+            return SimpleNamespace(**{**self.__dict__, **update})
+
+    brain_result = BrainResultStub()
+
+    bound = runtime._bind_brain_task_profile_job_id(request, resolution, brain_result)
+
+    assert bound.visual_task_profile.job_id == runtime._runtime_job_id(request, resolution)
+    assert profile.job_id == "brain-placeholder-job"
 
 
 def test_public_product_api_rejects_runtime_owned_frozen_plan_metadata() -> None:

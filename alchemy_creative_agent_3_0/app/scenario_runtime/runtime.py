@@ -948,6 +948,7 @@ class ScenarioRuntime:
                 quality_mode=quality_mode,
             )
             self._require_remote_creative_brain(request, policy, brain_result)
+            brain_result = self._bind_brain_task_profile_job_id(request, resolution, brain_result)
             normalized_intent = self._apply_brain_image_size_precedence(
                 request,
                 normalized_intent,
@@ -986,6 +987,7 @@ class ScenarioRuntime:
                 template_capability_policy=policy,
             )
             self._require_remote_creative_brain(request, policy, brain_result)
+            brain_result = self._bind_brain_task_profile_job_id(request, resolution, brain_result)
             normalized_intent = self._apply_brain_image_size_precedence(
                 request,
                 normalized_intent,
@@ -1050,6 +1052,7 @@ class ScenarioRuntime:
         record_stage_event("scenario_runtime", "slot_delta_recovery_returned", stage=stage)
         record_stage_event("scenario_runtime", "remote_brain_requirement_validation_call", stage=stage)
         self._require_remote_creative_brain(request, policy, brain_result)
+        brain_result = self._bind_brain_task_profile_job_id(request, resolution, brain_result)
         normalized_intent = self._apply_brain_image_size_precedence(
             request,
             normalized_intent,
@@ -1411,6 +1414,24 @@ class ScenarioRuntime:
         except (TypeError, ValueError) as exc:
             raise CapabilityActivationError("professional_mode_task_profile_binding_invalid") from exc
         return brain_result.model_copy(update={"visual_task_profile": bound_profile})
+
+    def _bind_brain_task_profile_job_id(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution: ScenarioPackResolution,
+        brain_result: BrainRunResult,
+    ) -> BrainRunResult:
+        """Keep Brain's semantic profile on the Product API's canonical job identity."""
+
+        profile = brain_result.visual_task_profile
+        if profile is None:
+            return brain_result
+        job_id = self._runtime_job_id(request, resolution)
+        if profile.job_id == job_id:
+            return brain_result
+        return brain_result.model_copy(
+            update={"visual_task_profile": profile.model_copy(update={"job_id": job_id})}
+        )
 
     def _finalize_professional_mode(
         self,

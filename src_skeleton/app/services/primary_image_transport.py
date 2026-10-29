@@ -72,7 +72,45 @@ def _legacy_primary_request(job, request, index, *, edit=False):
     if edit or request.source_output_id:
         hard["edit_source"] = True
     if request.asset_plan:
-        hard["asset_fusion"] = request.asset_plan
+        asset_plan = request.asset_plan
+        assets = asset_plan.get("assets", []) if isinstance(asset_plan, dict) else []
+        provider_plan = asset_plan.get("provider_input_plan", {}) if isinstance(asset_plan, dict) else {}
+        plan_requirements = asset_plan.get("requirements", {}) if isinstance(asset_plan, dict) else {}
+        has_reference_intent = bool(
+            (isinstance(provider_plan, dict) and provider_plan.get("requires_image_reference"))
+            or (isinstance(provider_plan, dict) and provider_plan.get("reference_image_count"))
+            or any(item.get("provider_input_required") is True for item in assets if isinstance(item, dict))
+        )
+        expected_reference_count = (
+            provider_plan.get("reference_image_count") if isinstance(provider_plan, dict) else None
+        )
+        has_declared_reference_count = type(expected_reference_count) is int and expected_reference_count >= 0
+        if not has_declared_reference_count:
+            expected_reference_count = sum(
+                1 for item in assets if isinstance(item, dict)
+                and item.get("provider_input_mode") == "reference_image"
+                and item.get("provider_input_required") is True
+            )
+        if has_reference_intent and expected_reference_count < 1:
+            expected_reference_count = 1
+        has_reference_plan = has_reference_intent or has_declared_reference_count
+        if has_reference_plan and len(refs) < expected_reference_count:
+            hard["missing_reference"] = True
+        elif has_reference_plan and len(refs) > expected_reference_count:
+            hard["reference_plan_mismatch"] = True
+        if any(item.get("provider_input_mode") == "mask_edit_source" for item in assets if isinstance(item, dict)):
+            hard["mask"] = True
+        if (
+            (isinstance(provider_plan, dict) and provider_plan.get("requires_postprocess"))
+            or (isinstance(plan_requirements, dict) and plan_requirements.get("needs_postprocess"))
+            or any(
+                isinstance(item, dict) and (
+                    item.get("provider_input_mode") == "postprocess_only" or item.get("postprocess_steps")
+                )
+                for item in assets
+            )
+        ):
+            hard["deterministic_postprocess"] = True
     if refs:
         hard["reference_semantics"] = "reference_images"
     width, height = 1024, 1024
@@ -104,10 +142,9 @@ def primary_request(job, request, index, *, edit=False):
     variables = plan.variables or {}
     hard = dict(unit.hard_requirements)
     for key in ("quality", "output_format", "output_compression", "transparent_background",
-                "size", "exact_dimensions", "seed", "input_fidelity"):
+                "size", "exact_dimensions", "seed", "input_fidelity", "input_fidelity_required",
+                "moderation"):
         hard.pop(key, None)
-    if variables.get("input_fidelity_required"):
-        hard["input_fidelity_required"] = True
     refs = unit.references
     if edit or request.source_output_id:
         source = media_store.find_output_file(request.source_output_id) if request.source_output_id else None
@@ -175,7 +212,12 @@ async def _run_owned(job, request, *, edit, transport, existing):
             job.model = result.provenance.get("actual_model") or "unknown"
             if result.image is None:
                 job.status = JobStatus.canceled if result.state == "canceled" else JobStatus.failed if result.state in {"failed", "expired"} else JobStatus.generating
-                job.error = ProviderError(code=f"bridge_{result.state}", message="Render Bridge owns this image; resume the same task.", retryable=False)
+                message = (
+                    "Render Bridge input storage stayed busy; no remote image task was created."
+                    if result.reason == "bridge_store_busy"
+                    else "Render Bridge owns this image; resume the same task."
+                )
+                job.error = ProviderError(code=f"bridge_{result.state}", message=message, retryable=False)
                 return True
             image = result.image
             item = {"b64_json": base64.b64encode(image.content).decode(), "format": image.mime_type.split("/")[-1], "width": image.width, "height": image.height,

@@ -35,6 +35,10 @@ frozen prompt/options, and ordered reference hashes.
 
 - A capability preflight rejection, unavailable Bridge, or atomic `queue_capacity`
   rejection is a proof of non-admission and may select the API-key route.
+- After a successful capabilities response with `admission.accepting_new_tasks=true`,
+  executor/profile health (`available`, `unavailable`, `unknown`, missing, stale,
+  or malformed) is diagnostic only and cannot select the API route. Admission
+  belongs to the Bridge endpoint and its atomic task-creation check.
 - Loss of a create response, uncertain timeout, 5xx without an explicit
   non-admission proof, or any admitted Bridge task is `bridge_submission_unknown`
   or Bridge-owned.  Query the exact origin; do not call an API-key provider.
@@ -62,6 +66,24 @@ deterministic postprocessing and unverified required conditioning remain hard
 capability gates; optional parameter adaptation does not silently waive them.
 Historical admitted units retain their original semantics. Defaults do not promise
 visual quality, dimensions or aspect ratio equivalent or close to the source request.
+
+### 2026-10-28 V1/Lab default and asset-plan parity
+
+For newly versioned V1/Lab Codex units, unsupported moderation is a provider
+control and is omitted so Codex uses its native default. A non-empty asset plan
+is not itself a renderer operation: reference-only plans pass their original
+reference bytes and use the existing negotiated reference-fusion contract.
+The adapter verifies that the materialized reference count matches the frozen
+plan; it never submits a partial required reference set. Only a missing required
+reference, mask/edit operation, or deterministic postprocess remains a hard gate.
+Unmarked historical units keep their original frozen digest and requirements.
+
+The shared Bridge admission layer also removes unsupported optional Codex image
+options (quality, output format, and transparency) from the outgoing payload
+when the selected adapter contract does not advertise them. The durable request
+key and frozen API fallback remain based on the original request; only the new
+Bridge payload uses native defaults. Malformed/missing adapter contracts remain
+rejected, and historical journal payloads are not normalized during recovery.
 
 The verified `rust-v0.163.0` ImageGen tool contract is `prompt`, up to five explicit
 `referenced_image_paths` (or, alternatively, a recent-image window), and
@@ -107,6 +129,17 @@ must resolve an existing origin before counting active work, atomically compare
 the configurable limit (default 10), then either create exactly one task or
 return an explicit no-task-created `queue_capacity` proof.  Published queue
 depth is diagnostic only and cannot replace the transactional check.
+
+During reference input staging, `store_busy` with HTTP 503 is a transient Bridge
+storage contention, not endpoint downtime or task admission. Retry the same
+input key and identical bytes once, honoring `Retry-After` when supplied. If
+the retry is still busy, keep the durable unit at `preflight` and return an
+explicit Bridge failure with reason `bridge_store_busy`. There is no remote
+task or task deadline to queue against; do not create a synthetic task or
+select API for this condition. The preflight ledger remains for diagnosis;
+no image task was admitted. Other staging errors retain their existing
+pre-admission behavior. This transport rule does not change product billing,
+review, persistence, or output ownership.
 
 ## Frozen adapter compatibility
 

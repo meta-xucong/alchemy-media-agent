@@ -15,7 +15,9 @@ from pathlib import Path
 import re
 import shutil
 import threading
-from typing import Any, Iterable
+import time
+from types import MappingProxyType
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 from ..creative_core.doc281_output_plan_binding import (
@@ -64,6 +66,12 @@ class V3GeneratedOutputRecord:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class _V3OutputCatalogSnapshot:
+    generation: int
+    entries: Mapping[str, tuple[tuple[int, int, int], tuple[str, int, str], str]]
+
+
 class V3GeneratedOutputStore:
     """Persistent local store for V3-generated image files only."""
 
@@ -82,6 +90,16 @@ class V3GeneratedOutputStore:
             str, tuple[tuple[int, int, int], str | None, bool]
         ] = OrderedDict()
         self._image_validation_cache: OrderedDict[str, tuple[tuple[int, int, int], bool]] = OrderedDict()
+        self._list_outputs_lock = threading.Lock()
+        self._list_outputs_catalog: dict[
+            str, tuple[tuple[int, int, int], tuple[str, int, str], str]
+        ] | None = None
+        self._list_outputs_catalog_revision: tuple[int, int] | None = None
+        self._list_outputs_scan_completed_at = 0.0
+        self._list_outputs_generation = 0
+        self._list_outputs_page_cache: tuple[
+            int, int, tuple[tuple[str, tuple[int, int, int], V3GeneratedOutputRecord], ...]
+        ] | None = None
 
     def save_base64_output(
         self,
@@ -306,22 +324,65 @@ class V3GeneratedOutputStore:
         bounded_limit = _bounded_output_limit(limit, default=100)
         return self._read_records_cached(bounded_limit)
 
+    def list_outputs_with_snapshot(
+        self,
+        limit: int = 100,
+    ) -> tuple[list[V3GeneratedOutputRecord], _V3OutputCatalogSnapshot]:
+        """Read a history page and return the exact immutable catalog it used."""
+
+        bounded_limit = _bounded_output_limit(limit, default=100)
+        return self._read_records_and_snapshot_cached(bounded_limit)
+
     def list_by_job(self, job_id: str, limit: int | None = None) -> list[V3GeneratedOutputRecord]:
         target = str(job_id or "").strip()
         if not target:
             return []
         scoped_limit = None if limit is None else _bounded_output_limit(limit, default=1)
         paths = self._scoped_output_paths(field="job_id", target=target)
-        records = self._read_scoped_records(paths, job_id=target, limit=scoped_limit)
-        # An out-of-band edit can move an existing record to another job while
-        # leaving the output directory revision unchanged. If the cached
-        # candidate paths produced no exact match, rebuild the locator once so
-        # the new authoritative job_id can be discovered. Normal repeated
-        # reads use the bounded path index when the catalog is small enough.
-        if not records:
-            paths = self._scoped_output_paths(field="job_id", target=target, force_rescan=True)
-            records = self._read_scoped_records(paths, job_id=target, limit=scoped_limit)
-        return records
+        return self._read_scoped_records(paths, job_id=target, limit=scoped_limit)
+
+    def list_by_jobs(
+        self,
+        job_ids: Iterable[str],
+        *,
+        catalog_snapshot: _V3OutputCatalogSnapshot | None = None,
+    ) -> dict[str, list[V3GeneratedOutputRecord]]:
+        """Read output records for multiple Jobs in one catalog pass."""
+
+        targets = {str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip()}
+        if not targets:
+            return {}
+        by_job: dict[str, list[tuple[str, int, str, V3GeneratedOutputRecord]]] = {}
+        catalog_paths = (
+            [
+                path_key
+                for path_key, (_signature, _sort_key, job_id) in catalog_snapshot.entries.items()
+                if job_id in targets
+            ]
+            if catalog_snapshot is not None
+            else None
+        )
+        paths = (
+            (Path(path_key) for path_key in catalog_paths)
+            if catalog_paths is not None
+            else self._iter_scoped_output_paths_for_jobs(targets)
+        )
+        for path in paths:
+            record = self.get_output(path.parent.name)
+            if record is None or record.job_id not in targets:
+                continue
+            by_job.setdefault(record.job_id, []).append(
+                (
+                    str(record.created_at or ""),
+                    -_output_id_order_number(record.output_id),
+                    str(path),
+                    record,
+                )
+            )
+        return {
+            job_id: [record for _created, _rank, _path, record in sorted(entries, reverse=True)]
+            for job_id, entries in by_job.items()
+        }
 
     def list_by_project(self, project_id: str, limit: int = 256) -> list[V3GeneratedOutputRecord]:
         target = str(project_id or "").strip()
@@ -331,16 +392,7 @@ class V3GeneratedOutputStore:
             limit, default=256, maximum=_OUTPUT_PROJECT_LIST_MAX_ENTRIES
         )
         paths = self._scoped_output_paths(field="project_id", target=target)
-        records = self._read_scoped_records(paths, project_id=target, limit=bounded_limit)
-        # Match list_by_job: an in-place output.json edit may change the
-        # authoritative project_id without changing the directory revision.
-        # Rebuild only when the cached candidates produce no exact match.
-        if not records:
-            paths = self._scoped_output_paths(
-                field="project_id", target=target, force_rescan=True
-            )
-            records = self._read_scoped_records(paths, project_id=target, limit=bounded_limit)
-        return records
+        return self._read_scoped_records(paths, project_id=target, limit=bounded_limit)
 
     def list_by_project_and_jobs(
         self,
@@ -690,6 +742,11 @@ class V3GeneratedOutputStore:
             self._record_file_revisions.clear()
             self._integrity_validation_cache.clear()
             self._image_validation_cache.clear()
+        with self._list_outputs_lock:
+            self._list_outputs_catalog = None
+            self._list_outputs_catalog_revision = None
+            self._list_outputs_scan_completed_at = 0.0
+            self._list_outputs_page_cache = None
 
     def _canonical_output_files_match_record_cached(
         self,
@@ -896,6 +953,23 @@ class V3GeneratedOutputStore:
                     yield path
                     break
 
+    def _iter_scoped_output_paths_for_jobs(self, job_ids: set[str]):
+        """Locate all requested Jobs during one pass over a large output catalog."""
+
+        for path in _iter_output_record_paths(self.storage_root):
+            if not _valid_output_id(path.parent.name):
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            for match in _SCOPED_INDEX_FIELD_PATTERN.finditer(raw):
+                if match.group("field") != b"job_id":
+                    continue
+                if _decode_scoped_index_value(match.group("value")) in job_ids:
+                    yield path
+                    break
+
     def _read_scoped_records(
         self,
         paths: Iterable[Path],
@@ -929,27 +1003,129 @@ class V3GeneratedOutputStore:
         return [record for _created, _reverse_id, _path, record in sorted(records, reverse=True)]
 
     def _read_records_cached(self, limit: int = 100) -> list[V3GeneratedOutputRecord]:
-        """Read a bounded newest-first page without retaining the full catalog."""
+        records, _snapshot = self._read_records_and_snapshot_cached(limit)
+        return records
+
+    def _read_records_and_snapshot_cached(
+        self,
+        limit: int = 100,
+    ) -> tuple[list[V3GeneratedOutputRecord], _V3OutputCatalogSnapshot]:
+        """Read an exact newest-first page, re-parsing only changed records."""
 
         bounded_limit = _bounded_output_limit(limit, default=100)
-        newest: list[tuple[str, int, str, V3GeneratedOutputRecord]] = []
-        for path in _iter_output_record_paths(self.storage_root):
-            try:
-                with path.open("r", encoding="utf-8") as handle:
-                    record = V3GeneratedOutputRecord(**json.load(handle))
-            except Exception:
-                continue
-            entry = (
-                str(record.created_at or ""),
-                -_output_id_order_number(record.output_id),
-                str(path),
-                record,
+        request_started_at = time.perf_counter()
+        with self._list_outputs_lock:
+            root_revision = self._storage_revision()
+            previous_catalog = self._list_outputs_catalog or {}
+            previous_page = self._list_outputs_page_cache
+            can_share_scan = (
+                self._list_outputs_catalog is not None
+                and self._list_outputs_catalog_revision == root_revision
+                and self._list_outputs_scan_completed_at >= request_started_at
             )
-            if len(newest) < bounded_limit:
-                heapq.heappush(newest, entry)
-            elif entry[:2] > newest[0][:2]:
-                heapq.heapreplace(newest, entry)
-        return [record for _created, _reverse_id, _path, record in sorted(newest, reverse=True)]
+            if can_share_scan:
+                catalog = self._list_outputs_catalog or {}
+                generation = self._list_outputs_generation
+                newest = None
+            else:
+                catalog: dict[
+                    str, tuple[tuple[int, int, int], tuple[str, int, str]]
+                ] = {}
+                newest: list[
+                    tuple[tuple[str, int, str], str, V3GeneratedOutputRecord | None]
+                ] = []
+                for path in _iter_output_record_paths(self.storage_root):
+                    path_key = str(path)
+                    try:
+                        stat = path.stat()
+                    except OSError:
+                        continue
+                    signature = (
+                        int(stat.st_mtime_ns),
+                        int(stat.st_ctime_ns),
+                        int(stat.st_size),
+                    )
+                    previous = previous_catalog.get(path_key)
+                    record = None
+                    if previous is not None and previous[0] == signature:
+                        sort_key = previous[1]
+                    else:
+                        try:
+                            with path.open("r", encoding="utf-8") as handle:
+                                record = V3GeneratedOutputRecord(**json.load(handle))
+                        except Exception:
+                            continue
+                        sort_key = (
+                            str(record.created_at or ""),
+                            -_output_id_order_number(record.output_id),
+                            path_key,
+                        )
+                    job_id = record.job_id if record is not None else previous[2]
+                    catalog[path_key] = (signature, sort_key, str(job_id or ""))
+                    entry = (sort_key, path_key, record)
+                    if len(newest) < bounded_limit:
+                        heapq.heappush(newest, entry)
+                    elif sort_key > newest[0][0]:
+                        heapq.heapreplace(newest, entry)
+
+                if self._list_outputs_catalog is None or catalog != previous_catalog:
+                    self._list_outputs_generation += 1
+                generation = self._list_outputs_generation
+                self._list_outputs_catalog = catalog
+                self._list_outputs_catalog_revision = root_revision
+
+            previous_page_records = {
+                path_key: (signature, record)
+                for path_key, signature, record in (previous_page[2] if previous_page else ())
+            }
+            if newest is None:
+                newest_keys = sorted(
+                    ((value[1], path_key, value[0]) for path_key, value in catalog.items()),
+                    reverse=True,
+                )[:bounded_limit]
+            else:
+                newest_keys = [
+                    (sort_key, path_key, catalog[path_key][0], record)
+                    for sort_key, path_key, record in sorted(newest, reverse=True)
+                ]
+
+            records: list[V3GeneratedOutputRecord] = []
+            page_entries: list[
+                tuple[str, tuple[int, int, int], V3GeneratedOutputRecord]
+            ] = []
+            page_cache_limit = min(bounded_limit, 256)
+            for index, selected in enumerate(newest_keys):
+                if len(selected) == 4:
+                    _sort_key, path_key, signature, record = selected
+                else:
+                    _sort_key, path_key, signature = selected
+                    record = None
+                if record is None and previous_page is not None:
+                    cached = previous_page_records.get(path_key)
+                    if cached is not None and cached[0] == signature:
+                        record = cached[1]
+                if record is None:
+                    try:
+                        with Path(path_key).open("r", encoding="utf-8") as handle:
+                            record = V3GeneratedOutputRecord(**json.load(handle))
+                    except Exception:
+                        continue
+                records.append(record)
+                if index < page_cache_limit:
+                    page_entries.append((path_key, signature, record))
+
+            self._list_outputs_page_cache = (
+                page_cache_limit,
+                generation,
+                tuple(page_entries),
+            )
+            if not can_share_scan:
+                self._list_outputs_scan_completed_at = time.perf_counter()
+            snapshot = _V3OutputCatalogSnapshot(
+                generation=generation,
+                entries=MappingProxyType(catalog),
+            )
+            return records, snapshot
 
 
 def download_route(output_id: str) -> str:

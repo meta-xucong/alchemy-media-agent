@@ -1010,6 +1010,32 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             "the return schema, never natural-language aliases. Developmental age and expression are governed by "
             "their separate semantic fields and are not reference-channel IDs."
         )
+        reference_input_summary = request.metadata.get("reference_input_summary")
+        reference_counts = (
+            [
+                reference_input_summary.get(key)
+                for key in (
+                    "logical_continuity_reference_count",
+                    "logical_mode_input_count",
+                    "physical_provider_reference_count",
+                )
+            ]
+            if isinstance(reference_input_summary, dict)
+            else []
+        )
+        has_reference_inputs = bool(
+            request.reference_assets
+            or request.selected_output_assets
+            or request.uploaded_assets
+            or any(isinstance(count, int) and not isinstance(count, bool) and count > 0 for count in reference_counts)
+        )
+        if has_reference_inputs:
+            payload["remote_response_contract"] += (
+                " This frozen request includes visual reference inputs, so set "
+                "visual_task_profile.reference_channel_ownership_intent.applicability to exactly "
+                "`applicable`. The remote Brain still owns the semantic decision about which exact reference "
+                "channels and current-request channels apply; cite the provided reference evidence IDs."
+            )
         if "variation_execution_contract" in payload:
             payload["remote_response_contract"] += (
                 f" {GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} When variation_execution_contract is present, "

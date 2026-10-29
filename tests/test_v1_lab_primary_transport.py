@@ -142,12 +142,11 @@ def test_v1_pending_restart_same_origin_no_api(runtime, state):
     assert bridge.creates == 1 and api.calls == 0
 
 
-@pytest.mark.parametrize('reason', ['queue', 'health', 'capability'])
+@pytest.mark.parametrize('reason', ['queue', 'capability'])
 def test_v1_proven_nonadmission_uses_exact_api_request_once(runtime, reason):
     bridge, api = runtime
     kwargs = {}
     if reason == 'queue': bridge.error = BridgeError('queue_capacity', status=429)
-    if reason == 'health': bridge.healthy = False
     if reason == 'capability': bridge.native = False; kwargs = {'background': 'transparent', 'output_compression': 0, 'quality': 'high'}
     job = asyncio.run(submit(**kwargs))
     assert job.status == JobStatus.ready and api.calls == 1
@@ -160,9 +159,17 @@ def test_v1_proven_nonadmission_uses_exact_api_request_once(runtime, reason):
     assert api.calls == 1
 
 
+def test_v1_unavailable_profile_health_keeps_bridge_primary(runtime):
+    bridge, api = runtime
+    bridge.healthy = False
+    job = asyncio.run(submit())
+    assert job.status == JobStatus.ready
+    assert bridge.creates == 1 and api.calls == 0
+
+
 def test_api_response_loss_never_reinvokes_provider(runtime):
     bridge, api = runtime
-    bridge.healthy = False; api.fail = True
+    bridge.error = BridgeError('queue_capacity', status=429); api.fail = True
     job = asyncio.run(submit())
     assert job.error.code == 'api_execution_unknown'
     api.fail = False
@@ -629,6 +636,154 @@ def test_v1_native_defaults_preserve_prompt_and_original_request(runtime):
     assert frozen.prompt_plan.output_compression == 17 and frozen.prompt_plan.size == '1536x1024'
 
 
+def test_v1_moderation_uses_codex_native_default(runtime):
+    bridge, api = runtime
+    job = asyncio.run(submit(moderation='low'))
+    assert job.status == JobStatus.ready and bridge.creates == 1 and api.calls == 0
+    assert next(iter(bridge.tasks.values()))['request']['parameters'] == {
+        'codex_adapter': 'codex_cli_imagegen_v1',
+    }
+    assert primary.frozen_request(job).prompt_plan.moderation == 'low'
+
+
+def test_v1_input_fidelity_hint_uses_codex_model_default(runtime):
+    bridge, api = runtime
+
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Keep image fidelity',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        request.prompt_plan.variables['input_fidelity_required'] = True
+        return await images.run_submitted_image_job(prepared.job.id, request)
+
+    job = asyncio.run(run())
+    assert job.status == JobStatus.ready and bridge.creates == 1 and api.calls == 0
+    assert next(iter(bridge.tasks.values()))['request']['parameters'] == {
+        'codex_adapter': 'codex_cli_imagegen_v1',
+    }
+
+
+def test_v1_reference_only_asset_plan_reaches_bridge_unchanged(runtime, tmp_path):
+    bridge, api = runtime
+    path = tmp_path / 'reference.png'
+    path.write_bytes(bridge.content)
+
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Use this reference',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        request.asset_plan = {
+            'assets': [{'asset_id': 'ref-1', 'provider_input_mode': 'reference_image',
+                        'storage_path': str(path)}],
+            'provider_input_plan': {'operation': 'reference_fusion', 'reference_image_count': 1,
+                                    'requires_postprocess': False},
+        }
+        return await images.run_submitted_image_job(prepared.job.id, request)
+
+    job = asyncio.run(run())
+    assert job.status == JobStatus.ready and bridge.creates == 1 and api.calls == 0
+    assert len(bridge.inputs) == 1 and bridge.inputs[0][1] == path.read_bytes()
+
+
+def test_v1_partial_required_reference_set_uses_api_without_submitting_partial_bridge_inputs(runtime, tmp_path):
+    bridge, api = runtime
+    present = tmp_path / 'present.png'
+    present.write_bytes(bridge.content)
+    plan = {
+        'assets': [
+            {'asset_id': 'present', 'provider_input_mode': 'reference_image',
+             'provider_input_required': True, 'storage_path': str(present)},
+            {'asset_id': 'missing', 'provider_input_mode': 'reference_image',
+             'provider_input_required': True, 'storage_path': str(tmp_path / 'missing.png')},
+        ],
+        'provider_input_plan': {'operation': 'reference_fusion', 'reference_image_count': 2,
+                                'requires_image_reference': True},
+    }
+
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Use both required references',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        request.asset_plan = plan
+        return await images.run_submitted_image_job(prepared.job.id, request)
+
+    job = asyncio.run(run())
+    assert job.status == JobStatus.ready and bridge.creates == 0 and api.calls == 1
+    assert not bridge.inputs
+
+
+def test_v1_reference_plan_count_mismatch_never_submits_extra_bridge_inputs(runtime, tmp_path):
+    bridge, api = runtime
+    paths = [tmp_path / 'one.png', tmp_path / 'two.png']
+    for path in paths:
+        path.write_bytes(bridge.content)
+    plan = {
+        'assets': [
+            {'asset_id': str(index), 'provider_input_mode': 'reference_image',
+             'provider_input_required': True, 'storage_path': str(path)}
+            for index, path in enumerate(paths)
+        ],
+        'provider_input_plan': {'operation': 'reference_fusion', 'reference_image_count': 1,
+                                'requires_image_reference': True},
+    }
+
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Use planned references',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        request.asset_plan = plan
+        return await images.run_submitted_image_job(prepared.job.id, request)
+
+    job = asyncio.run(run())
+    assert job.status == JobStatus.ready and bridge.creates == 0 and api.calls == 1
+    assert not bridge.inputs
+
+
+def test_v1_zero_reference_plan_does_not_admit_unplanned_asset_reference(runtime, tmp_path):
+    bridge, api = runtime
+    path = tmp_path / 'unplanned.png'
+    path.write_bytes(bridge.content)
+    plan = {
+        'assets': [{'asset_id': 'soft-reference', 'provider_input_mode': 'reference_image',
+                    'storage_path': str(path)}],
+        'provider_input_plan': {'operation': 'prompt_only', 'reference_image_count': 0,
+                                'requires_image_reference': False},
+    }
+
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Use the plan exactly',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        request.asset_plan = plan
+        return await images.run_submitted_image_job(prepared.job.id, request)
+
+    job = asyncio.run(run())
+    assert job.status == JobStatus.ready and bridge.creates == 0 and api.calls == 1
+    assert not bridge.inputs
+
+
+@pytest.mark.parametrize('asset_plan', [
+    {'assets': [{'provider_input_mode': 'postprocess_only'}],
+     'provider_input_plan': {'requires_postprocess': True}},
+    {'assets': [{'provider_input_mode': 'mask_edit_source'}]},
+    {'assets': [{'provider_input_mode': 'reference_image', 'provider_input_required': True}],
+     'provider_input_plan': {'requires_image_reference': True, 'reference_image_count': 1}},
+])
+def test_v1_asset_plan_operations_and_missing_refs_remain_gated(runtime, asset_plan):
+    bridge, api = runtime
+
+    async def run():
+        prepared = await images.submit_image_job(session_id='session', prompt='Use required image inputs',
+            work_intensity='passthrough', provider_preference='fixture_api')
+        request = prepared.request.model_copy(deep=True)
+        request.asset_plan = asset_plan
+        return await images.run_submitted_image_job(prepared.job.id, request)
+
+    job = asyncio.run(run())
+    assert job.status == JobStatus.ready and bridge.creates == 0 and api.calls == 1
+    assert api.requests[0].asset_plan == asset_plan
+
+
 def test_unmarked_legacy_ledger_recovers_without_digest_change(runtime):
     bridge, api = runtime
     async def run():
@@ -690,17 +845,16 @@ def test_v1_references_preserve_order_and_never_truncate(runtime, tmp_path, monk
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('variable', ['mask', 'input_fidelity_required'])
-def test_required_operations_are_not_optional_native_controls(runtime, variable):
+def test_mask_operation_remains_a_hard_bridge_gate(runtime):
     bridge, api = runtime
     async def run():
         prepared = await images.submit_image_job(session_id='session', prompt='Required operation',
             work_intensity='passthrough', provider_preference='fixture_api')
         request = prepared.request.model_copy(deep=True)
-        request.prompt_plan.variables[variable] = True
+        request.prompt_plan.variables['mask'] = True
         done = await images.run_submitted_image_job(prepared.job.id, request)
         assert done.status == JobStatus.ready and not bridge.creates and api.calls == 1
-        assert api.requests[0].prompt_plan.variables[variable] is True
+        assert api.requests[0].prompt_plan.variables['mask'] is True
     asyncio.run(run())
 
 

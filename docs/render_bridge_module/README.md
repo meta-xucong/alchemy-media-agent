@@ -10,6 +10,7 @@
 - [RB20](RB20_NATIVE_ADAPTER_CANVAS_LOCAL_ACCEPTANCE.md): current native-adapter/canvas candidate, exact paired Bridge pin and bounded local acceptance instructions.
 - [RB27](RB27_UNKNOWN_PROFILE_HEALTH_BRIDGE_FIRST.md): unknown executor-health handling for an online, accepting Bridge.
 - [RB28](RB28_CODEX_EVENT_BURST_AND_V2_RECONCILIATION.md): Codex stream-burst resilience and bounded same-task V2 reconciliation after unknown execution.
+- [RB29](RB29_V3_API_FALLBACK_UNKNOWN_DIAGNOSTICS.md): V3 API fallback outcome-unknown classification and safe route diagnostics.
 
 RB00–RB12 and the integration package's older native/preview documents describe
 historical experimental milestones. Their evidence remains pinned to those

@@ -19,6 +19,15 @@ committed output/debit/checkpoint, not receipt download.
 Validation uses offline fake transport and isolated V2 storage only. No live account,
 provider, deployment or production acceptance is implied by passing these tests.
 
+> **Current-contract note (2026-10-28):** the historical “quality=high falls back”
+> and “strong reference fusion/high fidelity falls back” paragraphs below describe
+> the initial V2 adapter. RB13 is now authoritative for new `codex_cli_imagegen_v1`
+> requests: unsupported optional renderer controls use the Codex native default;
+> their frozen product request and pre-admission API fallback remain unchanged.
+> Required missing references, masks, deterministic postprocessing and historical
+> journal replay remain strict. Do not use this historical paragraph to predict
+> the current V2 route.
+
 ## Deployment and limits
 
 The neutral transport is a separately installed package. From repository root,

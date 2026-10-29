@@ -74,17 +74,30 @@ def _gate_for(settings, app_request):
     return BatchAdmissionGate(settings, context.get("owner_id"), context.get("job_id"))
 
 
-def _error(code, provenance=None):
+def _error(code, provenance=None, *, provider="render_bridge", message=None, api_error_type=None):
     code = str(code)
-    if not code.startswith("bridge_"):
+    if provider == "render_bridge" and not code.startswith("bridge_"):
         code = "bridge_" + code
+    not_submitted = isinstance(provenance, dict) and provenance.get("reason") == "bridge_store_busy"
+    if message is None:
+        message = (
+            "Render Bridge input storage stayed busy; no remote image task was created. Retry the request later."
+            if not_submitted else
+            "The existing image execution must be recovered; no API fallback was called."
+        )
+    outcome = (
+        {"request_state": "not_submitted", "retryability": "safe_to_retry"}
+        if not_submitted else
+        {"request_state": "accepted_unknown", "retryability": "status_required"}
+    )
     return ProviderRuntimeError(
-        "The existing image execution must be recovered; no second provider was called.",
-        provider="render_bridge", detail={
+        message,
+        provider=provider, detail={
             "failure_code": code, "transport_retry_terminal": True,
             "transport_retry_owner": "render_bridge_primary",
-            "transport_outcome": {"request_state": "accepted_unknown", "retryability": "status_required"},
+            "transport_outcome": outcome,
             PROVENANCE: dict(provenance or {}),
+            **({"api_error_type": api_error_type} if api_error_type else {}),
         },
     )
 
@@ -149,28 +162,78 @@ def _source_request(app_request, *, native_defaults=False):
     )
 
 
-def request_for(app_request, transport=None):
+def _codex_transparency_supported(capabilities, profile):
+    if not isinstance(capabilities, dict):
+        return False
+    profiles = capabilities.get("profiles")
+    if not isinstance(profiles, list):
+        return False
+    selected = next((item for item in profiles
+                     if isinstance(item, dict) and item.get("execution_profile_id") == profile
+                     and item.get("execution_profile_revision") == "1"), None)
+    if not selected:
+        return False
+    parameter_contract = selected.get("parameter_contract")
+    if not isinstance(parameter_contract, dict):
+        return False
+    adapter = parameter_contract.get("codex_adapter")
+    if not isinstance(adapter, dict):
+        return False
+    options = adapter.get("image_options_contract")
+    if not isinstance(options, dict):
+        return False
+    transparency = options.get("transparent_background")
+    if not isinstance(transparency, dict):
+        return False
+    values = transparency.get("values")
+    return isinstance(values, list) and any(type(value) is bool and value is True for value in values)
+
+
+def request_for(app_request, transport=None, capabilities=None):
     """New units opt in; durable legacy digests remain authoritative on replay.
 
-    Only optional rendering controls use native defaults. Fidelity guarantees,
-    masks and unknown operations are not equivalent to a prompt/reference hint.
+    Unsupported rendering, fidelity, and identity hints use Codex native
+    defaults as best-effort semantics. Masks, postprocessing, and unknown
+    operations are not equivalent to prompt/reference hints and stay gated.
     """
     from render_bridge_primary.codex_adapter import CODEX_ADAPTER_VERSION, codex_cli_adaptation
 
     source = _source_request(app_request, native_defaults=True)
     plan = app_request.prompt_plan
     options = dict(plan.variables.get("provider_image_options") or {})
-    params = {**options, "background": plan.background,
+    background = plan.background if plan.background not in (None, "auto") else options.get("background")
+    params = {**options, "background": background,
               "transparent_background": bool(plan.transparent_background or
                   options.get("transparent_background") is True or
+                  options.get("background") == "transparent" or
                   plan.background == "transparent")}
     wire, _ = codex_cli_adaptation(params, len(source.references))
     wire["codex_adapter"] = CODEX_ADAPTER_VERSION
-    optional = {"quality", "size", "width", "height", "aspect_ratio", "output_format",
-                "output_compression", "seed", "input_fidelity", "background",
-                "transparent_background"}
+    requested_wire = dict(wire)
+    requested_transparency = params["transparent_background"]
+    profile = transport.settings.profile if transport is not None else "codex-image"
+    if requested_transparency and not _codex_transparency_supported(capabilities, profile):
+        image_options = dict(wire.get("image_options") or {})
+        image_options.pop("transparent_background", None)
+        if set(image_options) <= {"schema_version"}:
+            wire.pop("image_options", None)
+        else:
+            wire["image_options"] = image_options
+    prior_optional = {"quality", "size", "width", "height", "aspect_ratio", "output_format",
+                      "output_compression", "seed", "input_fidelity", "background",
+                      "transparent_background"}
+    optional = prior_optional | {
+        "moderation", "count", "provider_hint", "strong_identity",
+        "input_fidelity_required", "required_reference_conditioning",
+    }
+    # These are guarantees/options, not separate image operations. Keep every
+    # materialized reference and let Codex ImageGen apply its native defaults.
+    native_default_requirements = {
+        "strong_identity", "input_fidelity_required", "required_reference_conditioning",
+    }
     requirements = {key: value for key, value in source.hard_requirements.items()
-                    if key not in optional and not (key.startswith("option_") and key[7:] in optional)}
+                    if key not in optional and key not in native_default_requirements
+                    and not (key.startswith("option_") and key[7:] in optional)}
     asset_plan = app_request.asset_plan or plan.variables.get("asset_plan") or {}
     assets = asset_plan.get("assets", [])
     if ((asset_plan.get("requirements") or {}).get("needs_postprocess") or
@@ -191,7 +254,22 @@ def request_for(app_request, transport=None):
                 raise
             candidates = (native,)
         else:
-            candidates = (legacy, native)
+            # Preserve exact recovery for pre-defaulting V3 journals. Historical
+            # tasks keep their original capability contract and payload.
+            prior_requirements = {
+                key: value for key, value in source.hard_requirements.items()
+                if key not in prior_optional and not (key.startswith("option_") and key[7:] in prior_optional)
+            }
+            prior_params = {**options, "background": plan.background,
+                            "transparent_background": bool(plan.transparent_background or
+                                options.get("transparent_background") is True or
+                                plan.background == "transparent")}
+            prior_wire = codex_cli_adaptation(prior_params, len(source.references))[0]
+            prior_native = replace(source, parameters={**prior_wire, "codex_adapter": CODEX_ADAPTER_VERSION},
+                                  hard_requirements=prior_requirements)
+            supported_native = replace(source, parameters=requested_wire,
+                                       hard_requirements=requirements)
+            candidates = (legacy, prior_native, supported_native, native)
         matched = transport.match_existing_request(candidates)
         if matched is not None:
             return matched
@@ -206,9 +284,13 @@ def output_id(provenance):
 
 
 def _projection(result):
-    return {"route": result.route, "state": result.state, "reason": result.reason,
-            "origin_key": result.origin_key, "execution_key": result.execution_key,
-            "task_id": result.task_id, "receipt_id": result.receipt_id}
+    projection = {"route": result.route, "state": result.state, "reason": result.reason,
+                  "origin_key": result.origin_key, "execution_key": result.execution_key,
+                  "task_id": result.task_id, "receipt_id": result.receipt_id}
+    rejection = result.provenance.get("capability_rejection")
+    if isinstance(rejection, dict):
+        projection["capability_rejection"] = rejection
+    return projection
 
 
 def _cached_result(record, provenance):
@@ -260,6 +342,7 @@ async def retire_checkpoint(app_request, record):
 
 async def generate(app_request, legacy_generate, output_store):
     from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryError
+    from render_bridge_primary.http import BridgeError
 
     settings = PrimarySettings.from_env(product="v3")
     # Preserve disabled legacy behavior, but never hide an existing durable unit.
@@ -267,7 +350,20 @@ async def generate(app_request, legacy_generate, output_store):
         return await legacy_generate(app_request)
     transport = PrimaryTransport(settings)
     try:
-        request = request_for(app_request, transport)
+        capabilities = None
+        plan = app_request.prompt_plan
+        options = dict(plan.variables.get("provider_image_options") or {})
+        transparency_requested = bool(plan.transparent_background or
+            options.get("transparent_background") is True or
+            options.get("background") == "transparent" or plan.background == "transparent")
+        if transparency_requested:
+            try:
+                capabilities = await transport.client.capabilities()
+            except BridgeError:
+                # Capability uncertainty means use the CLI's native default;
+                # the normal resolve call remains authoritative for availability.
+                capabilities = None
+        request = request_for(app_request, transport, capabilities=capabilities)
         deadline = time.monotonic() + POLL_BUDGET_SECONDS
         context = dict(app_request.prompt_plan.variables.get(CONTEXT) or {})
         async with _gate_for(settings, app_request) as gate:
@@ -303,13 +399,29 @@ async def generate(app_request, legacy_generate, output_store):
             async with _gate_for(settings, app_request) as gate:
                 gate.assert_current()
                 if not transport.claim_api(request):
-                    raise _error("bridge_api_execution_unknown", provenance)
+                    raise _error(
+                        "api_execution_unknown", provenance, provider="api",
+                        message="An API fallback may already be in progress or accepted; check its outcome before retrying. automatic retry is disabled.",
+                    )
             try:
                 response = await legacy_generate(app_request)
-            except BaseException:
-                raise _error("bridge_api_execution_unknown", provenance) from None
+            except asyncio.CancelledError as exc:
+                raise _error(
+                    "api_execution_unknown", provenance, provider="api",
+                    message="The API fallback was interrupted; its execution outcome cannot be verified, so automatic retry is disabled.",
+                    api_error_type=exc.__class__.__name__,
+                ) from None
+            except Exception as exc:
+                raise _error(
+                    "api_execution_unknown", provenance, provider="api",
+                    message="The API fallback failed or was interrupted; its execution outcome cannot be verified, so automatic retry is disabled.",
+                    api_error_type=exc.__class__.__name__,
+                ) from None
             if len(response.outputs) != 1 or not response.outputs[0].get("b64_json"):
-                raise _error("bridge_api_output_contract_invalid", provenance)
+                raise _error(
+                    "api_output_contract_invalid", provenance, provider="api",
+                    message="The API fallback returned an unusable image response; its execution outcome must be checked before retrying.",
+                )
             for output in response.outputs:
                 output[PROVENANCE] = provenance
             return response

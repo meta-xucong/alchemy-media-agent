@@ -105,6 +105,7 @@ from app.repositories.sqlite_calls import SQLiteStorageBusy, sqlite_calls
 from app.providers.images import list_v2_image_provider_capabilities
 from app.services.output_storage import read_output_content
 from app.services.output_storage import resolve_output_file
+from render_bridge_primary.health import PrimaryHealthMonitor
 
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,8 @@ async def lifespan(_: FastAPI):
     resource_sync_stop: asyncio.Event | None = None
     queue_worker_task: asyncio.Task | None = None
     queue_worker_stop: asyncio.Event | None = None
+    primary_health_task: asyncio.Task | None = None
+    primary_health_task = asyncio.create_task(PrimaryHealthMonitor("v2").run_forever())
     if settings.sync_github_on_startup:
         startup_sync_task = asyncio.create_task(
             asyncio.to_thread(sync_resource_provider, EVOLINKAI_PROVIDER_ID, "remote")
@@ -174,6 +177,12 @@ async def lifespan(_: FastAPI):
         queue_worker_stop.set()
     if queue_worker_task and not queue_worker_task.done():
         queue_worker_task.cancel()
+    if primary_health_task and not primary_health_task.done():
+        primary_health_task.cancel()
+        try:
+            await primary_health_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def _prewarm_case_search_index() -> None:

@@ -1134,7 +1134,7 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         """
 
         for path in self._job_record_paths(newest_first=True):
-            restored = self._read_record(path.stem)
+            restored = self.get(path.stem)
             if restored is not None:
                 yield restored
 
@@ -1951,6 +1951,10 @@ class V3ProductApiService:
             trusted_professional_character_card=trusted_professional_character_card,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
             trusted_doc270_ecommerce_view_activation=trusted_doc270_ecommerce_view_activation,
+        )
+        self._bind_bridge_primary_real_image_requirement(
+            create_request,
+            generation_channel=generation_channel,
         )
         self._bind_doc73_auto_identity_anchor_transport(
             create_request,
@@ -3783,13 +3787,50 @@ class V3ProductApiService:
             records.append(record)
             if len(records) >= bounded_limit:
                 break
-        record_items = [self._history_item_from_record(record) for record in records]
+        partial_recovery_job_ids = {
+            record.job_id
+            for record in records
+            if record.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}
+            and record.generation_result is None
+        }
+        output_records_by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
+        output_store = getattr(self, "output_store", None)
+        list_by_jobs = getattr(output_store, "list_by_jobs", None)
+        history_output_records: list[V3GeneratedOutputRecord] | None = None
+        if partial_recovery_job_ids and callable(list_by_jobs):
+            list_outputs_with_snapshot = getattr(output_store, "list_outputs_with_snapshot", None)
+            list_outputs = getattr(output_store, "list_outputs", None)
+            if callable(list_outputs_with_snapshot):
+                history_output_records, catalog_snapshot = list_outputs_with_snapshot(
+                    limit=max(100, bounded_limit * 10)
+                )
+                output_records_by_job = list_by_jobs(
+                    partial_recovery_job_ids,
+                    catalog_snapshot=catalog_snapshot,
+                )
+            elif callable(list_outputs):
+                history_output_records = list_outputs(limit=max(100, bounded_limit * 10))
+                output_records_by_job = list_by_jobs(
+                    partial_recovery_job_ids,
+                )
+        record_items = [
+            self._history_item_from_record(
+                record,
+                output_records=output_records_by_job.get(record.job_id, []),
+            )
+            if record.job_id in partial_recovery_job_ids and callable(list_by_jobs)
+            else self._history_item_from_record(record)
+            for record in records
+        ]
         known_job_ids = {item.job_id for item in record_items}
+        skipped_job_ids = known_job_ids | expired_job_ids
         restored_items = [
             item
             for item in self._history_items_from_output_store(
                 bounded_limit,
                 owner_user_id=owner_user_id,
+                excluded_job_ids=skipped_job_ids,
+                output_records=history_output_records,
             )
             if item.job_id not in known_job_ids and item.job_id not in expired_job_ids
         ]
@@ -6536,6 +6577,25 @@ class V3ProductApiService:
             return ProviderStrategy.REFERENCE_CONDITIONED_PROVIDER
         return ProviderStrategy.DEFAULT_IMAGE_PROVIDER
 
+    @staticmethod
+    def _bind_bridge_primary_real_image_requirement(
+        create_request: CreateCreativeJobRequest,
+        *,
+        generation_channel: str,
+    ) -> None:
+        """Freeze real V3 rendering when the configured Bridge can own new jobs."""
+
+        if generation_channel == "mcp":
+            return
+        from render_bridge_primary import PrimarySettings
+
+        if not PrimarySettings.from_env(product="v3").enabled:
+            return
+        create_request.metadata = {
+            **dict(create_request.metadata or {}),
+            "require_real_images": True,
+        }
+
     def _generation_failure_message(self, exc: Exception, provider_strategy: ProviderStrategy) -> str:
         message = str(exc).strip() or exc.__class__.__name__
         detail = getattr(exc, "detail", None)
@@ -6600,6 +6660,46 @@ class V3ProductApiService:
             return (
                 "V3 image generation was blocked before an image request was sent because "
                 "the visual-reference contract did not match the current project plan."
+            )
+        if failure_code in {"api_execution_unknown", "api_output_contract_invalid"}:
+            attempts = [
+                item for item in (provider_failure_retry or {}).get("attempts", [])
+                if isinstance(item, dict)
+            ]
+            api_attempt = next((item for item in reversed(attempts) if item.get("route") == "api"), {})
+            details = []
+            route_reason = str(api_attempt.get("route_reason") or "")
+            if re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", route_reason):
+                details.append(f"reason: {route_reason}")
+            api_error_type = str(api_attempt.get("api_error_type") or "")
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", api_error_type):
+                details.append(f"API error type: {api_error_type}")
+            rejection = api_attempt.get("capability_rejection")
+            if isinstance(rejection, dict):
+                rejection_code = str(rejection.get("code") or "")
+                rejection_field = str(rejection.get("field") or "")
+                if re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", rejection_code):
+                    detail = f"capability rejection: {rejection_code}"
+                    if rejection_field in {
+                        "width", "height", "seed", "quality", "output_format",
+                        "transparent_background", "exact_dimensions", "reference_fusion",
+                        "reference_semantics", "mask", "background", "output_compression",
+                        "input_fidelity", "input_fidelity_required", "strong_identity",
+                        "required_reference_conditioning", "moderation", "deterministic_postprocess",
+                    }:
+                        detail += f" ({rejection_field})"
+                    details.append(detail)
+            route_detail = " after Render Bridge fallback"
+            if details:
+                route_detail += " (" + "; ".join(details) + ")"
+            if failure_code == "api_output_contract_invalid":
+                return (
+                    "V3 API image generation returned an unusable image response" + route_detail
+                    + "; its execution outcome is unknown and automatic retry is disabled."
+                )
+            return (
+                "V3 API image generation stopped" + route_detail
+                + ": the execution outcome is unknown and automatic retry is disabled."
             )
         if failure_code:
             return f"{prefix} with closed provider failure ({classification}: {failure_code})."
@@ -14799,6 +14899,48 @@ class V3ProductApiService:
                 for item in attempts
             ],
         }
+        safe_code = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+        safe_capability_fields = {
+            "width", "height", "seed", "quality", "output_format",
+            "transparent_background", "exact_dimensions", "reference_fusion",
+            "reference_semantics", "mask", "background", "output_compression",
+            "input_fidelity", "input_fidelity_required", "strong_identity",
+            "required_reference_conditioning", "moderation", "deterministic_postprocess",
+        }
+
+        def public_capability_rejection(value: Any) -> dict[str, str]:
+            if not isinstance(value, dict):
+                return {}
+            code = str(value.get("code") or "").strip()
+            field_name = str(value.get("field") or "").strip()
+            result = {"code": code} if code and safe_code.fullmatch(code) else {}
+            if field_name in safe_capability_fields:
+                result["field"] = field_name
+            return result
+
+        for key in ("route", "route_reason", "api_error_type"):
+            value = str(normalized.get(key) or "").strip()
+            if key == "route" and value not in {"api", "bridge"}:
+                continue
+            pattern = r"^[A-Za-z][A-Za-z0-9_]{0,79}$" if key == "api_error_type" else safe_code.pattern
+            if value and re.fullmatch(pattern, value):
+                projected[key] = value
+        rejection = normalized.get("capability_rejection")
+        safe_rejection = public_capability_rejection(rejection)
+        if safe_rejection:
+            projected["capability_rejection"] = safe_rejection
+        for attempt, source in zip(projected["attempts"], attempts):
+            for key in ("route", "route_reason", "api_error_type"):
+                value = str(source.get(key) or "").strip()
+                if key == "route" and value not in {"api", "bridge"}:
+                    continue
+                pattern = r"^[A-Za-z][A-Za-z0-9_]{0,79}$" if key == "api_error_type" else safe_code.pattern
+                if value and re.fullmatch(pattern, value):
+                    attempt[key] = value
+            rejection = source.get("capability_rejection")
+            safe_rejection = public_capability_rejection(rejection)
+            if safe_rejection:
+                attempt["capability_rejection"] = safe_rejection
         runtime_budget = safe_runtime_execution_budget(normalized.get("execution_audit"))
         if runtime_budget:
             projected["runtime_budget"] = runtime_budget
@@ -15187,8 +15329,16 @@ class V3ProductApiService:
             },
         )
 
-    def _history_item_from_record(self, record: ProductJobRecord) -> V3JobHistoryItem:
-        status = self._partial_output_recovery_status(record) or self._status_from_record(record)
+    def _history_item_from_record(
+        self,
+        record: ProductJobRecord,
+        *,
+        output_records: list[V3GeneratedOutputRecord] | None = None,
+    ) -> V3JobHistoryItem:
+        status = self._partial_output_recovery_status(
+            record,
+            output_records=output_records,
+        ) or self._status_from_record(record)
         scenario_id = status.scenario.scenario_id if status.scenario else None
         scenario_label = status.scenario.display_name if status.scenario else None
         selected_preset_id = status.scenario.selected_preset_id if status.scenario else None
@@ -15320,9 +15470,19 @@ class V3ProductApiService:
         limit: int,
         *,
         owner_user_id: int | None = None,
+        excluded_job_ids: set[str] | None = None,
+        output_records: list[V3GeneratedOutputRecord] | None = None,
     ) -> list[V3JobHistoryItem]:
+        excluded = excluded_job_ids or set()
         by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
-        for record in self.output_store.list_outputs(limit=max(100, limit * 10)):
+        records = (
+            output_records
+            if output_records is not None
+            else self.output_store.list_outputs(limit=max(100, limit * 10))
+        )
+        for record in records:
+            if record.job_id in excluded:
+                continue
             if not self._history_owner_matches(record.metadata, owner_user_id):
                 continue
             by_job.setdefault(record.job_id, []).append(record)

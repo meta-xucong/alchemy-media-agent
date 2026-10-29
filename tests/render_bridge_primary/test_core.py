@@ -1,12 +1,14 @@
 import asyncio
 import hashlib
 import io
+import struct
 from dataclasses import replace
+import zlib
 
 import pytest
 from PIL import Image
 
-from render_bridge_primary import PrimaryRequest, PrimarySettings, PrimaryTransport, PrimaryError
+from render_bridge_primary import PrimaryRequest, PrimarySettings, PrimaryTransport, PrimaryError, Reference
 from render_bridge_primary.http import BridgeError
 
 
@@ -18,11 +20,18 @@ class Client:
     calls = 0
     outcome = None
     async def capabilities(self):
-        return {'admission': {'accepting_new_tasks': True}, 'routing_availability_v1': {'profiles':[{'profile_id':'codex-image','health':'available','valid_until':'2099-01-01T00:00:00+00:00'}]}, 'profiles': [{
+        return {'admission': {'accepting_new_tasks': True},
+            'limits': {'max_input_bytes':16*1024*1024,'max_input_image_pixels':16*1024*1024},
+            'routing_availability_v1': {'profiles':[{'profile_id':'codex-image','health':'available','valid_until':'2099-01-01T00:00:00+00:00'}]}, 'profiles': [{
             'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
             'parameter_contract': {'accepted_parameters': ['width','height','seed','image_options'], 'dimension_semantics':'original_dimensions_recorded'},
             'image_options_contract': {'quality':{'values':['auto']}, 'output_format':{'values':['png','jpeg']}, 'references':{'max_count':8}},
-            'limits': {'max_output_bytes':16777216}}]}
+            'limits': {'max_input_bytes':16*1024*1024,'max_input_image_pixels':16*1024*1024,
+                       'max_output_bytes':16777216}}]}
+    async def create_input(self, payload):
+        return {'input_id':payload['input_key']}
+    async def upload_input(self, input_id, content, mime_type):
+        self.uploaded=(input_id,content,mime_type)
     async def create_task(self, payload):
         self.calls += 1
         self.payload = payload
@@ -70,8 +79,118 @@ def test_api_claim_is_one_way(tmp_path):
 
 def test_hard_controls_reject_before_create(tmp_path):
     c=Client(); t=PrimaryTransport(settings(tmp_path),client=c)
-    r=asyncio.run(t.resolve(request(hard_requirements={'mask':True})))
-    assert r.reason=='bridge_capability_unsupported' and r.route=='api' and c.calls==0
+    results={}
+    for product in ('v2','v3'):
+        req=PrimaryRequest(product=product, owner_id='u', unit_id='job:0', prompt='image',
+                           parameters={}, hard_requirements={'mask':True})
+        results[product]=asyncio.run(t.resolve(req))
+    assert all(r.reason=='bridge_capability_unsupported' and r.route=='api' for r in results.values())
+    assert c.calls==0
+    assert results['v2'].provenance.get('capability_rejection') is None
+    assert results['v3'].provenance['capability_rejection']=={
+        'code':'hard_requirement_not_advertised','field':'mask'}
+
+
+def test_v3_capability_rejection_records_safe_input_reason(tmp_path):
+    c=Client(); t=PrimaryTransport(settings(tmp_path),client=c)
+    oversized=Reference(b'x' * (16 * 1024 * 1024 + 1), 'image/png')
+    r=asyncio.run(t.resolve(PrimaryRequest(
+        product='v3', owner_id='u', unit_id='job:0', prompt='image', parameters={},
+        references=(oversized,),
+    )))
+    assert r.route=='api' and r.reason=='bridge_capability_unsupported' and c.calls==0
+    assert r.provenance['capability_rejection']=={'code':'reference_input_over_byte_limit'}
+    assert str(len(oversized.content)) not in repr(r.provenance)
+
+
+def _padded_png(size, target_bytes):
+    stream=io.BytesIO()
+    Image.new('RGB',size,'blue').save(stream,format='PNG')
+    content=stream.getvalue()
+    chunk_data=b'Comment\0'+b'x'*(target_bytes-len(content)-12)
+    chunk=(struct.pack('>I',len(chunk_data))+b'tEXt'+chunk_data+
+           struct.pack('>I',zlib.crc32(b'tEXt'+chunk_data)&0xffffffff))
+    return content[:-12]+chunk+content[-12:]
+
+
+def _png_header_with_dimensions(width, height):
+    stream = io.BytesIO()
+    Image.new('RGB', (1, 1), 'blue').save(stream, format='PNG')
+    content = bytearray(stream.getvalue())
+    content[16:20] = struct.pack('>I', width)
+    content[20:24] = struct.pack('>I', height)
+    content[29:33] = struct.pack('>I', zlib.crc32(b'IHDR' + content[16:29]) & 0xffffffff)
+    return bytes(content)
+
+
+def test_2986403_byte_reference_is_sent_to_bridge_unchanged(tmp_path):
+    original=_padded_png((1024,1536),2_976_403)
+    client=Client()
+    result=asyncio.run(PrimaryTransport(settings(tmp_path),client=client).resolve(
+        PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',prompt='image',parameters={},
+                       references=(Reference(original,'image/png'),))))
+    assert result.route=='bridge'
+    input_id='rb_'+PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',prompt='image',parameters={}).key+'_0'
+    assert client.uploaded==(input_id,original,'image/png')
+    assert client.payload['references']==[{'input_ref':input_id,'role':'reference',
+                                           'hash':hashlib.sha256(original).hexdigest()}]
+
+
+def test_legacy_bridge_missing_input_pixel_limit_uses_current_bound(tmp_path):
+    class Legacy(Client):
+        async def capabilities(self):
+            caps=await super().capabilities()
+            caps['limits'].pop('max_input_image_pixels')
+            return caps
+    c=Legacy(); t=PrimaryTransport(settings(tmp_path),client=c)
+    too_many_pixels=Reference(_png_header_with_dimensions(4097,4097),'image/png')
+    result=asyncio.run(t.resolve(PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',
+        prompt='image',parameters={},references=(too_many_pixels,))))
+    assert result.route=='api' and result.reason=='bridge_capability_unsupported'
+    assert result.provenance['capability_rejection']=={'code':'reference_input_over_pixel_limit'}
+    assert c.calls==0
+
+
+def test_legacy_bridge_missing_input_byte_limit_uses_current_bound(tmp_path):
+    class Legacy(Client):
+        async def capabilities(self):
+            caps=await super().capabilities()
+            caps['limits'].pop('max_input_bytes')
+            return caps
+    c=Legacy(); t=PrimaryTransport(settings(tmp_path),client=c)
+    oversized=Reference(b'x' * (16 * 1024 * 1024 + 1), 'image/png')
+    result=asyncio.run(t.resolve(PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',
+        prompt='image',parameters={},references=(oversized,))))
+    assert result.route=='api' and result.reason=='bridge_capability_unsupported'
+    assert result.provenance['capability_rejection']=={'code':'reference_input_over_byte_limit'}
+    assert c.calls==0
+
+
+def test_new_bridge_rejects_input_pixels_above_advertised_bound_before_upload(tmp_path):
+    c=Client(); t=PrimaryTransport(settings(tmp_path),client=c)
+    too_many_pixels=Reference(_png_header_with_dimensions(4097,4097),'image/png')
+    result=asyncio.run(t.resolve(PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',
+        prompt='image',parameters={},references=(too_many_pixels,))))
+    assert result.route=='api' and result.reason=='bridge_capability_unsupported'
+    assert result.provenance['capability_rejection']=={'code':'reference_input_over_pixel_limit'}
+    assert not hasattr(c,'uploaded') and c.calls==0
+
+
+@pytest.mark.parametrize('content,mime', [
+    pytest.param(b'not an image', 'image/png', id='invalid-image'),
+    pytest.param(_png_header_with_dimensions(9500, 9500), 'image/png', id='decompression-bomb'),
+    pytest.param(_png_header_with_dimensions(1, 1), 'image/jpeg', id='mime-mismatch'),
+])
+def test_invalid_or_decompression_bomb_reference_never_uploads(tmp_path, content, mime):
+    client = Client()
+    result = asyncio.run(PrimaryTransport(settings(tmp_path), client=client).resolve(
+        PrimaryRequest(product='v3', owner_id='u', unit_id='job:0', prompt='image',
+                       parameters={}, references=(Reference(content, mime),))))
+    assert result.route == 'api' and result.reason == 'bridge_capability_unsupported'
+    assert result.provenance['capability_rejection']['code'] in {
+        'reference_input_format', 'reference_input_invalid', 'reference_input_over_pixel_limit',
+    }
+    assert not hasattr(client, 'uploaded') and client.calls == 0
 
 
 def test_disabled_no_state_and_owned_work_sticky(tmp_path):
@@ -161,7 +280,7 @@ def test_unknown_profile_health_does_not_silently_select_api(tmp_path):
     assert result.route=='bridge' and result.state=='queued' and c.calls==1
 
 
-def test_explicitly_unavailable_profile_can_select_api_before_submission(tmp_path):
+def test_explicitly_unavailable_profile_health_keeps_bridge_primary(tmp_path):
     class Unavailable(Client):
         async def capabilities(self):
             caps=await super().capabilities()
@@ -170,7 +289,98 @@ def test_explicitly_unavailable_profile_can_select_api_before_submission(tmp_pat
             return caps
     c=Unavailable()
     result=asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(request()))
-    assert result.route=='api' and result.reason=='bridge_unavailable' and c.calls==0
+    assert result.route=='bridge' and result.state=='queued' and c.calls==1
+
+
+def _small_png():
+    stream=io.BytesIO()
+    Image.new('RGB',(7,11),'blue').save(stream,format='PNG')
+    return stream.getvalue()
+
+
+def test_store_busy_input_upload_retries_once_after_retry_after(tmp_path, monkeypatch):
+    import time
+
+    class BusyOnce(Client):
+        def __init__(self):
+            self.input_keys=[]
+            self.uploads=[]
+        async def create_input(self, payload):
+            self.input_keys.append(dict(payload))
+            return {'input_id':payload['input_key']}
+        async def upload_input(self, input_id, content, mime_type):
+            self.uploads.append((input_id,content,mime_type))
+            if len(self.uploads)==1:
+                raise BridgeError('store_busy',status=503,retry_not_before=time.time()+60)
+
+    delays=[]
+    async def no_wait(delay): delays.append(delay)
+    monkeypatch.setattr(asyncio,'sleep',no_wait)
+    content=_small_png(); c=BusyOnce(); req=replace(request(),references=(Reference(content,'image/png'),))
+    result=asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(req))
+    assert result.route=='bridge' and result.state=='queued' and c.calls==1
+    assert delays and delays[0]>=59
+    assert len(c.input_keys)==1 and c.input_keys[0]['input_key']==f'{result.origin_key}_0'
+    assert c.uploads==[(c.input_keys[0]['input_key'],content,'image/png')]*2
+
+
+def test_store_busy_input_upload_stays_preflight_and_recovers_same_origin(tmp_path, monkeypatch):
+    import time
+
+    class BusyThenReady(Client):
+        def __init__(self):
+            self.input_keys=[]
+            self.uploads=[]
+            self.busy=True
+        async def create_input(self, payload):
+            self.input_keys.append(dict(payload))
+            return {'input_id':payload['input_key']}
+        async def upload_input(self, input_id, content, mime_type):
+            self.uploads.append((input_id,content,mime_type))
+            if self.busy:
+                raise BridgeError('store_busy',status=503,retry_not_before=time.time()+60)
+
+    async def no_wait(_delay): pass
+    monkeypatch.setattr(asyncio,'sleep',no_wait)
+    content=_small_png(); c=BusyThenReady(); req=replace(request(),references=(Reference(content,'image/png'),))
+    transport=PrimaryTransport(settings(tmp_path),client=c)
+    first=asyncio.run(transport.resolve(req))
+    stored=transport._read(req)
+    import json
+    assert first.route=='bridge' and first.state=='failed' and first.reason=='bridge_store_busy'
+    assert first.provenance['state']=='failed' and first.provenance['reason']=='bridge_store_busy'
+    assert json.loads(stored['data'])['state']=='preflight'
+    assert len(c.uploads)==2 and c.calls==0
+
+    c.busy=False
+    recovered=asyncio.run(transport.resolve(req))
+    assert recovered.route=='bridge' and recovered.state=='queued'
+    assert recovered.origin_key==first.origin_key
+    assert [item['input_key'] for item in c.input_keys]==[f'{first.origin_key}_0']*2
+    assert c.uploads[-1]==(f'{first.origin_key}_0',content,'image/png')
+    assert c.calls==1
+
+
+def test_store_busy_input_creation_retries_same_input_key_once(tmp_path, monkeypatch):
+    import time
+
+    class BusyCreateOnce(Client):
+        def __init__(self): self.input_payloads=[]
+        async def create_input(self, payload):
+            self.input_payloads.append(dict(payload))
+            if len(self.input_payloads)==1:
+                raise BridgeError('store_busy',status=503,retry_not_before=time.time()+60)
+            return {'input_id':payload['input_key']}
+        async def upload_input(self, input_id, content, mime_type):
+            self.uploaded=(input_id,content,mime_type)
+
+    async def no_wait(_delay): pass
+    monkeypatch.setattr(asyncio,'sleep',no_wait)
+    content=_small_png(); c=BusyCreateOnce(); req=replace(request(),references=(Reference(content,'image/png'),))
+    result=asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(req))
+    assert result.route=='bridge' and result.state=='queued' and c.calls==1
+    assert len(c.input_payloads)==2 and c.input_payloads[0]==c.input_payloads[1]
+    assert c.uploaded==(c.input_payloads[0]['input_key'],content,'image/png')
 
 
 def test_malformed_available_health_does_not_silently_select_api(tmp_path):
@@ -424,6 +634,31 @@ def test_codex_adapter_requires_explicit_capability_before_submission(tmp_path, 
         assert client.payload['parameters'] == unit.parameters
     else:
         assert result.reason == 'bridge_capability_unsupported'
+
+
+def test_codex_unsupported_optional_image_options_use_native_defaults(tmp_path):
+    class DefaultsClient(Client):
+        async def capabilities(self):
+            caps = await super().capabilities()
+            caps['profiles'][0]['parameter_contract']['codex_adapter'] = {
+                'values': ['codex_cli_imagegen_v1'],
+                'image_options_contract': {'references': {'max_count': 5}},
+            }
+            return caps
+
+    client = DefaultsClient()
+    transport = PrimaryTransport(settings(tmp_path), client=client)
+    unit = replace(request(), parameters={
+        'codex_adapter': 'codex_cli_imagegen_v1',
+        'image_options': {'schema_version': '1', 'quality': 'high',
+                          'output_format': 'webp', 'transparent_background': True},
+    })
+    result = asyncio.run(transport.resolve(unit))
+    assert result.route == 'bridge'
+    assert client.calls == 1
+    assert client.payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
+    assert unit.parameters['image_options']['transparent_background'] is True
+    assert transport._read(unit)['key'] == unit.key
 
 
 def test_candidate_match_is_exact_read_only_and_preserves_semantic_guard(tmp_path):

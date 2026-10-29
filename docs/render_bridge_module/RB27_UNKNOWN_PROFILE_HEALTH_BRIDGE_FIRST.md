@@ -23,15 +23,22 @@ the executor health report is unknown.
 ## Corrected routing rule
 
 - A valid, unexpired `available` report is positive readiness evidence.
-- An explicit `unavailable` profile report remains a known pre-admission
-  rejection and may select the existing API fallback.
-- Missing, `unknown`, malformed-time, or expired health is indeterminate. It is
-  not a non-admission proof and must not silently select the API. When the
-  authenticated Bridge capability response advertises the requested profile
-  and says it is accepting tasks, submit the frozen request as `bridge_only`.
+- Profile health is execution telemetry, not task-admission authority. Once the
+  authenticated capabilities response advertises the requested profile and
+  `admission.accepting_new_tasks=true`, `available`, `unavailable`, `unknown`,
+  missing, malformed-time, or expired health cannot select the API. Submit the
+  frozen request as `bridge_only`; let the task report executor/account health.
 - Existing hard-capability rejection, Bridge transport unreachability,
   explicit draining, and atomic queue-capacity rejection retain their existing
   pre-admission fallback rules. No queue snapshot is treated as a permit.
+- During reference input staging, HTTP 503 `store_busy` means transient Bridge
+  storage contention, not service downtime. Retry the same input key and bytes
+  once after the supplied `Retry-After`. If still busy, retain durable
+  `data.state=preflight` and return an explicit Bridge failure with
+  `reason=bridge_store_busy`. No Bridge task/deadline exists to queue against;
+  do not invent one or select API. Keep the preflight ledger for diagnosis; no
+  image task was admitted. Other staging errors retain the existing fallback
+  behavior.
 - Once Bridge submission is attempted, an uncertain response remains owned by
   the same Bridge origin. A Bridge executor/account error after admission is
   surfaced and recovered as that same task; it must not create an API retry or
@@ -44,11 +51,14 @@ same task rather than pretending it completed or generating elsewhere.
 
 ## Regression and manual acceptance
 
-The Alchemy regression tests prove that an accepting Bridge with unknown or
-expired profile health receives one create request, while an explicitly
-unavailable profile still selects API before Bridge submission. Existing tests
-continue to cover network failure, unsupported capability, drain, queue-full
-non-admission, lost create responses, and same-origin recovery.
+The Alchemy regressions prove that an accepting Bridge with unavailable,
+unknown, expired, or malformed profile health receives a create request; API
+selection remains for proven non-admission. Input staging tests prove one
+  same-key/same-byte retry after `Retry-After`; if the store remains busy the
+  product fails promptly, retains the preflight ledger, and makes no task/API
+  call. Existing tests continue to cover network failure,
+unsupported capability, drain, queue-full non-admission, lost create responses,
+and same-origin recovery.
 
 These offline tests do not prove the local CLI is logged in or can generate.
 Before a new manual image attempt, confirm the running Alchemy process is the
@@ -57,6 +67,29 @@ task/attempt/receipt correlation; a returned image alone is not proof of Bridge
 execution. If Bridge accepts the task but reports attention or unknown
 execution, keep and reconcile that original task—do not clear its journal or
 resubmit through API.
+
+## 2026-10-29 local V3 startup environment regression
+
+V3 job `job_5654bb6b5a` stopped before Bridge admission. Both provider attempts
+reported `invalid_bridge_url`; the local control file contained the expected
+`http://127.0.0.1:8798`, but the Alchemy process did not inherit
+`ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK=true`. The flag was present in the
+Windows user environment, while the long-lived shell that started Alchemy had
+no process-scoped copy. The V3 primary journal and Bridge ledger therefore had
+no unit/task for this job, and no image API fallback was called.
+
+Keep the loopback opt-in in `src_skeleton/.env` as well as the Windows user
+environment. `src_skeleton/app/config.py` loads that file during startup, so a
+stale shell cannot omit the opt-in. The example environment now includes the
+same explicit local setting; it only permits HTTP for loopback hosts. When
+restarting from a long-lived shell, copy the user-scoped Bridge primary
+variables into the new process or start a fresh shell. Before manual image
+acceptance, use an authenticated, read-only capabilities probe to confirm the
+running Alchemy process reaches Bridge.
+
+The retry record also showed two repeats of the same local configuration error.
+Those attempts never reached Bridge or the image API; `provider_unavailable` is
+the sanitized public classification, not evidence of an upstream outage.
 
 ## Local acceptance incident: invalid control-file encoding
 

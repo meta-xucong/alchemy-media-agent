@@ -1618,7 +1618,7 @@ async def v3_history_endpoint(request: Request, limit: int = 20, authorization: 
     user_id = _require_veyra_user_if_enabled(request, authorization)
     if await _v3_is_admin_request(request, user_id):
         user_id = None
-    return _run_v3_handler(v3_route_handlers.get_history, limit, user_id)
+    return await _run_v3_handler_threaded(v3_route_handlers.get_history, limit, user_id)
 
 
 @app.get("/api/v3/creative-agent/projects")
@@ -1669,6 +1669,16 @@ async def v3_project_outputs_endpoint(
             for value in str(project_ids).split(",")
             if value.strip()
         ))[:100]
+    if str(surface or "").strip().lower() in {"home_preview", "delivery_preview"}:
+        return await _run_v3_handler_threaded(
+            v3_route_handlers.get_project_outputs,
+            limit,
+            user_id,
+            compact,
+            project_id,
+            surface,
+            requested_project_ids,
+        )
     if _v3_browse_compute is not None and str(surface or "").strip().lower() not in {"home_preview", "delivery_preview"}:
         try:
             return await run_output_browse(
@@ -1716,7 +1726,15 @@ async def v3_get_project_endpoint(
     authorization: str = Header(default=""),
 ):
     user_id = await _require_v3_project_read_visible(request, project_id, authorization)
-    response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id, view)
+    if str(view or "").strip().lower() == "summary":
+        response = await _run_v3_handler_threaded(
+            v3_route_handlers.get_project,
+            project_id,
+            user_id,
+            view,
+        )
+    else:
+        response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id, view)
     if str(view or "").strip().lower() == "summary":
         return response
     project = response.get("project") if isinstance(response, dict) else None
@@ -1761,7 +1779,7 @@ async def v3_delete_project_endpoint(project_id: str, request: Request, authoriz
 @app.get("/api/v3/creative-agent/projects/{project_id}/timeline")
 async def v3_project_timeline_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     user_id = await _require_v3_project_read_visible(request, project_id, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project_timeline, project_id, user_id)
+    return await _run_v3_handler_threaded(v3_route_handlers.get_project_timeline, project_id, user_id)
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/context")
@@ -2335,7 +2353,7 @@ async def v3_create_job_endpoint(request: Request, authorization: str = Header(d
     payload = await _v3_json_payload(request)
     _require_v3_uploaded_assets_visible(request, payload.get("uploaded_asset_ids"), authorization)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
-    return _run_v3_handler(v3_route_handlers.post_jobs, payload)
+    return await _run_v3_handler_threaded(v3_route_handlers.post_jobs, payload)
 
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}")

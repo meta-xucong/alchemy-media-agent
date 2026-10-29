@@ -15,7 +15,10 @@ from app.providers.base import ProviderRuntimeError
 from app.schemas import ImageGenerationResult
 from alchemy_creative_agent_3_0.app.generation_router import ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.generation_router import bridge_primary as adapter
+from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateJobRequest
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.tests.test_v3_provider_output_production import _generation_request
 
 
@@ -29,9 +32,12 @@ class Client:
         self.uploads = []
         self.state = 'artifacts_ready'
         self.error = None
+        self.input_error = None
+        self.transparent_supported = True
 
     async def capabilities(self):
-        return {'admission': {'accepting_new_tasks': True},
+        result = {'admission': {'accepting_new_tasks': True},
+            'limits': {'max_input_bytes': 16*1024*1024, 'max_input_image_pixels': 16*1024*1024},
             'routing_availability_v1': {'profiles': [{'profile_id': 'codex-image', 'health': 'available', 'valid_until': '2099-01-01T00:00:00+00:00'}]},
             'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
             'parameter_contract': {'accepted_parameters': ['width', 'height', 'image_options'], 'dimension_semantics': 'original_dimensions_recorded',
@@ -39,12 +45,17 @@ class Client:
                     'transparent_background': {'values': [True, False]}, 'references': {'max_count': 5}}}},
             'image_options_contract': {'quality': {'values': ['auto']}, 'output_format': {'values': ['png', 'jpeg']}, 'references': {'max_count': 8}},
             'limits': {'max_output_bytes': 16777216}}]}
+        if not self.transparent_supported:
+            del result['profiles'][0]['parameter_contract']['codex_adapter']['image_options_contract']['transparent_background']
+        return result
 
     async def create_input(self, payload):
         return {'input_id': payload['input_key']}
 
     async def upload_input(self, ref_id, content, mime_type):
         self.uploads.append((ref_id, content, mime_type))
+        if self.input_error:
+            raise self.input_error
 
     async def create_task(self, payload):
         self.calls += 1
@@ -102,7 +113,30 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(provider, '_app_provider', lambda name: SimpleNamespace(generate=legacy))
     request = _generation_request()
     request.metadata.update(provider_image_options={'quality': 'auto'}, veyra_user_id=7, project_id='project_7', requested_image_aspect_ratio='1:1')
-    return SimpleNamespace(cfg=cfg, client=client, provider=provider, request=request, api_calls=api_calls, store=store)
+    return SimpleNamespace(cfg=cfg, client=client, provider=provider, request=request, api_calls=api_calls, store=store,
+                           transport_type=transport_type)
+
+
+def test_bridge_enabled_new_v3_provider_job_freezes_real_image_strategy(tmp_path, monkeypatch):
+    configured = core.PrimarySettings(
+        enabled=True,
+        base_url="http://127.0.0.1:9999",
+        token="fixture",
+        state_dir=tmp_path / "ledger",
+    )
+    monkeypatch.setattr(
+        core.PrimarySettings,
+        "from_env",
+        classmethod(lambda cls, product: configured if product == "v3" else core.PrimarySettings()),
+    )
+    service = V3ProductApiService.__new__(V3ProductApiService)
+    create_request = SimpleNamespace(metadata={}, uploaded_asset_ids=[])
+
+    service._bind_bridge_primary_real_image_requirement(create_request, generation_channel="provider")
+
+    record = SimpleNamespace(request=create_request)
+    assert create_request.metadata["require_real_images"] is True
+    assert service._provider_strategy_for_generate(record, GenerateJobRequest()) == ProviderStrategy.DEFAULT_IMAGE_PROVIDER
 
 
 def test_actual_entrance_preserves_original_and_replays_checkpoint(rig):
@@ -126,6 +160,7 @@ def test_actual_entrance_preserves_original_and_replays_checkpoint(rig):
     {'quality': 'medium'}, {'quality': 'high'},
     {'quality': 'auto', 'background': 'transparent'},
     {'quality': 'auto', 'output_compression': 80}, {'quality': 'auto', 'output_format': 'webp'},
+    {'quality': 'auto', 'seed': 42},
 ])
 def test_optional_controls_use_native_bridge_defaults(rig, optional_controls):
     rig.request.metadata['provider_image_options'] = optional_controls
@@ -141,6 +176,75 @@ def test_optional_controls_use_native_bridge_defaults(rig, optional_controls):
         assert 'image_options' not in params
     rig.provider.generate(rig.request)
     assert rig.client.calls == 1
+
+
+def test_unsupported_transparency_uses_native_default_and_keeps_bridge(rig):
+    rig.client.transparent_supported = False
+    rig.request.metadata['provider_image_options'] = {
+        'quality': 'auto', 'transparent_background': True,
+    }
+    response = rig.provider.generate(rig.request)
+    assert response.candidates[0].provider == 'render_bridge'
+    assert rig.client.calls == 1 and not rig.api_calls
+    assert rig.client.payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
+
+
+@pytest.mark.parametrize('defaultable_controls', [
+    {'moderation': 'low'}, {'moderation': 'auto'}, {'count': 2},
+    {'provider_hint': 'legacy-provider'}, {'strong_identity': True},
+    {'input_fidelity_required': True}, {'required_reference_conditioning': True},
+])
+def test_codex_defaulted_controls_do_not_remain_as_hard_requirements(rig, defaultable_controls):
+    rig.request.metadata['provider_image_options'] = defaultable_controls
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    frozen = adapter.request_for(app_request)
+    normalized = set(defaultable_controls)
+    assert not normalized.intersection(frozen.hard_requirements)
+    assert not {f'option_{key}' for key in normalized}.intersection(frozen.hard_requirements)
+
+    result = rig.provider.generate(rig.request)
+    assert result.candidates[0].provider == 'render_bridge'
+    assert rig.client.calls == 1 and not rig.api_calls
+
+
+def test_unsupported_requirement_exposes_safe_diagnostic_and_keeps_api_route(rig):
+    rig.request.metadata['provider_image_options'] = {'unmodeled_render_control': 'private-value'}
+    result = rig.provider.generate(rig.request)
+    provenance = result.candidates[0].metadata[adapter.PROVENANCE]
+    assert result.candidates[0].provider == 'legacy'
+    assert provenance['route'] == 'api'
+    assert provenance['reason'] == 'bridge_capability_unsupported'
+    assert provenance['capability_rejection'] == {'code': 'hard_requirement_not_advertised'}
+    assert 'private-value' not in repr(provenance)
+    assert rig.client.calls == 0
+
+
+@pytest.mark.parametrize('malformed', [
+    {'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
+                   'parameter_contract': True}]},
+    {'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
+                   'parameter_contract': {'codex_adapter': {'image_options_contract': None}}}]},
+    {'profiles': [], 'admission': None},
+    {'profiles': [], 'routing_availability_v1': None},
+    {'profiles': [], 'routing_availability_v1': {'profiles': None}},
+])
+def test_malformed_nested_bridge_capabilities_use_safe_rejection(rig, malformed):
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    request = adapter.request_for(app_request)
+    assert rig.transport_type._safe_support_rejection(request, malformed, 'codex-image') == {
+        'code': 'capability_contract_invalid',
+    }
+
+
+@pytest.mark.parametrize('malformed', [
+    {'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
+                   'parameter_contract': True}]},
+    {'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
+                   'parameter_contract': {'codex_adapter': {'image_options_contract': {
+                       'transparent_background': True}}}}]},
+])
+def test_malformed_transparency_capability_uses_native_default(malformed):
+    assert adapter._codex_transparency_supported(malformed, 'codex-image') is False
 
 
 def test_create_loss_restart_and_unknown_never_legacy(rig):
@@ -216,9 +320,15 @@ def test_unsignoff_never_enters_bridge(rig):
 
 
 def test_disabled_still_resumes_existing_bridge(rig, monkeypatch):
+    # This case verifies same-task recovery after the wait budget is spent.
+    # Keep the polling window empty so the unit test does not wait the full
+    # production budget before checking the stable failure classification.
+    monkeypatch.setattr(adapter, "POLL_BUDGET_SECONDS", 0.0)
     rig.client.state = 'execution_unknown'
-    with pytest.raises(ProviderRuntimeError):
+    with pytest.raises(ProviderRuntimeError) as caught:
         rig.provider.generate(rig.request)
+    assert caught.value.provider == 'render_bridge'
+    assert caught.value.detail['failure_code'] == 'bridge_wait_budget_exhausted'
     monkeypatch.setattr(core.PrimarySettings, 'from_env', classmethod(lambda cls, product: replace(rig.cfg, enabled=False)))
     rig.client.state = 'artifacts_ready'
     response = rig.provider.generate(rig.request)
@@ -385,7 +495,7 @@ def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig
     assert len(rig.store.list_outputs()) == 2
 
 
-def test_materialized_identity_reference_cannot_become_unverified_hint(rig, tmp_path):
+def test_materialized_identity_reference_uses_native_defaults_and_keeps_image(rig, tmp_path):
     path = tmp_path / 'reference.png'
     path.write_bytes(rig.client.content)
     request = _generation_request(path)
@@ -393,11 +503,53 @@ def test_materialized_identity_reference_cannot_become_unverified_hint(rig, tmp_
     app_request, _, _ = rig.provider._build_app_request(request)
     frozen = adapter.request_for(app_request)
     assert frozen.references
-    assert frozen.hard_requirements['strong_identity'] or frozen.hard_requirements['input_fidelity'] or frozen.hard_requirements['reference_fusion']
+    assert 'strong_identity' not in frozen.hard_requirements
+    assert 'input_fidelity_required' not in frozen.hard_requirements
     response = rig.provider.generate(request)
-    assert response.candidates[0].provider == 'legacy'
-    assert rig.client.calls == 0 and len(rig.api_calls) == 1
-    assert response.candidates[0].metadata[adapter.PROVENANCE]['reason'] == 'bridge_capability_unsupported'
+    assert response.candidates[0].provider == 'render_bridge'
+    assert rig.client.calls == 1 and not rig.api_calls
+    assert len(rig.client.uploads) == len(frozen.references)
+    assert sorted(hashlib.sha256(item[1]).hexdigest() for item in rig.client.uploads) == sorted(
+        hashlib.sha256(reference.content).hexdigest() for reference in frozen.references
+    )
+    assert response.candidates[0].metadata[adapter.PROVENANCE]['route'] == 'bridge'
+
+
+def test_prior_codex_journal_digest_matches_and_recovers_same_task(rig, tmp_path):
+    from render_bridge_primary.codex_adapter import CODEX_ADAPTER_VERSION, codex_cli_adaptation
+
+    path = tmp_path / 'reference.png'
+    path.write_bytes(rig.client.content)
+    request = _generation_request(path)
+    request.metadata.update(provider_image_options={'quality': 'auto'}, veyra_user_id=7, project_id='project_7')
+    app_request = rig.provider._build_app_request(request)[0]
+    source = adapter._source_request(app_request, native_defaults=True)
+    plan = app_request.prompt_plan
+    options = dict(plan.variables.get('provider_image_options') or {})
+    prior_params = {**options, 'background': plan.background,
+                    'transparent_background': bool(plan.transparent_background or
+                        options.get('transparent_background') is True or plan.background == 'transparent')}
+    wire, _ = codex_cli_adaptation(prior_params, len(source.references))
+    wire['codex_adapter'] = CODEX_ADAPTER_VERSION
+    optional = {'quality', 'size', 'width', 'height', 'aspect_ratio', 'output_format',
+                'output_compression', 'seed', 'input_fidelity', 'background',
+                'transparent_background'}
+    prior_requirements = {
+        key: value for key, value in source.hard_requirements.items()
+        if key not in optional and not (key.startswith('option_') and key[7:] in optional)
+    }
+    prior = replace(source, parameters=wire, hard_requirements=prior_requirements)
+    assert prior.hard_requirements['strong_identity'] is True
+
+    transport = core.PrimaryTransport(rig.cfg)
+    first = asyncio.run(transport.resolve(prior))
+    assert first.route == 'api' and first.reason == 'bridge_capability_unsupported'
+    current = adapter.request_for(app_request, transport, capabilities=asyncio.run(rig.client.capabilities()))
+    assert current.digest == prior.digest
+    recovered = asyncio.run(transport.resolve(current))
+    assert recovered.route == 'api' and recovered.origin_key == first.origin_key
+    assert rig.client.calls == 0
+    asyncio.run(transport.close())
 
 
 def test_partial_product_result_can_cancel_remaining_bridge_unit(rig):
@@ -423,11 +575,92 @@ def test_api_fallback_ambiguous_response_is_never_repeated(rig, monkeypatch):
         calls.append(request)
         raise TimeoutError('synthetic response lost after upstream acceptance')
     monkeypatch.setattr(rig.provider, '_app_provider', lambda name: SimpleNamespace(generate=ambiguous))
+    first_failure_summary = None
     for _ in range(2):
         with pytest.raises(ProviderRuntimeError) as caught:
             rig.provider.generate(rig.request)
-        assert caught.value.detail['failure_code'] == 'bridge_api_execution_unknown'
+        assert caught.value.provider == 'api'
+        assert caught.value.detail['failure_code'] == 'api_execution_unknown'
+        assert 'automatic retry is disabled' in str(caught.value)
+        if first_failure_summary is None:
+            first_failure_summary = caught.value.provider_failure_retry
     assert len(calls) == 1 and rig.client.calls == 1
+    summary = first_failure_summary
+    failed_attempt = summary['attempts'][-1]
+    assert failed_attempt['route'] == 'api'
+    assert failed_attempt['route_reason'] == 'bridge_queue_capacity'
+    assert failed_attempt['api_error_type'] == 'TimeoutError'
+    assert 'synthetic response lost' not in repr(summary)
+
+    from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+    public = V3ProductApiService._public_provider_failure_retry(summary)
+    assert public['final_failure_code'] == 'api_execution_unknown'
+    assert public['attempts'][-1]['route'] == 'api'
+    assert public['attempts'][-1]['route_reason'] == 'bridge_queue_capacity'
+    assert public['attempts'][-1]['api_error_type'] == 'TimeoutError'
+    warnings = V3ProductApiService._public_job_warnings(
+        ['OpenAI image reference generation failed'],
+        {'provider_failure_retry': summary},
+    )
+    assert any('API image generation stopped' in item and 'bridge_queue_capacity' in item for item in warnings)
+    assert any('API error type: TimeoutError' in item for item in warnings)
+    assert any('automatic retry is disabled' in item for item in warnings)
+
+
+def test_api_fallback_invalid_output_is_classified_as_api_and_not_repeated(rig, monkeypatch):
+    rig.client.error = BridgeError('queue_capacity', status=429)
+    calls = []
+
+    async def invalid_output(request):
+        calls.append(request)
+        return SimpleNamespace(outputs=[{}])
+
+    monkeypatch.setattr(rig.provider, '_app_provider', lambda name: SimpleNamespace(generate=invalid_output))
+    first_summary = None
+    for attempt in range(2):
+        with pytest.raises(ProviderRuntimeError) as caught:
+            rig.provider.generate(rig.request)
+        assert caught.value.provider == 'api'
+        assert caught.value.detail['transport_outcome']['request_state'] == 'accepted_unknown'
+        if attempt == 0:
+            assert caught.value.detail['failure_code'] == 'api_output_contract_invalid'
+            assert 'API fallback returned an unusable image response' in str(caught.value)
+            first_summary = caught.value.provider_failure_retry
+        else:
+            assert caught.value.detail['failure_code'] == 'api_execution_unknown'
+            assert 'automatic retry is disabled' in str(caught.value)
+    assert len(calls) == 1 and rig.client.calls == 1
+    assert first_summary['final_failure_code'] == 'api_output_contract_invalid'
+    assert first_summary['attempts'][-1]['route'] == 'api'
+
+    public = V3ProductApiService._public_provider_failure_retry(first_summary)
+    assert public['final_failure_code'] == 'api_output_contract_invalid'
+    warning = V3ProductApiService._safe_generation_failure_message(
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        provider_failure_retry=public,
+        fallback_code='provider_failure',
+    )
+    assert 'unusable image response' in warning
+    assert 'execution outcome is unknown' in warning
+    assert 'automatic retry is disabled' in warning
+
+
+def test_api_fallback_cancellation_is_terminal_and_not_replayed(rig, monkeypatch):
+    rig.client.error = BridgeError('queue_capacity', status=429)
+    calls = []
+
+    async def canceled(request):
+        calls.append(request)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(rig.provider, '_app_provider', lambda name: SimpleNamespace(generate=canceled))
+    with pytest.raises(ProviderRuntimeError) as caught:
+        rig.provider.generate(rig.request)
+    assert caught.value.provider == 'api'
+    assert caught.value.detail['failure_code'] == 'api_execution_unknown'
+    assert caught.value.detail['api_error_type'] == 'CancelledError'
+    assert caught.value.detail['transport_retry_terminal'] is True
+    assert len(calls) == 1
 
 
 def test_receipt_ack_loss_keeps_original_checkpoint_and_can_retry(rig):
@@ -547,6 +780,28 @@ def test_new_native_normalization_does_not_mutate_api_fallback(rig):
     assert seen == [app_request] and seen[0] is app_request
     assert app_request.model_dump(mode='json') == before
     assert rig.client.payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
+
+
+def test_store_busy_reference_staging_fails_v3_without_api_or_polling(rig, tmp_path):
+    import time
+    app_request = rig.provider._build_app_request(rig.request)[0]
+    reference = tmp_path / 'reference.png'
+    reference.write_bytes(rig.client.content)
+    app_request.asset_plan = {'assets': [{'provider_input_mode': 'reference_image',
+                                          'storage_path': str(reference)}]}
+    rig.client.input_error = BridgeError('store_busy', status=503, retry_not_before=time.time() - 1)
+
+    async def forbidden_api(_request):
+        raise AssertionError('Persistent Bridge input contention must not call the API provider')
+
+    with pytest.raises(ProviderRuntimeError, match='no remote image task was created') as caught:
+        asyncio.run(adapter.generate(app_request, forbidden_api, rig.store))
+    assert caught.value.detail['transport_outcome'] == {
+        'request_state': 'not_submitted', 'retryability': 'safe_to_retry',
+    }
+    assert caught.value.detail[adapter.PROVENANCE]['reason'] == 'bridge_store_busy'
+    assert len(rig.client.uploads) == 2
+    assert rig.client.calls == 0 and rig.api_calls == []
 
 
 @pytest.mark.parametrize('operation', ['mask', 'deterministic_postprocess', 'unknown_operation'])

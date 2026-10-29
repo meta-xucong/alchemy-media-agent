@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image
 
@@ -39,6 +40,76 @@ def test_list_by_job_limit_is_optional_and_bounded(tmp_path) -> None:
     assert len(store.list_by_job("job_doc320")) == 3
 
 
+def test_list_by_jobs_returns_multiple_job_groups_from_one_lookup(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    records = []
+    for index, job_id in enumerate(("job_batch_a", "job_batch_b", "job_batch_a")):
+        records.append(
+            store.save_base64_output(
+                job_id=job_id,
+                candidate_id=f"candidate_{index}",
+                asset_id=f"asset_{index}",
+                provider="test",
+                model="test",
+                output_id=f"v3_output_{index:020x}",
+                encoded_image=_png_base64(),
+            )
+        )
+
+    grouped = store.list_by_jobs({"job_batch_a", "job_batch_b"})
+
+    assert {job_id: [item.output_id for item in items] for job_id, items in grouped.items()} == {
+        "job_batch_a": [records[2].output_id, records[0].output_id],
+        "job_batch_b": [records[1].output_id],
+    }
+
+
+def test_list_by_jobs_uses_the_exact_history_catalog_snapshot(tmp_path, monkeypatch) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = store.save_base64_output(
+        job_id="job_catalog_snapshot",
+        candidate_id="candidate_catalog_snapshot",
+        asset_id="asset_catalog_snapshot",
+        provider="test",
+        model="test",
+        output_id="v3_output_00000000000000000001",
+        encoded_image=_png_base64(),
+    )
+    _page, snapshot = store.list_outputs_with_snapshot(limit=10)
+
+    def fail_catalog_rescan(_job_ids):
+        raise AssertionError("history should share its just-built catalog snapshot")
+
+    monkeypatch.setattr(store, "_iter_scoped_output_paths_for_jobs", fail_catalog_rescan)
+
+    grouped = store.list_by_jobs({"job_catalog_snapshot"}, catalog_snapshot=snapshot)
+
+    assert [item.output_id for item in grouped["job_catalog_snapshot"]] == [record.output_id]
+
+
+def test_list_by_jobs_snapshot_is_stable_when_global_catalog_is_replaced(tmp_path) -> None:
+    root = tmp_path / "outputs"
+    store = V3GeneratedOutputStore(root)
+    output_id = "v3_output_00000000000000000001"
+    _save(store, output_id, project_id="project_catalog_snapshot")
+
+    _page, snapshot = store.list_outputs_with_snapshot(limit=10)
+    record_path = root / output_id / "output.json"
+    payload = json.loads(record_path.read_text(encoding="utf-8"))
+    payload["job_id"] = "job_catalog_snapshot_replaced"
+    record_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    # The caller stays bound to the exact page snapshot; the next independent
+    # lookup refreshes signatures and sees the out-of-band ownership change.
+    assert store.list_by_jobs({"job_doc320"}, catalog_snapshot=snapshot) == {}
+    assert [
+        item.output_id
+        for item in store.list_by_jobs({"job_catalog_snapshot_replaced"})[
+            "job_catalog_snapshot_replaced"
+        ]
+    ] == [output_id]
+
+
 def test_scoped_locator_rebuilds_after_out_of_band_metadata_change(tmp_path) -> None:
     root = tmp_path / "outputs"
     store = V3GeneratedOutputStore(root)
@@ -54,6 +125,71 @@ def test_scoped_locator_rebuilds_after_out_of_band_metadata_change(tmp_path) -> 
 
     assert store.list_by_project("project_old") == []
     assert [item.output_id for item in store.list_by_project("project_new")] == [output_id]
+
+
+def test_list_by_job_observes_out_of_band_job_id_change_without_a_second_scan(tmp_path) -> None:
+    root = tmp_path / "outputs"
+    store = V3GeneratedOutputStore(root)
+    output_id = "v3_output_00000000000000000001"
+    _save(store, output_id, project_id="project_job_change")
+    record_path = root / output_id / "output.json"
+
+    assert [item.output_id for item in store.list_by_job("job_doc320")] == [output_id]
+
+    payload = json.loads(record_path.read_text(encoding="utf-8"))
+    payload["job_id"] = "job_doc320_changed"
+    record_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert store.list_by_job("job_doc320") == []
+    assert [item.output_id for item in store.list_by_job("job_doc320_changed")] == [output_id]
+
+
+def test_global_history_cache_reuses_page_and_reindexes_out_of_band_timestamp_change(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "outputs"
+    store = V3GeneratedOutputStore(root)
+    output_ids = [f"v3_output_{index:020x}" for index in range(3)]
+    for output_id in output_ids:
+        _save(store, output_id, project_id="project_global_cache")
+
+    original_open = Path.open
+    opened_output_records = 0
+
+    def track_output_record_reads(path: Path, *args, **kwargs):
+        nonlocal opened_output_records
+        if path.name == "output.json" and str(args[0] if args else kwargs.get("mode", "r")).startswith("r"):
+            opened_output_records += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", track_output_record_reads)
+
+    first = store.list_outputs(limit=2)
+    assert len(first) == 2
+    assert opened_output_records == 3
+
+    second = store.list_outputs(limit=2)
+    assert [item.output_id for item in second] == [item.output_id for item in first]
+    assert opened_output_records == 3
+
+    store._list_outputs_scan_completed_at = 1.0  # noqa: SLF001
+    store._list_outputs_catalog_revision = store._storage_revision()  # noqa: SLF001
+    clock = [0.5]
+    monkeypatch.setattr(outputs_module.time, "perf_counter", lambda: clock[0])
+    shared = store.list_outputs(limit=2)
+    assert [item.output_id for item in shared] == [item.output_id for item in first]
+    assert store._list_outputs_scan_completed_at == 1.0  # noqa: SLF001
+
+    changed_path = root / output_ids[0] / "output.json"
+    with original_open(changed_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    payload["created_at"] = "9999-01-01T00:00:00+00:00"
+    changed_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    clock[0] = 1.05
+    refreshed = store.list_outputs(limit=2)
+    assert [item.output_id for item in refreshed] == [output_ids[0], output_ids[2]]
+    assert opened_output_records == 4
 
 
 def test_project_and_declared_jobs_share_one_batch_catalog_lookup(tmp_path, monkeypatch) -> None:

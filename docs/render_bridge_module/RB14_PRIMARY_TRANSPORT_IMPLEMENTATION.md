@@ -48,6 +48,13 @@ must match the control endpoint. `state_root()` uses
 `.render_bridge_primary/ledgers`. Independent processes must use the same absolute
 control/state paths. Product journals are separate; Bridge owns the global queue.
 
+Each V1/V3/Lab host and the isolated V2 host runs a process-local, read-only
+capabilities probe immediately at startup and every five seconds while the
+primary profile is enabled. An unreachable or unauthenticated Bridge is retried
+on the next interval; recovery is logged when a later probe succeeds. The probe
+does not create tasks or change request routing, task ownership, or fallback
+rules. Shutdown cancels the probe task.
+
 Construct immutable `PrimaryRequest(product, owner_id, unit_id, prompt,
 parameters, references, hard_requirements, binding_id=None)`. References hold
 original bytes and MIME. Parameters use only revision-1 width/height/seed and

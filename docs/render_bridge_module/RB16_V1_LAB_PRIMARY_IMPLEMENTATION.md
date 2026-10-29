@@ -23,6 +23,14 @@ without weakening the frozen request. Bridge bytes bypass mutating postprocess;
 thumbnail/preview derivatives do not replace the original. Lab currently asks
 for high quality, which requires explicit Bridge support, not a silent downgrade.
 
+> 2026-10-28 update: this paragraph describes the initial implementation
+> boundary. RB13's versioned Codex native-default contract supersedes it for
+> optional source-provider controls and reference-only asset plans. V1/Lab now
+> omit unsupported moderation, preserve reference bytes, and reserve hard
+> fallback for missing required references, masks/edit operations, and
+> deterministic postprocessing. Historical unversioned records retain this
+> original contract.
+
 ## Publication correction established by billing-crash test
 
 Existing V1 publication is canonical output presence, not Job.status. A partial

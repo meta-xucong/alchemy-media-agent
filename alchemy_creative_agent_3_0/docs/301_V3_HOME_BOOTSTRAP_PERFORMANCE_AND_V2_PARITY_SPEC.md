@@ -1,8 +1,9 @@
 # Doc301 - V3 Home Bootstrap Performance And V2 Parity
 
-Status: implementation contract for the V3 home loading repair. The
-2026-09-14 first-page image-readiness amendment below is authoritative for
-mask release timing.
+Status: implementation contract for the V3 home loading repair. Doc323
+supersedes this document's mobile-only mask timing: desktop keeps the first-page
+image-readiness gate, while mobile releases after the project catalog is ready
+and loads preview images progressively.
 
 ## 1. User objective and phase objective
 
@@ -10,10 +11,11 @@ The total objective is to make the V3 home surface feel as fast as the V2
 surface without weakening V3 project ownership, pagination, output-delivery,
 review, or workspace contracts.
 
-This phase repairs the V3 home read path. It must keep the initial page masked
-until the first-page project data and preview images have settled, while still
-keeping later-page/full-history work outside the critical path. It also removes
-the duplicated and unnecessarily full read paths identified by the code audit.
+This phase repairs the V3 home read path. Desktop keeps the initial page masked
+until the first-page project data and preview images have settled, while later
+pages and full history stay outside the critical path. Mobile follows Doc323
+and releases after the project catalog is ready. This phase also removes the
+duplicated and unnecessarily full read paths identified by the code audit.
 
 ## 2. Evidence and correction model
 
@@ -121,7 +123,7 @@ endpoint and project-scoped full/history paths remain unchanged.
 
 ### 4.3 Browser first-paint contract
 
-V3 desktop and mobile home initialization must:
+V3 desktop home initialization must:
 
 1. render cached/local project placeholders when available;
 2. await only the summary project catalog request;
@@ -129,7 +131,8 @@ V3 desktop and mobile home initialization must:
    request;
 4. render the returned first-page project covers, then wait for every
    first-page preview image to either load successfully or reach a terminal
-   error/timeout state;
+   error/timeout state. Images inside this bounded gate must be eager so the
+   browser starts loading them even when they are below the fold;
 5. release the page mask only after that first-page image readiness gate has
    settled. Later-page images and full project history remain progressive and
    outside this gate.
@@ -138,6 +141,10 @@ An image failure is a settled, visibly marked state rather than an empty
 placeholder. The readiness gate uses the existing bounded timeout as a safety
 escape for a request that never emits `load` or `error`; it must not wait on
 unbounded full history or unrelated asset-library requests.
+
+Mobile home follows Doc323: it releases the mask after the project catalog is
+available, so a slow preview image cannot block opening a project. Preview
+images continue loading progressively.
 
 Direct V3 route restoration must not create a second catalog request while
 the shell bootstrap is active. The auth/session cookie must be established
@@ -167,8 +174,8 @@ review, owner, or retry predicates and it is never persisted as Job state.
 
 - add `view=summary` to the V3 project route and service;
 - switch desktop V3 catalog calls to the summary view;
-- keep one bounded home-preview request and first-page image readiness on the
-  initial mask critical path;
+- keep one bounded home-preview request and desktop first-page image readiness
+  on the initial mask critical path;
 - release only after the first-page image gate settles; keep full history and
   later-page work progressive;
 - deduplicate direct-route initialization and move route restoration after V3
@@ -199,7 +206,7 @@ review, owner, or retry predicates and it is never persisted as Job state.
 | R1 | Summary catalog has the old response shape and pagination | route/service regression test |
 | R2 | Summary catalog does not read Jobs, outputs, timeline, review, or context | instrumented service test |
 | R3 | Home preview is delivery-only, owner-scoped, non-reconciling, and bounded | service regression test |
-| R4 | V3 shell releases only after one first-page preview request and all first-page images settle; full history stays out of the gate | desktop/mobile browser/contract test |
+| R4 | Desktop shell releases only after one first-page preview request and all first-page images settle; mobile follows Doc323 and releases after catalog readiness; full history stays out of both gates | desktop browser test and Doc323 mobile entry test |
 | R5 | Direct V3 route cannot duplicate the catalog request | frontend contract test |
 | R6 | Full project/output compatibility path remains unchanged | existing project/output regression suite |
 | R7 | Record/integrity caching preserves direct fallback and revalidates changed files | output-store regression test |

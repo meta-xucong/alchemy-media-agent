@@ -3702,10 +3702,16 @@ class V3ProjectModeService:
         separate delivery-preview surface supplies at most one validated item.
         """
 
+        continuity_state = self._anchor_bindings().state(
+            project.project_id,
+            verify_source=False,
+        )
         public_project = self._public_project_record(
             project,
             owner_user_id=owner_user_id,
             visible_output_items=[],
+            summary=True,
+            continuity_state=continuity_state,
         )
         public_project = public_project.model_copy(
             update={
@@ -3722,7 +3728,7 @@ class V3ProjectModeService:
             "project_detail_view": "summary",
             "project_outputs": [],
             "project_outputs_complete": False,
-            "continuity_anchor": self.get_continuity_anchor(project.project_id),
+            "continuity_anchor": ContinuityAnchorBindingService.public(continuity_state),
         }
         return ProjectResponse(
             api_namespace=API_NAMESPACE,
@@ -4153,7 +4159,17 @@ class V3ProjectModeService:
         owner_user_id: int | None = None,
     ) -> ProjectTimelineResponse:
         project = self._require_project(project_id)
-        self._reconcile_project_outputs(project)
+        read_snapshot = self._project_output_read_snapshot([project])
+        output_records_by_job = read_snapshot.get("records_by_job", {})
+        job_status_by_id = read_snapshot.get("job_status_by_id", {})
+        job_record_by_id = read_snapshot.get("job_record_by_id", {})
+        job_read_failures = read_snapshot.get("job_read_failures", set())
+        self._reconcile_project_outputs(
+            project,
+            output_records_by_job=output_records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
+        )
         items = self._timeline_items_for_owner(
             self.project_store.list_timeline(project.project_id),
             owner_user_id,
@@ -4170,6 +4186,10 @@ class V3ProjectModeService:
                     project,
                     limit=60,
                     owner_user_id=owner_user_id,
+                    output_records_by_job=output_records_by_job,
+                    job_status_by_id=job_status_by_id,
+                    job_record_by_id=job_record_by_id,
+                    job_read_failures=job_read_failures,
                 ),
             },
         )
@@ -4839,6 +4859,7 @@ class V3ProjectModeService:
         from io import BytesIO
         from PIL import Image
         from ..generation_router.render_bridge_provider import render_bridge_inputs
+        from render_bridge_primary.limits import MAX_REFERENCE_INPUT_BYTES, MAX_REFERENCE_INPUT_PIXELS
 
         project = self._render_bridge_project(project_id, owner_user_id)
         tombstones = self._standard_project_source_tombstones(project)
@@ -4862,12 +4883,12 @@ class V3ProjectModeService:
                     raise ValueError("not bound")
                 upload = self._require_ready_uploaded_reference(asset_id, ProjectReferenceUsePolicy.GENERAL)
                 path = Path(str(upload.file_path or ""))
-                if upload.mime_type not in {"image/png", "image/jpeg"} or not 0 < path.stat().st_size <= 1_048_576:
+                if upload.mime_type not in {"image/png", "image/jpeg"} or not 0 < path.stat().st_size <= MAX_REFERENCE_INPUT_BYTES:
                     raise ValueError("unsupported reference")
                 with path.open("rb") as handle:
-                    content = handle.read(1_048_577)
+                    content = handle.read(MAX_REFERENCE_INPUT_BYTES + 1)
                 if (
-                    not content or len(content) > 1_048_576
+                    not content or len(content) > MAX_REFERENCE_INPUT_BYTES
                     or hashlib.sha256(content).hexdigest() != upload.content_sha256
                 ):
                     raise ValueError("changed reference")
@@ -4875,7 +4896,7 @@ class V3ProjectModeService:
                     if (
                         image.format not in {"PNG", "JPEG"}
                         or Image.MIME[image.format] != upload.mime_type
-                        or image.width * image.height > 1_048_576
+                        or image.width * image.height > MAX_REFERENCE_INPUT_PIXELS
                         or getattr(image, "n_frames", 1) != 1
                     ):
                         raise ValueError("unsupported reference")
@@ -9670,6 +9691,7 @@ class V3ProjectModeService:
         *,
         output_records_by_job: dict[str, list[Any]] | None = None,
         job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
     ) -> bool:
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None or not project.job_ids:
@@ -9815,7 +9837,12 @@ class V3ProjectModeService:
                 reviewed_jobs.add(job_id)
                 changed = True
         if changed:
-            project.memory_summary = self._memory_summary(project)
+            project.memory_summary = self._memory_summary(
+                project,
+                output_records_by_job=output_records_by_job,
+                job_status_by_id=job_status_by_id,
+                job_record_by_id=job_record_by_id,
+            )
             self.project_store.save_project(project)
         return changed
 
@@ -11704,6 +11731,10 @@ class V3ProjectModeService:
         project: ProjectRecord,
         *,
         owner_user_id: int | None = None,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
+        job_read_failures: set[str] | None = None,
     ) -> ProjectMemorySummary:
         timeline = self.project_store.list_timeline(project.project_id)
         state_map = self._selected_output_state_map(project)
@@ -11712,6 +11743,10 @@ class V3ProjectModeService:
             limit=200,
             owner_user_id=owner_user_id,
             compact=True,
+            output_records_by_job=output_records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
+            job_read_failures=job_read_failures,
         )
         visible_output_aliases = self._visible_output_aliases(visible_output_items)
         selected_refs = [
@@ -11755,6 +11790,8 @@ class V3ProjectModeService:
             latest_job_status=self._latest_project_job_status(
                 project,
                 owner_user_id=owner_user_id,
+                job_status_by_id=job_status_by_id,
+                job_record_by_id=job_record_by_id,
             ),
             last_action_label=last_action,
             updated_at=project.updated_at,
@@ -11767,6 +11804,8 @@ class V3ProjectModeService:
         project: ProjectRecord,
         *,
         owner_user_id: int | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
     ) -> str | None:
         """Return one safe lifecycle value for recent-project rendering.
 
@@ -11778,10 +11817,16 @@ class V3ProjectModeService:
 
         for job_id in reversed(project.job_ids):
             try:
-                job_record = self.product_service.get_job_record(job_id)
+                if job_record_by_id is not None and job_id in job_record_by_id:
+                    job_record = job_record_by_id[job_id]
+                else:
+                    job_record = self.product_service.get_job_record(job_id)
                 if not self._job_record_visible_to_owner(job_record, owner_user_id):
                     continue
-                status = self.product_service.get_job(job_id)
+                if job_status_by_id is not None and job_id in job_status_by_id:
+                    status = job_status_by_id[job_id]
+                else:
+                    status = self.product_service.get_job(job_id)
             except Exception:
                 continue
             value = getattr(status, "status", None)
@@ -15611,11 +15656,22 @@ class V3ProjectModeService:
         *,
         owner_user_id: int | None = None,
         visible_output_items: list[dict[str, Any]] | None = None,
+        summary: bool = False,
+        continuity_state: dict[str, Any] | None = None,
     ) -> ProjectRecord:
         """Keep durable continuation plans out of browser project reads."""
 
+        if continuity_state is None:
+            continuity_state = (
+                self._anchor_bindings().state(project.project_id, verify_source=False)
+                if summary
+                else self._continuity_state(project)
+            )
+        direct_reference_ids = (
+            [] if summary else self._current_job_direct_reference_ids(project)
+        )
         project = self._reference_scoped_project(project, project.primary_template_id,
-            self._current_job_direct_reference_ids(project), self._continuity_state(project))
+            direct_reference_ids, continuity_state)
         public_metadata_keys = {
             "source",
             "project_mode",
@@ -15635,11 +15691,11 @@ class V3ProjectModeService:
             "doc281_used_source_disclosures",
         }
         public_metadata = self._public_metadata_projection(project.metadata, public_metadata_keys)
-        public_metadata["continuity_anchor"] = self.get_continuity_anchor(project.project_id)
+        public_metadata["continuity_anchor"] = ContinuityAnchorBindingService.public(continuity_state)
         mode = self._reference_project_mode(project)
         public_metadata["current_job_reference_mode"] = {"standard":"standard_direct_reference",
             "professional":"professional_asset_binding","ecommerce":"ecommerce_product_truth"}[mode]
-        direct_ids = self._current_job_direct_reference_ids(project) if mode == "standard" else []
+        direct_ids = direct_reference_ids if mode == "standard" else []
         public_metadata["current_job_reference_inputs"] = [
             {"asset_id":asset.asset_id,"role":asset.role.value if hasattr(asset.role,"value") else asset.role,
                 "filename":asset.filename,"preview_url":f"/api/v3/creative-agent/uploads/{asset.asset_id}/content"}

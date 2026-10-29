@@ -1935,6 +1935,38 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if not isinstance(detail, dict):
             return {}
         result: dict[str, Any] = {}
+        provenance = detail.get("render_bridge_primary")
+        if isinstance(provenance, dict):
+            route = str(provenance.get("route") or "").strip()
+            reason = str(provenance.get("reason") or "").strip()
+            safe_code = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+            if route in {"bridge", "api"}:
+                result["route"] = route
+            if reason and safe_code.fullmatch(reason):
+                result["route_reason"] = reason
+            rejection = provenance.get("capability_rejection")
+            if isinstance(rejection, dict):
+                safe_rejection = {}
+                if str(rejection.get("code") or "").strip() and safe_code.fullmatch(
+                    str(rejection.get("code") or "").strip()
+                ):
+                    safe_rejection["code"] = str(rejection["code"]).strip()
+                safe_fields = {
+                    "width", "height", "seed", "quality", "output_format",
+                    "transparent_background", "exact_dimensions", "reference_fusion",
+                    "reference_semantics", "mask", "background", "output_compression",
+                    "input_fidelity", "input_fidelity_required", "strong_identity",
+                    "required_reference_conditioning", "moderation", "deterministic_postprocess",
+                }
+                for key in ("field",):
+                    value = str(rejection.get(key) or "").strip()
+                    if value in safe_fields:
+                        safe_rejection[key] = value
+                if safe_rejection:
+                    result["capability_rejection"] = safe_rejection
+        api_error_type = str(detail.get("api_error_type") or "").strip()
+        if api_error_type and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", api_error_type):
+            result["api_error_type"] = api_error_type
         transport = detail.get("runtime_transport")
         if isinstance(transport, dict):
             result["runtime_transport"] = dict(transport)
@@ -2187,6 +2219,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         detail = getattr(exc, "detail", None)
         detail = dict(detail) if isinstance(detail, dict) else {}
         local_contract_failure = str(detail.get("failure_code") or "").strip()
+        if local_contract_failure in {"api_execution_unknown", "api_output_contract_invalid"}:
+            return local_contract_failure
         if local_contract_failure.startswith(("mcp_materialization_", "bridge_")):
             return local_contract_failure
         if local_contract_failure in {
@@ -2308,6 +2342,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "The visual-reference contract was invalid before an image request was sent."
             ),
             "empty_provider_output": "The image provider returned no image pixels.",
+            "api_execution_unknown": "The API fallback execution has an unknown outcome; automatic retry is disabled until its status is checked.",
+            "api_output_contract_invalid": "The API fallback returned an unusable image response; its outcome must be checked before retrying.",
             "remote_creative_brain_prompt_signoff_missing": "The creative plan did not contain an approved Provider prompt, so no image request was sent.",
             "canonical_provider_prompt_exceeds_transport_limit": "The approved Provider prompt exceeds the configured transport limit, so no image request was sent.",
         }

@@ -2193,6 +2193,25 @@ def test_project_outputs_keep_home_delivery_and_review_pixels_separate(tmp_path)
     assert summary["latest_thumbnail_urls"] == [good.thumbnail_url]
 
 
+def test_project_summary_reuses_the_loaded_project_for_its_anchor(tmp_path, monkeypatch) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a clean campaign"})["project"]
+    project_store = handlers.project_service.project_store
+    original_get_project = project_store.get_project
+    reads = 0
+
+    def one_project_read(project_id):
+        nonlocal reads
+        reads += 1
+        return original_get_project(project_id) if reads == 1 else None
+
+    monkeypatch.setattr(project_store, "get_project", one_project_read)
+    response = handlers.get_project(project["project_id"], view="summary")
+
+    assert response["project"]["project_id"] == project["project_id"]
+    assert reads == 1
+
+
 def test_project_outputs_expose_terminal_withheld_pixels_only_in_review_items(tmp_path, monkeypatch) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects({"user_goal": "Create a reviewed professional set"})["project"]
@@ -2550,7 +2569,7 @@ def test_project_output_history_is_scoped_by_account_owner(tmp_path) -> None:
     assert {item["output_id"] for item in second_outputs} == {second_record.output_id}
 
 
-def test_project_timeline_reconciles_outputs_written_after_background_disconnect(tmp_path) -> None:
+def test_project_timeline_reconciles_outputs_written_after_background_disconnect(tmp_path, monkeypatch) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects(
         {
@@ -2559,30 +2578,51 @@ def test_project_timeline_reconciles_outputs_written_after_background_disconnect
             "primary_template_id": "ecommerce_template",
         }
     )["project"]
-    job = handlers.post_project_job(
-        project["project_id"],
-        {"user_input": "Make one clean ecommerce image", "template_id": "ecommerce_template"},
-    )
+    job_id = "job-disconnected-output-recovery"
+    stored_project = handlers.project_service._require_project(project["project_id"])
+    stored_project.job_ids.append(job_id)
+    handlers.project_service.project_store.save_project(stored_project)
     record = _save_project_output(
         handlers,
-        job_id=job["job_id"],
+        job_id=job_id,
         candidate_id="candidate_recovered_1",
         asset_id="asset_recovered_1",
         prompt="clean marketplace product image",
     )
 
+    output_store = handlers.service.output_store
+    batch_reads = 0
+    job_scoped_reads = 0
+    original_batch_read = output_store.list_by_project_and_jobs
+    original_job_read = output_store.list_by_job
+
+    def counted_batch_read(*args, **kwargs):
+        nonlocal batch_reads
+        batch_reads += 1
+        return original_batch_read(*args, **kwargs)
+
+    def counted_job_read(*args, **kwargs):
+        nonlocal job_scoped_reads
+        job_scoped_reads += 1
+        return original_job_read(*args, **kwargs)
+
+    monkeypatch.setattr(output_store, "list_by_project_and_jobs", counted_batch_read)
+    monkeypatch.setattr(output_store, "list_by_job", counted_job_read)
+
     timeline = handlers.get_project_timeline(project["project_id"])
     generated_items = [
-        item for item in timeline["items"] if item["item_type"] == "job_generated" and item["job_id"] == job["job_id"]
+        item for item in timeline["items"] if item["item_type"] == "job_generated" and item["job_id"] == job_id
     ]
     review_items = [
-        item for item in timeline["items"] if item["item_type"] == "visual_review" and item["job_id"] == job["job_id"]
+        item for item in timeline["items"] if item["item_type"] == "visual_review" and item["job_id"] == job_id
     ]
     outputs = timeline["metadata"]["project_outputs"]
 
     assert generated_items == []
     assert review_items == []
     assert outputs == []
+    assert batch_reads == 1
+    assert job_scoped_reads == 0
     recovery_outputs = handlers.get_project_outputs(project_id=project["project_id"])
     assert recovery_outputs["items"] == []
     assert [item["output_id"] for item in recovery_outputs["review_items"]] == [record.output_id]
@@ -2591,7 +2631,7 @@ def test_project_timeline_reconciles_outputs_written_after_background_disconnect
         item
         for item in timeline["items"]
         if item["item_type"] == "note_added"
-        and item["job_id"] == job["job_id"]
+        and item["job_id"] == job_id
         and item["metadata"].get("output_store_restore_state") == "needs_recovery"
     ]
     assert len(recovery_notes) == 1
@@ -2599,10 +2639,10 @@ def test_project_timeline_reconciles_outputs_written_after_background_disconnect
 
     timeline_again = handlers.get_project_timeline(project["project_id"])
     generated_again = [
-        item for item in timeline_again["items"] if item["item_type"] == "job_generated" and item["job_id"] == job["job_id"]
+        item for item in timeline_again["items"] if item["item_type"] == "job_generated" and item["job_id"] == job_id
     ]
     review_again = [
-        item for item in timeline_again["items"] if item["item_type"] == "visual_review" and item["job_id"] == job["job_id"]
+        item for item in timeline_again["items"] if item["item_type"] == "visual_review" and item["job_id"] == job_id
     ]
 
     assert generated_again == []
@@ -2611,7 +2651,7 @@ def test_project_timeline_reconciles_outputs_written_after_background_disconnect
         item
         for item in timeline_again["items"]
         if item["item_type"] == "note_added"
-        and item["job_id"] == job["job_id"]
+        and item["job_id"] == job_id
         and item["metadata"].get("output_store_restore_state") == "needs_recovery"
     ]
     assert len(recovery_notes_again) == 1

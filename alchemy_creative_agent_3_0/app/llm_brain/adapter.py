@@ -330,6 +330,7 @@ class V3LLMBrainAdapter:
                 fallback,
                 data,
                 requires_complete_image_set=strict_remote_contract,
+                requires_reference_channel_decision=_brain_request_has_reference_inputs(request),
                 requires_product_truth_selection=_requires_product_truth_selection(request),
                 product_truth_asset_ids=_product_truth_asset_ids_for_contract(request),
                 max_product_truth_source_refs=_max_product_truth_source_refs_for_contract(request),
@@ -395,6 +396,7 @@ class V3LLMBrainAdapter:
                     fallback,
                     recovery_data,
                     requires_complete_image_set=True,
+                    requires_reference_channel_decision=_brain_request_has_reference_inputs(request),
                     requires_product_truth_selection=_requires_product_truth_selection(request),
                     product_truth_asset_ids=_product_truth_asset_ids_for_contract(request),
                     max_product_truth_source_refs=_max_product_truth_source_refs_for_contract(request),
@@ -1581,6 +1583,7 @@ class V3LLMBrainAdapter:
         data: dict[str, Any],
         *,
         requires_complete_image_set: bool = False,
+        requires_reference_channel_decision: bool = False,
         requires_product_truth_selection: bool = False,
         product_truth_asset_ids: set[str] | None = None,
         max_product_truth_source_refs: int | None = None,
@@ -1665,8 +1668,14 @@ class V3LLMBrainAdapter:
                 # rendering-intent sub-object. The remote Brain owns semantic
                 # subject/evidence judgement; the fallback profile only binds
                 # non-creative job identifiers and compatibility defaults.
-                if not _has_complete_remote_visual_task_profile(remote_section):
-                    contract_validation_sections[key] = _visual_task_profile_shape_validation_audit(remote_section)
+                if not _has_complete_remote_visual_task_profile(
+                    remote_section,
+                    requires_reference_channel_decision=requires_reference_channel_decision,
+                ):
+                    contract_validation_sections[key] = _visual_task_profile_shape_validation_audit(
+                        remote_section,
+                        requires_reference_channel_decision=requires_reference_channel_decision,
+                    )
                     rejected_sections.append(key)
                     continue
             if key == "capability_activation_intent" and requires_complete_image_set:
@@ -1727,7 +1736,10 @@ class V3LLMBrainAdapter:
                 **dict(payload.get("audit") or {}),
                 "remote_rendering_intent_received": True,
             }
-        if _has_complete_remote_visual_task_profile(data.get("visual_task_profile")):
+        if _has_complete_remote_visual_task_profile(
+            data.get("visual_task_profile"),
+            requires_reference_channel_decision=requires_reference_channel_decision,
+        ):
             payload["audit"] = {
                 **dict(payload.get("audit") or {}),
                 "remote_visual_task_profile_received": True,
@@ -4349,7 +4361,30 @@ def _normalize_remote_visual_task_profile_format(candidate: Any) -> tuple[Any, l
     return profile, list(dict.fromkeys(changed))
 
 
-def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
+def _brain_request_has_reference_inputs(request: BrainRunRequest) -> bool:
+    """Whether this frozen Brain request sends any visual reference context."""
+
+    if request.reference_assets or request.selected_output_assets or request.uploaded_assets:
+        return True
+    summary = request.metadata.get("reference_input_summary")
+    if not isinstance(summary, dict):
+        return False
+    for key in (
+        "logical_continuity_reference_count",
+        "logical_mode_input_count",
+        "physical_provider_reference_count",
+    ):
+        count = summary.get(key)
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            return True
+    return False
+
+
+def _has_complete_remote_visual_task_profile(
+    candidate: Any,
+    *,
+    requires_reference_channel_decision: bool = False,
+) -> bool:
     """Accept only a complete remote semantic profile for a real-image job.
 
     This is a contract-shape gate, not a local subject classifier.  It never
@@ -4391,6 +4426,11 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
         return False
     if not _has_remote_reference_channel_ownership_intent(reference_ownership):
         return False
+    if (
+        requires_reference_channel_decision
+        and reference_ownership.get("applicability") != "applicable"
+    ):
+        return False
     entity_fields = {
         "entity_id",
         "entity_type",
@@ -4427,7 +4467,11 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
     return all(isinstance(item, str) and item.strip() for item in [*tags, *unknowns])
 
 
-def _visual_task_profile_shape_validation_audit(candidate: Any) -> dict[str, Any]:
+def _visual_task_profile_shape_validation_audit(
+    candidate: Any,
+    *,
+    requires_reference_channel_decision: bool = False,
+) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         return _section_validation_audit("visual_task_profile", "visual_task_profile", "dict_type")
     if not _has_remote_rendering_intent(candidate):
@@ -4494,6 +4538,12 @@ def _visual_task_profile_shape_validation_audit(candidate: Any) -> dict[str, Any
             "literal_error",
         )
     if reference_ownership.get("applicability") not in {"applicable", "not_applicable", "ambiguous"}:
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent.applicability",
+            "literal_error",
+        )
+    if requires_reference_channel_decision and reference_ownership.get("applicability") != "applicable":
         return _section_validation_audit(
             "visual_task_profile",
             "visual_task_profile.reference_channel_ownership_intent.applicability",

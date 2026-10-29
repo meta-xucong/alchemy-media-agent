@@ -293,16 +293,23 @@ def test_desktop_home_mask_stays_visible_until_slow_first_page_image_settles() -
                   v3State.projectOutputsRequestOwner = null;
                   v3State.projectOutputsRequestKey = "";
                   const bootstrap = initV3Shell();
+                  // set_content() runs at about:blank, so restore the explicit-home route state
+                  // after initV3Shell() derives its initial route from location.search.
+                  v3State.explicitHome = true;
                   await delay(100);
                   const during = {
                     maskHidden: Boolean(document.querySelector("#v3PageLoadingOverlay")?.hidden),
                     imageComplete: Boolean(document.querySelector("img[data-v3-home-thumb='true']")?.complete),
                   };
                   await bootstrap;
+                  const image = document.querySelector("img[data-v3-home-thumb='true']");
                   return {
                     during,
                     maskHidden: Boolean(document.querySelector("#v3PageLoadingOverlay")?.hidden),
-                    imageLoaded: Boolean(document.querySelector("img[data-v3-home-thumb='true']")?.naturalWidth),
+                    imageLoaded: Boolean(image?.naturalWidth),
+                    imageComplete: Boolean(image?.complete),
+                    imageSrc: image?.currentSrc || image?.src || "",
+                    imageFailed: image?.dataset.v3HomeThumbFailed || "",
                   };
                 }
                 """,
@@ -310,12 +317,12 @@ def test_desktop_home_mask_stays_visible_until_slow_first_page_image_settles() -
             assert result["during"]["maskHidden"] is False
             assert result["during"]["imageComplete"] is False
             assert result["maskHidden"] is True
-            assert result["imageLoaded"] is True
+            assert result["imageLoaded"] is True, result
         finally:
             browser.close()
 
 
-def test_mobile_home_mask_stays_visible_until_slow_first_page_image_settles() -> None:
+def test_mobile_home_releases_mask_before_slow_first_page_image_settles() -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
@@ -400,10 +407,14 @@ def test_mobile_home_mask_stays_visible_until_slow_first_page_image_settles() ->
                 }
                 """,
             )
-            assert result["during"]["maskHidden"] is False
+            assert result["during"]["maskHidden"] is True
             assert result["during"]["imageComplete"] is False
             assert result["maskHidden"] is True
-            assert result["imageLoaded"] is True
+            page.wait_for_function(
+                "Boolean(document.querySelector(\"img[data-mobile-v3-home-thumb='true']\")?.naturalWidth)",
+                timeout=3000,
+            )
+            assert page.locator("img[data-mobile-v3-home-thumb='true']").evaluate("image => image.naturalWidth > 0") is True
         finally:
             browser.close()
 

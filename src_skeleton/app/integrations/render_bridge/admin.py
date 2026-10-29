@@ -25,6 +25,7 @@ from .store import TERMINAL
 
 from render_bridge_primary import (PrimarySettings, PrimaryTransport, control_path, state_root,
                                    pending_count as primary_pending_count)
+from render_bridge_primary.health import PrimaryHealthMonitor
 
 
 class AdminSettingsUpdate(BaseModel):
@@ -59,6 +60,7 @@ class BridgeAdminController:
         self.persisted = False
         self.updated_at = None
         self.primary_maintenance_task = None
+        self.primary_health_task = None
 
     async def maintain_primary_once(self):
         # Only reconcile durable post-registration ACKs and cancellation intents.
@@ -373,6 +375,7 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
     async def start():
         controller.read_saved()
         controller.primary_maintenance_task = asyncio.create_task(controller.maintain_primary())
+        controller.primary_health_task = asyncio.create_task(PrimaryHealthMonitor("v1").run_forever())
         if controller.error:
             return
         try:
@@ -384,6 +387,12 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
 
     @app.on_event("shutdown")
     async def stop():
+        if controller.primary_health_task:
+            controller.primary_health_task.cancel()
+            try:
+                await controller.primary_health_task
+            except asyncio.CancelledError:
+                pass
         if controller.primary_maintenance_task:
             controller.primary_maintenance_task.cancel()
             try:

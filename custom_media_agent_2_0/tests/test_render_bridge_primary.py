@@ -56,7 +56,7 @@ class Transport:
         return SimpleNamespace(route="api" if self.api else "bridge", state="queued" if self.pending else "receipt_ready",
             reason="queue_capacity" if self.api else "bridge_primary", origin_key=identity["origin_key"],
             execution_key=unit.key, task_id=identity["task_id"], receipt_id=identity["receipt_id"],
-            provenance={"attempt_id": identity["attempt_id"], "deadline": "2026-10-27T00:00:00+00:00"},
+            provenance={"attempt_id": identity["attempt_id"], "deadline": "2099-01-01T00:00:00+00:00"},
             image=None if self.pending or self.api else SimpleNamespace(content=content, mime_type="image/png",
                 sha256=hashlib.sha256(content).hexdigest(), width=23, height=19))
     def claim_api(self, unit):
@@ -123,6 +123,90 @@ def test_pending_resumes_frozen_request_without_mock_or_api(isolated, monkeypatc
     assert result.status == "completed"
     assert isolated.calls[0].digest == isolated.calls[1].digest
     assert isolated.calls[1].prompt == "A blue vase"
+
+
+def test_v2_entry_fails_store_busy_without_api_and_retains_same_preflight_unit(
+    isolated, monkeypatch, tmp_path
+):
+    import time
+    from types import SimpleNamespace
+    from render_bridge_primary import PrimarySettings, PrimaryTransport
+    from render_bridge_primary.http import BridgeError
+
+    class InputClient:
+        def __init__(self):
+            self.busy = True
+            self.input_payloads = []
+            self.uploads = []
+            self.tasks = []
+        async def capabilities(self):
+            return {
+                "admission": {"accepting_new_tasks": True},
+                "routing_availability_v1": {"profiles": [
+                    {"profile_id": "codex-image", "health": "unavailable", "reason_code": "auth_attention"}
+                ]},
+                "profiles": [{
+                    "execution_profile_id": "codex-image", "execution_profile_revision": "1",
+                    "parameter_contract": {"dimension_semantics": "original_dimensions_recorded",
+                        "codex_adapter": CODEX_ADAPTER_CONTRACT},
+                    "image_options_contract": {"quality": {"values": ["auto"]},
+                        "output_format": {"values": ["png", "jpeg"]},
+                        "transparent_background": {"values": [True]}, "references": {"max_count": 5}},
+                }],
+            }
+        async def create_input(self, payload):
+            self.input_payloads.append(dict(payload))
+            return {"input_id": payload["input_key"]}
+        async def upload_input(self, input_id, content, mime_type):
+            self.uploads.append((input_id, content, mime_type))
+            if self.busy:
+                raise BridgeError("store_busy", status=503, retry_not_before=time.time() + 60)
+        async def create_task(self, payload):
+            self.tasks.append(payload)
+            return {"remote_task_id": "bridge-v2-task", "origin_key": payload["origin_key"],
+                "request": payload, "state": "queued", "receipt_id": None, "attempt_id": "attempt-v2"}
+        async def close(self):
+            pass
+
+    async def no_wait(_delay):
+        pass
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
+    reference_path = tmp_path / "v2-reference.png"
+    reference_path.write_bytes(image_bytes())
+    monkeypatch.setattr(bridge, "uploaded_asset_path", lambda _asset_id: reference_path)
+    monkeypatch.setattr(bridge, "settings", SimpleNamespace(data_dir=tmp_path / "v2-data"))
+
+    client = InputClient()
+    transport = PrimaryTransport(PrimarySettings(enabled=True, base_url="http://127.0.0.1:9999",
+        token="fixture", state_dir=tmp_path / "primary-v2"), client=client)
+    monkeypatch.setattr(bridge, "transport", lambda _job_id: transport)
+    async def forbidden_provider(*_args):
+        raise AssertionError("V2 must not select API after Bridge input staging busy")
+    monkeypatch.setattr(generation, "get_v2_image_provider", forbidden_provider)
+    req = request().model_copy(update={"input_images": [ProviderInputImage(
+        asset_id="v2-reference", role="subject_reference", provider_input_required=True)]}, deep=True)
+
+    first = asyncio.run(generation.create_image_job(req, job_id="v2-store-busy-recovery"))
+    frozen = bridge.load_frozen("v2-store-busy-recovery")
+    unit = bridge._unit_request(frozen, 0)
+    row = transport._read(unit)
+    import json
+    assert first.status == "failed"
+    assert first.error and first.error["provider"] == "render_bridge"
+    assert first.error["error_code"] == "bridge_terminal"
+    assert first.error["detail"]["state"] == "bridge_store_busy"
+    assert "no remote image task was created" in first.error["message"]
+    assert client.tasks == []
+    assert json.loads(row["data"])["state"] == "preflight"
+    assert len(client.uploads) == 2 and client.uploads[0] == client.uploads[1]
+
+    client.busy = False
+    resumed = asyncio.run(transport.resolve(unit))
+    assert resumed.route == "bridge" and resumed.state == "queued"
+    assert len(client.tasks) == 1 and client.tasks[0]["origin_key"] == "rb_" + unit.key
+    assert len(client.input_payloads) == 2
+    assert client.input_payloads[0]["input_key"] == client.input_payloads[1]["input_key"]
+    assert client.uploads[-1] == (client.input_payloads[0]["input_key"], image_bytes(), "image/png")
 
 
 def test_batch_caches_first_unit_while_second_waits(isolated, monkeypatch):

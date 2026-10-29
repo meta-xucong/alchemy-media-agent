@@ -352,9 +352,10 @@ async def _generate(record: dict, select_provider, client):
             ensure_not_cancelled(record["job_id"])
             if decision.route == "bridge":
                 if decision.image is None:
-                    terminal = decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
+                    store_busy = decision.reason == "bridge_store_busy"
+                    terminal = store_busy or decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
                     provenance = getattr(decision, "provenance", {})
-                    raise BridgeWait(decision.state, terminal=terminal,
+                    raise BridgeWait("bridge_store_busy" if store_busy else decision.state, terminal=terminal,
                                      deadline=provenance.get("deadline") if isinstance(provenance, dict) else None)
                 adaptation = None
                 if (unit.parameters.get("codex_adapter") == "codex_cli_imagegen_v1" or

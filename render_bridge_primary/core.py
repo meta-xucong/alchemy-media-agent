@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
 import os
 import re
 import sqlite3
-from dataclasses import dataclass, field
+import time
+import warnings
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +17,7 @@ from urllib.parse import urlsplit
 
 from PIL import Image
 from .http import BridgeClient, BridgeError
+from .limits import LEGACY_REFERENCE_INPUT_BYTES, LEGACY_REFERENCE_INPUT_PIXELS
 
 
 def _json(value):
@@ -25,6 +29,20 @@ def _hash(value: bytes):
 
 
 _ROOT = Path(__file__).resolve().parent.parent / '.render_bridge_primary'
+_SAFE_CAPABILITY_FIELDS = frozenset({
+    'width', 'height', 'seed', 'quality', 'output_format', 'transparent_background',
+    'exact_dimensions', 'reference_fusion', 'reference_semantics', 'mask',
+    'background', 'output_compression', 'input_fidelity', 'input_fidelity_required',
+    'strong_identity', 'required_reference_conditioning', 'moderation',
+    'deterministic_postprocess',
+})
+
+
+def _capability_rejection(code, field=None):
+    result = {'code': code}
+    if field in _SAFE_CAPABILITY_FIELDS:
+        result['field'] = field
+    return result
 
 def control_path():
     return Path(os.environ.get('ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG', str(_ROOT / 'control.json')))
@@ -246,7 +264,7 @@ class PrimaryTransport:
         data=json.loads(row['data']); image=None
         if row['image'] is not None and not data.get('cancel_requested'):
             meta=data['image']; image=OriginalImage(bytes(row['image']),meta['mime_type'],meta['sha256'],meta['width'],meta['height'])
-        provenance={k:v for k,v in data.items() if k in {'product','profile','route','state','reason','origin_key','execution_key','task_id','receipt_id','attempt_id','image','queue_active_count','queue_limit','queue_observed_at'}}
+        provenance={k:v for k,v in data.items() if k in {'product','profile','route','state','reason','origin_key','execution_key','task_id','receipt_id','attempt_id','image','queue_active_count','queue_limit','queue_observed_at','capability_rejection'}}
         deadline = (data.get('payload') or {}).get('deadline')
         if isinstance(deadline, str): provenance['deadline'] = deadline
         if data.get('cancel_requested') and data['state'] not in {'canceled','failed','expired'}:
@@ -259,6 +277,17 @@ class PrimaryTransport:
         if 'queue_observed_at' in provenance:
             provenance['queue_snapshot_diagnostic']=True
         return PrimaryResult(data['route'],data['state'],data['reason'],data['origin_key'],data['execution_key'],data.get('task_id'),data.get('receipt_id'),image,provenance)
+
+    @staticmethod
+    async def _stage_input_once(operation):
+        try:
+            return await operation()
+        except BridgeError as error:
+            if error.code != 'store_busy' or error.status != 503:
+                raise
+            if error.retry_not_before is not None:
+                await asyncio.sleep(max(0.0, error.retry_not_before - time.time()))
+            return await operation()
 
     def has_binding(self, request):
         return self._read(request) is not None
@@ -309,31 +338,58 @@ class PrimaryTransport:
         self._save(request,data,state='api_completed')
 
     @staticmethod
-    def _supported(request, caps, profile):
+    def _support_rejection(request, caps, profile):
         selected=next((p for p in caps.get('profiles',[]) if p.get('execution_profile_id')==profile and p.get('execution_profile_revision')=='1'),None)
-        if not selected: return False
+        if not selected: return {'code':'profile_not_advertised'}
         pc=selected.get('parameter_contract',{}); ic=selected.get('image_options_contract',{})
         limits=selected.get('limits',{})
         width=request.parameters.get('width',32); height=request.parameters.get('height',32); seed=request.parameters.get('seed',0)
-        if not isinstance(request.prompt,str) or not 1<=len(request.prompt)<=16000: return False
-        if type(width) is not int or type(height) is not int or min(width,height)<1: return False
-        if max(width,height)>limits.get('max_dimension',40000) or width*height>limits.get('max_image_pixels',40000000): return False
-        if type(seed) is not int or not 0<=seed<=2**32-1: return False
-        if request.binding_id is not None and (not isinstance(request.binding_id,str) or not 1<=len(request.binding_id)<=256): return False
-        if set(request.parameters)-{'width','height','seed','image_options','codex_adapter'}: return False
+        if not isinstance(request.prompt,str) or not 1<=len(request.prompt)<=16000: return {'code':'prompt_contract'}
+        if type(width) is not int or type(height) is not int or min(width,height)<1: return {'code':'dimensions_invalid'}
+        if max(width,height)>limits.get('max_dimension',40000) or width*height>limits.get('max_image_pixels',40000000): return {'code':'dimensions_over_profile_limit'}
+        if type(seed) is not int or not 0<=seed<=2**32-1: return {'code':'seed_contract'}
+        if request.binding_id is not None and (not isinstance(request.binding_id,str) or not 1<=len(request.binding_id)<=256): return {'code':'binding_id_contract'}
+        extra_parameters=set(request.parameters)-{'width','height','seed','image_options','codex_adapter'}
+        if extra_parameters: return {'code':'parameter_not_advertised'}
         adapter = request.parameters.get('codex_adapter')
-        if 'codex_adapter' in request.parameters and (profile != 'codex-image' or adapter != 'codex_cli_imagegen_v1' or adapter not in pc.get('codex_adapter', {}).get('values', [])): return False
+        if 'codex_adapter' in request.parameters and (profile != 'codex-image' or adapter != 'codex_cli_imagegen_v1' or adapter not in pc.get('codex_adapter', {}).get('values', [])): return {'code':'adapter_not_advertised'}
         if adapter is not None:
-            ic = pc['codex_adapter'].get('image_options_contract')
-            if not isinstance(ic, dict): return False
+            adapter_contract = pc.get('codex_adapter')
+            ic = adapter_contract.get('image_options_contract') if isinstance(adapter_contract, dict) else None
+            if not isinstance(ic, dict): return {'code':'adapter_option_contract_missing'}
         options=request.parameters.get('image_options')
         if options is not None:
-            if not isinstance(options,dict) or options.get('schema_version')!='1' or set(options)-{'schema_version','quality','output_format','transparent_background'}: return False
-            if 'quality' in options and options['quality'] not in ic.get('quality',{}).get('values',[]): return False
-            if 'output_format' in options and options['output_format'] not in ic.get('output_format',{}).get('values',[]): return False
-            if 'transparent_background' in options and options['transparent_background'] not in ic.get('transparent_background',{}).get('values',[]): return False
-        if len(request.references)>ic.get('references',{}).get('max_count',0): return False
-        if any(r.mime_type not in {'image/png','image/jpeg'} or len(r.content)<1 or len(r.content)>caps.get('limits',{}).get('max_input_bytes',1048576) for r in request.references): return False
+            if not isinstance(options,dict) or options.get('schema_version')!='1': return {'code':'image_options_schema'}
+            option_keys=set(options)-{'schema_version','quality','output_format','transparent_background'}
+            if option_keys: return {'code':'image_option_not_advertised'}
+            if 'quality' in options and options['quality'] not in ic.get('quality',{}).get('values',[]): return _capability_rejection('image_option_not_advertised','quality')
+            if 'output_format' in options and options['output_format'] not in ic.get('output_format',{}).get('values',[]): return _capability_rejection('image_option_not_advertised','output_format')
+            if 'transparent_background' in options and options['transparent_background'] not in ic.get('transparent_background',{}).get('values',[]): return _capability_rejection('image_option_not_advertised','transparent_background')
+        if len(request.references)>ic.get('references',{}).get('max_count',0): return {'code':'reference_count_over_profile_limit'}
+        if any(r.mime_type not in {'image/png','image/jpeg'} or len(r.content)<1 for r in request.references): return {'code':'reference_input_format'}
+        input_limits=caps.get('limits',{})
+        if not isinstance(input_limits,dict): input_limits={}
+        max_input_bytes=input_limits.get('max_input_bytes',LEGACY_REFERENCE_INPUT_BYTES)
+        if type(max_input_bytes) is not int or max_input_bytes<1: max_input_bytes=LEGACY_REFERENCE_INPUT_BYTES
+        if any(len(r.content)>max_input_bytes for r in request.references): return {'code':'reference_input_over_byte_limit'}
+        max_input_image_pixels=input_limits.get('max_input_image_pixels',LEGACY_REFERENCE_INPUT_PIXELS)
+        if type(max_input_image_pixels) is not int or max_input_image_pixels<1: max_input_image_pixels=LEGACY_REFERENCE_INPUT_PIXELS
+        for reference in request.references:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter('error', Image.DecompressionBombWarning)
+                    with Image.open(io.BytesIO(reference.content)) as image:
+                        width,height=image.size
+                        expected_format={'image/png':'PNG','image/jpeg':'JPEG'}.get(reference.mime_type)
+                        if expected_format is None or image.format != expected_format or getattr(image,'n_frames',1)!=1:
+                            return {'code':'reference_input_format'}
+                        if width*height>max_input_image_pixels:
+                            return {'code':'reference_input_over_pixel_limit'}
+                        image.verify()
+            except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+                return {'code':'reference_input_over_pixel_limit'}
+            except (OSError, ValueError):
+                return {'code':'reference_input_invalid'}
         for key,value in request.hard_requirements.items():
             if value is None or value is False or value=='': continue
             if key=='output_format' and value in ic.get('output_format',{}).get('values',[]) and options and options.get('output_format')==value: continue
@@ -341,22 +397,97 @@ class PrimaryTransport:
             if key=='exact_dimensions' and pc.get('dimension_semantics')=='exact_output_match': continue
             if key=='reference_fusion' and request.references and len(request.references)<=ic.get('references',{}).get('max_count',0): continue
             if key=='reference_semantics' and value==pc.get('reference_semantics'): continue
-            return False
-        return True
+            return _capability_rejection('hard_requirement_not_advertised',key)
+        return None
 
     @staticmethod
-    def _health_state(health):
-        """Classify execution evidence without treating missing evidence as downtime."""
-        if not isinstance(health, dict): return 'unknown'
-        state=health.get('health')
-        if state=='unavailable': return 'unavailable'
-        if state!='available': return 'unknown'
+    def _safe_support_rejection(request, caps, profile):
         try:
-            valid_until=health['valid_until']
-            if not isinstance(valid_until,str): return 'unknown'
-            deadline=datetime.fromisoformat(valid_until.replace('Z','+00:00'))
-            return 'available' if deadline.tzinfo is not None and deadline>datetime.now(timezone.utc) else 'unknown'
-        except (KeyError, ValueError, TypeError): return 'unknown'
+            if not isinstance(caps, dict):
+                return {'code':'capability_contract_invalid'}
+            for key in ('admission', 'routing_availability_v1'):
+                if key in caps and not isinstance(caps[key], dict):
+                    return {'code':'capability_contract_invalid'}
+            availability = caps.get('routing_availability_v1')
+            if availability is not None and 'profiles' in availability and not isinstance(availability['profiles'], list):
+                return {'code':'capability_contract_invalid'}
+            profiles = caps.get('profiles', [])
+            if not isinstance(profiles, list) or any(not isinstance(item, dict) for item in profiles):
+                return {'code':'capability_contract_invalid'}
+            selected = next((item for item in profiles
+                             if item.get('execution_profile_id') == profile
+                             and item.get('execution_profile_revision') == '1'), None)
+            if selected is not None:
+                for key in ('parameter_contract', 'image_options_contract', 'limits'):
+                    if key in selected and not isinstance(selected[key], dict):
+                        return {'code':'capability_contract_invalid'}
+                parameter_contract = selected.get('parameter_contract', {})
+                if 'codex_adapter' in parameter_contract:
+                    adapter_contract = parameter_contract['codex_adapter']
+                    if not isinstance(adapter_contract, dict):
+                        return {'code':'capability_contract_invalid'}
+                    if ('image_options_contract' in adapter_contract
+                            and not isinstance(adapter_contract['image_options_contract'], dict)):
+                        return {'code':'capability_contract_invalid'}
+                image_contract = (adapter_contract.get('image_options_contract', {})
+                                  if isinstance(parameter_contract.get('codex_adapter'), dict)
+                                  else selected.get('image_options_contract', {}))
+                if any(key in image_contract and not isinstance(image_contract[key], dict)
+                       for key in ('quality', 'output_format', 'transparent_background', 'references')):
+                    return {'code':'capability_contract_invalid'}
+                for contract in image_contract.values():
+                    if isinstance(contract, dict) and 'values' in contract and not isinstance(contract['values'], list):
+                        return {'code':'capability_contract_invalid'}
+            return PrimaryTransport._support_rejection(request, caps, profile)
+        except (AttributeError, KeyError, TypeError):
+            return {'code':'capability_contract_invalid'}
+
+    @staticmethod
+    def _codex_native_defaults(request, caps, profile):
+        """Drop unsupported optional image controls from new Codex adapter payloads.
+
+        The original request remains the durable identity and API fallback input;
+        only the Bridge payload uses CLI-native defaults for unadvertised options.
+        """
+        if request.parameters.get('codex_adapter') != 'codex_cli_imagegen_v1':
+            return request
+        profiles = caps.get('profiles') if isinstance(caps, dict) else None
+        if not isinstance(profiles, list):
+            return request
+        selected = next((item for item in profiles
+                         if isinstance(item, dict)
+                         and item.get('execution_profile_id') == profile
+                         and item.get('execution_profile_revision') == '1'), None)
+        if selected is None:
+            return request
+        parameter_contract = selected.get('parameter_contract')
+        adapter_contract = parameter_contract.get('codex_adapter') if isinstance(parameter_contract, dict) else None
+        image_contract = adapter_contract.get('image_options_contract') if isinstance(adapter_contract, dict) else None
+        if not isinstance(image_contract, dict):
+            return request
+        options = request.parameters.get('image_options')
+        if not isinstance(options, dict):
+            return request
+        normalized = dict(options)
+        for field in ('quality', 'output_format', 'transparent_background'):
+            if field not in normalized:
+                continue
+            contract = image_contract.get(field)
+            values = contract.get('values') if isinstance(contract, dict) else None
+            if not isinstance(values, list) or normalized[field] not in values:
+                normalized.pop(field, None)
+        parameters = dict(request.parameters)
+        if set(normalized) <= {'schema_version'}:
+            parameters.pop('image_options', None)
+        else:
+            parameters['image_options'] = normalized
+        if parameters == request.parameters:
+            return request
+        return replace(request, parameters=parameters)
+
+    @staticmethod
+    def _supported(request, caps, profile):
+        return PrimaryTransport._safe_support_rejection(request, caps, profile) is None
 
     async def resolve(self, request):
         row=self._read(request)
@@ -379,31 +510,38 @@ class PrimaryTransport:
                     if type(value) is int and value>=0: data[target]=value
                 if 'queue_active_count' in data or 'queue_limit' in data:
                     data['queue_observed_at']=datetime.now(timezone.utc).isoformat()
-            if not self._supported(request,caps,self.settings.profile): return self._api(request,data,'bridge_capability_unsupported')
+            payload_request=self._codex_native_defaults(request,caps,self.settings.profile)
+            rejection=self._safe_support_rejection(payload_request,caps,self.settings.profile)
+            if rejection is not None:
+                # V3 needs a safe, durable reason for capability fallback so
+                # default-mapping gaps can be diagnosed without saving prompts,
+                # reference bytes, or option values in the transport journal.
+                if request.product=='v3': data['capability_rejection']=rejection
+                return self._api(request,data,'bridge_capability_unsupported')
             if caps.get('admission',{}).get('accepting_new_tasks') is False: return self._api(request,data,'bridge_unavailable')
-            availability=caps.get('routing_availability_v1',{}).get('profiles',[])
-            health=next((h for h in availability if isinstance(h,dict) and h.get('profile_id')==self.settings.profile),None)
-            health_state=self._health_state(health)
-            if health_state=='unavailable': return self._api(request,data,'bridge_unavailable')
-            # Unknown/expired profile health is not proof of non-admission. The
-            # authenticated Bridge endpoint has accepted this preflight and is
-            # accepting tasks, so keep the request bridge_only and let Bridge
-            # report a recoverable executor/account state instead of silently
-            # selecting a second, potentially billable provider.
-            # Input uploads cannot execute a renderer. A failure here proves this unit was not submitted.
+            # Profile health is execution telemetry, not task-admission authority.
+            # Capabilities plus accepting admission decide whether this request
+            # may reach Bridge; executor attention is reported by the owned task.
             references=[]
             try:
                 for index,ref in enumerate(request.references):
                     sha=_hash(ref.content)
-                    item=await self.client.create_input(dict(input_key=f'{data["origin_key"]}_{index}',original_sha256=sha,size=len(ref.content),mime_type=ref.mime_type))
+                    input_payload=dict(input_key=f'{data["origin_key"]}_{index}',original_sha256=sha,size=len(ref.content),mime_type=ref.mime_type)
+                    item=await self._stage_input_once(lambda: self.client.create_input(input_payload))
                     ref_id=item.get('input_id') or item.get('input_ref')
                     if not ref_id: raise BridgeError('invalid_bridge_response')
-                    await self.client.upload_input(ref_id,ref.content,ref.mime_type)
+                    await self._stage_input_once(lambda: self.client.upload_input(ref_id,ref.content,ref.mime_type))
                     references.append(dict(input_ref=ref_id,role='reference',hash=sha))
-            except BridgeError: return self._api(request,data,'bridge_unavailable')
+            except BridgeError as error:
+                if error.code == 'store_busy' and error.status == 503:
+                    pending=self._result(self._read(request))
+                    provenance=dict(pending.provenance)
+                    provenance.update(state='failed',reason='bridge_store_busy')
+                    return replace(pending,state='failed',reason='bridge_store_busy',provenance=provenance)
+                return self._api(request,data,'bridge_unavailable')
             payload=dict(schema_version='1',origin_key=data['origin_key'],binding_id=request.binding_id or request.key,
                          operation='image.generate',execution_profile_id=self.settings.profile,execution_profile_revision='1',
-                         prompt=request.prompt,parameters=request.parameters,references=references,output_slot={'slot_id':'primary','count':1},
+                         prompt=request.prompt,parameters=payload_request.parameters,references=references,output_slot={'slot_id':'primary','count':1},
                          deadline=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(),routing='bridge_only')
             data.update(payload=payload,state='bridge_submission_unknown')
             # CAS is the only create permit, across workers/processes. Store the exact wire payload first.

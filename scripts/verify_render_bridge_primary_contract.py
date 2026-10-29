@@ -115,12 +115,13 @@ async def main():
  unknown=await t.resolve(req(11)); assert unknown.route=='bridge' and unknown.state=='bridge_submission_unknown',unknown
  client.create_task=original
  recovered=await PrimaryTransport(settings,client=client).resolve(req(11)); assert recovered.state=='queued',recovered
- store.report_heartbeat(scope,'node','instance','available',['fake-image'],[dict(profile_id='fake-image',profile_revision='1',report_revision=2,health='unavailable',reason_code='tool_missing',evidence_kind='local_probe',revalidation_generation=0)])
- assert (await t.resolve(req(12))).route=='api'
  assert (await t.resolve(req(11))).route=='bridge'
  await t.cancel(req(11))
  canceled=await t.resolve(req(11)); assert canceled.route=='bridge' and canceled.state=='canceled',canceled
- print('PASS health fault affects only new requests; admitted task remains owned; same-task cancellation never API')
+ store.report_heartbeat(scope,'node','instance','available',['fake-image'],[dict(profile_id='fake-image',profile_revision='1',report_revision=2,health='unavailable',reason_code='tool_missing',evidence_kind='local_probe',revalidation_generation=0)])
+ unavailable=await t.resolve(req(12))
+ assert unavailable.route=='bridge' and unavailable.state=='queued',unavailable
+ print('PASS profile health is diagnostic only after accepting admission; existing task remains owned; same-task cancellation never API')
  print('PASS actual companion ASGI: 9-to-10 competition, full queue replay, original receipt/hash/bytes/dimensions, ACK and post-admission response-loss restart recovery')
  print('evidence_root',root)
  await client.close(); store.close()
