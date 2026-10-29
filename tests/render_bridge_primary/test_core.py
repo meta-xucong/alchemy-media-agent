@@ -55,7 +55,7 @@ def test_loss_restart_404_never_fallback(tmp_path):
     assert c.calls == 1
 
 
-@pytest.mark.parametrize('code,status,route',[('queue_capacity',429,'api'),('bridge_draining',503,'api'),('bridge_request_failed',503,'bridge')])
+@pytest.mark.parametrize('code,status,route',[('queue_capacity',429,'api'),('bridge_draining',503,'api'),('node_unavailable',503,'api'),('bridge_request_failed',503,'bridge')])
 def test_nonadmission(tmp_path,code,status,route):
     c=Client(); c.outcome=BridgeError(code,status=status)
     assert asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(request())).route==route
