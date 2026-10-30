@@ -78,6 +78,14 @@ existing idempotent recovery rules.
 Do not migrate the current local Alchemy or Bridge SQLite databases to the VPS.
 First reconcile any local accepted task and pending ACK on its original endpoint.
 Keep the local service available until that ledger is terminal and confirmed.
+While a task remains unresolved, retain its original Bridge endpoint, ledger,
+and enabled execution profile; removing the profile or changing the endpoint
+does not make that task safely replayable. Changing `dispatch_mode` on an
+existing ledger is not a migration: node pull does not consume or acknowledge
+old Hatchet outbox rows. Provision a fresh VPS Bridge data directory, finish
+old tasks in the old ledger, and do not recreate those tasks across ledgers.
+The rollout remains a single serial local node; no multi-node lease-wait
+scheduler is part of this change.
 
 Before the new VPS Bridge accepts work, revert by returning Alchemy to its prior
 release/configuration and keeping the local test service intact. After acceptance,

@@ -11,6 +11,8 @@
 - [RB27](RB27_UNKNOWN_PROFILE_HEALTH_BRIDGE_FIRST.md): unknown executor-health handling for an online, accepting Bridge.
 - [RB28](RB28_CODEX_EVENT_BURST_AND_V2_RECONCILIATION.md): Codex stream-burst resilience and bounded same-task V2 reconciliation after unknown execution.
 - [RB29](RB29_V3_API_FALLBACK_UNKNOWN_DIAGNOSTICS.md): V3 API fallback outcome-unknown classification and safe route diagnostics.
+- [RB31](RB31_QUEUED_TASK_DISPATCH_AND_V2_STATUS.md): cross-product queued-task dispatch ownership and the narrow V2 active-status projection correction.
+- [RB32](RB32_VPS_DEPLOYMENT_READINESS_EXECUTION_PLAN.md): ordered local preparation of Alchemy and Render Bridge for a later VPS deployment.
 
 RB00–RB12 and the integration package's older native/preview documents describe
 historical experimental milestones. Their evidence remains pinned to those
