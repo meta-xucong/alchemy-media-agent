@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import math
+import os
 import time
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
@@ -41,7 +42,9 @@ class BridgeClient:
             base_url=base_url + "/bridge/v1/", headers={"Authorization": f"Bearer {token}"},
             timeout=httpx.Timeout(5.0, connect=3.0, pool=1.0),
             limits=httpx.Limits(max_connections=2, max_keepalive_connections=2),
-            follow_redirects=False, trust_env=False, transport=transport,
+            follow_redirects=False, trust_env=False,
+            verify=os.environ.get("ALCHEMY_RENDER_BRIDGE_CA_BUNDLE") or True,
+            transport=transport,
         )
 
     async def close(self):
