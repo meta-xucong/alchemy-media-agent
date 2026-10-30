@@ -55,10 +55,39 @@ def test_loss_restart_404_never_fallback(tmp_path):
     assert c.calls == 1
 
 
-@pytest.mark.parametrize('code,status,route',[('queue_capacity',429,'api'),('bridge_draining',503,'api'),('bridge_request_failed',503,'bridge')])
+def test_unknown_create_then_node_unavailable_recovery_never_claims_api(tmp_path):
+    class OfflineOrigin(Client):
+        def __init__(self):
+            self.origin_calls = 0
+        async def create_task(self, payload):
+            self.calls += 1
+            self.payload = payload
+            raise BridgeError('bridge_unreachable', status=503)
+        async def by_origin(self, origin):
+            self.origin_calls += 1
+            raise BridgeError('node_unavailable', status=503)
+
+    c = OfflineOrigin()
+    transport = PrimaryTransport(settings(tmp_path), client=c)
+    first = asyncio.run(transport.resolve(request()))
+    recovered = asyncio.run(transport.resolve(request()))
+    assert first.state == recovered.state == 'bridge_submission_unknown'
+    assert first.route == recovered.route == 'bridge'
+    assert c.calls == 1 and c.origin_calls == 1
+    with pytest.raises(PrimaryError, match='bridge_owns_execution'):
+        transport.claim_api(request())
+
+
+@pytest.mark.parametrize('code,status,route',[('queue_capacity',429,'api'),('bridge_draining',503,'api'),('node_unavailable',503,'api'),('bridge_request_failed',503,'bridge')])
 def test_nonadmission(tmp_path,code,status,route):
     c=Client(); c.outcome=BridgeError(code,status=status)
-    assert asyncio.run(PrimaryTransport(settings(tmp_path),client=c).resolve(request())).route==route
+    transport = PrimaryTransport(settings(tmp_path),client=c)
+    assert asyncio.run(transport.resolve(request())).route==route
+    if code == 'node_unavailable':
+        assert asyncio.run(transport.resolve(request())).route == 'api'
+        assert c.calls == 1
+        assert transport.claim_api(request()) is True
+        assert transport.claim_api(request()) is False
 
 
 def test_semantics_cannot_change_same_unit(tmp_path):
@@ -123,8 +152,8 @@ def _png_header_with_dimensions(width, height):
     return bytes(content)
 
 
-def test_2986403_byte_reference_is_sent_to_bridge_unchanged(tmp_path):
-    original=_padded_png((1024,1536),2_976_403)
+def test_12_mib_reference_is_sent_to_bridge_unchanged(tmp_path):
+    original=_padded_png((1024,1536),12 * 1024 * 1024)
     client=Client()
     result=asyncio.run(PrimaryTransport(settings(tmp_path),client=client).resolve(
         PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',prompt='image',parameters={},

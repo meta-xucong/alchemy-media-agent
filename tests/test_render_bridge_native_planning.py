@@ -422,7 +422,7 @@ def test_reference_admission_rejects_before_brain(planning_fixture, fault):
     fixture = planning_fixture
     upload = _upload_reference(
         fixture, owner=8 if fault == "owner" else 7, bind=fault != "unbound",
-        size=(1025, 1024) if fault == "pixels" else (256, 256),
+        size=(4097, 4096) if fault == "pixels" else (256, 256),
     )
     if fault == "inactive":
         fixture.project.reference_assets[0].status = "inactive"
@@ -490,18 +490,25 @@ def test_jpeg_original_is_read_without_transcoding(planning_fixture):
 
 
 @pytest.mark.parametrize("fault", ["bytes", "webp"])
-def test_reference_candidates_exclude_unsupported_originals(planning_fixture, fault):
+def test_reference_candidates_keep_valid_large_originals_and_exclude_unsupported(planning_fixture, fault):
     fixture = planning_fixture
     content = None
     if fault == "bytes":
         buffer = BytesIO()
         Image.frombytes("RGB", (600, 600), random.Random(7).randbytes(600 * 600 * 3)).save(buffer, format="PNG")
         content = buffer.getvalue()
-        assert len(content) > 1_048_576
+        assert 1_048_576 < len(content) <= 12 * 1024 * 1024
     upload = _upload_reference(fixture, image_format="WEBP" if fault == "webp" else "PNG", content=content)
-    assert fixture.gateway.list_references(7, fixture.project.project_id)["references"] == []
-    with pytest.raises(BridgeNativeFacadeError, match="reference_unavailable"):
-        _create(fixture, uploaded_asset_ids=[upload.asset_id])
+    references = fixture.gateway.list_references(7, fixture.project.project_id)["references"]
+    if fault == "bytes":
+        assert [item["asset_id"] for item in references] == [upload.asset_id]
+        assert [item.asset_id for item in fixture.gateway._admit_references(
+            7, fixture.project.project_id, [upload.asset_id]
+        )] == [upload.asset_id]
+    else:
+        assert references == []
+        with pytest.raises(BridgeNativeFacadeError, match="reference_unavailable"):
+            _create(fixture, uploaded_asset_ids=[upload.asset_id])
     assert fixture.planning_calls == []
 
 
