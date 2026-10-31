@@ -108,7 +108,7 @@ class BridgeAdminController:
         if base:
             try:
                 parsed = urlsplit(base)
-                local_http = (parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+                local_http = (parsed.hostname in {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
                               and parsed.scheme == "http"
                               and os.getenv("ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK") == "true")
                 if (not parsed.hostname or not (parsed.scheme == "https" or local_http)

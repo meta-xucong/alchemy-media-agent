@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import httpx
 import pytest
 
-from app.integrations.render_bridge.admin import install_render_bridge_admin
+from app.integrations.render_bridge.admin import AdminSettingsUpdate, install_render_bridge_admin
 from app.integrations.render_bridge.client import BridgeClient
 from app.integrations.render_bridge.models import PreviewCreate
 from app.integrations.render_bridge.service import PreviewService
@@ -146,6 +146,33 @@ def test_invalid_settings_do_not_activate_or_persist(tmp_path, changes, code):
         response = client.post(BASE + "/settings", headers=HEADERS, json=settings(**changes))
         assert response.status_code == 422 and response.json()["detail"]["code"] == code
     assert not calls and not constructed and not controller.path.exists()
+
+
+def test_docker_desktop_host_relay_requires_loopback_opt_in(monkeypatch):
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_MODE", "enabled")
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_URL", "http://host.docker.internal:8798")
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_TOKEN", "fixture")
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_WORKSPACE", "workspace")
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_PROFILES", "codex-image")
+    monkeypatch.delenv("ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK", raising=False)
+    assert BridgeSettings.from_env().config_error == "invalid_bridge_url"
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK", "true")
+    assert BridgeSettings.from_env().config_error is None
+
+
+def test_admin_accepts_docker_desktop_host_relay_only_with_loopback_opt_in(tmp_path, monkeypatch):
+    baseline = BridgeSettings(mode="disabled", base_url="http://host.docker.internal:8798",
+                              token=SECRET, workspace="fixture-workspace", storage=tmp_path / "bridge")
+    _, controller, _, _ = fixture(tmp_path, baseline=baseline)
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_URL", "http://host.docker.internal:8798")
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_WORKSPACE", "fixture-workspace")
+    monkeypatch.delenv("ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK", raising=False)
+    with pytest.raises(ValueError, match="invalid_bridge_url"):
+        controller.validate(AdminSettingsUpdate.model_validate(settings(base_url="http://host.docker.internal:8798")))
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK", "true")
+    assert controller.validate(AdminSettingsUpdate.model_validate(settings(base_url="http://host.docker.internal:8798"))).base_url == "http://host.docker.internal:8798"
+    with pytest.raises(ValueError, match="invalid_bridge_url"):
+        controller.validate(AdminSettingsUpdate.model_validate(settings(base_url="http://host.docker.internal:bad")))
 
 
 @pytest.mark.parametrize("upstream,expected", [

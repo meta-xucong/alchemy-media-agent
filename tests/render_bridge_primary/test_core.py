@@ -439,6 +439,30 @@ def test_loopback_requires_explicit_environment_opt_in(tmp_path,monkeypatch):
     assert PrimarySettings.from_env('v2').enabled
 
 
+def test_docker_desktop_host_relay_rejects_malformed_port(tmp_path,monkeypatch):
+    import json
+    path=tmp_path/'control.json'
+    path.write_text(json.dumps({'schema_version':'1','mode':'enabled','profiles':['codex-image'],'base_url':'http://host.docker.internal:bad','workspace':'test'}))
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG',str(path))
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_URL','http://host.docker.internal:bad')
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_WORKSPACE','test')
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK','true')
+    with pytest.raises(PrimaryError): PrimarySettings.from_env('v2')
+
+
+def test_docker_desktop_host_relay_requires_explicit_environment_opt_in(tmp_path,monkeypatch):
+    import json
+    path=tmp_path/'control.json'
+    path.write_text(json.dumps({'schema_version':'1','mode':'enabled','profiles':['codex-image'],'base_url':'http://host.docker.internal:8798','workspace':'test'}))
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG',str(path))
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_URL','http://host.docker.internal:8798')
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_WORKSPACE','test')
+    monkeypatch.delenv('ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK',raising=False)
+    with pytest.raises(PrimaryError): PrimarySettings.from_env('v2')
+    monkeypatch.setenv('ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK','true')
+    assert PrimarySettings.from_env('v2').enabled
+
+
 def test_cancel_binding_latches_and_suppresses_late_pixels(tmp_path):
     class Late(ReceiptClient):
         async def by_origin(self,origin):

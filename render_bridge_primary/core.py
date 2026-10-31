@@ -88,7 +88,8 @@ class PrimarySettings:
         if base:
             try:
                 parsed=urlsplit(base)
-                local_http=(parsed.scheme=='http' and parsed.hostname in {'127.0.0.1','localhost','::1'} and os.environ.get('ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK')=='true')
+                local_host=parsed.hostname in {'127.0.0.1','localhost','::1','host.docker.internal'}
+                local_http=(parsed.scheme=='http' and local_host and os.environ.get('ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK')=='true')
                 if not parsed.hostname or not (parsed.scheme=='https' or local_http) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {'','/'}: raise ValueError()
                 _=parsed.port
             except ValueError:

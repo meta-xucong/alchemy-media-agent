@@ -41,13 +41,14 @@ class BridgeSettings:
         error = None
         try:
             parsed = urlsplit(base)
-            loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-            local_http = (loopback and parsed.scheme == "http" and
+            local_host = parsed.hostname in {"127.0.0.1", "localhost", "::1", "host.docker.internal"}
+            local_http = (local_host and parsed.scheme == "http" and
                           os.getenv("ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK") == "true")
             if (not parsed.hostname or not (parsed.scheme == "https" or local_http)
                     or parsed.username or parsed.password or parsed.query or parsed.fragment
                     or parsed.path not in {"", "/"}):
                 error = "invalid_bridge_url"
+            parsed.port
         except ValueError:
             error = "invalid_bridge_url"
         if not token or not workspace:
