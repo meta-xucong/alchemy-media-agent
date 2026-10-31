@@ -187,6 +187,25 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                     consume_attempt=retry_directive.consume_attempt,
                 )
                 return True
+            bridge_terminal_job = next(
+                (
+                    job
+                    for job in run.generation_jobs
+                    if run.status == "failed"
+                    and job.provider_id == "render_bridge"
+                    and (job.error or {}).get("error_code") == "bridge_terminal"
+                    and (job.error or {}).get("retryable") is False
+                ),
+                None,
+            )
+            if bridge_terminal_job is not None:
+                error = bridge_terminal_job.error or {}
+                message = str(
+                    error.get("message")
+                    or (run.next_actions[0] if run.next_actions else "Render Bridge task failed terminally.")
+                )
+                task_queue.fail_task(record, message, run, force_terminal=True)
+                return True
             if _bridge_reconciliation_required(run):
                 message = run.next_actions[0] if run.next_actions else "Render Bridge reconciliation deadline elapsed."
                 task_queue.fail_task(record, message, run, force_terminal=True)

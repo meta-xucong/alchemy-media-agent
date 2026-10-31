@@ -127,6 +127,66 @@ def test_v2_queued_billing_idempotency_is_stable_across_worker_job_ids(tmp_path:
     assert generation._billing_reference_id("job_direct") == "job_direct"
 
 
+def test_terminal_render_bridge_failure_marks_queue_task_failed(tmp_path: Path, monkeypatch) -> None:
+    from app.schemas import ImageJob, ImagePromptPlan
+    from app.services import queue_worker
+
+    _configure_queue(tmp_path, monkeypatch)
+    run_id = "run_bridge_terminal_failure"
+    queued_run = _run(run_id)
+    _enqueue(run_id)
+    now = utc_now()
+    failed_job = ImageJob(
+        job_id="job_bridge_terminal_failure",
+        run_id=run_id,
+        status="failed",
+        provider_id="render_bridge",
+        model="bridge-test",
+        prompt_plan=ImagePromptPlan(plan_id="plan_bridge_failure", mode="smart_enhance", prompt="offline fake"),
+        error={
+            "error_code": "bridge_terminal",
+            "message": "Render Bridge task failed terminally.",
+            "provider": "render_bridge",
+            "retryable": False,
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    failed_run = queued_run.model_copy(update={"status": "failed", "generation_jobs": [failed_job]})
+
+    class Runtime:
+        async def complete_queued_run(self, _request, _run_id):
+            return failed_run
+
+    async def skip_balance_preflight(_request, _run_id):
+        return None
+
+    monkeypatch.setattr(queue_worker, "_preflight_veyra_balance", skip_balance_preflight)
+    assert queue_worker.process_next_task_once(Runtime(), "worker-bridge-terminal") is True
+
+    with task_queue._connect() as connection:
+        row = connection.execute(
+            "SELECT status, attempts, result_json, error_json, locked_by, claim_token, not_before "
+            "FROM v2_tasks WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        task_count = connection.execute("SELECT COUNT(*) FROM v2_tasks WHERE run_id = ?", (run_id,)).fetchone()[0]
+
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1
+    assert row["result_json"] is not None
+    saved_run = task_queue._json_loads(row["result_json"])
+    assert saved_run["status"] == "failed"
+    assert saved_run["generation_jobs"][0]["error"]["error_code"] == "bridge_terminal"
+    assert saved_run["generation_jobs"][0]["error"]["retryable"] is False
+    assert row["error_json"] is not None
+    assert row["locked_by"] is None
+    assert row["claim_token"] is None
+    assert row["not_before"] is None
+    assert task_count == 1
+    assert task_queue.claim_next_task("worker-after-bridge-terminal") is None
+
+
 def test_claim_write_fence_prevents_takeover_during_local_commit(tmp_path: Path, monkeypatch) -> None:
     _configure_queue(tmp_path, monkeypatch)
     _enqueue("run_claim_commit_fence")

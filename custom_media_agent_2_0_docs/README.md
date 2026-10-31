@@ -52,6 +52,7 @@ V2-native provider/storage/history/review
 16. [21_Claude_Code速度优化开发文档.md](docs/21_Claude_Code速度优化开发文档.md)
 17. [24_架构纠偏方案_Creative_Orchestrator_Hybrid_Runtime.md](docs/24_架构纠偏方案_Creative_Orchestrator_Hybrid_Runtime.md)
 18. Veyra 生产登录门禁、匿名访问收紧和来源回跳方案见 [`../docs/30_生产登录门禁与来源回跳开发文档.md`](../docs/30_生产登录门禁与来源回跳开发文档.md)。
+19. Render Bridge 终态失败与 V2 queue row 状态一致性见 [25_V2_BRIDGE终态失败队列状态修正范围](docs/25_V2_BRIDGE终态失败队列状态修正范围.md)。
 
 ## 文档结构
 
