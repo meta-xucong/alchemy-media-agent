@@ -13,8 +13,10 @@ from fastapi.testclient import TestClient
 
 from app.integrations.render_bridge.client import BridgeClient, BridgeError
 from app.integrations.render_bridge.native_service import NativeBridgeService, NativeTaskCreate
+from app.integrations.render_bridge import native_service as native_service_module
 from app.integrations.render_bridge.routes import install_render_bridge, PREFIX
 from test_render_bridge_preview import MockBridge, settings, run, due
+from render_bridge_primary.limits import MAX_REFERENCE_INPUT_BYTES, MAX_REFERENCE_INPUT_PIXELS
 
 
 class NativeMockBridge(MockBridge):
@@ -154,6 +156,51 @@ def make_service(tmp_path, gateway=None, bridge=None):
         gateway, client=BridgeClient("https://bridge.test", "fixture-secret", transport=httpx.MockTransport(bridge)),
         target_factory=SimpleNamespace)
     return svc, gateway, bridge
+
+
+def test_frozen_reference_validation_uses_shared_input_limits(tmp_path, monkeypatch):
+    async def case():
+        svc, gateway, _ = make_service(tmp_path)
+        gateway.selected = ["reference_a"]
+        gateway.revision = "frozen_1"
+        reference_bytes = gateway.originals["reference_a"]
+        record = {
+            "id": "native_input_limit_test", "owner": "101", "project_id": "project_1",
+            "target": {"project_id": "project_1", "job_id": "job_1", "asset_id": "asset_1"},
+            "request": {"profile_id": "fake-image"}, "inputs_frozen": False,
+            "frozen": {"frozen_request_id": "frozen_1", "references": [{
+                "reference_id": "reference_a", "sha256": "fixture", "size_bytes": len(reference_bytes),
+            }]},
+        }
+        captured = []
+
+        def validate_reference(content, mime, **kwargs):
+            captured.append(kwargs)
+            return {"dimensions": {"width": 32, "height": 24}}
+
+        monkeypatch.setattr(native_service_module, "validate_image", validate_reference)
+
+        async def local(function, *args, **kwargs):
+            if function is validate_reference:
+                return function(*args, **kwargs)
+            return None
+
+        async def patch(target, **values):
+            target.update(values)
+
+        svc.local = local
+        svc._patch = patch
+        try:
+            await svc._freeze_inputs(record)
+            assert record["inputs_frozen"] is True
+            assert captured == [{
+                "expected_hash": "fixture", "expected_size": len(reference_bytes),
+                "max_bytes": MAX_REFERENCE_INPUT_BYTES, "max_pixels": MAX_REFERENCE_INPUT_PIXELS,
+            }]
+        finally:
+            await svc.close()
+
+    asyncio.run(case())
 
 
 def request(**values):

@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import mimetypes
+import re
 import sqlite3
 import time
 from dataclasses import replace
@@ -74,7 +75,8 @@ def _gate_for(settings, app_request):
     return BatchAdmissionGate(settings, context.get("owner_id"), context.get("job_id"))
 
 
-def _error(code, provenance=None, *, provider="render_bridge", message=None, api_error_type=None):
+def _error(code, provenance=None, *, provider="render_bridge", message=None, api_error_type=None,
+           api_transport_outcome=None):
     code = str(code)
     if provider == "render_bridge" and not code.startswith("bridge_"):
         code = "bridge_" + code
@@ -90,6 +92,11 @@ def _error(code, provenance=None, *, provider="render_bridge", message=None, api
         if not_submitted else
         {"request_state": "accepted_unknown", "retryability": "status_required"}
     )
+    if provider == "api" and isinstance(api_transport_outcome, dict):
+        outcome = {
+            "request_state": api_transport_outcome["request_state"],
+            "retryability": api_transport_outcome["retryability"],
+        }
     return ProviderRuntimeError(
         message,
         provider=provider, detail={
@@ -98,8 +105,51 @@ def _error(code, provenance=None, *, provider="render_bridge", message=None, api
             "transport_outcome": outcome,
             PROVENANCE: dict(provenance or {}),
             **({"api_error_type": api_error_type} if api_error_type else {}),
+            **({"api_transport_outcome": api_transport_outcome} if api_transport_outcome else {}),
         },
     )
+
+
+def _api_failure_outcome(exc):
+    """Classify API failures from structured transport evidence without changing retries."""
+    detail = getattr(exc, "detail", None)
+    detail = detail if isinstance(detail, dict) else {}
+    source = detail.get("transport_outcome")
+    source = source if isinstance(source, dict) else {}
+    provider_code = str(getattr(exc, "code", "") or "").strip().lower()
+    source_state = source.get("request_state")
+    upstream = detail.get("upstream_error")
+    upstream = upstream if isinstance(upstream, dict) else {}
+    upstream_code = detail.get("upstream_code") or upstream.get("upstream_code") or upstream.get("code")
+    if source_state == "not_started" or provider_code == "provider_not_configured":
+        request_state, retryability = "not_submitted", "never"
+        failure_code = provider_code if provider_code != "provider_error" else ""
+        failure_code = (failure_code or source.get("failure_code") or detail.get("failure_code")
+                        or upstream_code or "api_request_not_sent")
+    elif source_state == "terminal_failed":
+        request_state, retryability = "terminal_failed", "never"
+        failure_code = (
+            source.get("failure_code") or upstream_code
+            or (provider_code if provider_code != "provider_error" else "")
+            or "api_provider_failed"
+        )
+    else:
+        request_state, retryability = "accepted_unknown", "status_required"
+        failure_code = "api_execution_unknown"
+    if not isinstance(failure_code, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", failure_code):
+        failure_code = "api_provider_failed" if request_state == "terminal_failed" else "api_request_not_sent"
+    result = {"request_state": request_state, "retryability": retryability}
+    phase = source.get("phase")
+    if isinstance(phase, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", phase):
+        result["phase"] = phase
+    status_code = source.get("status_code")
+    if status_code is None:
+        status_code = detail.get("status_code")
+    if type(status_code) is int and 100 <= status_code <= 599:
+        result["status_code"] = status_code
+    if isinstance(upstream_code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", upstream_code):
+        result["upstream_code"] = upstream_code
+    return failure_code, result
 
 
 def _source_request(app_request, *, native_defaults=False):
@@ -406,16 +456,20 @@ async def generate(app_request, legacy_generate, output_store):
             try:
                 response = await legacy_generate(app_request)
             except asyncio.CancelledError as exc:
+                failure_code, api_outcome = _api_failure_outcome(exc)
                 raise _error(
-                    "api_execution_unknown", provenance, provider="api",
+                    failure_code, provenance, provider="api",
                     message="The API fallback was interrupted; its execution outcome cannot be verified, so automatic retry is disabled.",
                     api_error_type=exc.__class__.__name__,
+                    api_transport_outcome=api_outcome,
                 ) from None
             except Exception as exc:
+                failure_code, api_outcome = _api_failure_outcome(exc)
                 raise _error(
-                    "api_execution_unknown", provenance, provider="api",
+                    failure_code, provenance, provider="api",
                     message="The API fallback failed or was interrupted; its execution outcome cannot be verified, so automatic retry is disabled.",
                     api_error_type=exc.__class__.__name__,
+                    api_transport_outcome=api_outcome,
                 ) from None
             if len(response.outputs) != 1 or not response.outputs[0].get("b64_json"):
                 raise _error(

@@ -9,6 +9,6 @@
 <label>输出尺寸<select id="size"><option value="1024x1024">方图 · 1024 × 1024</option><option value="1024x768">横图 · 1024 × 768</option><option value="768x1024">竖图 · 768 × 1024</option></select></label>
 <label>参考原图 1（可选）<select id="reference-1" disabled><option value="">不使用</option></select></label>
 <label>参考原图 2（可选，按此顺序传输）<select id="reference-2" disabled><option value="">不使用</option></select></label>
-<p id="reference-status" class="muted">请先选择项目。仅列出当前用户已授权、已绑定本项目且符合限制的 PNG/JPEG 原图；每张不超过 1 MiB 和 1,048,576 像素，不会自动裁剪或压缩。</p>
+<p id="reference-status" class="muted">请先选择项目。仅列出当前用户已授权、已绑定本项目且符合限制的 PNG/JPEG 原图；每张不超过 16 MiB 和 16,777,216 像素，不会自动裁剪或压缩。</p>
 <label>交给原有 Brain 的需求<textarea id="user-input" rows="6" required maxlength="16000" placeholder="描述你的单张测试图需求。最终渲染提示词由 Alchemy 冻结，不由此页面拼接。"></textarea></label><label class="check"><input id="acknowledge" type="checkbox" required>我同意创建原生开发测试计划，使用所选执行配置，不代表真实工具验证或正式交付；非 fake 配置可能调用已配置的真实工具。</label><button id="submit" disabled>创建原生测试计划</button><p class="muted">相同提交重试沿用同一请求。不会切换其他 Provider；未确认登记时不会发送 accepted。</p></form><section><div class="section-heading"><h2>开发测试任务</h2><button id="refresh" class="secondary" type="button">刷新</button></div><div id="tasks" aria-live="polite"></div></section></section>
 </main></body></html>

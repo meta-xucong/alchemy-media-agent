@@ -18,7 +18,7 @@ Add only to the explicitly enabled native-test entry:
 The existing Alchemy reference admission and canonical frozen plan remain
 authoritative. The adapter must not select, crop, resize, compress, reorder or
 replace reference bytes. Inputs outside Bridge v1's PNG/JPEG, single-frame,
-1 MiB and 1,048,576-pixel limits are rejected explicitly.
+16 MiB and 16,777,216-pixel limits are rejected explicitly.
 Canonical plans that require unsupported fidelity or other options remain
 blocked rather than having those requirements silently removed.
 

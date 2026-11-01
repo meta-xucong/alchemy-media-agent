@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from PIL import Image
 from .http import BridgeClient, BridgeError
-from .limits import LEGACY_REFERENCE_INPUT_BYTES, LEGACY_REFERENCE_INPUT_PIXELS
+from .limits import MAX_REFERENCE_INPUT_BYTES, MAX_REFERENCE_INPUT_PIXELS
 
 
 def _json(value):
@@ -369,12 +369,15 @@ class PrimaryTransport:
         if len(request.references)>ic.get('references',{}).get('max_count',0): return {'code':'reference_count_over_profile_limit'}
         if any(r.mime_type not in {'image/png','image/jpeg'} or len(r.content)<1 for r in request.references): return {'code':'reference_input_format'}
         input_limits=caps.get('limits',{})
-        if not isinstance(input_limits,dict): input_limits={}
-        max_input_bytes=input_limits.get('max_input_bytes',LEGACY_REFERENCE_INPUT_BYTES)
-        if type(max_input_bytes) is not int or max_input_bytes<1: max_input_bytes=LEGACY_REFERENCE_INPUT_BYTES
+        if (not isinstance(input_limits,dict)
+                or type(input_limits.get('max_input_bytes')) is not int
+                or input_limits['max_input_bytes'] < 1
+                or type(input_limits.get('max_input_image_pixels')) is not int
+                or input_limits['max_input_image_pixels'] < 1):
+            return {'code':'reference_input_limits_not_advertised'}
+        max_input_bytes=min(input_limits['max_input_bytes'],MAX_REFERENCE_INPUT_BYTES)
         if any(len(r.content)>max_input_bytes for r in request.references): return {'code':'reference_input_over_byte_limit'}
-        max_input_image_pixels=input_limits.get('max_input_image_pixels',LEGACY_REFERENCE_INPUT_PIXELS)
-        if type(max_input_image_pixels) is not int or max_input_image_pixels<1: max_input_image_pixels=LEGACY_REFERENCE_INPUT_PIXELS
+        max_input_image_pixels=min(input_limits['max_input_image_pixels'],MAX_REFERENCE_INPUT_PIXELS)
         for reference in request.references:
             try:
                 with warnings.catch_warnings():

@@ -23,6 +23,7 @@ from .client import BridgeError
 from .models import validate_image
 from .options import FORMAT_MIMES, native_profile
 from .service import PreviewService, digest
+from render_bridge_primary.limits import MAX_REFERENCE_INPUT_BYTES, MAX_REFERENCE_INPUT_PIXELS
 from .routing_policy import routing_decision
 
 
@@ -576,7 +577,9 @@ class NativeBridgeService(PreviewService):
                 **({"execution_profile_id": record["request"]["profile_id"]} if record["request"]["profile_id"] != "fake-image" else {}))
             content, mime = value["content"], value["mime_type"]
             metadata = await self.local(validate_image, content, mime, expected_hash=reference["sha256"],
-                                       expected_size=reference["size_bytes"], max_pixels=1048576)
+                                       expected_size=reference["size_bytes"],
+                                       max_bytes=MAX_REFERENCE_INPUT_BYTES,
+                                       max_pixels=MAX_REFERENCE_INPUT_PIXELS)
             inputs.append((content, metadata))
         # Atomic and idempotent snapshot, before the first remote input effect.
         await self.local(self.store.save_inputs, record["id"], inputs)

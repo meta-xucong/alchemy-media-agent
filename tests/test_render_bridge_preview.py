@@ -11,9 +11,13 @@ from PIL import Image
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.integrations.render_bridge.client import BridgeClient, BridgeError
-from app.integrations.render_bridge.models import PreviewCreate
+from app.integrations.render_bridge.models import (
+    MAX_REFERENCE_INPUT_BASE64_CHARS, PreviewCreate, PreviewInput,
+)
+from render_bridge_primary.limits import MAX_REFERENCE_INPUT_BYTES, MAX_REFERENCE_INPUT_PIXELS
 from app.integrations.render_bridge.routes import install_render_bridge, PREFIX
 from app.integrations.render_bridge.service import PreviewService
 from app.integrations.render_bridge.settings import BridgeSettings
@@ -101,6 +105,15 @@ def settings(tmp_path, **changes):
 
 def payload(**values):
     return {"client_request_id": "request_1", "project_id": "project_1", "prompt": "Test green square", "acknowledge_test_only": True, **values}
+
+
+def test_render_bridge_input_contract_accepts_base64_for_shared_16_mib_limit():
+    assert MAX_REFERENCE_INPUT_BYTES == 16 * 1024 * 1024
+    assert MAX_REFERENCE_INPUT_PIXELS == 16 * 1024 * 1024
+    accepted = PreviewInput(content_base64="A" * MAX_REFERENCE_INPUT_BASE64_CHARS, mime_type="image/png")
+    assert len(accepted.content_base64) == MAX_REFERENCE_INPUT_BASE64_CHARS
+    with pytest.raises(ValidationError):
+        PreviewInput(content_base64="A" * (MAX_REFERENCE_INPUT_BASE64_CHARS + 1), mime_type="image/png")
 
 
 def service(tmp_path, mock=None, snapshots=None, **changes):

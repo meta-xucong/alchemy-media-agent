@@ -61,7 +61,7 @@ async function refresh() {
   }catch(error){if(current===generation){clearImages();$('tasks').replaceChildren();notice(`读取失败：${error.message}`,true);}}
 }
 async function fileInput(file){
-  if(!['image/png','image/jpeg'].includes(file.type)||file.size>1048576)throw new Error('参考图必须为 PNG/JPEG，且每张不超过 1 MiB');
+  if(!['image/png','image/jpeg'].includes(file.type)||file.size>16777216)throw new Error('参考图必须为 PNG/JPEG，且每张不超过 16 MiB');
   return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({mime_type:file.type,content_base64:String(reader.result).split(',')[1]});reader.onerror=reject;reader.readAsDataURL(file);});
 }
 $('create-form').addEventListener('submit',async event=>{

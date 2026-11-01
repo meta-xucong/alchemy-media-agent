@@ -123,6 +123,20 @@ def _png_header_with_dimensions(width, height):
     return bytes(content)
 
 
+def test_v3_capability_preflight_requires_explicit_input_limits():
+    req = PrimaryRequest(product='v3', owner_id='u', unit_id='job:0', prompt='image', parameters={})
+    caps = {'profiles': [{
+        'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
+        'parameter_contract': {}, 'image_options_contract': {'references': {'max_count': 8}},
+        'limits': {'max_dimension': 40000, 'max_image_pixels': 40000000},
+    }]}
+    assert PrimaryTransport._support_rejection(req, caps, 'codex-image') == {
+        'code': 'reference_input_limits_not_advertised'}
+    caps['limits'] = {'max_input_bytes': 16 * 1024 * 1024,
+                      'max_input_image_pixels': 16 * 1024 * 1024}
+    assert PrimaryTransport._support_rejection(req, caps, 'codex-image') is None
+
+
 def test_2986403_byte_reference_is_sent_to_bridge_unchanged(tmp_path):
     original=_padded_png((1024,1536),2_976_403)
     client=Client()
@@ -136,7 +150,7 @@ def test_2986403_byte_reference_is_sent_to_bridge_unchanged(tmp_path):
                                            'hash':hashlib.sha256(original).hexdigest()}]
 
 
-def test_legacy_bridge_missing_input_pixel_limit_uses_current_bound(tmp_path):
+def test_bridge_missing_input_pixel_limit_uses_existing_api_fallback(tmp_path):
     class Legacy(Client):
         async def capabilities(self):
             caps=await super().capabilities()
@@ -147,11 +161,11 @@ def test_legacy_bridge_missing_input_pixel_limit_uses_current_bound(tmp_path):
     result=asyncio.run(t.resolve(PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',
         prompt='image',parameters={},references=(too_many_pixels,))))
     assert result.route=='api' and result.reason=='bridge_capability_unsupported'
-    assert result.provenance['capability_rejection']=={'code':'reference_input_over_pixel_limit'}
+    assert result.provenance['capability_rejection']=={'code':'reference_input_limits_not_advertised'}
     assert c.calls==0
 
 
-def test_legacy_bridge_missing_input_byte_limit_uses_current_bound(tmp_path):
+def test_bridge_missing_input_byte_limit_uses_existing_api_fallback(tmp_path):
     class Legacy(Client):
         async def capabilities(self):
             caps=await super().capabilities()
@@ -162,7 +176,7 @@ def test_legacy_bridge_missing_input_byte_limit_uses_current_bound(tmp_path):
     result=asyncio.run(t.resolve(PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',
         prompt='image',parameters={},references=(oversized,))))
     assert result.route=='api' and result.reason=='bridge_capability_unsupported'
-    assert result.provenance['capability_rejection']=={'code':'reference_input_over_byte_limit'}
+    assert result.provenance['capability_rejection']=={'code':'reference_input_limits_not_advertised'}
     assert c.calls==0
 
 

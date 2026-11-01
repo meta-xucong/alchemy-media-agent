@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 API = "/api/v3/creative-agent"
-MAX_UPLOAD_BYTES = 12 * 1024 * 1024  # Existing V3 upload limit, also enforced by server.
+MAX_UPLOAD_BYTES = 16 * 1024 * 1024  # V3 asset limit shared with Render Bridge references.
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _ID = {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"}
 _TEXT = {"type": "string", "minLength": 1}

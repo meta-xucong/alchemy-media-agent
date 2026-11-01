@@ -1967,6 +1967,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
         api_error_type = str(detail.get("api_error_type") or "").strip()
         if api_error_type and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", api_error_type):
             result["api_error_type"] = api_error_type
+        api_outcome = detail.get("api_transport_outcome")
+        if isinstance(api_outcome, dict):
+            safe_api_outcome = {}
+            for key in ("request_state", "retryability", "phase", "upstream_code"):
+                value = str(api_outcome.get(key) or "").strip()
+                if value and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", value):
+                    safe_api_outcome[key] = value
+            status_code = api_outcome.get("status_code")
+            if type(status_code) is int and 100 <= status_code <= 599:
+                safe_api_outcome["status_code"] = status_code
+            if safe_api_outcome:
+                result["api_transport_outcome"] = safe_api_outcome
         transport = detail.get("runtime_transport")
         if isinstance(transport, dict):
             result["runtime_transport"] = dict(transport)
@@ -2219,6 +2231,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         detail = getattr(exc, "detail", None)
         detail = dict(detail) if isinstance(detail, dict) else {}
         local_contract_failure = str(detail.get("failure_code") or "").strip()
+        api_outcome = detail.get("api_transport_outcome")
+        if (isinstance(api_outcome, dict)
+                and api_outcome.get("request_state") in {"not_submitted", "terminal_failed"}
+                and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", local_contract_failure)):
+            return local_contract_failure
         if local_contract_failure in {"api_execution_unknown", "api_output_contract_invalid"}:
             return local_contract_failure
         if local_contract_failure.startswith(("mcp_materialization_", "bridge_")):
@@ -2343,6 +2360,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ),
             "empty_provider_output": "The image provider returned no image pixels.",
             "api_execution_unknown": "The API fallback execution has an unknown outcome; automatic retry is disabled until its status is checked.",
+            "provider_not_configured": "The API image provider is not configured; no image request was sent.",
             "api_output_contract_invalid": "The API fallback returned an unusable image response; its outcome must be checked before retrying.",
             "remote_creative_brain_prompt_signoff_missing": "The creative plan did not contain an approved Provider prompt, so no image request was sent.",
             "canonical_provider_prompt_exceeds_transport_limit": "The approved Provider prompt exceeds the configured transport limit, so no image request was sent.",

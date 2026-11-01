@@ -17,6 +17,7 @@ from .settings import BridgeSettings
 
 PREFIX = "/api/integrations/render-bridge/v1"
 STATIC = Path(__file__).parent / "static"
+PREVIEW_CREATE_BODY_LIMIT = 24 * 1024 * 1024
 HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
 
 
@@ -104,7 +105,7 @@ def install_render_bridge(app, *, session_user, auth_enabled, project_snapshot, 
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
-            if len(body) > 12 * 1024 * 1024:
+            if len(body) > PREVIEW_CREATE_BODY_LIMIT:
                 raise HTTPException(413, detail={"code": "request_too_large"})
         try:
             payload = PreviewCreate.model_validate_json(body)

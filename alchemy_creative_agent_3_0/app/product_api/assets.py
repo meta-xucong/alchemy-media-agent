@@ -23,7 +23,7 @@ from .contracts import (
 
 
 ACCEPTED_V3_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
-MAX_V3_UPLOADED_ASSET_BYTES = 12 * 1024 * 1024
+MAX_V3_UPLOADED_ASSET_BYTES = 16 * 1024 * 1024
 _ASSET_ID_PATTERN = re.compile(r"^v3_asset_[a-f0-9]{16}$")
 _ROLE_ALIASES = {
     "subject_reference": AssetRole.PRODUCT_REFERENCE,

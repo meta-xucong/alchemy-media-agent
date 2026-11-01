@@ -40,7 +40,7 @@ async function loadReferences() {
       $(id).disabled = false;
     }
     referencesReady = true;
-    $('reference-status').textContent = '按 1、2 顺序传输原图，不裁剪、不压缩。每张限 PNG/JPEG、1 MiB 和 1,048,576 像素。若原生计划要求未支持的保真参数，将明确拒绝，不降低要求。合成图不会按参考内容生成。';
+    $('reference-status').textContent = '按 1、2 顺序传输原图，不裁剪、不压缩。每张限 PNG/JPEG、16 MiB 和 16,777,216 像素。若原生计划要求未支持的保真参数，将明确拒绝，不降低要求。合成图不会按参考内容生成。';
     updateSubmit();
   } catch (error) {
     if (current === referenceGeneration) {

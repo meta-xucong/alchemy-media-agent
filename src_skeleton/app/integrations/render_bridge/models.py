@@ -8,11 +8,14 @@ from typing import Literal
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 from .client import BridgeError
+from render_bridge_primary.limits import MAX_REFERENCE_INPUT_BYTES, MAX_REFERENCE_INPUT_PIXELS
+
+MAX_REFERENCE_INPUT_BASE64_CHARS = 4 * ((MAX_REFERENCE_INPUT_BYTES + 2) // 3)
 
 
 class PreviewInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    content_base64: str = Field(min_length=1, max_length=1398104)
+    content_base64: str = Field(min_length=1, max_length=MAX_REFERENCE_INPUT_BASE64_CHARS)
     mime_type: Literal["image/png", "image/jpeg"]
 
 
@@ -30,7 +33,7 @@ class PreviewCreate(BaseModel):
 
 
 def validate_image(content: bytes, mime: str, *, expected_hash=None, expected_size=None,
-                   max_bytes=1048576, max_pixels=40000000):
+                   max_bytes=MAX_REFERENCE_INPUT_BYTES, max_pixels=MAX_REFERENCE_INPUT_PIXELS):
     if not content or len(content) > max_bytes:
         raise BridgeError("media_size_invalid", status=422, retryable=False)
     digest = hashlib.sha256(content).hexdigest()

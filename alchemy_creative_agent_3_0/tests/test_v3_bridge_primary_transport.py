@@ -607,6 +607,128 @@ def test_api_fallback_ambiguous_response_is_never_repeated(rig, monkeypatch):
     assert any('automatic retry is disabled' in item for item in warnings)
 
 
+def test_api_fallback_preserves_structured_transport_facts_without_changing_retry_policy():
+    from alchemy_creative_agent_3_0.app.generation_router.bridge_primary import _api_failure_outcome, _error
+    from alchemy_creative_agent_3_0.app.generation_router.providers import ProductionImageGenerationProvider
+
+    class ProviderFailure(Exception):
+        detail = {
+            'transport_outcome': {
+                'phase': 'image_edit', 'request_state': 'not_started', 'status_code': 422,
+            },
+            'upstream_code': 'invalid_reference',
+        }
+
+    failure_code, outcome = _api_failure_outcome(ProviderFailure())
+    assert failure_code == 'invalid_reference'
+    assert outcome == {
+        'request_state': 'not_submitted', 'retryability': 'never',
+        'phase': 'image_edit', 'status_code': 422, 'upstream_code': 'invalid_reference',
+    }
+    wrapped = _error(failure_code, provider='api', api_transport_outcome=outcome)
+    assert wrapped.detail['transport_outcome'] == {
+        'request_state': 'not_submitted', 'retryability': 'never',
+    }
+    assert wrapped.detail['transport_retry_terminal'] is True
+    assert wrapped.detail['failure_code'] == 'invalid_reference'
+
+    class NotConfigured(Exception):
+        code = 'provider_not_configured'
+
+    failure_code, not_sent = _api_failure_outcome(NotConfigured())
+    assert failure_code == 'provider_not_configured'
+    assert not_sent['request_state'] == 'not_submitted'
+    assert not_sent['retryability'] == 'never'
+    wrapped = _error(failure_code, provider='api', api_transport_outcome=not_sent)
+    assert wrapped.detail['failure_code'] == 'provider_not_configured'
+    assert wrapped.detail['transport_retry_terminal'] is True
+    provider = object.__new__(ProductionImageGenerationProvider)
+    assert provider._provider_failure_code(wrapped, reference_assets=[]) == 'provider_not_configured'
+
+    class AmbiguousProviderFailure(Exception):
+        detail = {
+            'transport_outcome': {
+                'phase': 'image_edit', 'request_state': 'accepted_unknown', 'status_code': 504,
+            },
+            'upstream_code': 'gateway_timeout',
+        }
+
+    failure_code, ambiguous = _api_failure_outcome(AmbiguousProviderFailure())
+    assert failure_code == 'api_execution_unknown'
+    assert ambiguous['request_state'] == 'accepted_unknown'
+    assert ambiguous['retryability'] == 'status_required'
+    assert ambiguous['phase'] == 'image_edit'
+    assert ambiguous['status_code'] == 504
+    assert ambiguous['upstream_code'] == 'gateway_timeout'
+
+    class TerminalProviderFailure(Exception):
+        code = 'provider_error'
+        detail = {
+            'transport_outcome': {
+                'phase': 'image_edit', 'request_state': 'terminal_failed',
+                'failure_code': 'bad_response_status_code', 'status_code': 422,
+            },
+            'upstream_code': 'invalid_reference',
+        }
+
+    failure_code, terminal = _api_failure_outcome(TerminalProviderFailure())
+    assert failure_code == 'bad_response_status_code'
+    assert terminal['request_state'] == 'terminal_failed'
+    assert terminal['retryability'] == 'never'
+    assert terminal['phase'] == 'image_edit'
+    assert terminal['status_code'] == 422
+    assert terminal['upstream_code'] == 'invalid_reference'
+    wrapped = _error(failure_code, provider='api', api_transport_outcome=terminal)
+    assert wrapped.detail['failure_code'] == 'bad_response_status_code'
+    assert wrapped.detail['transport_outcome']['request_state'] == 'terminal_failed'
+    assert wrapped.detail['transport_retry_terminal'] is True
+    assert provider._provider_failure_code(wrapped, reference_assets=[]) == 'bad_response_status_code'
+
+
+def test_provider_error_audit_keeps_only_safe_api_transport_facts():
+    from alchemy_creative_agent_3_0.app.generation_router.providers import ProductionImageGenerationProvider
+    from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+
+    class Failure(Exception):
+        detail = {
+            'api_transport_outcome': {
+                'request_state': 'accepted_unknown', 'retryability': 'status_required',
+                'phase': 'image_edit', 'status_code': 504, 'upstream_code': 'gateway_timeout',
+                'secret': 'must not escape',
+            }
+        }
+
+    audit = ProductionImageGenerationProvider._provider_error_transport_audit(Failure())
+    assert audit['api_transport_outcome'] == {
+        'request_state': 'accepted_unknown', 'retryability': 'status_required',
+        'phase': 'image_edit', 'status_code': 504, 'upstream_code': 'gateway_timeout',
+    }
+    summary = {
+        'executed_count': 1, 'max_attempts': 1, 'fresh_upstream_requests': 1,
+        'final_status': 'failed', 'final_classification': 'non_retryable_provider_failure',
+        'final_failure_code': 'api_execution_unknown',
+        'api_transport_outcome': audit['api_transport_outcome'],
+        'attempts': [{
+            'attempt': 1, 'status': 'failed', 'classification': 'non_retryable_provider_failure',
+            'failure_code': 'api_execution_unknown', 'retryable': False,
+            'api_transport_outcome': audit['api_transport_outcome'],
+        }],
+    }
+    public = V3ProductApiService._public_provider_failure_retry(summary)
+    assert public['api_transport_outcome'] == audit['api_transport_outcome']
+    assert public['attempts'][0]['api_transport_outcome'] == audit['api_transport_outcome']
+
+    class ClassifiedFailure(Exception):
+        code = 'provider_error'
+        detail = {
+            'failure_code': 'provider_not_configured',
+            'api_transport_outcome': {'request_state': 'not_submitted'},
+        }
+
+    provider = object.__new__(ProductionImageGenerationProvider)
+    assert provider._provider_failure_code(ClassifiedFailure(), reference_assets=[]) == 'provider_not_configured'
+
+
 def test_api_fallback_invalid_output_is_classified_as_api_and_not_repeated(rig, monkeypatch):
     rig.client.error = BridgeError('queue_capacity', status=429)
     calls = []

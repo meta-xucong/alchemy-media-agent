@@ -71,8 +71,8 @@ The old fake/PNG v1 wire without the additive descriptor remains supported.
 Quality `low/medium/high`, any explicit `input_fidelity` (even `auto`/null), WebP,
 and identity references whose canonical plan derives fidelity are not supported.
 They fail instead of being stripped, substituted or sent as a false native tool
-control. Native maximums remain the same three sizes and two 1 MiB original
-references. Output originals are bounded to 1 MiB for fake and 16 MiB for real
+control. Native maximums remain the same three sizes and two 16 MiB original
+references, with a 16,777,216-pixel input limit. Output originals are bounded to 1 MiB for fake and 16 MiB for real
 profiles, plus the same one-megapixel/dimension bounds. No re-encoding occurs.
 
 The server capability page distinguishes code support from configured profiles,

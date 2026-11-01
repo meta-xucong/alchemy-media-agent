@@ -14925,6 +14925,21 @@ class V3ProductApiService:
             pattern = r"^[A-Za-z][A-Za-z0-9_]{0,79}$" if key == "api_error_type" else safe_code.pattern
             if value and re.fullmatch(pattern, value):
                 projected[key] = value
+        def public_api_transport(value: Any) -> dict[str, Any]:
+            if not isinstance(value, dict):
+                return {}
+            result: dict[str, Any] = {}
+            for key in ("request_state", "retryability", "phase", "upstream_code"):
+                token = str(value.get(key) or "").strip()
+                if token and safe_code.fullmatch(token):
+                    result[key] = token
+            status_code = value.get("status_code")
+            if isinstance(status_code, int) and 100 <= status_code <= 599:
+                result["status_code"] = status_code
+            return result
+        api_transport = public_api_transport(normalized.get("api_transport_outcome"))
+        if api_transport:
+            projected["api_transport_outcome"] = api_transport
         rejection = normalized.get("capability_rejection")
         safe_rejection = public_capability_rejection(rejection)
         if safe_rejection:
@@ -14937,6 +14952,9 @@ class V3ProductApiService:
                 pattern = r"^[A-Za-z][A-Za-z0-9_]{0,79}$" if key == "api_error_type" else safe_code.pattern
                 if value and re.fullmatch(pattern, value):
                     attempt[key] = value
+            api_transport = public_api_transport(source.get("api_transport_outcome"))
+            if api_transport:
+                attempt["api_transport_outcome"] = api_transport
             rejection = source.get("capability_rejection")
             safe_rejection = public_capability_rejection(rejection)
             if safe_rejection:
