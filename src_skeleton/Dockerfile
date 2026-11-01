@@ -9,7 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && \
+ARG DEBIAN_MIRROR_HOST=deb.debian.org
+
+RUN if [ "$DEBIAN_MIRROR_HOST" != "deb.debian.org" ]; then \
+        sed -i "s|http://deb.debian.org|https://${DEBIAN_MIRROR_HOST}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    apt-get update && \
     apt-get install -y --no-install-recommends fonts-noto-cjk && \
     rm -rf /var/lib/apt/lists/*
 

@@ -12,11 +12,15 @@ def test_loopback_compose_rebuilds_from_current_alchemy_source() -> None:
     batch_entrypoint = (ROOT / "start_local_alchemy.bat").read_text(encoding="utf-8")
 
     assert "dockerfile: ./src_skeleton/Dockerfile" in base
+    dockerfile = (ROOT / "src_skeleton" / "Dockerfile").read_text(encoding="utf-8")
     assert "build: !reset null" not in loopback
     assert "pull_policy: build" in loopback
     assert 'ALCHEMY_REVISION: "${ALCHEMY_REVISION:?Use start_local_alchemy.bat to supply the Git revision}"' in loopback
     assert "dockerfile: ./src_skeleton/Dockerfile" in revision_overlay
     assert "ALCHEMY_REVISION" in revision_overlay
+    assert "DEBIAN_MIRROR_HOST: mirrors.tuna.tsinghua.edu.cn" in revision_overlay
+    assert "ARG DEBIAN_MIRROR_HOST=deb.debian.org" in dockerfile
+    assert 'https://${DEBIAN_MIRROR_HOST}' in dockerfile
     assert "rev-parse --verify HEAD" in launcher
     assert "status', '--porcelain', '--untracked-files=all'" in launcher
     assert "ALCHEMY_REVISION" in launcher
