@@ -19,8 +19,9 @@ RUN if [ "$DEBIAN_MIRROR_HOST" != "deb.debian.org" ]; then \
     rm -rf /var/lib/apt/lists/*
 
 COPY src_skeleton/requirements.txt ./requirements.txt
-RUN python -m pip install --upgrade pip && \
-    python -m pip install -r requirements.txt
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN python -m pip install --index-url "$PIP_INDEX_URL" --upgrade pip && \
+    python -m pip install --index-url "$PIP_INDEX_URL" -r requirements.txt
 
 COPY scripts/fetch_v3_identity_models.py ./scripts/fetch_v3_identity_models.py
 RUN python ./scripts/fetch_v3_identity_models.py --target /app/models/v3_identity
