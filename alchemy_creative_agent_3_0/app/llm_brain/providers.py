@@ -2177,8 +2177,6 @@ def _is_model_failover_eligible(error: BaseException) -> bool:
             return True
         if isinstance(item, BrainInvalidJsonResponse):
             return True
-        if isinstance(item, BrainTransportTimeoutError) and not _transport_worker_stopped(item):
-            return False
         if isinstance(item, BrainTransportTimeoutError) or _is_transport_timeout_exception(item):
             return True
         response = getattr(item, "response", None)

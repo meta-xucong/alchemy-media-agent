@@ -19,6 +19,8 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     _call_with_timeout,
     _collect_openai_chat_completion_stream,
     _new_transport_trace,
+    _TRANSPORT_RECEIPT_KEY,
+    _TRANSPORT_WORKER_STOPPED_ATTR,
     _transport_timeout_phase,
     BrainExecutionBudgetExceeded,
     BrainInvalidJsonResponse,
@@ -61,7 +63,7 @@ def test_brain_provider_timeout_is_bounded_per_model_attempt(monkeypatch) -> Non
 
     # Direct provider calls without an outer V3 execution scope may use one
     # bounded attempt for each model; each individual attempt remains capped.
-    assert time.perf_counter() - started < 2.6
+    assert time.perf_counter() - started < 4.5
     assert failure.value.safe_metadata() == {
         "schema_version": "v3_brain_transport_failure_v1",
         "stage": "provider_prompt_finalize",
@@ -985,7 +987,7 @@ def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:
     worker_finished = False
     try:
         with pytest.raises(BrainTransportTimeoutError):
-            provider.run(request)
+            provider._run_single_model(request)
         assert started.is_set()
         assert calls == 1
     finally:
@@ -993,6 +995,67 @@ def test_timeout_retry_requires_the_previous_transport_worker_to_stop() -> None:
         worker_finished = finished.wait(0.5)
         _ACTIVE_EXECUTION_BUDGET.reset(budget_token)
     assert worker_finished is True
+
+
+def test_model_failover_advances_after_timeout_even_if_previous_worker_is_active(monkeypatch) -> None:
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    candidates = (
+        ("anthropic", "claude-sonnet-5-5"),
+        ("openai", "kimi-k3"),
+        ("openai", "gpt-6.1-sol"),
+    )
+    monkeypatch.setattr(providers_module, "build_v3_model_candidates", lambda *_args: candidates)
+    request = BrainRunRequest(
+        user_input="Prepare one bounded Brain request.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}},
+    )
+    attempted_models = []
+
+    def fake_run_single_model(self, received_request):
+        assert received_request is request
+        attempted_models.append(self.model)
+        if self.model == "kimi-k3":
+            failure = BrainTransportTimeoutError(
+                stage=request.stage,
+                timeout_seconds=20,
+                elapsed_ms=20_000,
+                timeout_phase="unknown_transport_timeout",
+                request_acceptance="unknown",
+            )
+            setattr(failure, _TRANSPORT_WORKER_STOPPED_ATTR, False)
+            raise failure
+        if self.model == "claude-sonnet-5-5":
+            failure = BrainTransportTimeoutError(
+                stage=request.stage,
+                timeout_seconds=20,
+                elapsed_ms=20_000,
+                timeout_phase="read_timeout",
+            )
+            setattr(failure, _TRANSPORT_WORKER_STOPPED_ATTR, True)
+            raise failure
+        return {_TRANSPORT_RECEIPT_KEY: {}}
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", fake_run_single_model)
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.model = "claude-sonnet-5-5"
+    provider.backup_model = "kimi-k3"
+
+    result = provider.run(request)
+
+    assert attempted_models == ["claude-sonnet-5-5", "kimi-k3", "gpt-6.1-sol"]
+    receipt = result[_TRANSPORT_RECEIPT_KEY]
+    assert receipt["selected_model"] == "gpt-6.1-sol"
+    assert receipt["fallback_used"] is True
+    assert receipt["model_attempts"] == [
+        {"model": "claude-sonnet-5-5", "outcome": "failed", "failure_class": "timeout", "elapsed_ms": 0},
+        {"model": "kimi-k3", "outcome": "failed", "failure_class": "timeout", "elapsed_ms": 0},
+        {"model": "gpt-6.1-sol", "outcome": "accepted", "elapsed_ms": 0},
+    ]
 
 
 def test_stopped_timeout_gets_only_one_bounded_retry() -> None:
