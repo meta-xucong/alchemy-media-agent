@@ -40,7 +40,7 @@ if ($buildInputStatus.Count -gt 0) {
 
 $env:ALCHEMY_REVISION = $revision
 
-$docker = Get-Command docker -CommandType Application -ErrorAction Stop
+$docker = Get-Command docker.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $composeArgs = @('compose', '--project-directory', $repoRoot)
 foreach ($composeFile in $composeFiles) {
     $composeArgs += @('-f', $composeFile)

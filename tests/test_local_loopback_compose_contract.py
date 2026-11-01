@@ -28,6 +28,7 @@ def test_loopback_compose_rebuilds_from_current_alchemy_source() -> None:
     assert "rev-parse --verify HEAD" in launcher
     assert "status', '--porcelain', '--untracked-files=all'" in launcher
     assert "ALCHEMY_REVISION" in launcher
+    assert "Get-Command docker.exe -CommandType Application" in launcher
     assert "image inspect alchemy-media-agent:bridge-local" in launcher
     assert "--no-build --no-deps alchemy-media-agent" in launcher
     assert "scripts\\start_local_alchemy.ps1" in batch_entrypoint
