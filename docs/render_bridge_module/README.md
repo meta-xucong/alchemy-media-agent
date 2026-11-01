@@ -13,6 +13,7 @@
 - [RB29](RB29_V3_API_FALLBACK_UNKNOWN_DIAGNOSTICS.md): V3 API fallback outcome-unknown classification and safe route diagnostics.
 - [RB31](RB31_QUEUED_TASK_DISPATCH_AND_V2_STATUS.md): cross-product queued-task dispatch ownership and the narrow V2 active-status projection correction.
 - [RB32](RB32_VPS_DEPLOYMENT_READINESS_EXECUTION_PLAN.md): ordered local preparation of Alchemy and Render Bridge for a later VPS deployment.
+- [RB33](RB33_VPS_CUTOVER_BLUEPRINT.md): stepwise Alchemy VPS release and RenderBridge API-pull cutover blueprint, with current phase evidence.
 
 RB00–RB12 and the integration package's older native/preview documents describe
 historical experimental milestones. Their evidence remains pinned to those
