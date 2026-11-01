@@ -94,6 +94,80 @@ def test_legacy_frozen_owner_allows_read_without_output(monkeypatch):
     assert TestClient(main.app).get("/api/v2/image/jobs/private-job", headers=headers(17)).status_code == 200
 
 
+def test_retryable_bridge_wait_job_detail_projects_active_queue_status(monkeypatch):
+    now = datetime.now(timezone.utc)
+    failed = job(status="failed").model_copy(update={
+        "run_id": "active-run",
+        "error": {"error_code": "bridge_wait", "retryable": True,
+                  "detail": {"state": "queued"}, "provider": "render_bridge"},
+    })
+    queued = failed.model_copy(update={"status": "queued", "error": None, "updated_at": now})
+    snapshot = main.CreativeRun(
+        run_id="active-run", status="generating", mode="smart_enhance",
+        intent_summary="existing request", generation_jobs=[queued], trace_id="trace",
+        created_at=now, updated_at=now,
+    )
+    repository.save_image_job(failed)
+    monkeypatch.setattr(main, "get_run_snapshot", lambda run_id: snapshot if run_id == "active-run" else None)
+    monkeypatch.setattr(main, "_require_veyra_user_if_enabled", lambda *args: 17)
+    request = main.Request({"type": "http", "method": "GET", "path": "/api/v2/image/jobs/private-job",
+                            "headers": [], "query_string": b""})
+
+    response = main.get_image_job("private-job", request, "")
+
+    assert response.status == "queued"
+    assert response.error is None
+    assert repository.get_image_job("private-job").status == "failed"
+
+
+def test_bridge_wait_job_keeps_failed_projection_after_queue_terminal(monkeypatch):
+    now = datetime.now(timezone.utc)
+    failed = job(status="failed").model_copy(update={
+        "run_id": "terminal-run",
+        "error": {"error_code": "bridge_wait", "retryable": True,
+                  "detail": {"state": "queued"}, "provider": "render_bridge"},
+    })
+    terminal = failed.model_copy(update={"status": "failed", "updated_at": now})
+    snapshot = main.CreativeRun(
+        run_id="terminal-run", status="failed", mode="smart_enhance",
+        intent_summary="existing request", generation_jobs=[terminal], trace_id="trace",
+        created_at=now, updated_at=now,
+    )
+    repository.save_image_job(failed)
+    monkeypatch.setattr(main, "get_run_snapshot", lambda run_id: snapshot if run_id == "terminal-run" else None)
+    monkeypatch.setattr(main, "_require_veyra_user_if_enabled", lambda *args: 17)
+    request = main.Request({"type": "http", "method": "GET", "path": "/api/v2/image/jobs/private-job",
+                            "headers": [], "query_string": b""})
+
+    response = main.get_image_job("private-job", request, "")
+
+    assert response.status == "failed"
+
+
+def test_non_retryable_bridge_wait_job_keeps_failed_projection(monkeypatch):
+    now = datetime.now(timezone.utc)
+    failed = job(status="failed").model_copy(update={
+        "run_id": "active-run",
+        "error": {"error_code": "bridge_wait", "retryable": False,
+                  "detail": {"state": "queued"}, "provider": "render_bridge"},
+    })
+    queued = failed.model_copy(update={"status": "queued", "updated_at": now})
+    snapshot = main.CreativeRun(
+        run_id="active-run", status="generating", mode="smart_enhance",
+        intent_summary="existing request", generation_jobs=[queued], trace_id="trace",
+        created_at=now, updated_at=now,
+    )
+    repository.save_image_job(failed)
+    monkeypatch.setattr(main, "get_run_snapshot", lambda run_id: snapshot if run_id == "active-run" else None)
+    monkeypatch.setattr(main, "_require_veyra_user_if_enabled", lambda *args: 17)
+    request = main.Request({"type": "http", "method": "GET", "path": "/api/v2/image/jobs/private-job",
+                            "headers": [], "query_string": b""})
+
+    response = main.get_image_job("private-job", request, "")
+
+    assert response.status == "failed"
+
+
 def test_auth_disabled_legacy_local_behavior():
     object.__setattr__(settings, "veyra_auth_enabled", False)
     repository.save_image_job(job(owner=None))

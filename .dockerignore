@@ -1,5 +1,11 @@
 .git/
 .codex-longrun/
+.codex-work/
+.runtime/
+.local_backups/
+.tmp*
+**/.tmp*/
+alchemy-bridge-three-process-*/
 __pycache__/
 **/__pycache__/
 *.py[cod]

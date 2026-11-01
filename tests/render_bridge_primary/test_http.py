@@ -2,10 +2,47 @@
 import asyncio
 import json
 import httpx
+from unittest.mock import Mock
 
 from render_bridge_primary import PrimaryTransport
 from render_bridge_primary.http import BridgeClient
 from test_core import request, settings, Client
+
+
+def test_both_alchemy_clients_accept_an_explicit_ca_without_proxy_env(monkeypatch):
+    from app.integrations.render_bridge.client import BridgeClient as V1BridgeClient
+
+    ca_bundle = "C:/test/bridge-ca.pem"
+    monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_CA_BUNDLE", ca_bundle)
+
+    for client_class in (BridgeClient, V1BridgeClient):
+        captured = {}
+
+        def make_client(**kwargs):
+            captured.update(kwargs)
+            return Mock()
+
+        monkeypatch.setattr(client_class.__module__ + ".httpx.AsyncClient", make_client)
+        client_class("https://bridge.invalid", "fixture")
+        assert captured["verify"] == ca_bundle
+        assert captured["trust_env"] is False
+
+
+def test_both_alchemy_clients_keep_system_ca_validation_by_default(monkeypatch):
+    from app.integrations.render_bridge.client import BridgeClient as V1BridgeClient
+
+    monkeypatch.delenv("ALCHEMY_RENDER_BRIDGE_CA_BUNDLE", raising=False)
+    for client_class in (BridgeClient, V1BridgeClient):
+        captured = {}
+
+        def make_client(**kwargs):
+            captured.update(kwargs)
+            return Mock()
+
+        monkeypatch.setattr(client_class.__module__ + ".httpx.AsyncClient", make_client)
+        client_class("https://bridge.invalid", "fixture")
+        assert captured["verify"] is True
+        assert captured["trust_env"] is False
 
 
 def test_lost_http_create_response_and_exact_origin_recovery(tmp_path):

@@ -207,6 +207,7 @@ class Settings:
         "http://localhost:8094",
         "http://127.0.0.1:8096",
         "http://localhost:8096",
+        "http://127.0.0.1:18106",
         "http://127.0.0.1:18080",
         "http://localhost:18080",
     )
@@ -476,6 +477,7 @@ def load_settings() -> Settings:
                 "http://localhost:8094",
                 "http://127.0.0.1:8096",
                 "http://localhost:8096",
+                "http://127.0.0.1:18106",
                 "http://127.0.0.1:18080",
                 "http://localhost:18080",
             ),

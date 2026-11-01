@@ -1130,6 +1130,16 @@ def get_image_job(job_id: str, request: Request, authorization: str = Header(def
     if settings.veyra_auth_enabled:
         from app.services import render_bridge_primary
         _require_image_job_owner(job, user_id, frozen_record=render_bridge_primary.load_frozen(job_id))
+    if (job.status == "failed" and job.run_id
+            and (job.error or {}).get("error_code") == "bridge_wait"
+            and (job.error or {}).get("retryable") is True):
+        snapshot = get_run_snapshot(job.run_id)
+        if snapshot and snapshot.status in {"queued", "generating"}:
+            active_job = next((item for item in snapshot.generation_jobs if item.job_id == job_id
+                               and item.status in {"queued", "running"}), None)
+            if active_job:
+                job = job.model_copy(update={"status": active_job.status, "error": active_job.error,
+                                             "updated_at": active_job.updated_at})
     return job
 
 

@@ -153,6 +153,7 @@ def test_v2_entry_fails_store_busy_without_api_and_retains_same_preflight_unit(
                         "output_format": {"values": ["png", "jpeg"]},
                         "transparent_background": {"values": [True]}, "references": {"max_count": 5}},
                 }],
+                "limits": {"max_input_bytes": 16777216, "max_input_image_pixels": 16777216},
             }
         async def create_input(self, payload):
             self.input_payloads.append(dict(payload))
@@ -265,7 +266,8 @@ def test_codex_reference_limit_accepts_five_and_rejects_six_without_truncation()
         "parameter_contract": {"dimension_semantics": "original_dimensions_recorded",
                         "codex_adapter": CODEX_ADAPTER_CONTRACT},
         "image_options_contract": {"references": {"max_count": 5}}}],
-        "limits": {"max_dimension": 40000, "max_image_pixels": 40000000, "max_input_bytes": 1048576}}
+        "limits": {"max_dimension": 40000, "max_image_pixels": 40000000,
+                   "max_input_bytes": 16777216, "max_input_image_pixels": 16777216}}
     refs = tuple(Reference(content=image_bytes(), mime_type="image/png") for _ in range(5))
     request_with_five = PrimaryRequest(product="v2", owner_id="owner", unit_id="five",
         prompt="A blue vase", parameters={}, references=refs)
@@ -484,7 +486,8 @@ def test_codex_adapter_defaults_unsupported_provider_controls_and_keeps_bridge_p
                     "parameter_contract": {"dimension_semantics": "original_dimensions_recorded",
                         "codex_adapter": CODEX_ADAPTER_CONTRACT},
                     "image_options_contract": {"quality": {"values": ["auto"]}, "output_format": {"values": ["png", "jpeg"]},
-                        "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}]}
+                        "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}],
+                "limits": {"max_input_bytes": 16777216, "max_input_image_pixels": 16777216}}
         async def create_task(self, payload):
             self.calls += 1
             self.payload = payload
@@ -525,7 +528,8 @@ def test_explicit_queue_rejection_uses_untouched_original_provider_parameters(is
                     "parameter_contract": {"dimension_semantics": "original_dimensions_recorded",
                         "codex_adapter": CODEX_ADAPTER_CONTRACT},
                     "image_options_contract": {"quality": {"values": ["auto"]}, "output_format": {"values": ["png", "jpeg"]},
-                        "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}]}
+                        "transparent_background": {"values": [True]}, "references": {"max_count": 5}}}],
+                "limits": {"max_input_bytes": 16777216, "max_input_image_pixels": 16777216}}
         async def create_task(self, payload):
             self.calls += 1
             self.payload = payload
