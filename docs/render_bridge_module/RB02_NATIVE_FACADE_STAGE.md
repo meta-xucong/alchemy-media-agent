@@ -2,6 +2,11 @@
 
 Baseline: `6556a6ba5120fd5e17c6009f1161bd2213d2f979`, 2026-10-20.
 
+Historical-limit note (2026-11-01): the reference-size ceiling recorded below
+describes this original baseline and is superseded by the shared current limit
+of 16 MiB / 16,777,216 pixels in RB04/RB06. Do not use this milestone document
+as the current input-size contract.
+
 ## Supported scope and exclusions
 
 This is an explicitly selected, default-off **developer integration** for one
