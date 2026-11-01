@@ -105,6 +105,7 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(adapter, 'POLL_BUDGET_SECONDS', 0)
     store = V3GeneratedOutputStore(tmp_path / 'outputs')
     provider = ProductionImageGenerationProvider(output_store=store)
+    monkeypatch.setattr(provider, "_app_provider_poll_budget_seconds", lambda _request: adapter.POLL_BUDGET_SECONDS)
     api_calls = []
     async def legacy(request):
         api_calls.append(request)
@@ -290,9 +291,41 @@ def test_wait_budget_expiry_keeps_same_bridge_task_for_recovery(rig):
     assert rig.client.calls == 1 and not rig.api_calls
 
 
-def test_bridge_poll_and_v3_provider_finalization_fit_300_second_budget():
+def test_direct_bridge_poll_default_remains_285_seconds():
     assert adapter.POLL_BUDGET_SECONDS == 285.0
-    assert adapter.POLL_BUDGET_SECONDS + 15.0 == 300.0
+
+
+def test_high_resolution_bridge_wait_uses_outer_request_budget(rig, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", False)
+    monkeypatch.setattr(settings, "openai_image_request_timeout_seconds", 600.0)
+    monkeypatch.setattr(settings, "openai_image_high_resolution_timeout_seconds", 900.0)
+    high_resolution_request = SimpleNamespace(
+        prompt_plan=SimpleNamespace(quality="high", variables={}),
+        asset_plan=None,
+    )
+    assert type(rig.provider)._app_provider_poll_budget_seconds(
+        rig.provider, high_resolution_request
+    ) == 900.0  # noqa: SLF001
+    monkeypatch.setattr(rig.provider, "_app_provider_poll_budget_seconds", lambda _request: 900.0)
+    rig.client.state = "running"
+    adapter.POLL_BUDGET_SECONDS = 285.0
+    clock = {"now": 0.0}
+
+    async def advance_one_second(_seconds):
+        clock["now"] += 1.0
+        if clock["now"] >= 314.0:
+            rig.client.state = "artifacts_ready"
+
+    monkeypatch.setattr(adapter, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    monkeypatch.setattr(adapter.asyncio, "sleep", advance_one_second)
+
+    response = rig.provider.generate(rig.request)
+
+    assert clock["now"] == 314.0
+    assert response.candidates[0].provider == "render_bridge"
+    assert rig.client.calls == 1 and not rig.api_calls
 
 
 def test_queue_full_then_same_unit_api_is_single_claim(rig):
@@ -436,6 +469,11 @@ def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig
     from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter
     from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 
+    monkeypatch.setattr(
+        ProductionImageGenerationProvider,
+        "_app_provider_poll_budget_seconds",
+        lambda self, request: 0.0,
+    )
     tasks = {}
     receipts = {}
     finished = False

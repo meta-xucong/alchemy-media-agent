@@ -1687,7 +1687,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         async def legacy_generate(frozen_request):
             return await self._app_provider(provider_name).generate(frozen_request)
 
-        return await generate(app_request, legacy_generate, self.output_store)
+        return await generate(
+            app_request,
+            legacy_generate,
+            self.output_store,
+            poll_budget_seconds=self._app_provider_poll_budget_seconds(app_request),
+        )
 
     def _run_app_provider_with_timeout_retry(
         self,
@@ -7721,9 +7726,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 return max(660.0, float(value)) + 5.0
         except Exception:
             value = 240.0
-        # A Bridge-primary call can spend up to 285 seconds resolving its
-        # durable task; retain the same 15-second finalization margin as API.
+        # Keep fifteen seconds after the provider response budget to record
+        # and materialize the terminal image result.
         return max(300.0, float(value) + 15.0)
+
+    def _app_provider_poll_budget_seconds(self, app_request) -> float:
+        plan = getattr(app_request, "prompt_plan", None)
+        variables = getattr(plan, "variables", None) or {}
+        asset_plan = getattr(app_request, "asset_plan", None) or variables.get("asset_plan") or {}
+        reference_assets = asset_plan.get("assets") or []
+        outer_timeout = self._app_provider_timeout_seconds(reference_assets, app_request=app_request)
+        try:
+            from app.config import settings as app_settings
+
+            finalization_margin = 5.0 if bool(
+                getattr(app_settings, "openai_image_gateway_managed_failover", False)
+            ) else 15.0
+        except Exception:
+            finalization_margin = 15.0
+        return max(0.0, outer_timeout - finalization_margin)
 
     def _app_provider_max_attempts(self) -> int:
         try:
