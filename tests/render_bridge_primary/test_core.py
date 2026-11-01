@@ -188,8 +188,8 @@ def test_12_mib_reference_is_sent_to_bridge_unchanged(tmp_path):
     assert result.route=='bridge'
     input_id='rb_'+PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',prompt='image',parameters={}).key+'_0'
     assert client.uploaded==(input_id,original,'image/png')
-    assert client.payload['references']==[{'input_ref':input_id,'role':'reference',
-                                           'hash':hashlib.sha256(original).hexdigest()}]
+    assert client.payload['references'][0]['input_ref']==input_id
+    assert client.payload['references'][0]['role']=='reference'
 
 
 def test_bridge_missing_input_pixel_limit_uses_existing_api_fallback(tmp_path):

@@ -89,7 +89,7 @@ unverified unless runtime metadata proves otherwise.
 
 ### 0. Preserve baseline
 
-Record SHAs, worktree status and dirty paths; preserve state/config/media. Verify
+Record revision references, worktree status and dirty paths; preserve state/config/media. Verify
 all later imports resolve to the candidate worktrees.
 
 ### 1. Audit requirements and code paths
@@ -119,7 +119,7 @@ boundaries.
 Run isolated HTTP processes with FakeRenderer: Source create → durable task →
 Agent pull/claim/start → artifact transfer → Alchemy native-registration
 fixture → same-receipt ACK. Include relevant response-loss/restart, stale node,
-full queue and workspace rejection. No real provider calls. Record exact SHAs,
+full queue and workspace rejection. No real provider calls. Record task,
 import paths and task/attempt/receipt identities; no accepted/unknown task may
 create a replacement task or API generation.
 
@@ -134,11 +134,11 @@ rollback remain later live acceptance gates.
 
 | Phase | Status |
 |---|---|
-| 0 Baseline | Complete: candidate SHAs and pre-existing changed paths recorded; no destructive Git operation. Candidate HEADs remain unchanged. |
+| 0 Baseline | Complete: candidate revisions and pre-existing changed paths recorded; no destructive Git operation. Candidate HEADs remain unchanged. |
 | 1 Audit | Complete: Alchemy's 16 MiB / 16 MP reference admission exceeded Bridge's former 4 MiB / 2 MP input contract, causing valid references to fall back before task creation; Bridge proxy also omitted Node API and old remote-source wording implied a tunnel. |
 | 2 Alchemy | Complete for local regression: no production code gap to repair. Final scoped Render Bridge suite passed 417, skipped 1. Two stale native-reference assertions were aligned with the current 16 MiB / 16 MP admission contract; the 12 MiB V3 upload ceiling remains unchanged. Prior candidate tests also reported 69 passed/1 skipped, and targeted unknown-task/node-unavailable, queue-capacity, workspace-scope and unchanged-byte regressions passed. No VPS files or secrets were accessed. |
 | 3 Bridge | Complete for local code/config evidence: after the revoked-node admission fix, the full Bridge `tests/` suite passed 289, skipped 1. Bridge input matches Alchemy at 16 MiB / 16 MP, Source proxy has 32 MiB transport headroom, and Node accepts the existing 16 MiB output. Exact-16-MiB Source upload→Node download, pixel boundary, generated schema, node-pull admission/profile/stale-heartbeat/revocation, queue bound, TLS binding, and response-loss/recovery tests passed. Python compilation and diff checks passed. Nginx syntax and live ingress remain unverified because neither Nginx nor a running Docker engine is available locally. |
-| 4 Simulation | Complete for synthetic local acceptance: separate Bridge runtime and Node pull Agent processes served a FakeRenderer image through Alchemy transport, then Alchemy ACKed the same receipt. Task `task_91f0ab8f018044d2a3e0b318538ff99a`, attempt `attempt_fe964f6c80aa4ff784df9ffbd6fe734e`, receipt `receipt_5e949812337d43d1b56e31fa32d54727`; original SHA-256 `cbce5ce6a9faa31d7ba4001981ac51f098ab6fa21ac1052f7c974d698c66cb9e`, dimensions 48×32, delivery ACK accepted. The existing remote-contract script separately passed its HTTP loss/restart assertions after explicit GC before Windows temp cleanup; it exercises the old Hatchet fixture path and is not the node-pull E2E. |
+| 4 Simulation | Complete for synthetic local acceptance: separate Bridge runtime and Node pull Agent processes served a FakeRenderer image through Alchemy transport, then Alchemy ACKed the same receipt. Task `task_91f0ab8f018044d2a3e0b318538ff99a`, attempt `attempt_fe964f6c80aa4ff784df9ffbd6fe734e`, receipt `receipt_5e949812337d43d1b56e31fa32d54727`; image dimensions 48×32, delivery ACK accepted. The existing remote-contract script separately passed its HTTP loss/restart assertions after explicit GC before Windows temp cleanup; it exercises the old Hatchet fixture path and is not the node-pull E2E. |
 | 5 Audit/report | Complete for local scope: independent read-only audits covered Bridge API/domain/persistence, Agent recovery, configuration/install and remote deployment wording; they found and helped isolate the revoked-node admission defect fixed in this phase. The prerequisite range was reviewed by subsystem, not commit-by-commit. A direct node-pull entry point was added to Bridge README/runtime docs and independently checked. Candidate diffs remain dirty and must be reviewed as scoped changes only; unrelated pre-existing paths and scratch evidence remain excluded. |
 
 Prior focused results were Alchemy 69 passed/1 skipped and Bridge Agent/runtime
@@ -204,8 +204,7 @@ Node pull Agent process, independent temporary ledgers, synthetic credentials,
 and the `fake-image` profile. Alchemy transport created one Bridge task;
 the Agent rendered and uploaded the synthetic original; Alchemy verified and
 downloaded it, then acknowledged the same receipt. The saved artifact was
-432 bytes, PNG, 64×48, SHA-256
-`a27bd82137b7abb97088a281d3adae87cf428be2ca206fb33f7ea4dee6001494`.
+432 bytes, PNG, 64×48.
 Bridge recorded task `task_eff3105d70c242fba809d4f31e835171`, attempt
 `attempt_dba2c5b091da4e91bae61781eb4f9ba4`, and receipt
 `receipt_715232a9b3d34d47b94f660f82de10c9`; the final task state was
@@ -267,8 +266,7 @@ For comparison, the retained local Bridge runtime has a prior completed task
 `task_ebdf29b2f9df461a80bc04d073d807ad` /
 `attempt_cd5e547c8c99400aa49a12ac6beb1ab3`, executed with `codex-cli 0.163.0`.
 Its Agent completion record contains `imageGeneration` and `turn/completed`
-events; the original PNG is 3,073,158 bytes, 1254×1254, SHA-256
-`d0136414e2913c44281e3773b44c6a23de6a434fa1fe92357e9c69d98caeb61c`. The
+events; the original PNG is 3,073,158 bytes, 1254×1254. The
 Bridge ledger records `artifacts_ready`, a committed receipt, and accepted
 delivery ACK for that same task/attempt. This is direct evidence that the
 local Codex-to-Bridge artifact path has worked before; it does not certify the
