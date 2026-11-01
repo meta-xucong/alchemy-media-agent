@@ -346,5 +346,4 @@ jobs:
           printf 'GUARDED_CANDIDATE_CANDIDATE_RELEASE=%s\n' "$candidate_release"
           printf 'GUARDED_CANDIDATE_MODE=%s\n' "$candidate_mode"
           printf 'GUARDED_CANDIDATE_IMAGE=face_gate_enabled\n'
-          printf 'GUARDED_CANDIDATE_HISTORICAL_STATE=unchanged\n'
           REMOTE_SCRIPT

@@ -196,6 +196,13 @@ def test_successful_activation_restores_only_previously_active_maintenance_timer
     assert success.index(restore) < success.index(verify_active) < success.index(preserve_inactive) < workflow.index("GUARDED_ACTIVATE_RESULT=pass")
 
 
+def test_candidate_does_not_claim_historical_state_unchanged_without_comparison() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-candidate.yml").read_text(encoding="utf-8")
+
+    assert "state_digest" not in workflow
+    assert "GUARDED_CANDIDATE_HISTORICAL_STATE=unchanged" not in workflow
+
+
 def test_emergency_nginx_fallback_rechecks_writer_state_from_fresh_baseline() -> None:
     workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
     keep_closed = workflow[workflow.index("          keep_closed() {"):workflow.index("          rollback() {")]
