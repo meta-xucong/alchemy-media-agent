@@ -18,8 +18,7 @@ from app.services.asset_planning import reference_image_paths
 CONTEXT = "v3_bridge_primary_context"
 PROVENANCE = "render_bridge_primary"
 POLL_SECONDS = 1.0
-# V3 gives each provider request a 300-second outer budget, including the
-# existing 15-second finalization margin. Keep Bridge polling inside it.
+# Default for direct adapter callers that do not supply a provider budget.
 POLL_BUDGET_SECONDS = 285.0
 
 
@@ -390,10 +389,12 @@ async def retire_checkpoint(app_request, record):
         await transport.close()
 
 
-async def generate(app_request, legacy_generate, output_store):
+async def generate(app_request, legacy_generate, output_store, *, poll_budget_seconds=None):
     from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryError
     from render_bridge_primary.http import BridgeError
 
+    poll_budget = POLL_BUDGET_SECONDS if poll_budget_seconds is None else max(0.0, float(poll_budget_seconds))
+    deadline = time.monotonic() + poll_budget
     settings = PrimarySettings.from_env(product="v3")
     # Preserve disabled legacy behavior, but never hide an existing durable unit.
     if not settings.enabled and not (settings.state_dir / "primary.sqlite3").exists():
@@ -414,7 +415,6 @@ async def generate(app_request, legacy_generate, output_store):
                 # the normal resolve call remains authoritative for availability.
                 capabilities = None
         request = request_for(app_request, transport, capabilities=capabilities)
-        deadline = time.monotonic() + POLL_BUDGET_SECONDS
         context = dict(app_request.prompt_plan.variables.get(CONTEXT) or {})
         async with _gate_for(settings, app_request) as gate:
             gate.assert_current()
