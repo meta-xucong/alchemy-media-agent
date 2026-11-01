@@ -405,6 +405,116 @@ _DOC270_PHASE4_REQUIREMENT_KINDS = frozenset(
 _DOC277_PRIVATE_PLANNING_NAMESPACE = "doc277_project_planning_operations"
 _DOC277_CURRENT_OPERATION_KEY = "doc277_planning_current_operation"
 _DOC277_OPERATION_STATES = frozenset({"planning", "planning_failed"})
+_DOC277_PLANNING_DIAGNOSTICS_SCHEMA = "v3_project_planning_failure_diagnostics_v1"
+_DOC277_SAFE_PLANNING_OUTCOME_CLASSES = frozenset(
+    {
+        "remote_provider_error",
+        "remote_provider_unavailable",
+        "remote_contract_invalid",
+        "remote_output_count_mismatch",
+        "remote_prompt_signoff_unavailable",
+        "remote_brain_skipped",
+        "remote_creative_brain_required",
+    }
+)
+_DOC277_SAFE_PLANNING_ERROR_CLASSES = frozenset(
+    {
+        "timeout",
+        "budget_exceeded",
+        "execution_budget_exhausted",
+        "provider_error",
+        "provider_api_error",
+        "unavailable",
+        "upstream_transport_error",
+        "upstream_http_error",
+        "invalid_response",
+        "request_contract_invalid",
+        "truncated_response",
+        "content_policy",
+        "canceled",
+        "serialization_failure",
+        "contract_validation",
+        "unknown",
+    }
+)
+_DOC277_SAFE_PLANNING_AVAILABILITY_REASONS = frozenset(
+    {
+        "remote_disabled",
+        "brain_disabled",
+        "missing_credentials",
+        "invalid_configuration",
+        "capability_scope_inactive",
+        "availability_check_failed",
+        "provider_unavailable",
+        "configured",
+    }
+)
+_DOC277_SAFE_PLANNING_STAGES = frozenset(
+    {
+        "activation",
+        "generate",
+        "plan",
+        "provider_prompt_developmental_presence_verify",
+        "provider_prompt_finalize",
+        "provider_prompt_human_naturalness_resign",
+        "provider_prompt_professional_capture_resign",
+        "remote_intent",
+    }
+)
+_DOC277_SAFE_PLANNING_TRANSPORT_KINDS = frozenset(
+    {
+        "connection_error",
+        "network_error",
+        "protocol_error",
+        "provider_api_error",
+        "read_error",
+        "timeout",
+        "transport_error",
+        "write_error",
+    }
+)
+
+
+def _doc277_safe_planning_failure_diagnostics(
+    value: object,
+) -> dict[str, Any] | None:
+    """Keep a small operator-only projection; never persist provider payloads."""
+
+    if not isinstance(value, dict) or value.get("schema_version") != "v3_remote_creative_brain_outcome_v1":
+        return None
+    if value.get("state") != "blocked":
+        return None
+
+    safe: dict[str, Any] = {"schema_version": _DOC277_PLANNING_DIAGNOSTICS_SCHEMA}
+    outcome_class = value.get("outcome_class")
+    if isinstance(outcome_class, str) and outcome_class in _DOC277_SAFE_PLANNING_OUTCOME_CLASSES:
+        safe["outcome_class"] = outcome_class
+    for key in ("llm_used", "fallback_used", "remote_provider_available", "remote_brain_request_started"):
+        candidate = value.get(key)
+        if isinstance(candidate, bool):
+            safe[key] = candidate
+    availability_reason = value.get("remote_provider_availability_reason")
+    if isinstance(availability_reason, str) and availability_reason in _DOC277_SAFE_PLANNING_AVAILABILITY_REASONS:
+        safe["remote_provider_availability_reason"] = availability_reason
+    request_acceptance = value.get("remote_brain_request_acceptance")
+    if isinstance(request_acceptance, str) and request_acceptance in {"not_started", "dispatched", "unknown"}:
+        safe["remote_brain_request_acceptance"] = request_acceptance
+    error_class = value.get("remote_error_class")
+    if isinstance(error_class, str) and error_class in _DOC277_SAFE_PLANNING_ERROR_CLASSES:
+        safe["remote_error_class"] = error_class
+    stage = value.get("remote_brain_stage")
+    if isinstance(stage, str) and stage in _DOC277_SAFE_PLANNING_STAGES:
+        safe["remote_brain_stage"] = stage
+    http_status = value.get("remote_http_status_code")
+    if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
+        safe["remote_http_status_code"] = http_status
+    transport_kind = value.get("remote_provider_transport_kind")
+    if isinstance(transport_kind, str) and transport_kind in _DOC277_SAFE_PLANNING_TRANSPORT_KINDS:
+        safe["remote_provider_transport_kind"] = transport_kind
+
+    if len(safe) == 1:
+        return None
+    return safe
 
 
 class EcommerceSlotContinuationError(ValueError):
@@ -4025,6 +4135,7 @@ class V3ProjectModeService:
         *,
         failure_code: str,
         job_id: str | None = None,
+        failure_diagnostics: dict[str, Any] | None = None,
         ecommerce_opaque_hold_response: bool = False,
     ) -> dict[str, Any]:
         """Persist a terminal planning closure without exposing internals."""
@@ -4039,6 +4150,9 @@ class V3ProjectModeService:
                 raise ValueError("doc277_planning_operation_not_pending")
             clean_job_id = str(job_id or "").strip()
             clean_failure_code = str(failure_code or "").strip() or "planning_unavailable"
+            safe_failure_diagnostics = _doc277_safe_planning_failure_diagnostics(
+                failure_diagnostics,
+            )
             if clean_job_id:
                 self._issue_doc279_transparent_predecessor_receipt(
                     project_id,
@@ -4106,6 +4220,11 @@ class V3ProjectModeService:
                     "failure_code": clean_failure_code,
                     "created_at": now,
                     **({"job_id": clean_job_id} if clean_job_id else {}),
+                    **(
+                        {"failure_diagnostics": safe_failure_diagnostics}
+                        if safe_failure_diagnostics is not None
+                        else {}
+                    ),
                     **(
                         {
                             "doc279_e32_no_job_operation_projection": (

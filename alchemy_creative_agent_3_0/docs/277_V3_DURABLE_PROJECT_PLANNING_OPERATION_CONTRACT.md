@@ -24,6 +24,11 @@ established synchronous Product Job response contract.
 - A completed operation attaches exactly one real Product Job ID.
 - A failed operation is terminal and actionable. It never exposes provider,
   prompt, exception, path, hash, or request payload details.
+- Its private failed record may retain an allowlisted diagnostic summary
+  (provider outcome class, availability, stage, error class, HTTP status,
+  transport kind, and request acceptance). This summary is operator-only and
+  is excluded from the public current-operation and planning-operation
+  projections.
 
 ## Lifecycle
 

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore, V3ProjectModeService
+import alchemy_creative_agent_3_0.app.project_mode.service as project_mode_service_module
 from alchemy_creative_agent_3_0.app.product_api.contracts import (
     CreateCreativeJobRequest,
     ProductJobStatusValue,
@@ -418,6 +419,11 @@ def test_doc277_background_planning_failure_closes_without_creating_a_job(monkey
 
 
 def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection(monkeypatch) -> None:
+    # This lifecycle test exercises diagnostic projection only. Replace the
+    # existing identity digest machinery so this focused test does not perform
+    # integrity-digest work unrelated to its assertion.
+    monkeypatch.setattr(project_mode_service_module, "stable_id", lambda *parts: "_".join(map(str, parts)))
+    monkeypatch.setattr(V3ProjectModeService, "_doc277_digest", staticmethod(lambda _value: ""))
     handlers = V3ProductRouteHandlers(
         service=V3ProductApiService(),
         project_store=InMemoryProjectStore(),
@@ -446,6 +452,25 @@ def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection
                     "failure_code": "remote_brain_unavailable",
                     "reason_code": "remote_brain_unavailable",
                     "provider_request_started": False,
+                },
+                "remote_creative_brain_outcome": {
+                    "schema_version": "v3_remote_creative_brain_outcome_v1",
+                    "state": "blocked",
+                    "reason_code": "remote_brain_unavailable",
+                    "outcome_class": "remote_provider_error",
+                    "llm_used": False,
+                    "fallback_used": True,
+                    "remote_provider_available": True,
+                    "remote_provider_availability_reason": "configured",
+                    "remote_brain_request_started": True,
+                    "remote_brain_request_acceptance": "dispatched",
+                    "remote_error_class": "timeout",
+                    "remote_brain_stage": "plan",
+                    "remote_http_status_code": 503,
+                    "remote_provider_transport_kind": "timeout",
+                    "provider_api_key": "must-not-be-persisted",
+                    "raw_provider_body": "must-not-be-persisted",
+                    "user_prompt": "must-not-be-persisted",
                 },
             },
         }
@@ -477,6 +502,24 @@ def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection
     assert operation["job_id"] == job_id
     assert operation["failure_code"] == "remote_brain_unavailable"
     assert project["project"]["job_ids"] == [job_id]
+    operation_detail = client.get(
+        f"/api/v3/creative-agent/projects/{project_id}/planning-operations/{operation['operation_id']}"
+    ).json()
+    assert "failure_diagnostics" not in operation_detail
+    expected_diagnostics = {
+        "schema_version": "v3_project_planning_failure_diagnostics_v1",
+        "outcome_class": "remote_provider_error",
+        "llm_used": False,
+        "fallback_used": True,
+        "remote_provider_available": True,
+        "remote_provider_availability_reason": "configured",
+        "remote_brain_request_started": True,
+        "remote_brain_request_acceptance": "dispatched",
+        "remote_error_class": "timeout",
+        "remote_brain_stage": "plan",
+        "remote_http_status_code": 503,
+        "remote_provider_transport_kind": "timeout",
+    }
     failed_records = handlers.project_service.project_store.list_private_records(
         project_id,
         "doc277_project_planning_operations",
@@ -485,7 +528,15 @@ def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection
         item.get("record_kind") == "failed"
         and item.get("job_id") == job_id
         and item.get("failure_code") == "remote_brain_unavailable"
+        and item.get("failure_diagnostics") == expected_diagnostics
         for item in failed_records
+    )
+    assert all(
+        "provider_api_key" not in item.get("failure_diagnostics", {})
+        and "raw_provider_body" not in item.get("failure_diagnostics", {})
+        and "user_prompt" not in item.get("failure_diagnostics", {})
+        for item in failed_records
+        if item.get("record_kind") == "failed"
     )
     with app_main._v3_background_planning_operations_lock:
         app_main._v3_background_planning_operations.pop(

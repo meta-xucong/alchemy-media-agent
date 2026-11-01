@@ -209,6 +209,7 @@ class V3ProductRouteHandlers:
         failure_code: str,
         job_id: str | None = None,
         ecommerce_opaque_hold_response: bool = False,
+        failure_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.project_service.fail_project_planning_operation(
             project_id,
@@ -216,6 +217,7 @@ class V3ProductRouteHandlers:
             failure_code=failure_code,
             job_id=job_id,
             ecommerce_opaque_hold_response=ecommerce_opaque_hold_response,
+            failure_diagnostics=failure_diagnostics,
         )
 
     def close_interrupted_project_planning_operations(self) -> int:

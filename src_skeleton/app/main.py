@@ -952,6 +952,18 @@ def _v3_blocked_planning_failure_code(response: object, *, job_id: str) -> str:
     return "planning_job_blocked"
 
 
+def _v3_blocked_planning_failure_diagnostics(response: object) -> dict | None:
+    """Forward the Runtime's already-redacted Brain outcome to private storage."""
+
+    if not isinstance(response, dict):
+        return None
+    metadata = response.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    outcome = metadata.get("remote_creative_brain_outcome")
+    return dict(outcome) if isinstance(outcome, dict) else None
+
+
 def _run_v3_project_planning_background(
     project_id: str,
     operation_id: str,
@@ -970,6 +982,7 @@ def _run_v3_project_planning_background(
                 operation_id,
                 failure_code=_v3_blocked_planning_failure_code(response, job_id=job_id),
                 job_id=job_id or None,
+                failure_diagnostics=_v3_blocked_planning_failure_diagnostics(response),
                 ecommerce_opaque_hold_response=_v3_is_ecommerce_opaque_hold_response(
                     response,
                     job_id=job_id,
