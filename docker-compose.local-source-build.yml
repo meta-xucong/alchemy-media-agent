@@ -1,0 +1,8 @@
+services:
+  alchemy-media-agent:
+    image: alchemy-media-agent:bridge-local
+    build:
+      context: .
+      dockerfile: ./src_skeleton/Dockerfile
+      args:
+        ALCHEMY_REVISION: "${ALCHEMY_REVISION:?Use start_local_alchemy.bat to supply the Git revision}"

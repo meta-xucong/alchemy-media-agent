@@ -1,0 +1,25 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_loopback_compose_rebuilds_from_current_alchemy_source() -> None:
+    base = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    loopback = (ROOT / ".runtime" / "render-bridge-local" / "docker-compose.loopback.yml").read_text(encoding="utf-8")
+    revision_overlay = (ROOT / "docker-compose.local-source-build.yml").read_text(encoding="utf-8")
+    launcher = (ROOT / "scripts" / "start_local_alchemy.ps1").read_text(encoding="utf-8")
+    batch_entrypoint = (ROOT / "start_local_alchemy.bat").read_text(encoding="utf-8")
+
+    assert "dockerfile: ./src_skeleton/Dockerfile" in base
+    assert "build: !reset null" not in loopback
+    assert "pull_policy: build" in loopback
+    assert 'ALCHEMY_REVISION: "${ALCHEMY_REVISION:?Use start_local_alchemy.bat to supply the Git revision}"' in loopback
+    assert "dockerfile: ./src_skeleton/Dockerfile" in revision_overlay
+    assert "ALCHEMY_REVISION" in revision_overlay
+    assert "rev-parse --verify HEAD" in launcher
+    assert "status', '--porcelain', '--untracked-files=all'" in launcher
+    assert "ALCHEMY_REVISION" in launcher
+    assert "image inspect alchemy-media-agent:bridge-local" in launcher
+    assert "--no-build --no-deps alchemy-media-agent" in launcher
+    assert "scripts\\start_local_alchemy.ps1" in batch_entrypoint

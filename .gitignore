@@ -19,6 +19,11 @@
 
 # Runtime-generated media, history, and logs
 .runtime/
+!.runtime/
+.runtime/*
+!.runtime/render-bridge-local/
+.runtime/render-bridge-local/*
+!.runtime/render-bridge-local/docker-compose.loopback.yml
 .media_storage/
 .render_bridge_preview/
 .render_bridge_primary/

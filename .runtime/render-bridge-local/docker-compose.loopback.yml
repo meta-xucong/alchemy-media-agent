@@ -1,0 +1,34 @@
+services:
+  alchemy-media-agent:
+    image: alchemy-media-agent:bridge-local
+    build:
+      args:
+        ALCHEMY_REVISION: "${ALCHEMY_REVISION:?Use start_local_alchemy.bat to supply the Git revision}"
+    pull_policy: build
+    network_mode: !reset null
+    ports:
+      - "127.0.0.1:8017:8017"
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8017"
+    environment:
+      V2_API_PROXY_BASE_URL: http://host.docker.internal:8020
+      ALCHEMY_RENDER_BRIDGE_MODE: enabled
+      ALCHEMY_RENDER_BRIDGE_URL: http://host.docker.internal:8798
+      ALCHEMY_RENDER_BRIDGE_TOKEN: ${ALCHEMY_RENDER_BRIDGE_PRIMARY_TOKEN:?}
+      ALCHEMY_RENDER_BRIDGE_PRIMARY_TOKEN: ${ALCHEMY_RENDER_BRIDGE_PRIMARY_TOKEN:?}
+      ALCHEMY_RENDER_BRIDGE_WORKSPACE: ${ALCHEMY_RENDER_BRIDGE_WORKSPACE:?}
+      ALCHEMY_RENDER_BRIDGE_ALLOW_HTTP_LOOPBACK: "true"
+      ALCHEMY_RENDER_BRIDGE_PROFILES: codex-image
+      ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG: /app/.runtime/render-bridge-local/config/control-container.json
+      ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT: /app/.runtime/render-bridge-local/state
+    volumes:
+      - ./src_skeleton/.media_storage:/app/.media_storage
+      - ./.runtime/render-bridge-local/config/control-container.json:/app/.runtime/render-bridge-local/config/control-container.json:ro
+      - ./.runtime/render-bridge-local/state:/app/.runtime/render-bridge-local/state
