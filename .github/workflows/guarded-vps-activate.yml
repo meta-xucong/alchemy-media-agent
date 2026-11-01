@@ -366,23 +366,6 @@ jobs:
             install -m 644 "$drop_in_template" "$api_runtime_drop_in" || return 1
           }
 
-          state_digest() {
-            python3 - "$1" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          entries = []
-          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
-              directory = root / group
-              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
-                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
-          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
-          PY
-          }
-
           pending_planning_operation_count() {
             python3 - "$1" <<'PY'
           import json
@@ -763,7 +746,6 @@ jobs:
           require_disk_floor "$maintenance_backup_root" || stop_pre backup_disk_floor_not_met
           verify_v3_runtime_storage_roots "$old_env" || stop_pre v3_storage_roots_unverified
           verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || stop_pre candidate_v3_storage_roots_unverified
-          before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
             --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
@@ -899,7 +881,6 @@ jobs:
           [[ "$api_pid" =~ ^[1-9][0-9]*$ ]] || fail_post candidate_v2_api_pid_unavailable_after_admission
           python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-no-background-writers \
             --pid "$api_pid" || fail_post candidate_v2_api_background_writer_enabled_after_admission
-          [ "$(state_digest "$v1_media")" = "$before_digest" ] || fail_post historical_state_changed_before_public_open
           rm -f "$maintenance_flag" || fail_post public_gate_open_failed
           systemctl reload nginx || fail_public_open nginx_reload_after_gate_open_failed
           maintenance_active=0

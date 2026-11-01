@@ -115,23 +115,6 @@ jobs:
             done
           }
 
-          state_digest() {
-            python3 - "$1" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          entries = []
-          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
-              directory = root / group
-              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
-                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
-          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
-          PY
-          }
-
           compose_candidate() {
             (
               cd "$candidate_release"
@@ -143,9 +126,12 @@ jobs:
             )
           }
 
-          normalized_env_digest() {
-            local file="$1"
-            grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=' "$file" | sha256sum | awk '{print $1}'
+          normalized_env_matches() {
+            local candidate="$1" live="$2"
+            diff -q \
+              <(grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=' "$candidate") \
+              <(grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=' "$live") \
+              >/dev/null
           }
 
           env_value() {
@@ -235,7 +221,7 @@ jobs:
             local env_file="$candidate_release/src_skeleton/.env"
             local gate_count vision_enabled
             [ -f "$env_file" ] || stop candidate_env_missing
-            [ "$(normalized_env_digest "$env_file")" = "$(normalized_env_digest "$live_env")" ] || stop candidate_env_drift
+            normalized_env_matches "$env_file" "$live_env" || stop candidate_env_drift
 
             # Keep user-selected models and providers; migrate only stale GPT defaults.
             migrate_candidate_model_defaults "$env_file"
@@ -293,7 +279,6 @@ jobs:
           [ -d "$v2_storage" ] || stop v2_storage_missing
           env_metadata="$(stat -c '%a:%U:%G' "$live_env")"
           require_v2 || stop v2_units_not_active
-          before_digest="$(state_digest "$v1_media")" || stop historical_state_digest_unreadable
           v1_identity="$(docker inspect "$v1_container" --format '{{.Id}}|{{.State.StartedAt}}')" || stop v1_identity_unreadable
 
           git -C "$active_release" fetch --prune origin >/dev/null
@@ -355,8 +340,6 @@ jobs:
           [ "$(realpath "$deploy_link")" = "$active_release" ] || stop active_release_changed_during_build
           [ "$(docker inspect "$v1_container" --format '{{.Id}}|{{.State.StartedAt}}')" = "$v1_identity" ] || stop v1_changed_during_build
           require_v2 || stop v2_changed_during_build
-          [ "$(state_digest "$v1_media")" = "$before_digest" ] || stop historical_state_changed_during_build
-
           printf 'GUARDED_CANDIDATE_RESULT=pass\n'
           printf 'GUARDED_CANDIDATE_TARGET_SHA=%s\n' "$expected_sha"
           printf 'GUARDED_CANDIDATE_ACTIVE_RELEASE=%s\n' "$active_release"

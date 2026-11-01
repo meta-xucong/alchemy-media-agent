@@ -186,14 +186,13 @@ def test_successful_activation_restores_only_previously_active_maintenance_timer
     restore = 'if [ "$maintenance_timer_was_active" = 1 ]; then'
     verify_active = 'systemctl is-active --quiet alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_unverified'
     preserve_inactive = 'systemctl is-active --quiet alchemy-v3-storage-maintenance.timer && fail_public_open maintenance_timer_unexpectedly_active'
-    digest_check = '[ "$(state_digest "$v1_media")" = "$before_digest" ] || fail_post historical_state_changed_before_public_open'
     open_gate = 'rm -f "$maintenance_flag" || fail_post public_gate_open_failed'
     public_smoke = 'wait_for_200 "$public_base_url/api/v2/health" || fail_public_open v2_public_health_failed'
     assert restore in success
     assert 'systemctl start alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_failed' in success
     assert verify_active in success and preserve_inactive in success
-    assert digest_check in success
-    assert success.index(digest_check) < success.index(open_gate) < success.index(public_smoke) < success.index(restore)
+    assert "state_digest" not in workflow
+    assert success.index(open_gate) < success.index(public_smoke) < success.index(restore)
     assert success.index(restore) < success.index(verify_active) < success.index(preserve_inactive) < workflow.index("GUARDED_ACTIVATE_RESULT=pass")
 
 

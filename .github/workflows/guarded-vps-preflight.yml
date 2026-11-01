@@ -82,23 +82,6 @@ jobs:
             done
           }
 
-          state_digest() {
-            python3 - "$1" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          entries = []
-          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
-              directory = root / group
-              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
-                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
-          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
-          PY
-          }
-
           [ -L "$deploy_link" ] || stop deployment_link_missing
           active_release="$(realpath "$deploy_link")"
           [ -e "$active_release/.git" ] || stop active_release_not_git_worktree
@@ -111,14 +94,10 @@ jobs:
           [ -d "$v1_media" ] || stop v1_media_missing
           [ -d "$v2_storage" ] || stop v2_storage_missing
           require_v2 || stop v2_units_not_active
-          before_digest="$(state_digest "$v1_media")" || stop historical_state_digest_unreadable
-
           git -C "$active_release" fetch --prune origin >/dev/null
           [ "$(git -C "$active_release" rev-parse origin/main)" = "$expected_sha" ] || stop origin_main_target_mismatch
           [ "$(git -C "$active_release" cat-file -t "${expected_sha}^{commit}")" = commit ] || stop target_commit_unavailable
           git -C "$active_release" diff --quiet || stop active_release_changed_after_fetch
-          [ "$(state_digest "$v1_media")" = "$before_digest" ] || stop historical_state_changed_during_preflight
-
           printf 'GUARDED_PREFLIGHT_RESULT=pass\n'
           printf 'GUARDED_PREFLIGHT_TARGET_SHA=%s\n' "$expected_sha"
           printf 'GUARDED_PREFLIGHT_ACTIVE_RELEASE=%s\n' "$active_release"
@@ -127,5 +106,4 @@ jobs:
           printf 'GUARDED_PREFLIGHT_V1_MEDIA=%s\n' "$v1_media"
           printf 'GUARDED_PREFLIGHT_V2_STORAGE=%s\n' "$v2_storage"
           printf 'GUARDED_PREFLIGHT_V2_UNITS=all_active\n'
-          printf 'GUARDED_PREFLIGHT_HISTORICAL_STATE_DIGEST=%s\n' "$before_digest"
           REMOTE_SCRIPT

@@ -158,3 +158,8 @@ with admission still closed, and check that V1/V3/Lab and V2 report the same
 Bridge origin/workspace/profile. Preserve existing API fallback behavior.
 Advance to the synthetic fake-image task only after the staged client guards
 pass; do not report total completion at a phase boundary.
+
+The guarded candidate, preflight and activation workflows no longer compute or
+compare SHA-256 digests of V1 historical state. Candidate environment
+equivalence uses a quiet direct diff; the Git commit identifier remains the
+release selector. The RB33 flow has not yet dispatched a candidate build.
