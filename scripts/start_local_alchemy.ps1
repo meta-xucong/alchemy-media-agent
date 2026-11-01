@@ -71,9 +71,18 @@ if ($composeExitCode -ne 0) {
     throw "Local Alchemy build failed with exit code $composeExitCode. The running service was not changed."
 }
 
-$imageRevisionOutput = & $docker.Source image inspect alchemy-media-agent:bridge-local --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>$null
+$imageLabelsJson = & $docker.Source image inspect alchemy-media-agent:bridge-local --format '{{json .Config.Labels}}' 2>$null
 $imageInspectExitCode = $LASTEXITCODE
-$imageRevision = ($imageRevisionOutput -join '').Trim()
+$imageRevision = ''
+if ($imageInspectExitCode -eq 0) {
+    try {
+        $imageLabels = ($imageLabelsJson -join '') | ConvertFrom-Json -ErrorAction Stop
+        $imageRevisionProperty = $imageLabels.PSObject.Properties['org.opencontainers.image.revision']
+        if ($imageRevisionProperty) { $imageRevision = [string]$imageRevisionProperty.Value }
+    } catch {
+        $imageRevision = ''
+    }
+}
 if ($imageInspectExitCode -ne 0 -or $imageRevision -ne $revision) {
     throw 'The newly built Alchemy image does not report the current Git revision. The running service was not changed.'
 }

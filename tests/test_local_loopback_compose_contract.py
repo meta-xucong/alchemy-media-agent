@@ -30,5 +30,9 @@ def test_loopback_compose_rebuilds_from_current_alchemy_source() -> None:
     assert "ALCHEMY_REVISION" in launcher
     assert "Get-Command docker.exe -CommandType Application" in launcher
     assert "image inspect alchemy-media-agent:bridge-local" in launcher
+    assert "--format '{{json .Config.Labels}}'" in launcher
+    assert "ConvertFrom-Json -ErrorAction Stop" in launcher
+    assert "org.opencontainers.image.revision" in launcher
+    assert launcher.index("$imageRevision -ne $revision") < launcher.index("up -d --no-build --no-deps alchemy-media-agent")
     assert "--no-build --no-deps alchemy-media-agent" in launcher
     assert "scripts\\start_local_alchemy.ps1" in batch_entrypoint
