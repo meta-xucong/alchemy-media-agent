@@ -907,6 +907,5 @@ jobs:
           printf 'GUARDED_ACTIVATE_HEALTH=v1_v2_local_public_200\n'
           printf 'GUARDED_ACTIVATE_FRONTEND=desktop_h5_static_markers_verified\n'
           printf 'GUARDED_ACTIVATE_PROTECTION=v3_projects_%s\n' "$project_status"
-          printf 'GUARDED_ACTIVATE_HISTORICAL_STATE=unchanged\n'
           printf 'GUARDED_ACTIVATE_ROLLBACK=not_needed\n'
           REMOTE_SCRIPT

@@ -507,6 +507,9 @@ def test_backup_and_restore_preserve_database_and_source_epoch(tmp_path):
 
     result = _MODULE.create_backup(backup_dir, roots, [v1, v2], [source])
     assert result["status"] == "backed_up"
+    assert "manifest_sha256" not in result
+    manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert all("sha256" not in item for item in manifest["records"])
     if os.name != "nt":
         assert (backup_dir.stat().st_mode & 0o777) == 0o700
 
@@ -526,6 +529,27 @@ def test_backup_and_restore_preserve_database_and_source_epoch(tmp_path):
     with sqlite3.connect(v2) as connection:
         assert connection.execute("SELECT status FROM v2_tasks").fetchone()[0] == "completed"
     assert source.read_text(encoding="utf-8") == '{"id":"before"}\n'
+
+
+def test_backup_restore_does_not_compute_or_compare_content_sha(tmp_path):
+    root = tmp_path / "v1"
+    root.mkdir()
+    source = root / "history.jsonl"
+    source.write_text("before\n", encoding="utf-8")
+    backup_dir = tmp_path / "backup"
+
+    result = _MODULE.create_backup(backup_dir, [root], [], [source])
+    assert "manifest_sha256" not in result
+    manifest_path = backup_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    record = manifest["records"][0]
+    assert "sha256" not in record
+    (backup_dir / record["backup"]).write_text("backup copy\n", encoding="utf-8")
+
+    restored = _MODULE.restore_backup(manifest_path, [root])
+
+    assert restored["status"] == "restored"
+    assert source.read_text(encoding="utf-8") == "backup copy\n"
 
 
 def test_backup_refuses_database_outside_allowed_roots(tmp_path):

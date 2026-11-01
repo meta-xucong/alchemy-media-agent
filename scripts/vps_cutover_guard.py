@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -886,14 +885,6 @@ def _within(path: Path, roots: list[Path]) -> bool:
     return any(resolved == root.resolve() or root.resolve() in resolved.parents for root in roots)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _original_file_metadata(path: Path) -> dict:
     try:
         details = path.stat(follow_symlinks=False)
@@ -1020,7 +1011,7 @@ def create_backup(backup_dir: Path, roots: list[Path], databases: list[Path], so
                 finally:
                     source.close()
                 _private_mode(target, 0o600)
-                item.update({"backup": target.name, "sha256": _sha256(target)})
+                item.update({"backup": target.name})
             records.append(item)
 
         for index, source_path in enumerate(sources):
@@ -1034,7 +1025,7 @@ def create_backup(backup_dir: Path, roots: list[Path], databases: list[Path], so
                 target = backup_dir / f"source-{index:04d}-{path.name}"
                 shutil.copy2(path, target)
                 _private_mode(target, 0o600)
-                item.update({"backup": target.name, "sha256": _sha256(target)})
+                item.update({"backup": target.name})
             records.append(item)
 
         manifest = {"schema_version": 2, "restore_scope": "pre_candidate_writer_start_only",
@@ -1045,8 +1036,7 @@ def create_backup(backup_dir: Path, roots: list[Path], databases: list[Path], so
         _private_mode(temporary, 0o600)
         os.replace(temporary, manifest_path)
         return {"status": "backed_up", "database_count": sum(item["kind"] == "sqlite" for item in records),
-                "source_count": sum(item["kind"] == "source" for item in records),
-                "manifest_sha256": _sha256(manifest_path)}
+                "source_count": sum(item["kind"] == "source" for item in records)}
     except Exception:
         # Keep partial evidence for operator inspection; do not silently remove it.
         raise
@@ -1079,8 +1069,8 @@ def restore_backup(manifest_path: Path, roots: list[Path]) -> dict:
                     sidecar.unlink(missing_ok=True)
         else:
             backup = (backup_dir / item["backup"]).resolve()
-            if backup.parent != backup_dir or _sha256(backup) != item.get("sha256"):
-                raise CutoverBlocked("backup_checksum_mismatch")
+            if backup.parent != backup_dir or not backup.is_file():
+                raise CutoverBlocked("backup_file_missing")
             target.parent.mkdir(parents=True, exist_ok=True)
             temporary = target.with_name(target.name + ".cutover-restore-tmp")
             shutil.copy2(backup, temporary)
@@ -1096,8 +1086,6 @@ def restore_backup(manifest_path: Path, roots: list[Path]) -> dict:
                         raise CutoverBlocked("restored_sqlite_quick_check_failed")
                 finally:
                     connection.close()
-            if _sha256(target) != item.get("sha256"):
-                raise CutoverBlocked("restored_file_checksum_mismatch")
         restored += 1
     return {"status": "restored", "record_count": restored}
 

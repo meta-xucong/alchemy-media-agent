@@ -81,30 +81,11 @@ jobs:
             printf '%s' "$value"
           }
 
-          state_digest() {
-            python3 - "$1" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          entries = []
-          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
-              directory = root / group
-              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
-                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
-          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
-          PY
-          }
-
           [ -L "$deploy_link" ] || stop deployment_link_missing
           active_release="$(realpath "$deploy_link")"
           [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_sha" ] || stop active_release_head_mismatch
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
           v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
-          before_digest="$(state_digest "$v1_media")" || stop historical_state_digest_unreadable
-
           docker exec -i "$v1_container" python - "$project_id" <<'PY'
           import json
           import sys
@@ -257,9 +238,7 @@ jobs:
           )
           PY
 
-          [ "$(state_digest "$v1_media")" = "$before_digest" ] || stop historical_state_changed_during_audit
           printf 'GUARDED_PROJECT_AUDIT_RESULT=pass\n'
           printf 'GUARDED_PROJECT_AUDIT_PROJECT_ID=%s\n' "$project_id"
           printf 'GUARDED_PROJECT_AUDIT_ACTIVE_SHA=%s\n' "$expected_sha"
-          printf 'GUARDED_PROJECT_AUDIT_HISTORICAL_STATE=unchanged\n'
           REMOTE_SCRIPT
