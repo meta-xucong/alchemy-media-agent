@@ -990,6 +990,42 @@ def public_exploration_session(session: ExplorationSession) -> dict[str, Any]:
     return payload
 
 
+def _lab_bridge_wait_message(job: GenerationJob | None) -> str:
+    code = str(getattr(job.error, "code", "") or "") if job and job.error else ""
+    if not code.startswith("bridge_"):
+        return ""
+    state = code[len("bridge_"):]
+    return {
+        "queued": "Bridge 已接收原任务，正在排队等待 Codex 节点。",
+        "claimed": "Codex 节点已接收原任务，正在准备执行。",
+        "running": "Codex 节点正在执行原图任务。",
+        "execution_unknown": "Bridge 尚未确认原任务的执行结果，系统正在继续对账。",
+        "bridge_submission_unknown": "Bridge 尚未确认是否接收原任务，系统正在查询同一任务。",
+        "awaiting_user": "Bridge 任务等待人工处理，请检查执行窗口。",
+        "artifacts_ready": "Bridge 已有生成结果，Alchemy 正在接收并登记原图。",
+        "bridge_store_busy": "Bridge 输入存储暂忙；系统会继续检查原任务状态。",
+    }.get(state, "")
+
+
+async def public_exploration_session_with_bridge_status(session: ExplorationSession) -> dict[str, Any]:
+    """Project Bridge reconciliation state into the existing public progress field."""
+    payload = public_exploration_session(session)
+    if not session.primary_transport:
+        return payload
+    for variant in session.variants:
+        metadata = variant.provider_metadata or {}
+        job_id = metadata.get("job_id")
+        if variant.status != "running" or not metadata.get("primary_transport") or not job_id:
+            continue
+        job = await _run_lab_sqlite_call(repository.get_job, str(job_id))
+        message = _lab_bridge_wait_message(job)
+        if message and isinstance(payload.get("progress"), dict):
+            payload["progress"]["message"] = message
+        if message:
+            break
+    return payload
+
+
 def update_favorites(session_id: str, selection: FavoriteSelection, *, veyra_user_id: int | None = None, is_admin: bool = False) -> ExplorationSession | None:
     session = get_exploration_session(session_id, veyra_user_id=veyra_user_id, is_admin=is_admin)
     if not session:

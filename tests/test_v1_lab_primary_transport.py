@@ -234,6 +234,27 @@ def test_lab_real_entry_pending_restart_keeps_variant_job(runtime, monkeypatch):
     assert len(repository.list_jobs()) == 1 and bridge.creates == 1 and not api.calls
 
 
+def test_lab_public_projection_exposes_bridge_wait_state_without_mutating_session(monkeypatch):
+    session = make_lab_session()
+    session.primary_transport = True
+    session.status = 'running'
+    session.variants[0].status = 'running'
+    session.variants[0].provider_metadata = {'job_id': 'job_fixture', 'primary_transport': True}
+    session.progress = {'message': '正在生成第 1/1 张。'}
+    stored_message = session.progress['message']
+    monkeypatch.setattr(lab.repository, 'get_job', lambda job_id: SimpleNamespace(
+        error=SimpleNamespace(code='bridge_execution_unknown') if job_id == 'job_fixture' else None,
+    ))
+
+    async def read_direct(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(lab, '_run_lab_sqlite_call', read_direct)
+    public = asyncio.run(lab.public_exploration_session_with_bridge_status(session))
+    assert public['progress']['message'] == 'Bridge 尚未确认原任务的执行结果，系统正在继续对账。'
+    assert session.progress['message'] == stored_message
+
+
 def test_billing_response_loss_reuses_outputs_and_debit_key_before_ack(runtime, monkeypatch):
     bridge, api = runtime
     debit_keys = []; charged = set(); preflights = []; account = {"balance": 2}

@@ -91,7 +91,7 @@ from app.services.alchemy_lab import (
     list_lab_history,
     list_lab_modules,
     list_style_presets,
-    public_exploration_session,
+    public_exploration_session_with_bridge_status,
     update_favorites,
 )
 from app.services.alchemy_lab_style_search import SearchLabStylesRequest, search_lab_styles
@@ -2536,7 +2536,7 @@ async def create_rare_style_explorer_session(
             detail={"code": "storage_busy", "message": "Storage is busy; retry shortly."},
             headers={"Retry-After": "1"},
         ) from exc
-    return {"session": public_exploration_session(session), "board": comparison_board(session), "async": session.status not in {"completed", "partial_success", "failed"}}
+    return {"session": await public_exploration_session_with_bridge_status(session), "board": comparison_board(session), "async": session.status not in {"completed", "partial_success", "failed"}}
 
 
 @app.get("/api/lab/rare-style-explorer/sessions/{session_id}")
@@ -2553,7 +2553,7 @@ async def get_rare_style_explorer_session(session_id: str, request: Request, aut
     if session.primary_transport and session.status in {"queued", "running"}:
         from app.services.alchemy_lab import run_exploration_session
         session = await run_exploration_session(session.id, veyra_user_id=context.get("user_id"))
-    return {"session": public_exploration_session(session), "board": comparison_board(session)}
+    return {"session": await public_exploration_session_with_bridge_status(session), "board": comparison_board(session)}
 
 
 @app.post("/api/lab/rare-style-explorer/sessions/{session_id}/cancel")
@@ -2568,7 +2568,7 @@ async def cancel_primary_lab_session(session_id: str, request: Request, authoriz
     from app.services.primary_image_transport import PrimaryFinalizationInProgress
     try:
         canceled = await cancel_primary_exploration_session(session.id)
-        return {"session": public_exploration_session(canceled), "board": comparison_board(canceled)}
+        return {"session": await public_exploration_session_with_bridge_status(canceled), "board": comparison_board(canceled)}
     except PrimaryFinalizationInProgress:
         raise HTTPException(status_code=409, detail={"code": "primary_finalization_in_progress"}) from None
 
@@ -2590,7 +2590,7 @@ async def update_rare_style_explorer_favorites(
     )
     if not session:
         raise HTTPException(status_code=404, detail={"code": "exploration_session_not_found", "message": "Exploration session not found."})
-    return {"session": public_exploration_session(session), "board": comparison_board(session)}
+    return {"session": await public_exploration_session_with_bridge_status(session), "board": comparison_board(session)}
 
 
 @app.api_route("/api/v2/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])

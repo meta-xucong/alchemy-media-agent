@@ -2138,21 +2138,15 @@ function scheduleLabPolling() {
         await finishLabPolling(payload.board);
         return;
       }
-      if (labState.pollAttempt >= labPollMaxAttempts) {
-        stopLabPolling();
-        updateLabNotice("任务仍在后台串行生成，请稍后刷新历史查看结果。", "warning");
-        labState.loading = false;
-        setLabBusy(false);
-        return;
+      if (labState.pollAttempt === labPollMaxAttempts) {
+        updateLabNotice(payload.session?.progress?.message || "任务仍在后台串行生成，页面会继续查询同一任务。", "warning");
       }
     } catch (error) {
-      stopLabPolling();
-      updateLabNotice(`状态刷新失败：${friendlyError(error)}。任务可能仍在后台继续。`, "warning");
-      labState.loading = false;
-      setLabBusy(false);
+      updateLabNotice(`状态刷新暂时失败：${friendlyError(error)}。页面会继续查询原任务。`, "warning");
+      labState.pollTimer = window.setTimeout(tick, 15000);
       return;
     }
-    labState.pollTimer = window.setTimeout(tick, labPollIntervalMs);
+    labState.pollTimer = window.setTimeout(tick, labState.pollAttempt >= labPollMaxAttempts ? 30000 : labPollIntervalMs);
   };
   labState.pollTimer = window.setTimeout(tick, labPollIntervalMs);
 }
@@ -11240,6 +11234,8 @@ function v2ProgressDetailForRun(stageKey, run) {
   if (run?.status === "blocked_by_policy") return "安全策略要求停止本次生成。";
   if (run?.status === "waiting_for_user") return "需要用户确认后继续。";
   if (run?.status === "completed") return outputs.length ? `流程完成，共得到 ${outputs.length} 张输出。` : "流程结束。";
+  const bridgeWaitMessage = v2BridgeWaitMessage(run);
+  if (bridgeWaitMessage) return bridgeWaitMessage;
   if (stageKey === "composing_prompt" && claudeProgress?.message) {
     const elapsed = v2DurationFromMs(claudeProgress.elapsed_ms);
     return elapsed ? `${claudeProgress.message} · Claude累计 ${elapsed}` : claudeProgress.message;
@@ -11260,8 +11256,24 @@ function v2ProgressTypeForRun(run) {
   if (run?.status === "failed" || run?.status === "cancelled") return "error";
   if (run?.status === "blocked_by_policy" || run?.status === "waiting_for_user") return "warning";
   if (run?.status === "completed") return "success";
+  if (v2BridgeWaitMessage(run)) return "warning";
   if (run?.orchestrator_decision?.fallback_reason) return "warning";
   return "info";
+}
+
+function v2BridgeWaitMessage(run) {
+  const jobs = Array.isArray(run?.generation_jobs) ? run.generation_jobs : [];
+  const job = jobs.find((item) => item?.provider_id === "render_bridge"
+    && item?.error?.error_code === "bridge_wait");
+  if (!job) return "";
+  const action = String(run?.next_actions?.[0] || "").trim();
+  if (action) return action;
+  const state = String(job.error?.detail?.state || "");
+  if (state === "awaiting_user") return "Render Bridge 等待人工处理；系统会保留并查询同一任务。";
+  if (["execution_unknown", "bridge_submission_unknown"].includes(state)) {
+    return "Render Bridge 尚未确认原任务结果；系统会继续对账，不会重新生图或切换 API。";
+  }
+  return "Render Bridge 尚未返回最终结果；系统会继续查询同一任务。";
 }
 
 function v2FallbackReasonLabel(reason) {
@@ -11399,7 +11411,7 @@ async function pollV2Run(runId, options = {}) {
     }
     if (attempt === v2RunLongWaitAttempt || (attempt > v2RunLongWaitAttempt && attempt % 30 === 0)) {
       const stage = refineV2ProgressStage(v2StatusStageMap[run.status] || "planning", run);
-      const longWaitDetail = "后台仍在运行，页面会持续刷新直到任务明确完成或失败；真实出图可能需要数分钟。";
+      const longWaitDetail = v2BridgeWaitMessage(run) || "后台仍在运行，页面会持续刷新直到任务明确完成或失败；真实出图可能需要数分钟。";
       if (showProfessionalProgress) {
         setV2Progress(stage, longWaitDetail, "info", { forceNotice: true });
       } else {
@@ -13891,7 +13903,25 @@ function v1ImageJobTerminal(job) {
 function v1ImageJobPollDelay(attempt) {
   if (attempt < 4) return 1200;
   if (attempt < 30) return 2500;
+  if (attempt >= 120) return 10000;
   return 5000;
+}
+
+function v1BridgeWaitMessage(job) {
+  const code = String(job?.error?.code || "");
+  if (!code.startsWith("bridge_")) return "";
+  const state = code.slice("bridge_".length);
+  const messages = {
+    queued: "Bridge 已接收原任务，正在排队等待 Codex 节点。",
+    claimed: "Codex 节点已接收原任务，正在准备执行。",
+    running: "Codex 节点正在执行原图任务。",
+    execution_unknown: "Bridge 尚未确认原任务的执行结果，系统正在继续对账。",
+    bridge_submission_unknown: "Bridge 尚未确认是否接收原任务，系统正在查询同一任务。",
+    awaiting_user: "Bridge 任务等待人工处理，请检查执行窗口。",
+    artifacts_ready: "Bridge 已有生成结果，Alchemy 正在接收并登记原图。",
+    bridge_store_busy: "Bridge 输入存储暂忙；系统会继续检查原任务状态。",
+  };
+  return messages[state] || "";
 }
 
 function delay(ms) {
@@ -13921,13 +13951,18 @@ async function refreshV1GenerationSideEffects() {
   }
 }
 
-async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttempts = 120, onJobUpdate = null } = {}) {
+async function waitForV1ImageJob(initialJob, { actionLabel = "生成", onJobUpdate = null } = {}) {
   let job = initialJob;
   let transientErrors = 0;
-  for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     state.currentJob = job;
     onJobUpdate?.(job);
     setStatus(job?.status || "生成中", job?.outputs?.length || 0, job?.trace_id || "-");
+    const bridgeMessage = v1BridgeWaitMessage(job);
+    if (bridgeMessage) {
+      const bridgeState = String(job?.error?.code || "").slice("bridge_".length);
+      showNotice(bridgeMessage, ["execution_unknown", "bridge_submission_unknown", "awaiting_user"].includes(bridgeState) ? "warning" : "info");
+    }
     if (v1ImageJobReady(job) || v1ImageJobTerminal(job)) {
       return job;
     }
@@ -13945,14 +13980,10 @@ async function waitForV1ImageJob(initialJob, { actionLabel = "生成", maxAttemp
     } catch (error) {
       transientErrors += 1;
       if (transientErrors >= 3) {
-        return deferV1ImageJob(
-          job,
-          `${actionLabel}任务已提交，但状态查询暂时中断；后台会继续处理，稍后刷新历史即可看到结果。`
-        );
+        showNotice(`${actionLabel}任务状态暂时无法读取，正在继续查询同一任务。`, "warning");
       }
     }
   }
-  return deferV1ImageJob(job, `${actionLabel}仍在后台进行，请稍后刷新历史查看结果。`);
 }
 
 async function generateImage(options = {}) {
@@ -15653,8 +15684,10 @@ function updateV1ProfessionalProgressFromJob(job, { actionLabel = "生成" } = {
   const stageKey = v1JobStatusStageMap[status] || "generating";
   const outputs = Array.isArray(job?.outputs) ? job.outputs.length : 0;
   let detail = `${actionLabel}任务正在处理。`;
+  const bridgeMessage = v1BridgeWaitMessage(job);
+  if (bridgeMessage) detail = bridgeMessage;
   if (stageKey === "queued") detail = `${actionLabel}任务已提交，后台正在排队或准备模型。`;
-  if (stageKey === "generating") detail = `模型正在出图，已返回 ${outputs} 张。`;
+  if (stageKey === "generating" && !bridgeMessage) detail = `模型正在出图，已返回 ${outputs} 张。`;
   if (stageKey === "postprocessing") detail = outputs ? `已得到 ${outputs} 张，正在整理和复检。` : "正在整理生成结果。";
   if (stageKey === "ready") detail = `完成，共得到 ${outputs} 张输出。`;
   if (stageKey === "failed") detail = jobErrorMessage(job);
