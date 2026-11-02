@@ -109,6 +109,7 @@ jobs:
           v2_queue_db=""
           bridge_control=""
           bridge_control_dir=""
+          bridge_legacy_control=""
           bridge_state=""
           nginx_config_backup=""
           runtime_contract_backup=""
@@ -721,6 +722,7 @@ jobs:
             --release-root "$old_release" --release-root "$candidate_release")" || stop_pre bridge_paths_invalid
           bridge_control="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["control_path"])' <<<"$bridge_paths")"
           bridge_control_dir="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["control_dir"])' <<<"$bridge_paths")"
+          bridge_legacy_control="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("legacy_control_path", ""))' <<<"$bridge_paths")"
           bridge_state="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' <<<"$bridge_paths")"
           # Provision only new deployment directories. Existing ownership/modes
           # and credentials are never rewritten; incompatible access stops cutover.
@@ -778,6 +780,7 @@ jobs:
             python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-v2-api-runtime-contract \
               --environment-file "$api_runtime_env" --drop-in "$api_runtime_drop_in" >/dev/null || stop_pre api_runtime_contract_invalid
           fi
+          cp -p /etc/alchemy/alchemy-v2.env "$runtime_contract_backup/alchemy-v2.env" || stop_pre v2_environment_backup_failed
 
           maintenance_active=1
           install -m 644 "$candidate_release/alchemy-media-agent.nginx.conf" "$nginx_config" || stop_pre candidate_nginx_install_failed
@@ -811,6 +814,29 @@ jobs:
             --v2-repository "$v2_data/repository.sqlite3" \
             --v3-projects-root "$v1_media/v3_projects" \
             --v3-container-started-at "$v1_container_started_at" || stop_pre durable_work_changed_while_fencing
+          if [ -n "$bridge_legacy_control" ]; then
+            bridge_v2_config="$(python3 -c 'import runpy,sys; from pathlib import Path; ns=runpy.run_path(sys.argv[1]); key="ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG"; print(ns["_read_v3_bootstrap_environment"](Path(sys.argv[2]), {key}).get(key, ""))' "$candidate_release/scripts/vps_cutover_guard.py" /etc/alchemy/alchemy-v2.env)" || stop_pre v2_bridge_config_read_failed
+            if [ "$(grep -c '^ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=' /etc/alchemy/alchemy-v2.env || true)" -gt 1 ]; then
+              stop_pre v2_bridge_config_duplicate
+            fi
+            if [ -z "$bridge_v2_config" ] || [ "$bridge_v2_config" = /var/lib/alchemy/render-bridge-primary/control.json ]; then
+              bridge_env_tmp="/etc/alchemy/alchemy-v2.env.migration.$$"
+              awk 'BEGIN { replaced=0 } /^ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=/ { if (!replaced) print "ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=/var/lib/alchemy/render-bridge-primary/control/control.json"; replaced=1; next } { print } END { if (!replaced) print "ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=/var/lib/alchemy/render-bridge-primary/control/control.json" }' /etc/alchemy/alchemy-v2.env > "$bridge_env_tmp" || stop_pre v2_bridge_config_migration_write_failed
+              chmod --reference=/etc/alchemy/alchemy-v2.env "$bridge_env_tmp" || stop_pre v2_bridge_config_migration_mode_failed
+              chown --reference=/etc/alchemy/alchemy-v2.env "$bridge_env_tmp" || stop_pre v2_bridge_config_migration_owner_failed
+              mv "$bridge_env_tmp" /etc/alchemy/alchemy-v2.env || stop_pre v2_bridge_config_migration_install_failed
+            fi
+            if [ -e "$bridge_legacy_control" ]; then
+              cp -p "$bridge_legacy_control" "$maintenance_backup/bridge-control-legacy.json" || stop_pre bridge_control_backup_failed
+              if [ ! -e "$bridge_control" ]; then
+                local_bridge_tmp="${bridge_control_dir}.migration.$$"
+                [ ! -e "$local_bridge_tmp" ] || stop_pre bridge_control_migration_temp_exists
+                cp -p "$bridge_legacy_control" "$local_bridge_tmp" || stop_pre bridge_control_migration_copy_failed
+                chown alchemy:alchemy "$local_bridge_tmp" || stop_pre bridge_control_migration_owner_failed
+                mv "$local_bridge_tmp" "$bridge_control" || stop_pre bridge_control_migration_install_failed
+              fi
+            fi
+          fi
           backup_stores || stop_pre consistent_store_backup_failed
           require_disk_floor "$maintenance_backup_root" || stop_pre backup_consumed_disk_reserve
           require_post_backup_data_capacity "$maintenance_backup/database-inventory.bin" || stop_pre backup_consumed_data_reserve

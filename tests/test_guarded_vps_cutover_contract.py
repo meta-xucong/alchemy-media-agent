@@ -279,9 +279,36 @@ def test_candidate_migrates_only_the_known_old_v3_brain_budget() -> None:
     assert 'if [ "$brain_budget" = "550" ]; then' in candidate
     assert 'set_env_value "$env_file" V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS "2200"' in candidate
     assert "candidate_brain_budget_migration_invalid" in candidate
-    assert "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=" in candidate
+    assert "|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS|ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG)=" in candidate
     assert "tail -n 120 \"$build_log\"" in candidate
     assert "candidate_image_build_failed" in candidate
+
+
+def test_candidate_migrates_only_the_legacy_bridge_control_path() -> None:
+    candidate = (ROOT / ".github" / "workflows" / "guarded-vps-candidate.yml").read_text(encoding="utf-8")
+
+    assert "migrate_candidate_bridge_paths()" in candidate
+    assert 'if [ "$value" = /var/lib/alchemy/render-bridge-primary/control.json ] || \\' in candidate
+    assert 'set_env_value "$env_file" "$key" /var/lib/alchemy/render-bridge-primary/control/control.json' in candidate
+    assert '"/var/lib/alchemy/render-bridge-primary/control.json"' in candidate
+    assert "'/var/lib/alchemy/render-bridge-primary/control.json'" in candidate
+    assert "|ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG)=" in candidate
+    assert "ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT)='" not in candidate
+
+
+def test_bridge_control_migration_is_backed_up_and_runs_after_writers_are_fenced() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+
+    assert 'bridge_legacy_control="$(python3 -c' in workflow
+    assert 'cp -p "$bridge_legacy_control" "$maintenance_backup/bridge-control-legacy.json"' in workflow
+    assert 'cp -p "$bridge_legacy_control" "$local_bridge_tmp"' in workflow
+    assert 'cp -p /etc/alchemy/alchemy-v2.env "$runtime_contract_backup/alchemy-v2.env"' in workflow
+    assert '_read_v3_bootstrap_environment' in workflow
+    assert 'print "ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=/var/lib/alchemy/render-bridge-primary/control/control.json"' in workflow
+    assert 'END { if (!replaced) print "ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=/var/lib/alchemy/render-bridge-primary/control/control.json" }' in workflow
+    writers_fenced = workflow.index('|| stop_pre durable_work_changed_while_fencing')
+    assert writers_fenced < workflow.index('cp -p "$bridge_legacy_control" "$maintenance_backup/bridge-control-legacy.json"')
+    assert workflow.index('cp -p "$bridge_legacy_control" "$maintenance_backup/bridge-control-legacy.json"') < workflow.index('backup_stores || stop_pre consistent_store_backup_failed')
 
 
 def test_maintenance_flag_is_checked_before_any_https_route() -> None:

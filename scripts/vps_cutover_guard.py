@@ -248,8 +248,12 @@ def _parse_cutover_timestamp(value: object) -> datetime | None:
 
 
 BRIDGE_ROOT = Path("/var/lib/alchemy/render-bridge-primary")
-BRIDGE_PATHS = {
+LEGACY_BRIDGE_PATHS = {
     "ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG": str(BRIDGE_ROOT / "control.json"),
+    "ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT": str(BRIDGE_ROOT / "ledgers"),
+}
+BRIDGE_PATHS = {
+    "ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG": str(BRIDGE_ROOT / "control" / "control.json"),
     "ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT": str(BRIDGE_ROOT / "ledgers"),
 }
 
@@ -263,6 +267,8 @@ def verify_bridge_storage_configuration(v1_environment: Path, v2_environment: Pa
         paths = {}
         for key, default in BRIDGE_PATHS.items():
             value = env.get(key, default)
+            if value == LEGACY_BRIDGE_PATHS[key]:
+                value = default
             if not value or not Path(value).is_absolute():
                 raise CutoverBlocked("bridge_persistent_path_not_absolute")
             resolved = Path(value).resolve()
@@ -278,6 +284,8 @@ def verify_bridge_storage_configuration(v1_environment: Path, v2_environment: Pa
             raise CutoverBlocked("bridge_source_scope_conflict")
     config = Path(effective[0]["ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG"])
     state = Path(effective[0]["ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT"])
+    legacy_control = Path(LEGACY_BRIDGE_PATHS["ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG"])
+    default_control = Path(BRIDGE_PATHS["ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG"]).resolve()
     if config.parent == Path("/") or config == state or config.is_relative_to(state):
         raise CutoverBlocked("bridge_storage_layout_invalid")
     # Admin updates control.json with atomic rename, so a directory bind is
@@ -290,9 +298,10 @@ def verify_bridge_storage_configuration(v1_environment: Path, v2_environment: Pa
             if path.is_dir() and state.is_relative_to(resolved):
                 continue
             raise CutoverBlocked("bridge_control_directory_not_dedicated")
-    if config.exists():
+    control_to_validate = config if config.exists() else legacy_control if config == default_control else config
+    if control_to_validate.exists():
         try:
-            control = json.loads(config.read_text(encoding="utf-8"))
+            control = json.loads(control_to_validate.read_text(encoding="utf-8"))
             if not isinstance(control, dict) or control.get("schema_version") != "1":
                 raise ValueError()
             if control.get("mode") not in {"disabled", "enabled", "draining"}:
@@ -323,8 +332,11 @@ def verify_bridge_storage_configuration(v1_environment: Path, v2_environment: Pa
                 raise CutoverBlocked("bridge_control_endpoint_conflict")
             if expected_workspace and workspace and expected_workspace != workspace:
                 raise CutoverBlocked("bridge_control_workspace_conflict")
-    return {"status": "verified", "scope": "bridge_persistent_paths",
-            "control_path": str(config), "control_dir": str(config.parent), "state_root": str(state)}
+    result = {"status": "verified", "scope": "bridge_persistent_paths",
+              "control_path": str(config), "control_dir": str(config.parent), "state_root": str(state)}
+    if config == default_control:
+        result["legacy_control_path"] = str(legacy_control)
+    return result
 
 
 def verify_bridge_runtime(container: object, processes: list[dict[str, str]],
