@@ -963,10 +963,19 @@ def test_v2_write_access_probe_cli_returns_verified_json(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["status"] == "verified"
 
 
-def test_bridge_paths_default_and_custom_are_consistent(tmp_path):
+def test_bridge_paths_default_and_custom_are_consistent(tmp_path, monkeypatch):
+    bridge_root = tmp_path / 'bridge-root'
+    monkeypatch.setattr(_MODULE, 'BRIDGE_ROOT', bridge_root)
+    monkeypatch.setitem(_MODULE.BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG', str(bridge_root / 'control' / 'control.json'))
+    monkeypatch.setitem(_MODULE.BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT', str(bridge_root / 'ledgers'))
+    monkeypatch.setitem(_MODULE.LEGACY_BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG', str(bridge_root / 'control.json'))
+    monkeypatch.setitem(_MODULE.LEGACY_BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT', str(bridge_root / 'ledgers'))
     v1, v2 = tmp_path / 'v1.env', tmp_path / 'v2.env'
     for p in (v1, v2): p.write_text('VEYRA_SECRET=untouched\n')
-    assert _MODULE.verify_bridge_storage_configuration(v1, v2)['state_root'].endswith('/ledgers')
+    default_result = _MODULE.verify_bridge_storage_configuration(v1, v2)
+    assert Path(default_result['state_root']).name == 'ledgers'
+    assert Path(default_result['control_path']).parts[-2:] == ('control', 'control.json')
+    assert default_result['legacy_control_path'] == str(bridge_root / 'control.json')
     config = tmp_path / 'persistent' / 'control.json'
     state = tmp_path / 'persistent' / 'state'
     text = f'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG={config}\nALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT={state}\n'
@@ -977,6 +986,50 @@ def test_bridge_paths_default_and_custom_are_consistent(tmp_path):
     with pytest.raises(_MODULE.CutoverBlocked, match='path_conflict'):
         _MODULE.verify_bridge_storage_configuration(v1, v2)
     assert v1.read_text() == text
+
+
+def test_bridge_legacy_default_paths_migrate_to_dedicated_control_directory(tmp_path, monkeypatch):
+    bridge_root = tmp_path / 'bridge-root'
+    monkeypatch.setattr(_MODULE, 'BRIDGE_ROOT', bridge_root)
+    monkeypatch.setitem(_MODULE.BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG', str(bridge_root / 'control' / 'control.json'))
+    monkeypatch.setitem(_MODULE.BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT', str(bridge_root / 'ledgers'))
+    monkeypatch.setitem(_MODULE.LEGACY_BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG', str(bridge_root / 'control.json'))
+    monkeypatch.setitem(_MODULE.LEGACY_BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT', str(bridge_root / 'ledgers'))
+    v1, v2 = tmp_path / 'v1.env', tmp_path / 'v2.env'
+    legacy = _MODULE.LEGACY_BRIDGE_PATHS
+    text = '\n'.join(f'{key}={value}' for key, value in legacy.items()) + '\n'
+    v1.write_text(text)
+    legacy_config = legacy['ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG']
+    v2.write_text(text.replace(legacy_config, '"' + legacy_config + '"'))
+
+    result = _MODULE.verify_bridge_storage_configuration(v1, v2)
+
+    assert Path(result['control_path']).parts[-2:] == ('control', 'control.json')
+    assert Path(result['state_root']).name == 'ledgers'
+    assert result['legacy_control_path'] == str(bridge_root / 'control.json')
+
+
+def test_bridge_legacy_root_can_contain_other_runtime_files_after_control_path_migration(tmp_path, monkeypatch):
+    bridge_root = tmp_path / 'bridge-root'
+    monkeypatch.setattr(_MODULE, 'BRIDGE_ROOT', bridge_root)
+    monkeypatch.setitem(_MODULE.BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG', str(bridge_root / 'control' / 'control.json'))
+    monkeypatch.setitem(_MODULE.BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT', str(bridge_root / 'ledgers'))
+    monkeypatch.setitem(_MODULE.LEGACY_BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG', str(bridge_root / 'control.json'))
+    monkeypatch.setitem(_MODULE.LEGACY_BRIDGE_PATHS, 'ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT', str(bridge_root / 'ledgers'))
+    bridge_root.mkdir()
+    (bridge_root / 'control.json').write_text(json.dumps({'schema_version': '1', 'mode': 'disabled', 'profiles': ['codex-image']}))
+    (bridge_root / 'api-credentials.env').write_text('PRESERVE_ME=true\n')
+    (bridge_root / 'ledgers').mkdir()
+    v1, v2 = tmp_path / 'v1.env', tmp_path / 'v2.env'
+    legacy = _MODULE.LEGACY_BRIDGE_PATHS
+    text = '\n'.join(f'{key}={value}' for key, value in legacy.items()) + '\n'
+    for path in (v1, v2):
+        path.write_text(text)
+
+    result = _MODULE.verify_bridge_storage_configuration(v1, v2)
+
+    assert Path(result['control_path']).parent == bridge_root / 'control'
+    assert result['legacy_control_path'] == str(bridge_root / 'control.json')
 
 
 def test_bridge_paths_reject_checkout_or_relative(tmp_path):

@@ -129,8 +129,8 @@ jobs:
           normalized_env_matches() {
             local candidate="$1" live="$2"
             diff -q \
-              <(grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=' "$candidate") \
-              <(grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS)=' "$live") \
+              <(grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS|ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG)=' "$candidate") \
+              <(grep -Ev '^(V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED|BACKUP_LLM_MODEL|OPENAI_LLM_MODEL|V3_VISION_INSPECTION_MODEL|V3_VISION_INSPECTION_PROTOCOL|V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS|ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG)=' "$live") \
               >/dev/null
           }
 
@@ -187,6 +187,17 @@ jobs:
             fi
           }
 
+          migrate_candidate_bridge_paths() {
+            local env_file="$1" key value
+            key=ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG
+            value="$(env_value "$env_file" "$key")"
+            if [ "$value" = /var/lib/alchemy/render-bridge-primary/control.json ] || \
+               [ "$value" = '"/var/lib/alchemy/render-bridge-primary/control.json"' ] || \
+               [ "$value" = "'/var/lib/alchemy/render-bridge-primary/control.json'" ]; then
+              set_env_value "$env_file" "$key" /var/lib/alchemy/render-bridge-primary/control/control.json
+            fi
+          }
+
           assert_candidate_model_defaults() {
             local env_file="$1"
             local key live_value expected_value candidate_value vision_provider vision_protocol expected_protocol brain_budget
@@ -226,6 +237,7 @@ jobs:
             # Keep user-selected models and providers; migrate only stale GPT defaults.
             migrate_candidate_model_defaults "$env_file"
             assert_candidate_model_defaults "$env_file"
+            migrate_candidate_bridge_paths "$env_file"
 
             # Enable ordinary V3 visual review by default while preserving an explicit operator opt-out.
             vision_enabled="$(env_value "$env_file" V3_VISION_INSPECTION_ENABLED | tr '[:upper:]' '[:lower:]')"
