@@ -2,13 +2,14 @@
 
 ## Correction model
 
-Bridge is authoritative for the Codex turn boundary: after at most 600 seconds
-it terminates and reaps the local app-server process, then reports
+Bridge is authoritative for the Codex execution deadline: one 600-second
+budget spans app-server initialization and the image turn. On timeout it
+terminates and reaps the local app-server process, then reports
 `codex_turn_timed_out` as terminal failure for the same task and attempt. The
 user accepts that upstream work may still finish and a later generation may
-duplicate it. Bridge releases the slot only after its server confirms the
-terminal-failure evidence. If reporting cannot be confirmed, the slot remains
-occupied until the existing heartbeat retry succeeds. Generic unknown states
+duplicate it. Bridge releases its local slot after process exit and retries
+terminal reporting in the background. The server releases its slot when it
+confirms the terminal-failure evidence. Generic unknown states
 and unconfirmed local process exit remain occupied and require reconciliation.
 Alchemy shows the timeout as terminal and does not auto-route it to the API.
 
@@ -26,7 +27,7 @@ state even though Bridge had stopped its local session.
    to show the same-task reconciliation message.
 3. When V3 Bridge is enabled, give its outer provider call and poll budget
    enough time to receive and persist Bridge's timeout result.
-4. Convert only the specific 600-second turn timeout, after successful local
+4. Convert only the specific 600-second execution timeout, after successful local
    process reaping, into terminal evidence for the same attempt. Do not infer
    this outcome from generic `execution_unknown` or overdue lease status.
 5. Mark the Alchemy V1/Lab and V2 product job terminal-failed for the explicit
