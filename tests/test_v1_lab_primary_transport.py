@@ -147,7 +147,7 @@ def test_v1_pending_restart_same_origin_no_api(runtime, state):
     assert bridge.creates == 1 and api.calls == 0
 
 
-@pytest.mark.parametrize("attention_code", ["codex_turn_timed_out", "execution_reconciliation_overdue"])
+@pytest.mark.parametrize("attention_code", ["codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue"])
 def test_v1_timeout_projects_terminal_curated_error_but_keeps_unknown_task(runtime, attention_code):
     bridge, api = runtime
     bridge.state = 'execution_unknown'
@@ -155,7 +155,14 @@ def test_v1_timeout_projects_terminal_curated_error_but_keeps_unknown_task(runti
     job = asyncio.run(submit())
     assert job.status == JobStatus.failed
     assert job.error.code == f'bridge_{attention_code}'
-    assert ('600 秒' if attention_code == 'codex_turn_timed_out' else '租约已过期') in job.error.message
+    assert ('600 秒' if 'codex_turn_timeout' in attention_code or attention_code == 'codex_turn_timed_out' else '租约已过期') in job.error.message
+    if attention_code == 'codex_turn_timed_out':
+        assert '已释放执行名额' in job.error.message
+        assert '可能产生重复结果' in job.error.message
+        assert '不会自动切换 API' in job.error.message
+    if attention_code == 'codex_turn_timeout_unconfirmed':
+        assert '名额仍被占用' in job.error.message
+        assert '不会自动切换 API' in job.error.message
     assert bridge.creates == 1 and api.calls == 0
 
 

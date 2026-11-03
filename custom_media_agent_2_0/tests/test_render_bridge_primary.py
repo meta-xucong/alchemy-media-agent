@@ -309,7 +309,7 @@ def test_bridge_wait_without_valid_deadline_fails_to_manual_reconciliation_not_i
     assert failed.error["detail"]["state"] == "bridge_reconciliation_deadline_missing_or_invalid"
 
 
-@pytest.mark.parametrize("attention_code", ["codex_turn_timed_out", "execution_reconciliation_overdue"])
+@pytest.mark.parametrize("attention_code", ["codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue"])
 def test_timeout_attention_is_terminal_and_curated_in_v2_error(isolated, monkeypatch, attention_code):
     async def timed_out(*args, **kwargs):
         raise bridge.BridgeWait("execution_unknown", attention_code=attention_code)
@@ -317,7 +317,14 @@ def test_timeout_attention_is_terminal_and_curated_in_v2_error(isolated, monkeyp
     failed = asyncio.run(generation.create_image_job(request(), job_id=f"bridge-{attention_code}"))
     assert failed.status == "failed"
     assert failed.error["detail"]["attention_code"] == attention_code
-    assert ("600" if attention_code == "codex_turn_timed_out" else "租约已过期") in failed.error["message"]
+    assert ("600" if "codex_turn_timeout" in attention_code or attention_code == "codex_turn_timed_out" else "租约已过期") in failed.error["message"]
+    if attention_code == "codex_turn_timed_out":
+        assert "已释放执行名额" in failed.error["message"]
+        assert "可能产生重复结果" in failed.error["message"]
+        assert "不会自动切换 API" in failed.error["message"]
+    if attention_code == "codex_turn_timeout_unconfirmed":
+        assert "名额仍被占用" in failed.error["message"]
+        assert "不会自动切换 API" in failed.error["message"]
     assert failed.provider_id == "render_bridge"
 
 

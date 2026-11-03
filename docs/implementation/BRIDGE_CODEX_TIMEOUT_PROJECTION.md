@@ -3,12 +3,14 @@
 ## Correction model
 
 Bridge is authoritative for the Codex turn boundary: after at most 600 seconds
-it terminates the local app-server process and reports
-`codex_turn_timed_out`. The result may still be unknown upstream, so the same
-Bridge attempt remains held for reconciliation. The product job must end in a
-visible terminal error so its UI does not wait forever, while the Bridge slot
-stays held until same-attempt reconciliation. Alchemy must show that timeout
-without changing the existing no-duplicate rule.
+it terminates and reaps the local app-server process, then reports
+`codex_turn_timed_out` as terminal failure for the same task and attempt. The
+user accepts that upstream work may still finish and a later generation may
+duplicate it. Bridge releases the slot only after its server confirms the
+terminal-failure evidence. If reporting cannot be confirmed, the slot remains
+occupied until the existing heartbeat retry succeeds. Generic unknown states
+and unconfirmed local process exit remain occupied and require reconciliation.
+Alchemy shows the timeout as terminal and does not auto-route it to the API.
 
 The previous projection lost this information: `action_required_detail` was
 filtered by Alchemy's curated attention map, and the V3 outer call could expire
@@ -24,18 +26,21 @@ state even though Bridge had stopped its local session.
    to show the same-task reconciliation message.
 3. When V3 Bridge is enabled, give its outer provider call and poll budget
    enough time to receive and persist Bridge's timeout result.
-4. Keep `execution_unknown` bound to the original Bridge task. Do not release
-   its slot, start a second renderer, or invoke API fallback from this timeout.
+4. Convert only the specific 600-second turn timeout, after successful local
+   process reaping, into terminal evidence for the same attempt. Do not infer
+   this outcome from generic `execution_unknown` or overdue lease status.
 5. Mark the Alchemy V1/Lab and V2 product job terminal-failed for the explicit
-   timeout and overdue-reconciliation codes. Keep the Bridge execution ledger
-   and slot in attention until evidence resolves the original attempt.
+   timeout and overdue-reconciliation codes. Bridge frees the slot for a
+   confirmed timeout terminal failure; an overdue unknown remains occupied.
 
 ## Acceptance
 
 - A timeout reason reaches desktop/mobile V1, Lab, V2 and V3 through curated
   text; arbitrary remote message text is not exposed.
 - V1/Lab and V2 stop presenting the product job as actively generating after
-  the Bridge timeout; the Bridge physical slot remains held for reconciliation.
+  the Bridge timeout. Confirmed timeout releases the Bridge physical slot;
+  generic unknown and overdue states remain held.
 - V3 outer and polling budgets cover the Bridge timeout.
-- A timed-out unknown execution stays on the original Bridge route and does
-  not invoke the API provider.
+- The 600-second timeout stays on the original Bridge route, terminalizes only
+  after local process exit, warns that upstream may still finish, and does not
+  invoke the API provider.

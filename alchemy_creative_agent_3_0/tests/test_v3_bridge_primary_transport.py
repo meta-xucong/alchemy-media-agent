@@ -319,13 +319,19 @@ def test_disabled_bridge_keeps_extended_budget_for_an_existing_pending_binding(r
 
 
 @pytest.mark.parametrize('state', ['execution_unknown', 'cancel_requested'])
-def test_codex_timeout_attention_is_reported_without_api_fallback(rig, state):
+@pytest.mark.parametrize('timeout_code', ['codex_turn_timed_out', 'codex_turn_timeout_unconfirmed'])
+def test_codex_timeout_attention_is_reported_without_api_fallback(rig, state, timeout_code):
     rig.client.state = state
-    rig.client.action_required_code = 'codex_turn_timed_out'
+    rig.client.action_required_code = timeout_code
     with pytest.raises(ProviderRuntimeError) as caught:
         rig.provider.generate(rig.request)
-    assert caught.value.detail['failure_code'] == 'bridge_codex_turn_timed_out', repr(caught.value.detail)
+    assert caught.value.detail['failure_code'] == f'bridge_{timeout_code}', repr(caught.value.detail)
     assert '600' in str(caught.value)
+    if timeout_code == 'codex_turn_timed_out':
+        assert '已释放执行名额' in str(caught.value)
+        assert '可能产生重复结果' in str(caught.value)
+    else:
+        assert '名额仍被占用' in str(caught.value)
     assert rig.client.calls == 1 and not rig.api_calls
 
 

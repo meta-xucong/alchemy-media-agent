@@ -433,7 +433,7 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
             result = await transport.resolve(request)
         provenance = _projection(result)
         if (result.route == "bridge" and provenance.get("attention_code") in {
-                    "codex_turn_timed_out", "execution_reconciliation_overdue",
+                    "codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue",
                 }):
             from app.integrations.render_bridge.attention import MESSAGES
 

@@ -21,7 +21,8 @@ from app.services import task_queue
 from app.services.uploaded_assets import uploaded_asset_path
 
 ATTENTION_MESSAGES = {
-    "codex_turn_timed_out": "Codex 生图超过 600 秒仍未确认结果；本地会话已停止，但上游结果未知。任务仍保留在 Bridge 中，请核对同一任务，不要重复生成或切换 API。",
+    "codex_turn_timed_out": "Codex 生图超过 600 秒；本机进程已停止，Bridge 确认后已释放执行名额，但上游可能仍完成。重新生成可能产生重复结果；本任务不会自动切换 API。",
+    "codex_turn_timeout_unconfirmed": "Codex 生图超过 600 秒，但 Bridge 未能确认本机进程已退出；名额仍被占用并等待对账。本任务不会自动切换 API。",
     "execution_reconciliation_overdue": "执行租约已过期，但没有证据证明上游执行已停止。任务仍保留在 Bridge 中，请核对同一任务。",
 }
 
@@ -363,7 +364,7 @@ async def _generate(record: dict, select_provider, client):
                     provenance = getattr(decision, "provenance", {})
                     attention_code = provenance.get("attention_code") if isinstance(provenance, dict) else None
                     terminal = (store_busy or decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
-                                or attention_code in {"codex_turn_timed_out", "execution_reconciliation_overdue"})
+                                or attention_code in {"codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue"})
                     raise BridgeWait("bridge_store_busy" if store_busy else decision.state, terminal=terminal,
                                      deadline=provenance.get("deadline") if isinstance(provenance, dict) else None,
                                      attention_code=provenance.get("attention_code") if isinstance(provenance, dict) else None)

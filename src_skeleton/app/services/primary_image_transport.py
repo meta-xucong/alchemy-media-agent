@@ -213,7 +213,7 @@ async def _run_owned(job, request, *, edit, transport, existing):
             if result.image is None:
                 attention_code = result.provenance.get("attention_code")
                 terminal_attention = attention_code in {
-                    "codex_turn_timed_out", "execution_reconciliation_overdue",
+                    "codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue",
                 }
                 job.status = (JobStatus.canceled if result.state == "canceled" else
                               JobStatus.failed if result.state in {"failed", "expired"} or terminal_attention else
