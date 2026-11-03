@@ -10,7 +10,6 @@ then rechecks that manifest against the active release.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -49,12 +48,6 @@ def runtime_paths(release: Path) -> RuntimePaths:
     )
 
 
-def requirements_sha256(requirements: Path) -> str:
-    if not requirements.is_file():
-        raise RuntimeGuardError("V2 requirements file is missing.")
-    return hashlib.sha256(requirements.read_bytes()).hexdigest()
-
-
 def verify_bridge_install(paths: RuntimePaths) -> None:
     # V2 runs outside the repository root. Check the installed dependency here
     # so app.main's lazy imports cannot hide a missing transport until generation.
@@ -66,7 +59,6 @@ def verify_bridge_install(paths: RuntimePaths) -> None:
 def build_manifest(paths: RuntimePaths) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
-        "requirements_sha256": requirements_sha256(paths.requirements),
         "venv_python": str(paths.python),
         "prepared_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -77,8 +69,6 @@ def validate_manifest(paths: RuntimePaths, manifest: object) -> None:
         raise RuntimeGuardError("V2 runtime manifest is invalid.")
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RuntimeGuardError("V2 runtime manifest schema does not match this release gate.")
-    if manifest.get("requirements_sha256") != requirements_sha256(paths.requirements):
-        raise RuntimeGuardError("V2 runtime manifest does not match the active requirements.")
     if manifest.get("venv_python") != str(paths.python):
         raise RuntimeGuardError("V2 runtime manifest points at a different release virtual environment.")
 

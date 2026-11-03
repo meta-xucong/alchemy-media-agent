@@ -14,7 +14,7 @@ import pytest
 from app.repositories import history_index as index
 from app.repositories.memory import MemoryRepository
 from app.repositories.sqlite_json import connect
-from app.schemas import GenerationJob, GenerationOutput, Session
+from app.schemas import GenerationJob, GenerationOutput, ImagePromptPlan, Session
 from app.storage.local import LocalMediaStore
 
 
@@ -810,6 +810,24 @@ def test_normalized_job_projection_is_exact_and_common_payload_stored_once(store
     connection = connect(repo.database_path)
     assert connection.execute("SELECT COUNT(*) FROM v1_read_jobs").fetchone()[0] == 0
     connection.close()
+
+
+def test_lab_quality_job_intensity_survives_history_projection(stores):
+    store, repo = stores
+    value = job(1).model_copy(update={
+        "prompt_plan": ImagePromptPlan(
+            main_subject="synthetic Lab image",
+            variables={"work_intensity": "lab_quality", "work_intensity_label": "Lab增强"},
+        ),
+    })
+    put_jobs(repo, [value])
+    index.prepare_history_index(store)
+
+    rows, total = page(store, all_owners=True)
+
+    assert total == 1
+    assert rows[0]["work_intensity"] == "lab_quality"
+    assert rows[0]["work_intensity_label"] == "Lab增强"
 
 
 def test_duplicate_fanout_streams_scalar_rows_with_linear_work_and_bounded_memory(stores):

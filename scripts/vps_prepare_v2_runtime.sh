@@ -79,4 +79,3 @@ if [[ "${install_systemd}" == "1" ]]; then
 fi
 
 echo "V2_RUNTIME_PREPARED_RELEASE=${release}"
-echo "V2_RUNTIME_REQUIREMENTS_SHA256=$(sha256sum "${v2_dir}/requirements.txt" | awk '{print $1}')"

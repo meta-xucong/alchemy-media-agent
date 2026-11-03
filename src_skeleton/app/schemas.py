@@ -334,7 +334,7 @@ class ImageHistoryItem(BaseModel):
     prompt_plan: dict[str, Any] | None = None
     original_prompt: str | None = None
     final_prompt: str | None = None
-    work_intensity: Literal["swift", "balanced", "studio", "atelier"] | None = None
+    work_intensity: Literal["swift", "balanced", "studio", "atelier", "lab_quality"] | None = None
     work_intensity_label: str | None = None
     prompt: str | None = None
     size: str | None = None

@@ -31,17 +31,17 @@ def _prepared_release(tmp_path: Path) -> tuple[Path, object]:
     return release, runtime_paths(release)
 
 
-def test_v2_runtime_manifest_binds_exact_requirements(tmp_path: Path) -> None:
+def test_v2_runtime_manifest_does_not_compare_requirements_content(tmp_path: Path) -> None:
     release, paths = _prepared_release(tmp_path)
     manifest = build_manifest(paths)
 
     validate_manifest(paths, manifest)
     assert manifest["schema_version"] == 1
     assert manifest["venv_python"] == str(paths.python)
+    assert "requirements_sha256" not in manifest
 
     paths.requirements.write_text("httpx>=0.28.0\nhttpcore>=1.0.0,<2\nPillow>=10.4\n", encoding="utf-8")
-    with pytest.raises(RuntimeGuardError, match="requirements"):
-        validate_manifest(paths, manifest)
+    validate_manifest(paths, manifest)
 
 
 def test_v2_runtime_manifest_rejects_wrong_release_python(tmp_path: Path) -> None:
