@@ -34,6 +34,8 @@ class Client:
         self.error = None
         self.input_error = None
         self.transparent_supported = True
+        self.state = 'artifacts_ready'
+        self.action_required_code = None
 
     async def capabilities(self):
         result = {'admission': {'accepting_new_tasks': True},
@@ -66,7 +68,9 @@ class Client:
 
     def task_record(self):
         return {'remote_task_id': 'task_1', 'origin_key': self.payload['origin_key'], 'request': self.payload,
-                'attempt_id': 'attempt_1', 'state': self.state, 'receipt_id': 'receipt_1' if self.state == 'artifacts_ready' else None}
+                'attempt_id': 'attempt_1', 'state': self.state, 'receipt_id': 'receipt_1' if self.state == 'artifacts_ready' else None,
+                'action_required_detail': ({'code': self.action_required_code,
+                    'message': 'untrusted bridge detail'} if self.action_required_code else None)}
 
     async def by_origin(self, origin):
         if self.error:
@@ -293,6 +297,36 @@ def test_wait_budget_expiry_keeps_same_bridge_task_for_recovery(rig):
 
 def test_direct_bridge_poll_default_remains_285_seconds():
     assert adapter.POLL_BUDGET_SECONDS == 285.0
+
+
+def test_active_bridge_extends_v3_outer_and_poll_budgets_to_cover_codex_timeout(rig, monkeypatch):
+    timeout = rig.provider._app_provider_timeout_seconds([], app_request=rig.request)
+    poll_budget = type(rig.provider)._app_provider_poll_budget_seconds(rig.provider, rig.request)
+    assert timeout >= 720.0
+    assert poll_budget >= 705.0
+
+
+def test_disabled_bridge_keeps_extended_budget_for_an_existing_pending_binding(rig, monkeypatch):
+    rig.client.state = 'running'
+    with pytest.raises(ProviderRuntimeError):
+        rig.provider.generate(rig.request)
+    disabled = replace(rig.cfg, enabled=False)
+    monkeypatch.setattr(core.PrimarySettings, 'from_env', classmethod(lambda cls, product: disabled))
+    timeout = rig.provider._app_provider_timeout_seconds([], app_request=rig.request)
+    poll_budget = type(rig.provider)._app_provider_poll_budget_seconds(rig.provider, rig.request)
+    assert timeout >= 720.0
+    assert poll_budget >= 705.0
+
+
+@pytest.mark.parametrize('state', ['execution_unknown', 'cancel_requested'])
+def test_codex_timeout_attention_is_reported_without_api_fallback(rig, state):
+    rig.client.state = state
+    rig.client.action_required_code = 'codex_turn_timed_out'
+    with pytest.raises(ProviderRuntimeError) as caught:
+        rig.provider.generate(rig.request)
+    assert caught.value.detail['failure_code'] == 'bridge_codex_turn_timed_out', repr(caught.value.detail)
+    assert '600' in str(caught.value)
+    assert rig.client.calls == 1 and not rig.api_calls
 
 
 def test_high_resolution_bridge_wait_uses_outer_request_budget(rig, monkeypatch):

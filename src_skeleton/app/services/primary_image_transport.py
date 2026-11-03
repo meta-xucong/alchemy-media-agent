@@ -211,7 +211,21 @@ async def _run_owned(job, request, *, edit, transport, existing):
             job.provider = result.provenance.get("actual_provider") or "render_bridge"
             job.model = result.provenance.get("actual_model") or "unknown"
             if result.image is None:
-                job.status = JobStatus.canceled if result.state == "canceled" else JobStatus.failed if result.state in {"failed", "expired"} else JobStatus.generating
+                attention_code = result.provenance.get("attention_code")
+                terminal_attention = attention_code in {
+                    "codex_turn_timed_out", "execution_reconciliation_overdue",
+                }
+                job.status = (JobStatus.canceled if result.state == "canceled" else
+                              JobStatus.failed if result.state in {"failed", "expired"} or terminal_attention else
+                              JobStatus.generating)
+                from app.integrations.render_bridge.attention import MESSAGES as BRIDGE_ATTENTION_MESSAGES
+                if attention_code in BRIDGE_ATTENTION_MESSAGES:
+                    job.error = ProviderError(
+                        code=f"bridge_{attention_code}",
+                        message=BRIDGE_ATTENTION_MESSAGES[attention_code],
+                        retryable=False,
+                    )
+                    return True
                 message = (
                     "Render Bridge input storage stayed busy; no remote image task was created."
                     if result.reason == "bridge_store_busy"

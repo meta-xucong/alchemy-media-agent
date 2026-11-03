@@ -24,9 +24,12 @@ class Bridge:
         self.content = stream.getvalue()
         self.tasks = {}; self.creates = 0; self.acks = []; self.cancels = []; self.inputs = []
         self.state = 'artifacts_ready'; self.error = None; self.healthy = True; self.native = True
+        self.attention_code = None
 
     async def capabilities(self):
-        return {'admission': {'accepting_new_tasks': True}, 'routing_availability_v1': {'profiles': [
+        return {'admission': {'accepting_new_tasks': True},
+            'limits': {'max_input_bytes': 16 * 1024 * 1024, 'max_input_image_pixels': 16_777_216},
+            'routing_availability_v1': {'profiles': [
             {'profile_id': 'codex-image', 'health': 'available' if self.healthy else 'unavailable', 'valid_until': '2099-01-01T00:00:00Z'}]},
             'profiles': [{'execution_profile_id': 'codex-image', 'execution_profile_revision': '1',
             'parameter_contract': {'accepted_parameters': ['width', 'height', 'seed', 'image_options'], 'dimension_semantics': 'original_dimensions_recorded',
@@ -44,6 +47,8 @@ class Bridge:
         self.creates += 1
         task = {'remote_task_id': 'task_'+str(self.creates), 'origin_key': payload['origin_key'], 'request': payload, 'state': self.state, 'attempt_id': 'attempt_'+str(self.creates)}
         task['receipt_id'] = 'receipt_'+str(self.creates) if self.state == 'artifacts_ready' else None
+        task['action_required_detail'] = ({'code': self.attention_code, 'message': 'untrusted detail'}
+                                          if self.attention_code else None)
         self.tasks[payload['origin_key']] = task
         if self.error:
             raise self.error
@@ -139,6 +144,18 @@ def test_v1_pending_restart_same_origin_no_api(runtime, state):
     bridge.state = 'artifacts_ready'
     resumed = asyncio.run(primary.resume_primary_job(job.id))
     assert resumed.status == JobStatus.ready and len(resumed.outputs) == 1
+    assert bridge.creates == 1 and api.calls == 0
+
+
+@pytest.mark.parametrize("attention_code", ["codex_turn_timed_out", "execution_reconciliation_overdue"])
+def test_v1_timeout_projects_terminal_curated_error_but_keeps_unknown_task(runtime, attention_code):
+    bridge, api = runtime
+    bridge.state = 'execution_unknown'
+    bridge.attention_code = attention_code
+    job = asyncio.run(submit())
+    assert job.status == JobStatus.failed
+    assert job.error.code == f'bridge_{attention_code}'
+    assert ('600 秒' if attention_code == 'codex_turn_timed_out' else '租约已过期') in job.error.message
     assert bridge.creates == 1 and api.calls == 0
 
 
@@ -242,8 +259,9 @@ def test_lab_public_projection_exposes_bridge_wait_state_without_mutating_sessio
     session.variants[0].provider_metadata = {'job_id': 'job_fixture', 'primary_transport': True}
     session.progress = {'message': '正在生成第 1/1 张。'}
     stored_message = session.progress['message']
+    job_error = SimpleNamespace(code='bridge_execution_unknown')
     monkeypatch.setattr(lab.repository, 'get_job', lambda job_id: SimpleNamespace(
-        error=SimpleNamespace(code='bridge_execution_unknown') if job_id == 'job_fixture' else None,
+        error=job_error if job_id == 'job_fixture' else None,
     ))
 
     async def read_direct(function, *args, **kwargs):
@@ -253,6 +271,9 @@ def test_lab_public_projection_exposes_bridge_wait_state_without_mutating_sessio
     public = asyncio.run(lab.public_exploration_session_with_bridge_status(session))
     assert public['progress']['message'] == 'Bridge 尚未确认原任务的执行结果，系统正在继续对账。'
     assert session.progress['message'] == stored_message
+    job_error.code = 'bridge_codex_turn_timed_out'
+    timed_out = asyncio.run(lab.public_exploration_session_with_bridge_status(session))
+    assert '600 秒' in timed_out['progress']['message']
 
 
 def test_billing_response_loss_reuses_outputs_and_debit_key_before_ack(runtime, monkeypatch):

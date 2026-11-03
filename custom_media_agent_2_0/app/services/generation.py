@@ -178,6 +178,10 @@ async def create_image_job(
             result = await bridge_primary.generate(frozen, get_v2_image_provider)
         except bridge_primary.BridgeWait as exc:
             detail = {"state": exc.state}
+            BRIDGE_ATTENTION_MESSAGES = bridge_primary.ATTENTION_MESSAGES
+            if exc.attention_code:
+                if exc.attention_code in BRIDGE_ATTENTION_MESSAGES:
+                    detail["attention_code"] = exc.attention_code
             deadline = exc.deadline
             if isinstance(deadline, str) and deadline:
                 detail["reconciliation_deadline"] = deadline
@@ -191,6 +195,8 @@ async def create_image_job(
             message = (
                 "Bridge input storage stayed busy; no remote image task was created and no API fallback was started."
                 if exc.state == "bridge_store_busy"
+                else BRIDGE_ATTENTION_MESSAGES[exc.attention_code]
+                if exc.attention_code in BRIDGE_ATTENTION_MESSAGES
                 else "The same image task is retained for recovery."
             )
             error = V2ImageProviderError(message,

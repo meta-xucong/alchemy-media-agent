@@ -19,6 +19,8 @@ def request(**kw):
 class Client:
     calls = 0
     outcome = None
+    state = 'queued'
+    action_required_detail = None
     async def capabilities(self):
         return {'admission': {'accepting_new_tasks': True},
             'limits': {'max_input_bytes':16*1024*1024,'max_input_image_pixels':16*1024*1024},
@@ -36,7 +38,8 @@ class Client:
         self.calls += 1
         self.payload = payload
         if self.outcome: raise self.outcome
-        return {'remote_task_id':'task_1','origin_key':payload['origin_key'],'request':payload,'state':'queued','receipt_id':None,'attempt_id':'attempt_1'}
+        return {'remote_task_id':'task_1','origin_key':payload['origin_key'],'request':payload,'state':self.state,'receipt_id':None,'attempt_id':'attempt_1',
+                'action_required_detail':self.action_required_detail}
     async def by_origin(self, origin):
         raise BridgeError('not_found', status=404)
     async def close(self): pass
@@ -53,6 +56,19 @@ def test_loss_restart_404_never_fallback(tmp_path):
     assert first.route == second.route == 'bridge'
     assert second.state == 'bridge_submission_unknown'
     assert c.calls == 1
+
+
+def test_timeout_attention_code_is_projected_without_executor_message(tmp_path):
+    c = Client()
+    c.state = 'execution_unknown'
+    c.action_required_detail = {
+        'code': 'codex_turn_timed_out',
+        'message': 'untrusted server text must not be projected',
+    }
+    result = asyncio.run(PrimaryTransport(settings(tmp_path), client=c).resolve(request()))
+    assert result.state == 'execution_unknown'
+    assert result.provenance['attention_code'] == 'codex_turn_timed_out'
+    assert 'untrusted server text' not in repr(result.provenance)
 
 
 def test_unknown_create_then_node_unavailable_recovery_never_claims_api(tmp_path):

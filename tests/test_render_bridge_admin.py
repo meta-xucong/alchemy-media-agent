@@ -251,6 +251,17 @@ def test_attention_projection_uses_curated_messages_and_legacy_support():
     assert attention_projection({"action_required_detail": {"code": []}}) is None
 
 
+def test_attention_projection_includes_codex_timeout_but_not_remote_text():
+    from app.integrations.render_bridge.attention import attention_projection
+
+    projected = attention_projection({"action_required_detail": {
+        "code": "codex_turn_timed_out", "message": "untrusted remote text",
+    }})
+    assert projected["code"] == "codex_turn_timed_out"
+    assert "600 秒" in projected["message"]
+    assert "untrusted remote text" not in projected["message"]
+
+
 def test_invalid_additive_readiness_does_not_break_legacy_probe(tmp_path):
     upstream = httpx.Response(200, json={"schema_version": "1", "profiles": [],
         "node_status": {"state": []}, "admission": {"accepting_new_tasks": True, "mode": []}})

@@ -268,6 +268,7 @@ class PrimaryTransport:
         provenance={k:v for k,v in data.items() if k in {'product','profile','route','state','reason','origin_key','execution_key','task_id','receipt_id','attempt_id','image','queue_active_count','queue_limit','queue_observed_at','capability_rejection'}}
         deadline = (data.get('payload') or {}).get('deadline')
         if isinstance(deadline, str): provenance['deadline'] = deadline
+        if isinstance(data.get('attention_code'), str): provenance['attention_code'] = data['attention_code']
         if data.get('cancel_requested') and data['state'] not in {'canceled','failed','expired'}:
             data['state']='cancel_requested'
         provenance['policy_version']='rb14'
@@ -563,7 +564,15 @@ class PrimaryTransport:
         if task.get('origin_key')!=data['origin_key'] or task.get('request')!=data.get('payload'):
             raise PrimaryError('bridge_task_identity_mismatch')
         if not task.get('remote_task_id'): raise PrimaryError('invalid_bridge_task')
+        attention = task.get('action_required_detail')
+        attention_code = attention.get('code') if isinstance(attention, dict) else None
+        if not isinstance(attention_code, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', attention_code):
+            attention_code = None
         data.update(task_id=task['remote_task_id'],state=task.get('state','bridge_submission_unknown'),attempt_id=task.get('attempt_id'),receipt_id=task.get('receipt_id'))
+        if attention_code:
+            data['attention_code'] = attention_code
+        else:
+            data.pop('attention_code', None)
         self._save(request,data)
         if data.get('cancel_requested') and data['state'] not in {'canceled','failed','expired','artifacts_ready'}:
             try: await self.client.cancel(data['task_id'])

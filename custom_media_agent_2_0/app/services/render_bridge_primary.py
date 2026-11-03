@@ -20,6 +20,11 @@ from app.schemas import CreateImageJobRequest
 from app.services import task_queue
 from app.services.uploaded_assets import uploaded_asset_path
 
+ATTENTION_MESSAGES = {
+    "codex_turn_timed_out": "Codex 生图超过 600 秒仍未确认结果；本地会话已停止，但上游结果未知。任务仍保留在 Bridge 中，请核对同一任务，不要重复生成或切换 API。",
+    "execution_reconciliation_overdue": "执行租约已过期，但没有证据证明上游执行已停止。任务仍保留在 Bridge 中，请核对同一任务。",
+}
+
 
 def transport(job_id: str | None = None):
     from render_bridge_primary import PrimarySettings, PrimaryTransport
@@ -132,8 +137,10 @@ def provider_result(result, *, parameter_adaptation: dict | None = None) -> V2Im
 
 
 class BridgeWait(Exception):
-    def __init__(self, state: str, *, terminal: bool = False, deadline: str | None = None):
+    def __init__(self, state: str, *, terminal: bool = False, deadline: str | None = None,
+                 attention_code: str | None = None):
         self.state, self.terminal, self.deadline = state, terminal, deadline
+        self.attention_code = attention_code
         super().__init__(state)
 
 
@@ -353,10 +360,13 @@ async def _generate(record: dict, select_provider, client):
             if decision.route == "bridge":
                 if decision.image is None:
                     store_busy = decision.reason == "bridge_store_busy"
-                    terminal = store_busy or decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
                     provenance = getattr(decision, "provenance", {})
+                    attention_code = provenance.get("attention_code") if isinstance(provenance, dict) else None
+                    terminal = (store_busy or decision.state in {"failed", "canceled", "cancelled", "expired", "rejected", "manual_review_required"}
+                                or attention_code in {"codex_turn_timed_out", "execution_reconciliation_overdue"})
                     raise BridgeWait("bridge_store_busy" if store_busy else decision.state, terminal=terminal,
-                                     deadline=provenance.get("deadline") if isinstance(provenance, dict) else None)
+                                     deadline=provenance.get("deadline") if isinstance(provenance, dict) else None,
+                                     attention_code=provenance.get("attention_code") if isinstance(provenance, dict) else None)
                 adaptation = None
                 if (unit.parameters.get("codex_adapter") == "codex_cli_imagegen_v1" or
                         unit.digest == _normalized_unit_request(record, index, versioned=False).digest):

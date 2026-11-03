@@ -309,6 +309,18 @@ def test_bridge_wait_without_valid_deadline_fails_to_manual_reconciliation_not_i
     assert failed.error["detail"]["state"] == "bridge_reconciliation_deadline_missing_or_invalid"
 
 
+@pytest.mark.parametrize("attention_code", ["codex_turn_timed_out", "execution_reconciliation_overdue"])
+def test_timeout_attention_is_terminal_and_curated_in_v2_error(isolated, monkeypatch, attention_code):
+    async def timed_out(*args, **kwargs):
+        raise bridge.BridgeWait("execution_unknown", attention_code=attention_code)
+    monkeypatch.setattr(bridge, "generate", timed_out)
+    failed = asyncio.run(generation.create_image_job(request(), job_id=f"bridge-{attention_code}"))
+    assert failed.status == "failed"
+    assert failed.error["detail"]["attention_code"] == attention_code
+    assert ("600" if attention_code == "codex_turn_timed_out" else "租约已过期") in failed.error["message"]
+    assert failed.provider_id == "render_bridge"
+
+
 def test_unknown_bridge_task_keeps_same_queue_identity_until_bridge_deadline(isolated, monkeypatch, tmp_path):
     from dataclasses import replace
     from app.schemas import CreativeRun, ImageJob

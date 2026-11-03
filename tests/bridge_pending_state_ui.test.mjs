@@ -51,6 +51,8 @@ for (const [name, relativePath] of shells) {
     }
     const bridgeMessage = context.v1BridgeWaitMessage({ error: { code: "bridge_execution_unknown" } });
     assert.equal(bridgeMessage, "Bridge 尚未确认原任务的执行结果，系统正在继续对账。");
+    const timeoutMessage = context.v1BridgeWaitMessage({ error: { code: "bridge_codex_turn_timed_out" } });
+    assert.match(timeoutMessage, /600 秒/);
     const result = await context.waitForV1ImageJob({ id: "job-1", status: "generating" });
     assert.equal(result.status, "ready");
     assert.equal(calls, 131);
@@ -68,6 +70,8 @@ for (const [name, relativePath] of shells) {
       }],
     };
     assert.equal(context.v2BridgeWaitMessage(run), "Render Bridge is reconciling the existing task.");
+    run.generation_jobs[0].error.detail.attention_code = "codex_turn_timed_out";
+    assert.match(context.v2BridgeWaitMessage(run), /600 秒/);
   });
 
   test(`${name}: Lab keeps polling after its long-wait threshold until the session is terminal`, async () => {

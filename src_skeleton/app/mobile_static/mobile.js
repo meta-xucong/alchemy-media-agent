@@ -11266,6 +11266,12 @@ function v2BridgeWaitMessage(run) {
   const job = jobs.find((item) => item?.provider_id === "render_bridge"
     && item?.error?.error_code === "bridge_wait");
   if (!job) return "";
+  if (job.error?.detail?.attention_code === "codex_turn_timed_out") {
+    return "Codex 生图超过 600 秒仍未确认结果；本地会话已停止，但上游结果未知。任务仍保留在 Bridge 中，请核对同一任务，不要重复生成或切换 API。";
+  }
+  if (job.error?.detail?.attention_code === "execution_reconciliation_overdue") {
+    return "执行租约已过期，但没有证据证明上游执行已停止。任务仍保留在 Bridge 中，请核对同一任务。";
+  }
   const action = String(run?.next_actions?.[0] || "").trim();
   if (action) return action;
   const state = String(job.error?.detail?.state || "");
@@ -13912,6 +13918,8 @@ function v1BridgeWaitMessage(job) {
   if (!code.startsWith("bridge_")) return "";
   const state = code.slice("bridge_".length);
   const messages = {
+    codex_turn_timed_out: "Codex 生图超过 600 秒仍未确认结果；本地会话已停止，但上游结果未知。任务仍保留在 Bridge 中，请核对同一任务，不要重复生成或切换 API。",
+    execution_reconciliation_overdue: "执行租约已过期，但没有证据证明上游执行已停止。任务仍保留在 Bridge 中，请核对同一任务。",
     queued: "Bridge 已接收原任务，正在排队等待 Codex 节点。",
     claimed: "Codex 节点已接收原任务，正在准备执行。",
     running: "Codex 节点正在执行原图任务。",
@@ -13957,11 +13965,12 @@ async function waitForV1ImageJob(initialJob, { actionLabel = "生成", onJobUpda
   for (let attempt = 0; ; attempt += 1) {
     state.currentJob = job;
     onJobUpdate?.(job);
-    setStatus(job?.status || "生成中", job?.outputs?.length || 0, job?.trace_id || "-");
+    const bridgeTimedOut = job?.error?.code === "bridge_codex_turn_timed_out";
+    setStatus(bridgeTimedOut ? "Codex 超时，结果待对账" : job?.status || "生成中", job?.outputs?.length || 0, job?.trace_id || "-");
     const bridgeMessage = v1BridgeWaitMessage(job);
     if (bridgeMessage) {
       const bridgeState = String(job?.error?.code || "").slice("bridge_".length);
-      showNotice(bridgeMessage, ["execution_unknown", "bridge_submission_unknown", "awaiting_user"].includes(bridgeState) ? "warning" : "info");
+      showNotice(bridgeMessage, ["execution_unknown", "bridge_submission_unknown", "awaiting_user", "codex_turn_timed_out", "execution_reconciliation_overdue"].includes(bridgeState) ? "warning" : "info");
     }
     if (v1ImageJobReady(job) || v1ImageJobTerminal(job)) {
       return job;

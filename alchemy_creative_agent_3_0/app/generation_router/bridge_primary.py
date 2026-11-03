@@ -339,6 +339,9 @@ def _projection(result):
     rejection = result.provenance.get("capability_rejection")
     if isinstance(rejection, dict):
         projection["capability_rejection"] = rejection
+    attention_code = result.provenance.get("attention_code")
+    if isinstance(attention_code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", attention_code):
+        projection["attention_code"] = attention_code
     return projection
 
 
@@ -429,6 +432,13 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
             await asyncio.sleep(POLL_SECONDS)
             result = await transport.resolve(request)
         provenance = _projection(result)
+        if (result.route == "bridge" and provenance.get("attention_code") in {
+                    "codex_turn_timed_out", "execution_reconciliation_overdue",
+                }):
+            from app.integrations.render_bridge.attention import MESSAGES
+
+            attention_code = provenance["attention_code"]
+            raise _error(attention_code, provenance, message=MESSAGES[attention_code])
         existing = output_store.get_output(output_id(provenance))
         if existing is not None:
             if (existing.metadata or {}).get(PROVENANCE, {}).get("execution_key") != result.execution_key:

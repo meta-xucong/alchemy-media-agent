@@ -996,6 +996,8 @@ def _lab_bridge_wait_message(job: GenerationJob | None) -> str:
         return ""
     state = code[len("bridge_"):]
     return {
+        "codex_turn_timed_out": "Codex 生图超过 600 秒仍未确认结果；本地会话已停止，但上游结果未知。任务仍保留在 Bridge 中，请核对同一任务，不要重复生成或切换 API。",
+        "execution_reconciliation_overdue": "执行租约已过期，但没有证据证明上游执行已停止。任务仍保留在 Bridge 中，请核对同一任务。",
         "queued": "Bridge 已接收原任务，正在排队等待 Codex 节点。",
         "claimed": "Codex 节点已接收原任务，正在准备执行。",
         "running": "Codex 节点正在执行原图任务。",

@@ -7706,6 +7706,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return f"{width}x{height}"
 
     def _app_provider_timeout_seconds(self, reference_assets: list[dict[str, Any]], *, app_request=None) -> float:
+        bridge_enabled = False
+        try:
+            from render_bridge_primary import PrimarySettings, pending_count
+
+            bridge_config = PrimarySettings.from_env(product="v3")
+            bridge_enabled = bridge_config.enabled or pending_count(bridge_config.state_dir) > 0
+        except Exception:
+            pass
         try:
             from app.config import settings as app_settings
             from app.providers.openai_image import OpenAIGPTImageProvider
@@ -7723,9 +7731,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 # guard slightly later than the provider's HTTP deadline so
                 # the provider can convert its terminal timeout into a normal
                 # failed job rather than leaving a canceled request behind.
-                return max(660.0, float(value)) + 5.0
+                return max(max(660.0, float(value)) + 5.0, 720.0 if bridge_enabled else 0.0)
         except Exception:
             value = 240.0
+        if bridge_enabled:
+            # The Bridge owns a Codex turn for up to 600 seconds. Keep the
+            # outer V3 call alive long enough to read its terminal timeout
+            # state and persist the public error on the same request.
+            return max(720.0, float(value) + 15.0)
         # Keep fifteen seconds after the provider response budget to record
         # and materialize the terminal image result.
         return max(300.0, float(value) + 15.0)
