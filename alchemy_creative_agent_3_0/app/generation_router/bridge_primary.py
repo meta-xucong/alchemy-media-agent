@@ -428,6 +428,7 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
             return await legacy_generate(app_request)
         while result.route == "bridge" and result.image is None and result.state in {
             "queued", "running", "bridge_submission_unknown", "execution_unknown", "awaiting_user",
+            "artifacts_ready",
         } and time.monotonic() < deadline:
             await asyncio.sleep(POLL_SECONDS)
             result = await transport.resolve(request)
@@ -452,6 +453,7 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
         if result.route == "bridge" and result.image is None:
             if result.state in {
                 "queued", "running", "bridge_submission_unknown", "execution_unknown", "awaiting_user",
+                "artifacts_ready",
             }:
                 raise _error("bridge_wait_budget_exhausted", provenance)
             raise _error(result.state, provenance)

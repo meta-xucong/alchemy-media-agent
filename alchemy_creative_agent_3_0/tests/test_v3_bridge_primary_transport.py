@@ -299,6 +299,29 @@ def test_direct_bridge_poll_default_remains_285_seconds():
     assert adapter.POLL_BUDGET_SECONDS == 285.0
 
 
+def test_artifacts_ready_retries_transient_artifact_download_before_failing(rig, monkeypatch):
+    from render_bridge_primary.http import BridgeError
+
+    original_artifact = rig.client.artifact
+    artifact_calls = []
+
+    async def transient_artifact_failure(artifact_id, limit):
+        artifact_calls.append(artifact_id)
+        if len(artifact_calls) == 1:
+            raise BridgeError("bridge_unreachable")
+        return await original_artifact(artifact_id, limit)
+
+    monkeypatch.setattr(rig.client, "artifact", transient_artifact_failure)
+    monkeypatch.setattr(adapter, "POLL_BUDGET_SECONDS", 2.0)
+
+    response = rig.provider.generate(rig.request)
+
+    assert response.candidates[0].provider == "render_bridge"
+    assert len(artifact_calls) == 2
+    assert rig.client.calls == 1
+    assert not rig.api_calls
+
+
 def test_active_bridge_extends_v3_outer_and_poll_budgets_to_cover_codex_timeout(rig, monkeypatch):
     timeout = rig.provider._app_provider_timeout_seconds([], app_request=rig.request)
     poll_budget = type(rig.provider)._app_provider_poll_budget_seconds(rig.provider, rig.request)
