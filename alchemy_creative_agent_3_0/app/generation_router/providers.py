@@ -1388,6 +1388,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 # journal can resume identity; renderer payloads cannot.
                 output_id=checkpoint_output_id or None,
                 **({"preserve_original_bytes": True} if bridge_provenance.get("route") == "bridge" else {}),
+                **({"include_content_hash": False} if (
+                    bridge_provenance.get("route") == "bridge"
+                    or self.provider_name == "render_bridge_receipt_provider"
+                ) else {}),
                 mime_type=output.get("mime_type"),
                 output_format=output.get("format") or app_request.prompt_plan.output_format,
                 width=output.get("width"),

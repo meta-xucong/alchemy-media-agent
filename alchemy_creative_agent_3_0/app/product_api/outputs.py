@@ -117,6 +117,7 @@ class V3GeneratedOutputStore:
         height: int | None = None,
         metadata: dict | None = None,
         preserve_original_bytes: bool = False,
+        include_content_hash: bool = True,
     ) -> V3GeneratedOutputRecord:
         fmt = _normalise_format(output_format, mime_type)
         mime = _normalise_mime(mime_type, fmt)
@@ -133,7 +134,7 @@ class V3GeneratedOutputStore:
             )
         if normalized_dimensions is not None:
             actual_width, actual_height = normalized_dimensions
-        content_sha256 = hashlib.sha256(content).hexdigest()
+        content_sha256 = hashlib.sha256(content).hexdigest() if include_content_hash else None
         width = actual_width if preserve_original_bytes else (width or actual_width)
         height = actual_height if preserve_original_bytes else (height or actual_height)
         if normalized_dimensions is not None:
@@ -150,9 +151,10 @@ class V3GeneratedOutputStore:
                 or existing.asset_id != asset_id
             ):
                 raise ValueError("existing V3 output checkpoint belongs to another candidate")
-            existing_sha = str((existing.metadata or {}).get("content_sha256") or "")
-            if existing_sha and existing_sha != content_sha256:
-                raise ValueError("existing V3 output checkpoint content changed")
+            if include_content_hash:
+                existing_sha = str((existing.metadata or {}).get("content_sha256") or "")
+                if existing_sha and existing_sha != content_sha256:
+                    raise ValueError("existing V3 output checkpoint content changed")
             return existing
 
         output_dir = self.storage_root / output_id
@@ -172,7 +174,7 @@ class V3GeneratedOutputStore:
             candidate_id=candidate_id,
             asset_id=asset_id,
             output_id=output_id,
-            content_sha256=content_sha256,
+            content_sha256=content_sha256 or "",
         )
         source_binding = stored_metadata.get("doc73_auto_identity_anchor_binding")
         if _is_doc73_source_binding(source_binding) and not self.claim_doc73_auto_identity_anchor(source_binding):
@@ -208,10 +210,12 @@ class V3GeneratedOutputStore:
             metadata={
                 **stored_metadata,
                 "v3_owned_output": True,
-                "content_sha256": content_sha256,
-                # New records publish both names for one canonical integrity
-                # fact; older readers may still provide either one.
-                "source_integrity_id": f"sha256:{content_sha256}",
+                **({
+                    "content_sha256": content_sha256,
+                    # New records publish both names for one canonical integrity
+                    # fact; older readers may still provide either one.
+                    "source_integrity_id": f"sha256:{content_sha256}",
+                } if include_content_hash else {}),
             },
         )
         self._write_record(record)
