@@ -10,7 +10,7 @@ from PIL import Image
 
 from app.providers.mock_image import MockImageProvider
 from app.repositories import repository
-from app.schemas import ImageGenerationResult, JobStatus
+from app.schemas import GenerationJob, GenerationOutput, ImageGenerationResult, JobStatus
 from app.services import image_service as images, primary_image_transport as primary, alchemy_lab as lab
 from app.storage import media_store
 from render_bridge_primary import PrimarySettings, PrimaryTransport
@@ -213,10 +213,11 @@ def test_cancellation_never_falls_back_or_publishes_late_receipt(runtime):
     assert bridge.creates == 1 and not api.calls and not bridge.acks
 
 
-def make_lab_session():
+def make_lab_session(*, veyra_user_id=None):
     sid = 'lab_test'
     style = lab.FALLBACK_STYLE_PRESETS[0]
     session = lab.ExplorationSession(id=sid, status='queued', created_at='2026-10-24T00:00:00Z', updated_at='2026-10-24T00:00:00Z',
+        veyra_user_id=veyra_user_id,
         request=lab.ExplorationRequest(idea='A quiet landscape', provider_preference='fixture_api', generation_interval_seconds=0), style_presets=[style],
         prompts=[lab.ComposedPrompt(id='prompt', session_id=sid, style_preset_id=style.id, style_preset_version='1', idea='A quiet landscape', final_prompt='A quiet landscape')],
         variants=[lab.GenerationVariant(id='variant', session_id=sid, prompt_id='prompt', style_preset_id=style.id, index_within_style=1, status='queued', created_at='2026-10-24T00:00:00Z')])
@@ -256,6 +257,63 @@ def test_lab_real_entry_pending_restart_keeps_variant_job(runtime, monkeypatch):
     final = asyncio.run(lab.run_exploration_session(session.id))
     assert final.status == 'completed' and final.variants[0].asset['job_id'] == job_id
     assert len(repository.list_jobs()) == 1 and bridge.creates == 1 and not api.calls
+
+
+def test_lab_owner_resume_reuses_existing_primary_job(runtime, monkeypatch):
+    _, api = runtime
+    session = make_lab_session(veyra_user_id=41)
+    resumed_job_ids = []
+
+    async def submit_existing_job(**kwargs):
+        media_session = repository.get_session(kwargs['session_id'])
+        assert media_session.veyra_user_id == kwargs['veyra_user_id'] == 41
+        existing = repository.get_job_by_idempotency_key(
+            kwargs['idempotency_key'],
+            session_id=kwargs['session_id'],
+            owner_id=kwargs['veyra_user_id'],
+        )
+        if existing:
+            return images.PreparedImageJob(existing)
+        job = GenerationJob(
+            id='job_lab_owner_fixture',
+            session_id=kwargs['session_id'],
+            job_type='image',
+            status=JobStatus.generating,
+            idempotency_key=kwargs['idempotency_key'],
+            trace_id='trace_lab_owner_fixture',
+            raw_response_summary={primary.KEY: {'units': {}}},
+            created_at='2026-10-24T00:00:00Z',
+            updated_at='2026-10-24T00:00:00Z',
+        )
+        return images.PreparedImageJob(repository.save_job(job))
+
+    async def resume_existing_job(job_id):
+        resumed_job_ids.append(job_id)
+        job = repository.get_job(job_id)
+        if len(resumed_job_ids) == 1:
+            return job
+        ready = job.model_copy(update={
+            'status': JobStatus.ready,
+            'provider': 'render_bridge',
+            'outputs': [GenerationOutput(id='out_lab_owner_fixture', job_id=job_id, url='/fixture.png')],
+        })
+        return repository.save_job(ready)
+
+    monkeypatch.setattr(lab, 'submit_image_job', submit_existing_job)
+    monkeypatch.setattr(primary, 'resume_primary_job', resume_existing_job)
+
+    first = asyncio.run(lab.run_exploration_session(session.id))
+    assert first.status == 'running'
+    job_id = first.variants[0].provider_metadata['job_id']
+    assert len(repository.list_jobs(session_id=f'ses_{session.id}')) == 1
+
+    resumed = asyncio.run(lab.run_exploration_session(session.id))
+
+    assert resumed.status == 'completed'
+    assert resumed.variants[0].asset['job_id'] == job_id
+    assert len(repository.list_jobs(session_id=f'ses_{session.id}')) == 1
+    assert resumed_job_ids == [job_id, job_id]
+    assert api.calls == 0
 
 
 def test_lab_public_projection_exposes_bridge_wait_state_without_mutating_session(monkeypatch):

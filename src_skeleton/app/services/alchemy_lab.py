@@ -777,7 +777,11 @@ async def _run_exploration_session_owned(session_id: str, *, veyra_user_id: int 
 
     media_session = await _run_lab_sqlite_call(
         repository.save_session,
-        _lab_media_session(session.id, title=f"Alchemy Lab: {session.request.idea[:48]}"),
+        _lab_media_session(
+            session.id,
+            title=f"Alchemy Lab: {session.request.idea[:48]}",
+            veyra_user_id=effective_user_id,
+        ),
     )
     prompt_by_id = {prompt.id: prompt for prompt in session.prompts}
 
@@ -2220,7 +2224,14 @@ def _size_from_aspect_ratio(aspect_ratio: str | None) -> str | None:
     return None
 
 
-def _lab_media_session(session_id: str, *, title: str):
+def _lab_media_session(session_id: str, *, title: str, veyra_user_id: int | None = None):
     from app.schemas import Session
 
-    return Session(id=f"ses_{session_id}", project_id=LAB_PROJECT_ID, title=title, orchestration_mode="runtime_first", created_at=now_iso())
+    return Session(
+        id=f"ses_{session_id}",
+        project_id=LAB_PROJECT_ID,
+        title=title,
+        orchestration_mode="runtime_first",
+        created_at=now_iso(),
+        veyra_user_id=veyra_user_id,
+    )
