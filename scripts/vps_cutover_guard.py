@@ -394,6 +394,18 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                     raise ValueError()
                 # api_ready is NOT terminal: a direct request can still dispatch.
                 terminal = state in {"acked", "api_completed"}
+                # An artifact-ready Bridge task remains unresolved unless the
+                # product explicitly abandoned it and remote cancellation has
+                # been reconciled. Reconcile may confirm an already-ready task
+                # without changing its immutable execution state.
+                if (
+                    not terminal
+                    and state == "artifacts_ready"
+                    and data.get("route") == "bridge"
+                    and data.get("cancel_requested") is True
+                    and data.get("cancel_reconciled") is True
+                ):
+                    terminal = True
                 if state in {"canceled", "failed", "expired"}:
                     terminal = not data.get("cancel_requested") or bool(data.get("cancel_reconciled"))
                 counts["bridge_unresolved_units"] += not terminal

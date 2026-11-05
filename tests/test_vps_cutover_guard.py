@@ -1040,12 +1040,13 @@ def test_bridge_paths_reject_checkout_or_relative(tmp_path):
             _MODULE.verify_bridge_storage_configuration(v1, v2, (tmp_path / 'release',))
 
 
-def _bridge_inventory_fixture(tmp_path, state, native_status='completed', cancel=False, reconciled=False):
+def _bridge_inventory_fixture(tmp_path, state, native_status='completed', cancel=False, reconciled=False,
+                              route=None):
     root = tmp_path / 'ledgers'
     (root / 'v2').mkdir(parents=True)
     db = sqlite3.connect(root / 'v2' / 'primary.sqlite3')
     db.execute('CREATE TABLE units(state TEXT, data TEXT)')
-    db.execute('INSERT INTO units VALUES (?,?)', (state, json.dumps(dict(product='v2', unit_id='job1:0', route='api' if state.startswith('api') else 'bridge', cancel_requested=cancel, cancel_reconciled=reconciled))))
+    db.execute('INSERT INTO units VALUES (?,?)', (state, json.dumps(dict(product='v2', unit_id='job1:0', route=route or ('api' if state.startswith('api') else 'bridge'), cancel_requested=cancel, cancel_reconciled=reconciled))))
     db.commit(); db.close()
     frozen = tmp_path / 'requests'; frozen.mkdir()
     (frozen / 'job.json').write_text(json.dumps({'job_id': 'job1', 'request': {}}))
@@ -1084,6 +1085,38 @@ def test_cancel_pending_vs_reconciled_inventory(tmp_path):
     with sqlite3.connect(root/'v2'/'primary.sqlite3') as db:
         db.execute('UPDATE units SET data=?',(json.dumps({'cancel_requested':True,'cancel_reconciled':True}),))
     assert _MODULE.inspect_bridge_work(root,frozen,repository)['bridge_unresolved_units'] == 0
+
+
+def test_reconciled_abandonment_of_ready_artifact_allows_cutover(tmp_path):
+    root,frozen,repository = _bridge_inventory_fixture(
+        tmp_path,'artifacts_ready',cancel=True,reconciled=True,
+    )
+    counts = _MODULE.inspect_bridge_work(root,frozen,repository)
+    assert counts['bridge_unresolved_units'] == 0
+
+
+def test_ready_artifact_stays_blocking_until_cancel_reconciled(tmp_path):
+    root,frozen,repository = _bridge_inventory_fixture(
+        tmp_path,'artifacts_ready',cancel=True,reconciled=False,
+    )
+    counts = _MODULE.inspect_bridge_work(root,frozen,repository)
+    assert counts['bridge_unresolved_units'] == 1
+
+
+def test_reconciled_api_artifact_does_not_use_bridge_abandonment_rule(tmp_path):
+    root,frozen,repository = _bridge_inventory_fixture(
+        tmp_path,'artifacts_ready',cancel=True,reconciled=True,route='api',
+    )
+    counts = _MODULE.inspect_bridge_work(root,frozen,repository)
+    assert counts['bridge_unresolved_units'] == 1
+
+
+def test_reconciled_running_bridge_unit_still_blocks_cutover(tmp_path):
+    root,frozen,repository = _bridge_inventory_fixture(
+        tmp_path,'running',cancel=True,reconciled=True,
+    )
+    counts = _MODULE.inspect_bridge_work(root,frozen,repository)
+    assert counts['bridge_unresolved_units'] == 1
 
 
 def _bridge_control_envs(tmp_path, control):
