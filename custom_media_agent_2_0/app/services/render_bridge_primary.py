@@ -131,7 +131,7 @@ def provider_result(result, *, parameter_adaptation: dict | None = None) -> V2Im
     return V2ImageProviderResult(provider="render_bridge", model="render-bridge-primary",
         outputs=[V2ImageProviderOutput(b64_json=base64.b64encode(image.content).decode(),
             mime_type=image.mime_type, format=image.mime_type.split("/")[-1], width=image.width, height=image.height,
-            metadata={"render_bridge_primary": provenance, "original_sha256": image.sha256,
+            metadata={"render_bridge_primary": provenance,
                       "width": image.width, "height": image.height, "original_size_bytes": len(image.content),
                       "preserve_original_bytes": True})],
         raw_response_summary={"render_bridge_primary": provenance})
@@ -348,8 +348,8 @@ async def _generate(record: dict, select_provider, client):
             for output in result.outputs:
                 if output.metadata.get("preserve_original_bytes"):
                     content = base64.b64decode(output.b64_json, validate=True)
-                    if hashlib.sha256(content).hexdigest() != output.metadata.get("original_sha256"):
-                        raise BridgeWait("bridge_cached_original_integrity_failed", terminal=True)
+                    if len(content) != output.metadata.get("original_size_bytes"):
+                        raise BridgeWait("bridge_cached_original_size_mismatch", terminal=True)
         else:
             from render_bridge_primary import PrimaryError
             try:

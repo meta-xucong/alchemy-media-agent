@@ -34,6 +34,10 @@ original hash. A Bridge receipt, downloaded file or mock acknowledgment cannot
 stand in for registration. Normal Generate cannot render a server-marked Bridge
 plan; ordinary unmarked jobs keep the original behavior.
 
+The Bridge artifact receipt and delivery ACK bind through task, attempt, slot,
+receipt and artifact identifiers plus size/MIME/dimensions. The native gateway's
+separate registration confirmation retains its own original-image hash contract.
+
 Native candidate validation/persistence and shared review-only continuation are
 reused. No default provider fallback, renderer retry, automatic selection,
 formal delivery, MCP guard relaxation or new billing behavior is introduced.

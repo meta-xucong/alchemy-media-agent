@@ -99,7 +99,9 @@ then uses its canonical frozen contract. Startup/status never invoke Brain.
 
 Focused module tests cover disabled/no-config/outage, mock HTTP happy path,
 input/create response loss, restart, cancellation, permission/revision change,
-strict receipt binding/hash/media checks and no accepted ack. Host regressions
+strict receipt identity/size/media checks and no accepted ack. V1 output
+publication replay binds to the Bridge receipt identity; it does not calculate
+an image-content digest. Host regressions
 cover the existing authenticated routes and health/V3 endpoints with the module
 disabled. Real Bridge HTTP plus FakeRenderer is a separate joint test, not implied
 by MockTransport. No real Codex/Midjourney login, provider call, production deploy,

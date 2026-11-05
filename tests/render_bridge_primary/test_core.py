@@ -300,8 +300,7 @@ class ReceiptClient(Client):
         return {**result,'state':'artifacts_ready','receipt_id':'receipt_1','attempt_id':'attempt_1'}
     async def receipt(self,receipt_id):
         return {'receipt_id':receipt_id,'task_id':'task_1','artifact_id':'artifact_1','attempt_id':'attempt_1','execution_profile_id':'codex-image','execution_profile_revision':'1','slot_id':'primary',
-                'original_sha256':hashlib.sha256(self.content).hexdigest(),'size':len(self.content),
-                'mime_type':'image/png','dimensions':{'width':7,'height':11}}
+                'size':len(self.content),'mime_type':'image/png','dimensions':{'width':7,'height':11}}
     async def artifact(self,artifact_id,limit): return self.content,{}
     async def accept_registered_receipt(self,*args,**kwargs): self.acks.append((args,kwargs))
     async def cancel(self,task_id): self.cancels.append(task_id)
@@ -830,7 +829,8 @@ def test_retirement_intent_preserved_until_confirmed_ack_then_reconciled(tmp_pat
     assert asyncio.run(restarted.reconcile_pending())['acked'] == 1
     row = restarted._read(request()); data = json.loads(row['data'])
     assert row['image'] is None and data['cache_retired']
-    assert 'payload' not in data and data['image']['sha256'] == hashlib.sha256(c.content).hexdigest()
+    assert 'payload' not in data and data['image'] == {
+        'mime_type': 'image/png', 'width': 7, 'height': 11, 'size': len(c.content)}
     assert restarted.cached_result(request()).state == 'acked'
     t._save(request(), stale, image=c.content)
     assert t._read(request())['image'] is None

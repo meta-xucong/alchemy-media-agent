@@ -121,20 +121,18 @@ class BridgeClient:
     async def artifact(self, artifact_id, limit):
         return await self._request("GET", f"artifacts/{self._key(artifact_id)}/content", limit=limit)
 
-    async def reject_receipt(self, receipt_id, *, client_receipt_id, original_hash, reason_code):
+    async def reject_receipt(self, receipt_id, *, client_receipt_id, reason_code):
         return await self._json("POST", f"receipts/{self._key(receipt_id)}/ack", json={
             "client_receipt_id": client_receipt_id, "decision": "rejected",
-            "reason_code": reason_code, "original_hash": original_hash,
+            "reason_code": reason_code,
         })
 
     async def accept_registered_receipt(self, receipt_id, *, client_receipt_id,
-                                       original_hash, native_registration_ref, normalized_hash=None):
+                                       native_registration_ref):
         """Called only after the product durably confirms native registration."""
         if not isinstance(native_registration_ref, str) or not native_registration_ref.strip():
             raise BridgeError("native_confirmation_required", retryable=False)
         payload = {"client_receipt_id": client_receipt_id, "decision": "accepted",
-                   "reason_code": "native_registered", "original_hash": original_hash,
+                   "reason_code": "native_registered",
                    "native_registration_ref": native_registration_ref}
-        if normalized_hash is not None:
-            payload["normalized_hash"] = normalized_hash
         return await self._json("POST", f"receipts/{self._key(receipt_id)}/ack", json=payload)

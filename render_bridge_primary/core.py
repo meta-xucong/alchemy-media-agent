@@ -141,7 +141,6 @@ class PrimaryRequest:
 class OriginalImage:
     content: bytes
     mime_type: str
-    sha256: str
     width: int
     height: int
 
@@ -264,7 +263,7 @@ class PrimaryTransport:
     def _result(self, row):
         data=json.loads(row['data']); image=None
         if row['image'] is not None and not data.get('cancel_requested'):
-            meta=data['image']; image=OriginalImage(bytes(row['image']),meta['mime_type'],meta['sha256'],meta['width'],meta['height'])
+            meta=data['image']; image=OriginalImage(bytes(row['image']),meta['mime_type'],meta['width'],meta['height'])
         provenance={k:v for k,v in data.items() if k in {'product','profile','route','state','reason','origin_key','execution_key','task_id','receipt_id','attempt_id','image','queue_active_count','queue_limit','queue_observed_at','capability_rejection'}}
         deadline = (data.get('payload') or {}).get('deadline')
         if isinstance(deadline, str): provenance['deadline'] = deadline
@@ -591,9 +590,8 @@ class PrimaryTransport:
                 raise PrimaryError('bridge_receipt_identity_mismatch')
             content,_=await self.client.artifact(receipt['artifact_id'],16777216)
         except BridgeError: return
-        sha=_hash(content)
-        if sha!=receipt.get('original_sha256') or len(content)!=receipt.get('size'):
-            raise PrimaryError('bridge_artifact_integrity_failed')
+        if len(content)!=receipt.get('size'):
+            raise PrimaryError('bridge_artifact_size_mismatch')
         try:
             with Image.open(io.BytesIO(content)) as im:
                 width,height=im.size; mime=Image.MIME.get(im.format)
@@ -609,7 +607,7 @@ class PrimaryTransport:
             raise PrimaryError('bridge_artifact_dimensions_mismatch')
         if options.get('output_format') and mime!='image/'+options['output_format']:
             raise PrimaryError('bridge_artifact_format_mismatch')
-        data['image']=dict(sha256=sha,mime_type=mime,width=width,height=height,size=len(content))
+        data['image']=dict(mime_type=mime,width=width,height=height,size=len(content))
         self._save(request,data,state='artifacts_ready',image=content)
 
     def _check_scope(self, data):
@@ -619,7 +617,7 @@ class PrimaryTransport:
     async def _ack_saved(self, key, data):
         self._check_scope(data)
         await self.client.accept_registered_receipt(data['receipt_id'], client_receipt_id='ack_'+key,
-            original_hash=data['image']['sha256'], native_registration_ref=data['registration_ref'])
+            native_registration_ref=data['registration_ref'])
         self._save_key(key, data, state='acked')
 
     async def acknowledge(self, request, registration_ref):

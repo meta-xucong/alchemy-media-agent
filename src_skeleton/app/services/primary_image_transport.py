@@ -235,7 +235,7 @@ async def _run_owned(job, request, *, edit, transport, existing):
                 return True
             image = result.image
             item = {"b64_json": base64.b64encode(image.content).decode(), "format": image.mime_type.split("/")[-1], "width": image.width, "height": image.height,
-                    "primary_output_id": output_id, "bridge_original": True, "sha256": image.sha256, "original_size": len(image.content), "primary_provenance": dict(result.provenance)}
+                    "primary_output_id": output_id, "bridge_original": True, "original_size": len(image.content), "primary_provenance": dict(result.provenance)}
             outputs.extend(image_service._store_outputs(job, [item], request=request))
         else:
             provider = await registry.select_image(request.provider_preference)
@@ -297,8 +297,12 @@ async def finish_primary(job, request):
             if native is None or native[2] != job.id:
                 may_retire = False
             elif result.route == "bridge":
-                expected = result.provenance.get("image", {}).get("sha256")
-                if not expected or hashlib.sha256(native[0].read_bytes()).hexdigest() != expected:
+                expected = result.provenance.get("image", {})
+                output = native_outputs[output_id]
+                if (not expected or native[0].stat().st_size != expected.get("size")
+                        or output.width != expected.get("width")
+                        or output.height != expected.get("height")
+                        or "image/" + output.format != expected.get("mime_type")):
                     may_retire = False
         # Persist explicit owning-product proof before ACK, so the existing
         # ACK-only maintenance can finish cleanup after a lost response/restart.
@@ -372,7 +376,7 @@ def public_image_job(job):
         safe = {key: value for key, value in provenance.items() if key in allowed}
         if isinstance(provenance.get("image"), dict):
             safe["image"] = {key: value for key, value in provenance["image"].items()
-                             if key in {"sha256", "mime_type", "width", "height", "size"}}
+                             if key in {"mime_type", "width", "height", "size"}}
         units[index] = safe
     summary = {**job.raw_response_summary, KEY: {"units": units, "billing_finalizing": bool(state.get("billing_finalizing"))}}
     return job.model_copy(update={"raw_response_summary": summary}, deep=True)
