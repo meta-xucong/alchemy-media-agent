@@ -83,7 +83,7 @@ class Client:
     async def receipt(self, rid):
         return {'receipt_id': rid, 'task_id': 'task_1', 'artifact_id': 'artifact_1', 'attempt_id': 'attempt_1',
                 'execution_profile_id': 'codex-image', 'execution_profile_revision': '1', 'slot_id': 'primary',
-                'original_sha256': hashlib.sha256(self.content).hexdigest(), 'size': len(self.content),
+                'size': len(self.content),
                 'mime_type': 'image/png', 'dimensions': {'width': 73, 'height': 41}}
 
     async def artifact(self, aid, limit):
@@ -562,7 +562,7 @@ def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig
         return {'receipt_id': rid, 'task_id': f'task_{index}', 'artifact_id': f'artifact_{index}',
                 'attempt_id': f'attempt_{index}', 'execution_profile_id': 'codex-image',
                 'execution_profile_revision': '1', 'slot_id': 'primary',
-                'original_sha256': hashlib.sha256(rig.client.content).hexdigest(), 'size': len(rig.client.content),
+                'size': len(rig.client.content),
                 'mime_type': 'image/png', 'dimensions': {'width': 73, 'height': 41}}
     rig.client.create_task = create
     rig.client.by_origin = by_origin

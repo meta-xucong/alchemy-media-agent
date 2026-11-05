@@ -234,7 +234,7 @@ class PreviewService:
                 receipt = await self.client.receipt(remote["receipt_id"])
                 self._validate_receipt(record, remote, receipt)
                 await self.client.reject_receipt(receipt["receipt_id"],
-                    client_receipt_id=record["client_receipt_id"], original_hash=receipt["original_sha256"],
+                    client_receipt_id=record["client_receipt_id"],
                     reason_code="preview_canceled")
             # Local cancel is final; remote may still be settling execution.
             await self._finish(record, state="canceled", delivery_ack="rejected" if remote.get("receipt_id") else "pending")
@@ -250,7 +250,7 @@ class PreviewService:
             if headers.get("content-type", "").split(";")[0] != receipt["mime_type"]:
                 raise BridgeError("artifact_mime_mismatch", retryable=False)
             metadata = await self.local(validate_image, content, receipt["mime_type"],
-                expected_hash=receipt["original_sha256"], expected_size=receipt["size"],
+                expected_size=receipt["size"], include_hash=False,
                 max_bytes=limits["max_output_bytes"], max_pixels=limits["max_image_pixels"])
             if metadata["dimensions"] != receipt["dimensions"]:
                 raise BridgeError("artifact_dimensions_mismatch", retryable=False)
@@ -317,6 +317,5 @@ class PreviewService:
                 or receipt.get("attempt_id") != remote.get("attempt_id") or receipt.get("slot_id") != "primary"
                 or receipt.get("execution_profile_id") != record["request"]["profile_id"]
                 or receipt.get("execution_profile_revision") != "1"
-                or not isinstance(receipt.get("original_sha256"), str) or len(receipt["original_sha256"]) != 64
                 or type(receipt.get("size")) is not int or receipt["size"] < 1):
             raise BridgeError("receipt_binding_mismatch", retryable=False)

@@ -1,7 +1,6 @@
 """Offline tests through product entrypoints and the real durable primary ledger."""
 import asyncio
 import base64
-import hashlib
 import io
 from types import SimpleNamespace
 
@@ -63,7 +62,7 @@ class Bridge:
     async def receipt(self, receipt_id):
         return {'receipt_id': receipt_id, 'task_id': 'task_'+receipt_id.split('_')[-1], 'artifact_id': 'artifact',
                 'attempt_id': 'attempt_'+receipt_id.split('_')[-1], 'execution_profile_id': 'codex-image', 'execution_profile_revision': '1', 'slot_id': 'primary',
-                'original_sha256': hashlib.sha256(self.content).hexdigest(), 'size': len(self.content), 'mime_type': 'image/png', 'dimensions': {'width': 7, 'height': 11}}
+                'size': len(self.content), 'mime_type': 'image/png', 'dimensions': {'width': 7, 'height': 11}}
 
     async def artifact(self, artifact_id, limit):
         return self.content, {}
@@ -124,7 +123,9 @@ def test_v1_real_entry_original_bytes_and_concurrent_resume(runtime, monkeypatch
     assert api.calls == 0
     for output in job.outputs:
         assert (output.width, output.height) == (7, 11)
-        assert output.metadata['sha256'] == hashlib.sha256(bridge.content).hexdigest()
+        assert 'sha256' not in output.metadata
+        assert output.metadata['primary_provenance']['receipt_id']
+        assert output.metadata['original_size'] == len(bridge.content)
         assert media_store.find_output_file(output.id)[0].read_bytes() == bridge.content
     async def polls(): return await asyncio.gather(primary.resume_primary_job(job.id), primary.resume_primary_job(job.id))
     assert all(len(j.outputs) == 2 for j in asyncio.run(polls()))
@@ -449,15 +450,36 @@ def test_bridge_original_write_crash_reuses_reserved_id_and_cached_pixels(runtim
     assert bridge.creates == 1 and not api.calls and len(bridge.acks) == 1
 
 
-def test_reservation_replay_requires_exact_owner_job_and_hash(runtime):
-    bridge, _ = runtime
+def test_reservation_replay_requires_exact_owner_job_and_bridge_receipt(runtime):
     from app.repositories.output_publication import reserve_output
-    digest = hashlib.sha256(bridge.content).hexdigest()
-    args = dict(output_id='out_unpublished_primary', job_id='job_primary', owner_id=41, replay_sha256=digest)
+    args = dict(output_id='out_unpublished_primary', job_id='job_primary', owner_id=41,
+                replay_identity='receipt_primary')
     reserve_output(repository.database_path, **args)
     reserve_output(repository.database_path, **args)
-    for change in ({'owner_id': 42}, {'job_id': 'other'}, {'replay_sha256': '0'*64}, {'replay_sha256': None}):
+    for change in ({'owner_id': 42}, {'job_id': 'other'},
+                   {'replay_identity': 'receipt_other'}, {'replay_identity': None}):
         with pytest.raises(ValueError): reserve_output(repository.database_path, **{**args, **change})
+    from app.repositories.sqlite_json import connect
+    connection = connect(repository.database_path)
+    try:
+        payload = connection.execute(
+            "SELECT payload FROM v1_records WHERE namespace='output_publications' AND record_key=?",
+            (args['output_id'],),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert 'original_sha256' not in payload and 'replay_identity' in payload
+
+
+def test_legacy_reservation_without_receipt_identity_cannot_be_replayed(runtime):
+    from app.repositories.output_publication import reserve_output
+    database_path = repository.database_path
+    reserve_output(database_path, output_id='out_legacy_reservation',
+                   job_id='job_primary', owner_id=41)
+    with pytest.raises(ValueError):
+        reserve_output(database_path, output_id='out_legacy_reservation',
+                       job_id='job_primary', owner_id=41,
+                       replay_identity='receipt_primary')
 
 
 def test_lab_authenticated_poll_restores_pending_session(runtime, monkeypatch):

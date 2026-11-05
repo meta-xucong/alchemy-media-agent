@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -256,9 +255,8 @@ async def verify(checkout):
             assert store.start_execution(scope, first.task_id, claim["claim_id"])["may_execute"]
             assert not store.start_execution(scope, first.task_id, claim["claim_id"])["may_execute"]
             content = fixture_png(32, 24)
-            digest = hashlib.sha256(content).hexdigest()
             upload = store.create_upload(scope, first.task_id, claim["claim_id"], dict(
-                attempt_id=claim["attempt_id"], slot_id="primary", original_sha256=digest,
+                attempt_id=claim["attempt_id"], slot_id="primary",
                 size=len(content), mime_type="image/png"))
             store.put_upload_content(scope, upload["upload_id"], claim["claim_id"], content)
             receipt = store.commit_upload(scope, upload["upload_id"], claim["claim_id"])
@@ -267,7 +265,7 @@ async def verify(checkout):
             interrupted = await transport.resolve(request("normal"))
             assert interrupted.route == "bridge" and interrupted.image is None
             result = await transport.resolve(request("normal"))
-            assert result.image.content == content and result.image.sha256 == digest
+            assert result.image.content == content
             assert result.image.mime_type == "image/png"
             assert (result.image.width, result.image.height) == (32, 24)
 

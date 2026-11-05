@@ -33,10 +33,11 @@ class PreviewCreate(BaseModel):
 
 
 def validate_image(content: bytes, mime: str, *, expected_hash=None, expected_size=None,
-                   max_bytes=MAX_REFERENCE_INPUT_BYTES, max_pixels=MAX_REFERENCE_INPUT_PIXELS):
+                   max_bytes=MAX_REFERENCE_INPUT_BYTES, max_pixels=MAX_REFERENCE_INPUT_PIXELS,
+                   include_hash=True):
     if not content or len(content) > max_bytes:
         raise BridgeError("media_size_invalid", status=422, retryable=False)
-    digest = hashlib.sha256(content).hexdigest()
+    digest = hashlib.sha256(content).hexdigest() if include_hash or expected_hash is not None else None
     if (expected_hash is not None and digest != expected_hash) or (
             expected_size is not None and len(content) != expected_size):
         raise BridgeError("media_integrity_mismatch", status=422, retryable=False)
@@ -54,8 +55,11 @@ def validate_image(content: bytes, mime: str, *, expected_hash=None, expected_si
                 image.load()
     except Exception:
         raise BridgeError("invalid_image", status=422, retryable=False) from None
-    return {"original_sha256": digest, "size": len(content), "mime_type": mime,
-            "dimensions": {"width": width, "height": height}}
+    result = {"size": len(content), "mime_type": mime,
+              "dimensions": {"width": width, "height": height}}
+    if include_hash:
+        result["original_sha256"] = digest
+    return result
 
 
 def decode_inputs(request: PreviewCreate):

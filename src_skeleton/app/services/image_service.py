@@ -921,13 +921,16 @@ def _store_outputs(job: GenerationJob, provider_outputs: list[dict], *, request:
     for item in provider_outputs:
         output_id = item.get("primary_output_id") or make_id("out")
         output_format = item.get("format") or (job.prompt_plan.output_format if job.prompt_plan else "png")
+        replay_identity = (
+            item["primary_provenance"]["receipt_id"] if item.get("bridge_original") else None
+        )
         url = media_store.save_base64_output(
             job_id=job.id,
             output_id=output_id,
             b64_json=item["b64_json"],
             output_format=output_format,
             owner_id=request.veyra_user_id,
-            **({"replay_sha256": item["sha256"]} if item.get("bridge_original") else {}),
+            replay_identity=replay_identity,
         )
         width = item.get("width")
         height = item.get("height")

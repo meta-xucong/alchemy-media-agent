@@ -363,6 +363,16 @@ def _durable_original(record, result, *, allow_pending_ack=False):
         return False
     if metadata.get(PROVENANCE, {}).get("execution_key") != result.execution_key:
         return False
+    if result.route == "bridge":
+        expected = result.provenance.get("image", {})
+        try:
+            size = Path(record.file_path).stat().st_size
+        except OSError:
+            return False
+        return (size == expected.get("size")
+                and record.mime_type == expected.get("mime_type")
+                and record.width == expected.get("width")
+                and record.height == expected.get("height"))
     try:
         content_hash = hashlib.sha256(Path(record.file_path).read_bytes()).hexdigest()
     except OSError:
@@ -370,8 +380,6 @@ def _durable_original(record, result, *, allow_pending_ack=False):
     expected = metadata.get("content_sha256")
     if not expected or content_hash != expected:
         return False
-    if result.route == "bridge":
-        return content_hash == result.provenance.get("image", {}).get("sha256")
     return True
 
 
@@ -497,7 +505,7 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
         return ImageGenerationResult(provider="render_bridge", model=settings.profile,
             outputs=[{"b64_json": base64.b64encode(image.content).decode(), "mime_type": image.mime_type,
                       "format": image.mime_type.split("/")[-1], "width": image.width, "height": image.height,
-                      "original_sha256": image.sha256, PROVENANCE: provenance}],
+                  PROVENANCE: provenance}],
             raw_response_summary={PROVENANCE: provenance})
     except PrimaryError as exc:
         raise _error(exc.code) from None

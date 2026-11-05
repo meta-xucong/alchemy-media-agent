@@ -37,7 +37,7 @@ class MockBridge:
         self.lose_create = False
         self.lose_input = False
         self.outage = False
-        self.wrong_hash = False
+        self.wrong_size = False
         self.wrong_binding = False
         self.slow = None
         self.content = png()
@@ -87,12 +87,12 @@ class MockBridge:
             self.acks.append(body)
             return httpx.Response(200, json={"delivery_ack": body["decision"]})
         if path.startswith("receipts/"):
-            import hashlib
             task = next(iter(self.tasks.values()))
             return httpx.Response(200, json={"receipt_id": "receipt_1", "task_id": "wrong" if self.wrong_binding else task["remote_task_id"],
                 "attempt_id": "attempt_1", "slot_id": "primary", "execution_profile_id": "fake-image",
-                "execution_profile_revision": "1", "artifact_id": "artifact_1", "original_sha256": "0"*64 if self.wrong_hash else hashlib.sha256(self.content).hexdigest(),
-                "size": len(self.content), "mime_type": "image/png", "dimensions": {"width": 32, "height": 32}, "delivery_ack": "pending"})
+                "execution_profile_revision": "1", "artifact_id": "artifact_1",
+                "size": len(self.content) + int(self.wrong_size), "mime_type": "image/png",
+                "dimensions": {"width": 32, "height": 32}, "delivery_ack": "pending"})
         if path == "artifacts/artifact_1/content":
             return httpx.Response(200, content=self.content, headers={"Content-Type": "image/png"})
         raise AssertionError((request.method, path))
@@ -318,7 +318,7 @@ def test_cancel_ready_receipt_hides_then_rejects_never_accepts(tmp_path):
     run(case())
 
 
-@pytest.mark.parametrize("mismatch", ["wrong_hash", "wrong_binding"])
+@pytest.mark.parametrize("mismatch", ["wrong_size", "wrong_binding"])
 def test_invalid_receipt_not_previewed(tmp_path, mismatch):
     async def case():
         svc, mock = service(tmp_path)

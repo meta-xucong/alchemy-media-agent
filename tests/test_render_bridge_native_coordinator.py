@@ -222,7 +222,6 @@ def test_native_chain_uses_frozen_prompt_and_confirms_before_accepted(tmp_path):
             assert next(iter(bridge.tasks.values()))["request"]["prompt"] == "Exact approved canonical prompt"
             assert next(iter(bridge.tasks.values()))["request"]["parameters"] == {"width": 1024, "height": 1024, "seed": 0}
             assert bridge.acks == [{"client_receipt_id": final["client_receipt_id"], "decision": "accepted", "reason_code": "native_registered",
-                "original_hash": final["native_outcome"]["original_sha256"], "normalized_hash": final["native_outcome"]["normalized_sha256"],
                 "native_registration_ref": "native_output_1"}]
             public = svc.public(final)
             assert public["formal_delivery"] is False and public["billing"]["charged"] is False

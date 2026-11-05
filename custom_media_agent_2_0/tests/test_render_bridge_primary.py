@@ -102,7 +102,7 @@ def test_bridge_entry_without_api_credentials_preserves_original_and_replay(isol
     assert result.status == "completed" and result.provider_id == "render_bridge"
     output = result.outputs[0]
     assert output_storage.read_output_content(output.output_id)[0] == image_bytes()
-    assert output.metadata["original_sha256"] == hashlib.sha256(image_bytes()).hexdigest()
+    assert "original_sha256" not in output.metadata
     assert output.metadata["render_bridge_primary"]["parameter_adaptation"]["adapter"] == "codex_cli_imagegen_v1"
     assert output.metadata["render_bridge_primary"]["parameter_adaptation"]["defaults_applied"]["quality"] == "native_default"
     assert (output.metadata["width"], output.metadata["height"]) == (23, 19)
@@ -898,8 +898,8 @@ def test_unversioned_frozen_units_preserve_journal_semantics(isolated, tmp_path,
         assert "cancel" in client.calls
     else:
         if operation in {"ack", "downloaded"}:
-            data.update(receipt_id="receipt", image={"sha256": hashlib.sha256(image_bytes()).hexdigest(),
-                        "mime_type": "image/png", "width": 23, "height": 19})
+            data.update(receipt_id="receipt", image={"mime_type": "image/png", "width": 23,
+                        "height": 19, "size": len(image_bytes())})
             core._save(unit, data, state="artifacts_ready", image=image_bytes())
             result = bridge.provider_result(core._result(core._read(unit)))
         else:
