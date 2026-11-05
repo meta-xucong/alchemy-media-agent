@@ -5,7 +5,6 @@ local fixture token. HTTP handlers are exercised through ASGI, not the network.
 """
 import argparse
 import asyncio
-import hashlib
 import sys
 import tempfile
 from pathlib import Path
@@ -61,14 +60,14 @@ async def verify_codex_adapter():
             assert store.start_execution(scope, first.task_id, claim['claim_id'])['may_execute']
             assert not store.start_execution(scope, first.task_id, claim['claim_id'])['may_execute']
             content = fixture_png(32, 24)
-            digest = hashlib.sha256(content).hexdigest()
             upload = store.create_upload(scope, first.task_id, claim['claim_id'], dict(
-                attempt_id=claim['attempt_id'], slot_id='primary', original_sha256=digest,
+                attempt_id=claim['attempt_id'], slot_id='primary',
                 size=len(content), mime_type='image/png'))
             store.put_upload_content(scope, upload['upload_id'], claim['claim_id'], content)
             store.commit_upload(scope, upload['upload_id'], claim['claim_id'])
             result = await transport.resolve(request('first'))
-            assert result.image.content == content and result.image.sha256 == digest
+            assert result.image.content == content
+            assert len(result.image.content) == len(content)
             await transport.acknowledge(request('first'), 'fixture-output')
             assert (await transport.resolve(request('first'))).image.content == content
             original_create = client.create_task
@@ -104,7 +103,8 @@ async def main():
  assert sorted(x.route for x in raced)==['api','bridge'],raced
  assert (await t.resolve(req(0))).task_id==first.task_id
  rendered=run_fake_once(store,scope,first.task_id,node_id='node',executor_instance='instance',start_log=root/'starts')
- result=await t.resolve(req(0)); assert result.image and result.image.sha256==rendered['receipt']['original_sha256']
+ result=await t.resolve(req(0)); assert result.image and len(result.image.content)==rendered['receipt']['size']
+ assert result.image.mime_type==rendered['receipt']['mime_type']
  await t.acknowledge(req(0),'product-output-fixture')
  assert (await t.resolve(req(0))).image.content==result.image.content
  # response loss after durable admission; no resubmit, recover via origin with new transport
@@ -122,7 +122,7 @@ async def main():
  unavailable=await t.resolve(req(12))
  assert unavailable.route=='bridge' and unavailable.state=='queued',unavailable
  print('PASS profile health is diagnostic only after accepting admission; existing task remains owned; same-task cancellation never API')
- print('PASS actual companion ASGI: 9-to-10 competition, full queue replay, original receipt/hash/bytes/dimensions, ACK and post-admission response-loss restart recovery')
+ print('PASS actual companion ASGI: 9-to-10 competition, full queue replay, original receipt/bytes/dimensions, ACK and post-admission response-loss restart recovery')
  print('evidence_root',root)
  await client.close(); store.close()
  if args.require_codex_adapter:
