@@ -92,7 +92,6 @@ class RenderBridgeRegistration:
     target_revision: str
     prompt_sha256: str
     receipt_id: str
-    original_sha256: str
     execution_profile_id: str = "fake-image"
     execution_profile_revision: str = "1"
     uploaded_asset_ids: tuple[str, ...] = ()
@@ -138,8 +137,6 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
         if not isinstance(binding, RenderBridgeRegistration):
             raise ValueError("render_bridge_registration_untrusted")
         render_bridge_options(binding.execution_profile_id, binding.output_format, uploaded_asset_ids=binding.uploaded_asset_ids)
-        if hashlib.sha256(artifact_bytes).hexdigest() != binding.original_sha256:
-            raise ValueError("render_bridge_artifact_hash_mismatch")
         self.binding = binding
         self.artifact_bytes = artifact_bytes
         self.assert_current = assert_current

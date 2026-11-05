@@ -463,17 +463,14 @@ class NativeRenderBridgeGateway:
 
     @staticmethod
     def _validate_artifact(
-        artifact_bytes: bytes, original_sha256: str, *, size: str = "1024x1024",
+        artifact_bytes: bytes, *, size: str = "1024x1024",
         execution_profile_id: str = "fake-image", output_format: str = "png",
     ) -> None:
         if (
             not isinstance(artifact_bytes, bytes)
             or not 0 < len(artifact_bytes) <= (1_048_576 if execution_profile_id == "fake-image" else 16_777_216)
-            or not isinstance(original_sha256, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", original_sha256)
-            or hashlib.sha256(artifact_bytes).hexdigest() != original_sha256
         ):
-            raise BridgeNativeFacadeError("render_bridge_artifact_hash_mismatch")
+            raise BridgeNativeFacadeError("render_bridge_artifact_invalid")
         try:
             with Image.open(BytesIO(artifact_bytes)) as image:
                 if (
@@ -517,7 +514,6 @@ class NativeRenderBridgeGateway:
         import_key: str,
         frozen_request_id: str,
         receipt_id: str,
-        original_sha256: str,
         artifact_bytes: bytes,
         execution_profile_id: str = "fake-image",
     ) -> dict[str, Any]:
@@ -536,7 +532,7 @@ class NativeRenderBridgeGateway:
                 if frozen["frozen_request_id"] != frozen_request_id:
                     raise BridgeNativeFacadeError("render_bridge_frozen_request_changed")
                 self._validate_artifact(
-                    artifact_bytes, original_sha256, size=frozen["image_options"]["size"],
+                    artifact_bytes, size=frozen["image_options"]["size"],
                     execution_profile_id=execution_profile_id, output_format=frozen["image_options"]["output_format"],
                 )
                 binding = RenderBridgeRegistration(
@@ -546,7 +542,6 @@ class NativeRenderBridgeGateway:
                     target_revision=frozen["target_revision"],
                     prompt_sha256=frozen["prompt_sha256"],
                     receipt_id=receipt_id,
-                    original_sha256=original_sha256,
                     execution_profile_id=execution_profile_id,
                     uploaded_asset_ids=tuple(item["asset_id"] for item in frozen["references"]),
                     reference_sha256=tuple(item["sha256"] for item in frozen["references"]),
@@ -561,14 +556,13 @@ class NativeRenderBridgeGateway:
             else:
                 binding = RenderBridgeRegistration(**journal["binding"])
                 self._validate_artifact(
-                    artifact_bytes, original_sha256, size=binding.size,
+                    artifact_bytes, size=binding.size,
                     execution_profile_id=binding.execution_profile_id, output_format=binding.output_format,
                 )
                 if (
                     journal["import_key"] != import_key
                     or binding.frozen_request_id != frozen_request_id
                     or binding.receipt_id != receipt_id
-                    or binding.original_sha256 != original_sha256
                     or binding.execution_profile_id != execution_profile_id
                 ):
                     raise BridgeNativeFacadeError("render_bridge_receipt_conflict")

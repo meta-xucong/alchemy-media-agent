@@ -186,7 +186,6 @@ def _receipt(fixture, frozen=None, content=None, **overrides):
         "import_key": "same-native-import",
         "frozen_request_id": frozen["frozen_request_id"],
         "receipt_id": "bridge_fake_receipt_1",
-        "original_sha256": hashlib.sha256(content).hexdigest(),
         "artifact_bytes": content,
         "execution_profile_id": "fake-image",
         **overrides,
@@ -238,7 +237,6 @@ def test_default_off_gateway_does_not_read_or_write(native_fixture, monkeypatch)
             import_key="disabled",
             frozen_request_id="disabled",
             receipt_id="disabled",
-            original_sha256="0" * 64,
             artifact_bytes=b"disabled",
         ),
     ):
@@ -286,8 +284,8 @@ def test_one_hundred_identical_receipts_have_one_native_checkpoint(native_fixtur
     assert output.output_id == result["native_registration_ref"]
     assert output.job_id == fixture.target.job_id
     assert output.asset_id == fixture.target.asset_id
-    assert result["original_sha256"] == receipt["original_sha256"]
-    assert result["normalized_sha256"] == hashlib.sha256(Path(output.file_path).read_bytes()).hexdigest()
+    assert "content_sha256" not in output.metadata and "source_integrity_id" not in output.metadata
+    assert "original_sha256" not in result and "normalized_sha256" not in result
     assert fixture.gateway.registration_status(
         7, fixture.target, import_key=receipt["import_key"]
     ) == result
@@ -334,13 +332,12 @@ def test_concurrent_receipt_replays_commit_one_native_checkpoint(native_fixture)
     fixture.usage.assert_not_called()
 
 
-def test_same_import_key_with_changed_content_is_a_conflict(native_fixture):
+def test_same_import_key_and_receipt_id_replay_without_image_hash(native_fixture):
     fixture = native_fixture
     frozen = fixture.gateway.prepare(7, fixture.target)
     receipt = _receipt(fixture, frozen)
     accepted = _register(fixture, **receipt)
-    with pytest.raises(BridgeNativeFacadeError, match="conflict|mismatch"):
-        _register(fixture, **_receipt(fixture, frozen, content=_png_bytes("red")))
+    assert _register(fixture, **_receipt(fixture, frozen, content=_png_bytes("red"))) == accepted
     assert len(fixture.outputs.list_by_job(fixture.target.job_id)) == 1
     assert fixture.gateway.registration_status(
         7, fixture.target, import_key=receipt["import_key"]
@@ -532,18 +529,12 @@ def test_unverified_execution_profile_is_rejected(native_fixture, profile):
 
 
 @pytest.mark.parametrize(
-    "content,sha256",
-    [
-        (b"not-an-image", None),
-        (_png_bytes(size=(256, 256)), None),
-        (_png_bytes(), "0" * 64),
-    ],
+    "content",
+    [b"not-an-image", _png_bytes(size=(256, 256))],
 )
-def test_invalid_receipt_pixels_are_rejected_before_native_output(native_fixture, content, sha256):
+def test_invalid_receipt_pixels_are_rejected_before_native_output(native_fixture, content):
     fixture = native_fixture
     receipt = _receipt(fixture, content=content)
-    if sha256 is not None:
-        receipt["original_sha256"] = sha256
     with pytest.raises(BridgeNativeFacadeError):
         _register(fixture, **receipt)
     assert fixture.outputs.list_by_job(fixture.target.job_id) == []

@@ -405,7 +405,8 @@ class NativeBridgeService(PreviewService):
         if headers.get("content-type", "").split(";")[0] != mime or receipt["mime_type"] != mime:
             raise BridgeError("native_output_format_mismatch", retryable=False)
         metadata = await self.local(validate_image, content, mime, expected_size=receipt["size"], max_bytes=limit,
-                                   max_pixels=40000000 if profile_id == "codex-image" else 1048576)
+                                   max_pixels=40000000 if profile_id == "codex-image" else 1048576,
+                                   include_hash=False)
         if (receipt["dimensions"] != metadata["dimensions"]
                 or (profile_id != "codex-image" and metadata["dimensions"] != dimensions)):
             raise BridgeError("native_fixture_dimensions_required", retryable=False)
@@ -413,8 +414,7 @@ class NativeBridgeService(PreviewService):
         if latest["cancel_requested"]:
             await self._cancel_native(latest)
             return
-        local_receipt = {**receipt, "original_sha256": metadata["original_sha256"]}
-        await self.local(self.store.save_receipt, record["id"], local_receipt, content)
+        await self.local(self.store.save_receipt, record["id"], receipt, content)
         await self._patch(record, native_phase="registering", receipt_id=receipt["receipt_id"])
         await self._register_or_confirm(record)
 
@@ -595,7 +595,7 @@ class NativeBridgeService(PreviewService):
             manifest, content = stored
             outcome = await self.authority(self.gateway.register_receipt, owner, target,
                 import_key=record["import_key"], frozen_request_id=record["frozen"]["frozen_request_id"],
-                receipt_id=manifest["receipt_id"], original_sha256=manifest["original_sha256"], artifact_bytes=content,
+                receipt_id=manifest["receipt_id"], artifact_bytes=content,
                 execution_profile_id=record["request"]["profile_id"])
         await self._patch(record, native_outcome=outcome)
         if outcome["status"] == "rejected":
@@ -611,11 +611,8 @@ class NativeBridgeService(PreviewService):
         if outcome["status"] != "registered":
             await self._finish(record, state="import_unknown", last_error="native_registration_unconfirmed")
             return
-        if not outcome.get("native_registration_ref") or not outcome.get("original_sha256"):
+        if not outcome.get("native_registration_ref"):
             raise BridgeError("native_confirmation_missing", retryable=False)
-        stored = await self.local(self.store.receipt, record["id"])
-        if not stored or stored[0]["original_sha256"] != outcome["original_sha256"]:
-            raise BridgeError("native_confirmation_hash_mismatch", retryable=False)
         await self._patch(record, native_phase="ack_pending")
         if record.get("delivery_ack") != "accepted":
             await self.client.accept_registered_receipt(record["receipt_id"],

@@ -130,9 +130,7 @@ class NativeGatewayDouble:
         assert not self.canceled
         assert values["frozen_request_id"] == self.revision
         assert values["execution_profile_id"] == self.profile_id
-        assert hashlib.sha256(values["artifact_bytes"]).hexdigest() == values["original_sha256"]
         result = {"status": "registered", "native_registration_ref": "native_output_1",
-                  "original_sha256": values["original_sha256"], "normalized_sha256": values["original_sha256"],
                   "review_status": "test_review_only", "formal_delivery": False,
                   "billing": {"mode": "v3_zero_credit_stub", "charged": False}, "execution_audit_count": 1}
         self.registrations[values["import_key"]] = result

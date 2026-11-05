@@ -5507,8 +5507,6 @@ class V3ProductApiService:
         return {
             "status": "registered",
             "native_registration_ref": binding.output_id,
-            "original_sha256": binding.original_sha256,
-            "normalized_sha256": str(output.metadata.get("content_sha256") or ""),
             "review_status": str(record.status),
             "current_review_status": str(record.status),
             "review_pending": self._render_bridge_review_pending(record),

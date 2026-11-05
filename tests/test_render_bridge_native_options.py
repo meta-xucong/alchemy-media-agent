@@ -64,7 +64,7 @@ def test_profile_format_originals_register_once_and_remain_review_only(options_f
     assert accepted["status"] == "registered"
     assert accepted["formal_delivery"] is False
     assert accepted["test_fixture"] is (profile == "fake-image")
-    assert accepted["original_sha256"] == accepted["normalized_sha256"] == hashlib.sha256(content).hexdigest()
+    assert "original_sha256" not in accepted and "normalized_sha256" not in accepted
     for _ in range(5):
         assert _register(bound, **receipt) == accepted
     assert bound.gateway.registration_status(7, bound.target, import_key=receipt["import_key"]) == accepted
@@ -238,19 +238,16 @@ def test_format_is_verified_from_original_not_transcoded(options_fixture, expect
 def test_profile_specific_output_byte_limit_and_decoding():
     content = _image("png", noise=True)
     assert 1_048_576 < len(content) < 16_777_216
-    digest = hashlib.sha256(content).hexdigest()
-    with pytest.raises(BridgeNativeFacadeError, match="hash_mismatch"):
-        NativeRenderBridgeGateway._validate_artifact(content, digest)
+    with pytest.raises(BridgeNativeFacadeError, match="artifact_invalid"):
+        NativeRenderBridgeGateway._validate_artifact(content)
     for profile in ("codex-image", "midjourney-manual"):
-        NativeRenderBridgeGateway._validate_artifact(content, digest, execution_profile_id=profile)
+        NativeRenderBridgeGateway._validate_artifact(content, execution_profile_id=profile)
     oversized = b"x" * 16_777_217
-    with pytest.raises(BridgeNativeFacadeError, match="hash_mismatch"):
-        NativeRenderBridgeGateway._validate_artifact(oversized, hashlib.sha256(oversized).hexdigest(),
-                                                   execution_profile_id="codex-image")
+    with pytest.raises(BridgeNativeFacadeError, match="artifact_invalid"):
+        NativeRenderBridgeGateway._validate_artifact(oversized, execution_profile_id="codex-image")
     malformed = _image("jpeg")[:-100]
     with pytest.raises(BridgeNativeFacadeError, match="artifact_invalid"):
-        NativeRenderBridgeGateway._validate_artifact(malformed, hashlib.sha256(malformed).hexdigest(),
-                                                   execution_profile_id="codex-image", output_format="jpeg")
+        NativeRenderBridgeGateway._validate_artifact(malformed, execution_profile_id="codex-image", output_format="jpeg")
 
 
 def test_profile_and_format_identity_defaults_preserve_old_records():
@@ -260,7 +257,7 @@ def test_profile_and_format_identity_defaults_preserve_old_records():
     assert plan.safe_metadata() == {"schema_version": "render_bridge_native_plan_v1", **old}
     assert len({plan.instance_id, replace(plan, output_format="jpeg").instance_id,
                 replace(plan, execution_profile_id="codex-image").instance_id}) == 3
-    binding = RenderBridgeRegistration("k", "p", "j", "a", "f", "t", "s", "r", "h")
+    binding = RenderBridgeRegistration("k", "p", "j", "a", "f", "t", "s", "r")
     assert "output_format" not in binding.safe_metadata()
     assert "development_only" not in binding.safe_metadata()
     assert len({binding.output_id, replace(binding, output_format="jpeg").output_id,
