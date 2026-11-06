@@ -47,6 +47,13 @@ class NativeRenderBridgeGateway:
         self.project_service = project_service
         self.allowed_profiles = allowed_profiles
 
+    @staticmethod
+    def _registration_from_journal(value):
+        fields = dict(value)
+        fields.pop("original_sha256", None)
+        fields.pop("reference_sha256", None)
+        return RenderBridgeRegistration(**fields)
+
     def _enabled(self) -> None:
         if not self.enabled:
             raise BridgeNativeFacadeError("render_bridge_native_disabled", 404)
@@ -87,7 +94,6 @@ class NativeRenderBridgeGateway:
         options = frozen["image_options"]
         if (
             [item["asset_id"] for item in frozen["references"]] != uploaded_asset_ids
-            or [item["sha256"] for item in frozen["references"]] != [item.content_sha256 for item in admitted]
             or options != {
                 "size": size,
                 "quality": "auto",
@@ -174,8 +180,6 @@ class NativeRenderBridgeGateway:
             raise BridgeNativeFacadeError("render_bridge_target_not_eligible")
         admitted = self._admit_references(actor_user_id, target.project_id,
             [item["asset_id"] for item in binding.frozen["references"]])
-        if [item.content_sha256 for item in admitted] != [item["sha256"] for item in binding.frozen["references"]]:
-            raise BridgeNativeFacadeError("render_bridge_reference_changed")
 
     def cloud_admission(self, actor_user_id, target, *, frozen_request_id, execution_profile_id="fake-image"):
         from ..generation_router.render_bridge_provider import RenderBridgeCloudContinuation
@@ -451,8 +455,6 @@ class NativeRenderBridgeGateway:
         if revision != binding.target_revision:
             raise BridgeNativeFacadeError("render_bridge_target_revision_changed")
         admitted = self._admit_references(actor_user_id, target.project_id, list(binding.uploaded_asset_ids))
-        if [item.content_sha256 for item in admitted] != list(binding.reference_sha256):
-            raise BridgeNativeFacadeError("render_bridge_reference_changed")
         if str(record.status) != "planned" or record.generation_result is not None:
             native = (
                 record.generation_result.metadata.get("render_bridge_registration")
@@ -544,7 +546,6 @@ class NativeRenderBridgeGateway:
                     receipt_id=receipt_id,
                     execution_profile_id=execution_profile_id,
                     uploaded_asset_ids=tuple(item["asset_id"] for item in frozen["references"]),
-                    reference_sha256=tuple(item["sha256"] for item in frozen["references"]),
                     size=frozen["image_options"]["size"],
                     output_format=frozen["image_options"]["output_format"],
                 )
@@ -554,7 +555,7 @@ class NativeRenderBridgeGateway:
                 journal = {"status": "intent", "import_key": import_key, "binding": journal_binding}
                 self._write(path, journal)
             else:
-                binding = RenderBridgeRegistration(**journal["binding"])
+                binding = self._registration_from_journal(journal["binding"])
                 self._validate_artifact(
                     artifact_bytes, size=binding.size,
                     execution_profile_id=binding.execution_profile_id, output_format=binding.output_format,
@@ -613,7 +614,7 @@ class NativeRenderBridgeGateway:
                 raise BridgeNativeFacadeError("render_bridge_receipt_conflict")
             if journal["status"] == "rejected":
                 return dict(journal["outcome"])
-            binding = RenderBridgeRegistration(**journal["binding"])
+            binding = self._registration_from_journal(journal["binding"])
             self._options(binding.execution_profile_id, binding.output_format, uploaded_asset_ids=binding.uploaded_asset_ids)
             outcome = self.service.lookup_render_bridge_registration(binding)
             if outcome["status"] == "registered":

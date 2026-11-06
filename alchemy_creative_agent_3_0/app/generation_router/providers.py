@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..reference_input_plan import PLAN_KEY, plan_from_metadata, digest as reference_plan_digest
+from ..reference_input_plan import PLAN_KEY, SCHEMA as NO_IMAGE_SHA_REFERENCE_PLAN_SCHEMA, plan_from_metadata, digest as reference_plan_digest
 
 import asyncio
 from dataclasses import dataclass, field
@@ -81,6 +81,7 @@ from ..scenario_packs.ecommerce.contracts import (
 )
 from ..scenario_packs.ecommerce.physical_renderer_reference_plan import (
     DOC269_MAX_REFERENCE_IMAGES,
+    DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA,
     NativeEcommerceBodyReferenceBinding,
     NativeEcommerceIdentityBinding,
     PhysicalRendererReferencePlan,
@@ -1389,7 +1390,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 output_id=checkpoint_output_id or None,
                 **({"preserve_original_bytes": True} if bridge_provenance.get("route") == "bridge" else {}),
                 **({"include_content_hash": False} if (
-                    bridge_provenance.get("route") == "bridge"
+                    bridge_provenance
                     or self.provider_name == "render_bridge_receipt_provider"
                 ) else {}),
                 mime_type=output.get("mime_type"),
@@ -2458,13 +2459,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "reference_input_execution": reference_execution,
         }
 
-    @staticmethod
-    def _raw_reference_assets(request: GenerationRequest) -> list[dict[str, Any]]:
+    def _raw_reference_assets(self, request: GenerationRequest) -> list[dict[str, Any]]:
         """Read declared reference evidence without materializing or mutating it."""
 
         plan = plan_from_metadata(ProductionImageGenerationProvider._generation_request_metadata(request))
         if plan is not None:
-            return plan.references()
+            no_image_sha = bool(getattr(self, "_bridge_transport", False)) or (
+                request.metadata.get("render_bridge_primary_no_image_sha") is True
+            ) or plan.as_dict().get("schema_version") == NO_IMAGE_SHA_REFERENCE_PLAN_SCHEMA
+            return plan.references(verify_bytes=not no_image_sha)
         values: list[Any] = []
         for source in (
             request.metadata.get("reference_assets"),
@@ -2542,7 +2545,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         image_request_cls = getattr(app_schemas, "ImageGenerationRequest")
         prompt_plan_cls = getattr(app_schemas, "Image" + "PromptPlan")
 
-        materialization = self.materialize_final_prompt(request)
+        materialization = self.materialize_final_prompt(
+            request, bridge_transport=(
+                bool(getattr(self, "_bridge_transport", False))
+                or metadata.get("render_bridge_primary_no_image_sha") is True
+            )
+        )
         provider_name = self._select_provider(materialization.reference_assets)
         prompt_plan = prompt_plan_cls(
             main_subject=request.asset_spec.purpose if request.asset_spec else request.prompt_compilation.asset_id,
@@ -2621,7 +2629,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
             materialization.reference_assets,
         )
 
-    def materialize_final_prompt(self, request: GenerationRequest) -> ProviderPromptMaterialization:
+    def materialize_final_prompt(
+        self, request: GenerationRequest, *, bridge_transport: bool = False
+    ) -> ProviderPromptMaterialization:
         """Build the canonical final renderer prompt without selecting or calling a Provider.
 
         The Web route and Codex Native ImageGen use this exact boundary.  Any
@@ -2641,10 +2651,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback": "blocked",
                 },
             )
-        admitted_reference_assets = [] if self._has_doc269_ecommerce_physical_plan(request) else self._reference_assets(request)
+        admitted_reference_assets = [] if self._has_doc269_ecommerce_physical_plan(request) else self._reference_assets(
+            request, bridge_transport=bridge_transport,
+        )
         asset_plan = self._asset_plan(request, admitted_reference_assets)
         asset_plan = self._provider_materialization_asset_plan(request, asset_plan)
-        self._bind_reference_materialization_receipt(request, asset_plan)
+        self._bind_reference_materialization_receipt(request, asset_plan, bridge_transport=bridge_transport)
         self._assert_professional_view_evidence_ready(request, asset_plan)
         # ``asset_plan`` is the single provider-input authority.  The Web
         # adapter reads its ``storage_path`` entries, so this materializer and
@@ -2814,10 +2826,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if not settings.openai_base_url and getattr(settings, "lab_openai_base_url", None):
             settings.openai_base_url = settings.lab_openai_base_url
 
-    def _reference_assets(self, request: GenerationRequest) -> list[dict[str, Any]]:
+    def _reference_assets(self, request: GenerationRequest, *, bridge_transport=False) -> list[dict[str, Any]]:
         plan = plan_from_metadata(self._generation_request_metadata(request), job_id=str(request.metadata.get("job_id") or "") or None)
+        bridge_transport = bridge_transport or bool(getattr(self, "_bridge_transport", False)) or (
+            request.metadata.get("render_bridge_primary_no_image_sha") is True
+        )
         if plan is not None:
-            sources = plan.references()
+            bridge_transport = bridge_transport or plan.as_dict().get("schema_version") == NO_IMAGE_SHA_REFERENCE_PLAN_SCHEMA
+            sources = plan.references(verify_bytes=not bridge_transport)
             mode = plan.as_dict()["project_mode"]
             if mode == "ecommerce":
                 sources = self._reference_input_scope(request, sources)
@@ -2829,7 +2845,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         detail={"reference_input_failure_code":"reference_input_unsupported", "reason":reason})
                 # Approved Professional views have distinct provenance even when
                 # test/source bytes coincide; Standard deduplicates identical bytes.
-                key = source["content_sha256"] if mode == "standard" else source["asset_id"]
+                key = source["asset_id"] if bridge_transport or mode != "standard" else source["content_sha256"]
                 if key not in seen:
                     exact.append(source); seen.add(key)
             limit = self._reference_capacity_limit(request, exact)
@@ -2961,9 +2977,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             lock_targets = tuple(
                 sorted(str(value).strip() for value in data.get("lock_targets", []) if str(value).strip())
             )
-            content_fingerprint = self._reference_content_fingerprint(file_path)
+            bridge_transport = bool(getattr(self, "_bridge_transport", False)) or (
+                request.metadata.get("render_bridge_primary_no_image_sha") is True
+            )
+            content_fingerprint = None if bridge_transport else self._reference_content_fingerprint(file_path)
             canonical_role = self._reference_evidence_role(role, use_policy)
-            evidence_key = (content_fingerprint or f"path:{resolved_path}", canonical_role)
+            stable_source_id = source_id or str(data.get("asset_id") or data.get("output_id") or file_path.stem)
+            evidence_key = (
+                stable_source_id if bridge_transport else (content_fingerprint or f"path:{resolved_path}"),
+                canonical_role,
+            )
             if evidence_key in seen_evidence:
                 existing = assets[seen_evidence[evidence_key]]
                 existing["lock_targets"] = sorted(set(existing.get("lock_targets", [])) | set(lock_targets))
@@ -2983,7 +3006,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 metadata["doc93_content_role_deduplicated"] = True
                 existing["metadata"] = metadata
                 resolution_audit["suppressed"].append(
-                    {"source_id": source_id, "reason": "duplicate_source_content", "retained_source_id": existing.get("asset_id")}
+                    {
+                        "source_id": source_id,
+                        "reason": "duplicate_source_identity" if bridge_transport else "duplicate_source_content",
+                        "retained_source_id": existing.get("asset_id"),
+                    }
                 )
                 continue
             seen_evidence[evidence_key] = len(assets)
@@ -3009,10 +3036,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             resolution_audit["retained"].append(
                 {
                     "source_id": source_id or str(data.get("asset_id") or file_path.stem),
-                    "source_integrity_id": data.get("source_integrity_id") or metadata.get("source_integrity_id") or content_fingerprint,
                     "output_id": data.get("output_id"),
                 }
             )
+            if not bridge_transport:
+                resolution_audit["retained"][-1]["source_integrity_id"] = (
+                    data.get("source_integrity_id") or metadata.get("source_integrity_id") or content_fingerprint
+                )
         required_unresolved = [
             entry
             for entry in [*resolution_audit["unresolved"], *resolution_audit["required_unavailable"]]
@@ -3456,8 +3486,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "fallback": "blocked",
                     },
                 )
-            actual_digest = self._reference_content_fingerprint(path)
-            if actual_digest != source.content_sha256:
+            no_image_sha = metadata.get("render_bridge_primary_no_image_sha") is True
+            if not no_image_sha and self._reference_content_fingerprint(path) != getattr(source, "content_sha256", None):
                 raise ReferenceInputAdmissionError(
                     "A canonical Professional E-Commerce product reference changed after admission.",
                     provider=self.provider_name,
@@ -3726,12 +3756,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "reference_truth_layers":[{"asset_id":a["asset_id"],"source_asset_id":a["source_asset_id"],
                     "truth_layer":a["reference_truth_layer"],"truth_layers":a["truth_layers"],"provider_reference_derivative":False} for a in assets]}}
 
-    def _bind_reference_materialization_receipt(self, request, asset_plan: dict) -> None:
+    def _bind_reference_materialization_receipt(self, request, asset_plan: dict, *, bridge_transport=False) -> None:
         plan=plan_from_metadata(self._generation_request_metadata(request), job_id=str(request.metadata.get("job_id") or "") or None)
         if plan is None:
             return
         logical=plan.as_dict()
-        sources=plan.references()
+        bridge_transport = bridge_transport or logical.get("schema_version") == NO_IMAGE_SHA_REFERENCE_PLAN_SCHEMA
+        sources=plan.references(verify_bytes=not bridge_transport)
         allowed={s["asset_id"]:s for s in sources}
         physical=[a for a in asset_plan.get("assets",[]) if a.get("provider_input_mode")=="reference_image"]
         limit=self._reference_capacity_limit(request, sources)
@@ -3743,21 +3774,30 @@ class ProductionImageGenerationProvider(GenerationProvider):
             source_id=str(item.get("source_asset_id") or item.get("asset_id") or "")
             if source_id not in allowed:
                 raise ValueError("reference_input_plan_unbound_source")
-            content_hash=hashlib.sha256(Path(item["storage_path"]).read_bytes()).hexdigest()
-            if logical["project_mode"]=="standard" and (item.get("provider_reference_derivative") or content_hash!=allowed[source_id]["content_sha256"]):
+            content_hash = None if bridge_transport else hashlib.sha256(Path(item["storage_path"]).read_bytes()).hexdigest()
+            if logical["project_mode"]=="standard" and (
+                    item.get("provider_reference_derivative")
+                    or (not bridge_transport and content_hash!=allowed[source_id]["content_sha256"])):
                 raise ValueError("reference_input_plan_unapproved_representation")
-            records.append({"source_asset_id":source_id,"asset_id":item["asset_id"],"content_sha256":content_hash,
+            record = {"source_asset_id":source_id,"asset_id":item["asset_id"],
                 "selected_representation":item.get("derivative_kind") or "original_full_frame",
-                "derived":item.get("provider_reference_derivative") is True,"required":True})
+                "derived":item.get("provider_reference_derivative") is True,"required":True}
+            if not bridge_transport:
+                record["content_sha256"] = content_hash
+            records.append(record)
         if logical["project_mode"] == "standard":
-            seen_hashes = set()
-            expected = []
-            for source in sources:
-                if source["content_sha256"] not in seen_hashes:
-                    expected.append((source["asset_id"], source["content_sha256"]))
-                    seen_hashes.add(source["content_sha256"])
-            actual = [(record["source_asset_id"], record["content_sha256"]) for record in records]
-            if actual != expected or len(records) != logical["physical_provider_reference_count"]:
+            if bridge_transport:
+                expected = list(dict.fromkeys(source["asset_id"] for source in sources))
+                actual = [record["source_asset_id"] for record in records]
+            else:
+                seen_hashes = set()
+                expected = []
+                for source in sources:
+                    if source["content_sha256"] not in seen_hashes:
+                        expected.append((source["asset_id"], source["content_sha256"]))
+                        seen_hashes.add(source["content_sha256"])
+                actual = [(record["source_asset_id"], record["content_sha256"]) for record in records]
+            if actual != expected or (not bridge_transport and len(records) != logical["physical_provider_reference_count"]):
                 raise ValueError("reference_input_plan_physical_count_mismatch")
         anchor=logical.get("continuity_anchor")
         if anchor and anchor["reference"]["asset_id"] not in {r["source_asset_id"] for r in records}:
@@ -4596,6 +4636,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     raise ValueError("plans_missing")
                 raw_plan = raw_plans.get(str(output_index))
             plan = PhysicalRendererReferencePlan.model_validate(raw_plan)
+            no_image_sha = plan.schema_version == DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA
             if (
                 plan.job_id != projection.job_id
                 or plan.output_index != projection.output_index
@@ -4687,7 +4728,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
             assets: list[dict[str, Any]] = []
             for entry in plan.references:
                 path = Path(entry.file_path).resolve(strict=True)
-                if not path.is_file() or self._reference_content_fingerprint(path) != entry.content_sha256:
+                if not path.is_file() or (
+                    not no_image_sha and self._reference_content_fingerprint(path) != entry.content_sha256
+                ):
                     raise ValueError("file_drift")
                 assets.append(
                     {
@@ -4832,7 +4875,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if (
             not path.is_file()
             or str(path) != binding.file_path
-            or self._reference_content_fingerprint(path) != binding.content_sha256
+            or (
+                plan.schema_version != DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA
+                and self._reference_content_fingerprint(path) != binding.content_sha256
+            )
             or str(path)
             in {
                 str(Path(str(item.get("storage_path") or "")).resolve())
@@ -4890,14 +4936,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 or str(path) in seen_paths
                 or bound.source_id != planned.source_id
                 or str(path) != str(Path(planned.file_path).resolve())
-                or bound.content_sha256 != planned.content_sha256
+                or (
+                    plan.schema_version != DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA
+                    and bound.content_sha256 != planned.content_sha256
+                )
                 or bound.role != planned.role
                 or bound.channel != planned.channel
                 or bound.source_type != planned.source_type
                 or bound.role != "face_reference"
                 or bound.channel != "people_identity"
                 or bound.source_type != "visual_asset_library"
-                or self._reference_content_fingerprint(path) != bound.content_sha256
+                or (
+                    plan.schema_version != DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA
+                    and self._reference_content_fingerprint(path) != bound.content_sha256
+                )
             ):
                 raise ValueError("identity_plan_mismatch")
             seen_ids.add(bound.source_id)
@@ -4911,6 +4963,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         """Ensure the optional fifth input is exactly Project Mode's Doc265 selection."""
 
         admissions = metadata.get("doc269_selected_continuation_admissions", [])
+        no_image_sha = metadata.get("render_bridge_primary_no_image_sha") is True or any(
+            getattr(entry, "content_sha256", None) is None for entry in continuation_entries
+        )
         if not isinstance(admissions, list) or len(admissions) > 1:
             raise ValueError("continuation_admission_invalid")
         if not admissions:
@@ -4928,13 +4983,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "reference_id": getattr(binding, "reference_id", ""),
             "output_id": entry.source_id,
             "source_job_id": getattr(binding, "source_job_id", ""),
-            "content_sha256": entry.content_sha256,
             "source_type": "generated_selected",
             "use_policy": "style",
             "role": "selected_continuation_reference",
             "channel": "generated_selected",
             "file_path": str(Path(entry.file_path).resolve()),
         }
+        if not no_image_sha:
+            expected["content_sha256"] = entry.content_sha256
         if (
             not expected["project_id"]
             or admission.get("project_job_ids") != list(getattr(binding, "project_job_ids", ()))

@@ -190,7 +190,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: meta-xucong/alchemy-render-bridge
-          ref: 10138cfc3bae6ac28ff0a3dc1dda1b7d7d63344e
+          ref: 28790fa457f17bc53dc20442bfbdb288c6a4cf31
           path: .bridge-primary-counterpart
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -211,7 +211,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: meta-xucong/alchemy-render-bridge
-          ref: 10138cfc3bae6ac28ff0a3dc1dda1b7d7d63344e
+          ref: 28790fa457f17bc53dc20442bfbdb288c6a4cf31
           path: .bridge-native-counterpart
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -251,3 +251,4 @@ jobs:
             ${{ runner.temp }}/render-bridge-browser.xml
             ${{ runner.temp }}/render-bridge-admin-screenshots/*.png
           if-no-files-found: warn
+

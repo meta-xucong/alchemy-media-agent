@@ -113,6 +113,7 @@ class PrimarySettings:
 class Reference:
     content: bytes
     mime_type: str
+    reference_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -134,7 +135,8 @@ class PrimaryRequest:
     def digest(self):
         return _hash(_json([self.product, self.owner_id, self.unit_id, self.prompt,
                            self.parameters, self.hard_requirements, self.binding_id,
-                           [[_hash(r.content), r.mime_type] for r in self.references]]).encode())
+                           [[r.reference_key or str(index), r.mime_type, len(r.content)]
+                            for index, r in enumerate(self.references)]]).encode())
 
 
 @dataclass(frozen=True)
@@ -529,13 +531,12 @@ class PrimaryTransport:
             references=[]
             try:
                 for index,ref in enumerate(request.references):
-                    sha=_hash(ref.content)
-                    input_payload=dict(input_key=f'{data["origin_key"]}_{index}',original_sha256=sha,size=len(ref.content),mime_type=ref.mime_type)
+                    input_payload=dict(input_key=f'{data["origin_key"]}_{index}',size=len(ref.content),mime_type=ref.mime_type)
                     item=await self._stage_input_once(lambda: self.client.create_input(input_payload))
                     ref_id=item.get('input_id') or item.get('input_ref')
                     if not ref_id: raise BridgeError('invalid_bridge_response')
                     await self._stage_input_once(lambda: self.client.upload_input(ref_id,ref.content,ref.mime_type))
-                    references.append(dict(input_ref=ref_id,role='reference',hash=sha))
+                    references.append(dict(input_ref=ref_id,role='reference'))
             except BridgeError as error:
                 if error.code == 'store_busy' and error.status == 503:
                     pending=self._result(self._read(request))

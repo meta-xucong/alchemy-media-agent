@@ -1610,9 +1610,11 @@ class CentralCreativeBrain:
             return None
         path = Path(file_path)
         try:
-            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != str(
-                receipt.get("source_content_sha256") or ""
-            ).strip().lower():
+            if not path.is_file():
+                return None
+            if context.metadata.get("render_bridge_primary_no_image_sha") is not True and hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest() != str(receipt.get("source_content_sha256") or "").strip().lower():
                 return None
         except OSError:
             return None
@@ -1654,9 +1656,12 @@ class CentralCreativeBrain:
         ):
             return None
         try:
-            if not Path(file_path).is_file() or hashlib.sha256(Path(file_path).read_bytes()).hexdigest() != str(
-                binding.get("source_content_sha256") or ""
-            ).strip().lower():
+            path = Path(file_path)
+            if not path.is_file():
+                return None
+            if context.metadata.get("render_bridge_primary_no_image_sha") is not True and hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest() != str(binding.get("source_content_sha256") or "").strip().lower():
                 return None
         except OSError:
             return None

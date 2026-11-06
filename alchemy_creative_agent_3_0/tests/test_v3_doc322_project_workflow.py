@@ -14,15 +14,19 @@ from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.tests.test_v3_doc73_first_output_identity_anchor import RecordingImageProvider
 
 
-def create_source(handlers, project, *, count=2, index=0, retry=0, mock=False):
+def create_source(handlers, project, *, count=2, index=0, retry=0, mock=False, no_image_sha=False):
     created=handlers.post_project_job(project["project_id"],{"user_input":"A photographic continuity set.","metadata":{"requested_image_count":count}})
     job=handlers.service.get_job_record(created["job_id"])
     image=Image.new("RGB",(256,256),(45+index*50,110,130))
     data=BytesIO();image.save(data,format="PNG")
     output=handlers.service.output_store.save_base64_output(job_id=job.job_id,candidate_id="candidate_"+job.job_id,
         asset_id=job.planning_result.series_plan.assets[index].asset_id,provider="controlled_pixel_fixture",model="test",
-        encoded_image=base64.b64encode(data.getvalue()).decode(),metadata={"project_id":project["project_id"],"mock_contract_fixture":mock})
+        encoded_image=base64.b64encode(data.getvalue()).decode(),metadata={"project_id":project["project_id"],"mock_contract_fixture":mock,
+            **({"render_bridge_primary_no_image_sha":True} if no_image_sha else {})},include_content_hash=not no_image_sha)
     record=certify_output(handlers.service,output)
+    if no_image_sha:
+        record.request.metadata["render_bridge_primary_no_image_sha"] = True
+        handlers.service.job_store.save(record)
     record.generation_result.metadata["doc322_auto_anchor_candidate"]=True
     record.generation_result.asset_pack.assets[0].metadata["candidate_metadata"]["retry_attempt"]=retry
     handlers.service.job_store.save(record)

@@ -14,6 +14,21 @@ V1/V2 health checks passed with Bridge admission closed. Next, perform the
 V1 native `fake-image` receipt flow while keeping V2 and real Codex execution
 disabled; then close fake admission before preparing real-route acceptance.
 
+## 2026-11-06 image-transfer contract correction
+
+The current acceptance requires no image-byte SHA generation, transmission,
+or comparison across the Alchemy/RenderBridge image-transfer path. Bind
+references to the existing product reference IDs and frozen task identity;
+bind generated artifacts to the existing task, attempt, slot, and receipt IDs.
+Keep the existing size, MIME, image-format, dimension, and pixel-limit checks.
+Prompt, task, account, and other non-image identity digests remain unchanged.
+Do not use image SHA as the input or publication idempotency key.
+
+This is a code/call-path correction discovered before Phase 8; no new image task
+was created. Existing tasks, ledgers, artifacts, release images, and VPS data
+remain preserved. Phase 8 must use the revised contract on both services before
+Phase 9 real product acceptance can start.
+
 ## Fixed architecture and authorities
 
 ```text
@@ -168,3 +183,126 @@ metadata and SQLite quick-check behavior. Candidate environment equivalence
 uses a quiet direct diff; the Git commit identifier remains the release
 selector. Candidate build run `41363241309` completed for commit
 `9a42dd87e3bd`; historical V1 data was not compared.
+
+## 2026-11-06 no-image-SHA correction model
+
+The user selected end-to-end removal of image-content SHA from the Bridge
+artifact contract and authorized replacing image-based replay identity with
+stable task/output/reference IDs. The failure was not limited to upload or
+receipt fields: V3 froze and rechecked reference bytes before the Bridge
+adapter ran, and API fallback results managed by the Bridge primary route were
+still stored with output-content SHA.
+
+For Bridge-managed V3 jobs, the server marks the request before freezing its
+reference plan. New plans use schema v4 and bind references by stable asset ID,
+order, and existing file path; plan JSON digests remain metadata digests. Old
+schema-v3 plans remain readable, but their historical image digest fields are
+not recalculated or compared during Bridge-managed execution. The Bridge
+primary API fallback keeps the same `legacy_generate(app_request)` call,
+reference files, prompt, and provider result handling; its Bridge-managed
+output record omits image-content SHA just like a successful Bridge output.
+Ordinary API jobs without the Bridge primary marker retain their existing
+path.
+
+### Follow-up theory correction: V3 continuity and reference materialization
+
+The first implementation still left two reachable image-byte hash paths in
+Bridge-managed V3 generation: generic reference evidence deduplication ran
+before Bridge transport, and Doc73 same-batch continuity required an image
+digest in its output binding. This contradicted the no-image-SHA contract even
+though the V4 plan and Bridge receipt omitted that field.
+
+The owning layers are V3 provider reference materialization and the Doc73
+output-identity binding. For Bridge-managed V3 only, deduplication must use
+the already-authoritative asset/output IDs, and Doc73 continuity must bind to
+the persisted output ID plus its existing job, project, batch, asset, and
+candidate identity. The binding's canonical metadata digest may remain; it
+must not include or require an image-content digest. Existing non-Bridge
+Doc73 v1 behavior remains unchanged. Regression coverage must include a
+Bridge-managed first output, its hash-free Doc73 receipt, and the resulting
+V4 same-batch reference plan before running the focused generation tests.
+
+Focused acceptance must prove: the new V3 plan contains no image-content SHA;
+the Bridge input and receipt/ACK payloads contain none; output and API-fallback
+records managed by Bridge primary contain none; reference bytes still reach
+the selected provider; stable IDs preserve replay; and ordinary API routing
+still works. This design does not claim that every unrelated V3 asset-library
+or project-mode record in the product database has been migrated.
+
+### Follow-up theory correction: E-Commerce admission before Bridge materialization
+
+The code-first trace found that E-Commerce Bridge jobs still entered Doc263
+product-truth admission before provider materialization. Its v1 source schema
+required computing and comparing uploaded image bytes, and optional Doc270
+binding repeated that image-content comparison before issuing the Bridge
+request. This made the earlier V4/Doc269 omission incomplete for E-Commerce.
+
+Bridge-marked E-Commerce requests now use a Doc263 v2 source binding keyed by
+the existing asset ID and omit the image-content field. The provider still
+requires the canonical product asset, role, project/job binding, and selected
+projection, but skips image-byte fingerprinting in this marked path. Optional
+Doc270 binding likewise retains project/source IDs and its existing metadata
+receipts while omitting the image-content comparison and selected-source field.
+The ordinary unmarked API path retains Doc263 v1 and Doc270's current image
+integrity behavior. A focused regression test makes `Path.read_bytes` fail if
+the Bridge admission path attempts to read image bytes.
+
+### Follow-up theory correction: output-store delivery closure
+
+The successful Bridge output path also seals an immutable V3 output-store
+delivery closure after review. Its v1 schema required each output's image SHA,
+so a hash-free output could remain available in memory but could not be sealed
+for restart/history recovery. Bridge-marked output jobs now use closure v2,
+which binds output, asset, candidate, job, execution-envelope, and ledger IDs;
+it confirms the canonical download file exists without reading its bytes.
+The existing v1 closure schema and byte-integrity path remain in place for
+unmarked API jobs and previously stored receipts.
+
+### Follow-up theory correction: E-Commerce public review projection
+
+The code audit found one more reachable Bridge-marked consumer after delivery
+closure: V3 status projection derives the E-Commerce review disposition from
+persisted OutputStore records. Its existing unmarked-API path verifies file
+bytes against `content_sha256`, which is absent by design on Bridge outputs.
+For the Bridge marker only, the projection must bind the same job/output/asset
+IDs, require the canonical file to exist, and avoid reading its contents. The
+unmarked API branch keeps its existing byte-integrity comparison. A focused
+test will make `Path.read_bytes` fail while the marked review disposition is
+derived, then assert that the existing final-delivery state is projected.
+
+### Follow-up theory correction: Doc73 Project Mode continuity lookup
+
+The downstream Project Mode anchor reader also accepts Doc73 v2's ID-bound
+receipt, then incorrectly re-hashes the referenced output and rejects the
+receipt because v2 has no `source_content_sha256`. In the Bridge-marked v2
+case, the authoritative binding is the validated Doc73 receipt plus its job,
+project, output, asset and candidate IDs; the existing output path must exist,
+but its bytes are not read. Doc73 v1 remains on the original SHA comparison.
+A focused regression test will make `Path.read_bytes` fail during v2 anchor
+lookup and assert that the exact bound output is returned.
+
+### Follow-up theory correction: explicit Project Mode continuity binding
+
+Manual or automatic Project Mode continuity binding has its own durable
+Doc322 record. Its v1 resolver hashes the selected output, and the persisted
+anchor stores that image digest; later generation also requires the digest in
+Doc269 admission. For a Bridge-marked output, use a v2 anchor record bound by
+the existing project, job, output, asset and candidate IDs, with a canonical
+file-existence check and no image digest. The v1 record and resolver remain
+unchanged for ordinary API outputs. Doc269's Bridge-marked admission must
+preserve the same selected reference while omitting image-content fields.
+Regression coverage now verifies ID-bound v2 persistence/reload, Project Mode
+source resolution, and hash-free Doc269 admission without reading output
+bytes.
+
+### Follow-up theory correction: Doc271 E-Commerce source closure
+
+The independent Project Mode audit traced selected outputs one step further:
+E-Commerce's Doc271 current-source receipt re-read generated output bytes and
+required the selected-continuation digest. It also projected Doc269 physical
+reference plans into a receipt that required an image digest for every input.
+Bridge-marked v2 plans now project stable source IDs and file existence into a
+v2 binding without reading image bytes; their Doc271 source binding omits image
+digests. The existing v1 digest path remains for ordinary API plans. A focused
+regression test rejects any image-byte read while deriving the v2 physical
+binding.

@@ -384,7 +384,8 @@ def test_two_ordered_originals_flow_through_plan_freeze_and_review_only_registra
     assert frozen["operation"] == "image_edit"  # Diagnostic, not a wire edit capability.
     assert frozen["image_options"]["size"] == size
     assert [item["asset_id"] for item in frozen["references"]] == ids
-    assert [item["sha256"] for item in frozen["references"]] == [item.content_sha256 for item in refs]
+    assert [item["asset_id"] for item in frozen["references"]] == [item.asset_id for item in refs]
+    assert all("sha256" not in item for item in frozen["references"])
     for reference, original in zip(frozen["references"], refs, strict=True):
         read = fixture.gateway.read_reference(
             7, bound.target, frozen_request_id=frozen["frozen_request_id"], reference_id=reference["reference_id"],
@@ -432,16 +433,14 @@ def test_reference_admission_rejects_before_brain(planning_fixture, fault):
     assert fixture.planning_calls == []
 
 
-@pytest.mark.parametrize("change", ["bytes", "owner", "membership"])
+@pytest.mark.parametrize("change", ["owner", "membership"])
 def test_changed_reference_after_freeze_cannot_be_read_or_registered(planning_fixture, change):
     fixture = planning_fixture
     upload = _upload_reference(fixture)
     bound = _new_target(fixture, _create(fixture, uploaded_asset_ids=[upload.asset_id], size="768x1024"))
     frozen = fixture.gateway.prepare(7, bound.target)
     receipt = _receipt(bound, frozen, content=_png_bytes(size=(768, 1024)))
-    if change == "bytes":
-        Path(upload.file_path).write_bytes(_png_bytes("red", (256, 256)))
-    elif change == "owner":
+    if change == "owner":
         fixture.service.asset_store._save_record(upload.model_copy(update={"veyra_user_id": 8}))
     else:
         fixture.project.reference_assets.clear()
@@ -454,6 +453,22 @@ def test_changed_reference_after_freeze_cannot_be_read_or_registered(planning_fi
         _register(bound, **receipt)
     assert fixture.outputs.list_by_job(bound.target.job_id) == []
     assert fixture.reviews == []
+
+
+def test_reference_bytes_are_not_part_of_bridge_plan_identity(planning_fixture):
+    fixture = planning_fixture
+    upload = _upload_reference(fixture)
+    bound = _new_target(fixture, _create(fixture, uploaded_asset_ids=[upload.asset_id]))
+    frozen = fixture.gateway.prepare(7, bound.target)
+    changed = _png_bytes("red", (256, 256))
+    Path(upload.file_path).write_bytes(changed)
+    reference = frozen["references"][0]
+    read = fixture.gateway.read_reference(
+        7, bound.target, frozen_request_id=frozen["frozen_request_id"],
+        reference_id=reference["reference_id"],
+    )
+    assert read["content"] == changed
+    assert all("sha256" not in item for item in frozen["references"])
 
 
 def test_non_square_plan_rejects_square_artifact(planning_fixture):

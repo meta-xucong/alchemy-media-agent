@@ -250,7 +250,7 @@ class PreviewService:
             if headers.get("content-type", "").split(";")[0] != receipt["mime_type"]:
                 raise BridgeError("artifact_mime_mismatch", retryable=False)
             metadata = await self.local(validate_image, content, receipt["mime_type"],
-                expected_size=receipt["size"], include_hash=False,
+                expected_size=receipt["size"],
                 max_bytes=limits["max_output_bytes"], max_pixels=limits["max_image_pixels"])
             if metadata["dimensions"] != receipt["dimensions"]:
                 raise BridgeError("artifact_dimensions_mismatch", retryable=False)
@@ -286,13 +286,13 @@ class PreviewService:
         await self._patch(record, profile_snapshot={**profile, "limits": limits})
         references = []
         for index, (content, metadata) in enumerate(await self.local(self.store.inputs, record["id"])):
-            payload = {k: metadata[k] for k in ("original_sha256", "size", "mime_type")}
+            payload = {k: metadata[k] for k in ("size", "mime_type")}
             payload["input_key"] = f"{record['origin_key']}_{index}"
             result = await self.client.create_input(payload)
             if any(result.get(k) != v for k, v in payload.items()):
                 raise BridgeError("input_binding_mismatch", retryable=False)
             await self.client.upload_input(result["input_id"], content, metadata["mime_type"])
-            references.append({"input_ref": result["input_id"], "role": "reference", "hash": metadata["original_sha256"]})
+            references.append({"input_ref": result["input_id"], "role": "reference"})
         wire = {"schema_version": "1", "origin_key": record["origin_key"], "binding_id": record["binding_id"],
                 "operation": "image.generate", "execution_profile_id": request["profile_id"],
                 "execution_profile_revision": "1", "prompt": request["prompt"],

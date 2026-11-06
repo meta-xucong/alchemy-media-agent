@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import mimetypes
+from pathlib import Path
 
 from app.config import settings
 from app.schemas import GenerationOutput, ImageGenerationRequest, JobStatus, ProviderError
@@ -51,7 +52,8 @@ def _legacy_primary_request(job, request, index, *, edit=False):
             if path is None:
                 raise ValueError("Primary image reference is unavailable")
             paths.append(path)
-    refs = tuple(Reference(content=p.read_bytes(), mime_type=mimetypes.guess_type(str(p))[0] or "application/octet-stream") for p in paths)
+    refs = tuple(Reference(content=p.read_bytes(), mime_type=mimetypes.guess_type(str(p))[0] or "application/octet-stream",
+                           reference_key=Path(p).stem) for p in paths)
     hard = {"output_format": plan.output_format}
     if plan.quality != "auto":
         hard["quality"] = plan.quality
@@ -157,7 +159,8 @@ def primary_request(job, request, index, *, edit=False):
                 or source[2] != source_job.id or media_store.output_publication_blocked(output.id)):
             raise PrimaryError("primary_edit_source_not_accessible")
         path = source[0]
-        source_ref = Reference(content=path.read_bytes(), mime_type=mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+        source_ref = Reference(content=path.read_bytes(), mime_type=mimetypes.guess_type(str(path))[0] or "application/octet-stream",
+                               reference_key=request.source_output_id or Path(path).stem)
         if source_ref not in refs:
             refs = (source_ref,) + refs
         hard.pop("edit_source", None)

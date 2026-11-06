@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,7 +52,8 @@ def target_fixture(monkeypatch, tmp_path):
             {"asset_id": f"source_{index}", "file_path": str(path), "mime_type": "image/png", "role": "style_reference"}
         )
     logical = ReferenceInputPlan.freeze(
-        job_id=job_id, project_id=target.project_id, mode="standard", inputs=references
+        job_id=job_id, project_id=target.project_id, mode="standard", inputs=references,
+        no_image_sha=True,
     ).as_dict()
     metadata = {
         "project_id": target.project_id,
@@ -145,9 +145,10 @@ def test_freeze_reuses_real_materializer_without_mutation(target_fixture, monkey
     assert result["operation"] == "image_edit"
     assert result["submission_ready"] is False
     assert result["native_registration_connected"] is False
-    assert [item["sha256"] for item in result["references"]] == [
-        hashlib.sha256(Path(item["file_path"]).read_bytes()).hexdigest() for item in expected.reference_assets
+    assert [item["asset_id"] for item in result["references"]] == [
+        item["asset_id"] for item in expected.reference_assets
     ]
+    assert all("sha256" not in item for item in result["references"])
     assert str(fixture.tmp_path) not in json.dumps(result)
     assert record == before
     assert sorted(path.relative_to(fixture.tmp_path) for path in fixture.tmp_path.rglob("*")) == files_before
@@ -161,7 +162,7 @@ def test_reference_read_rechecks_exact_snapshot_and_bytes(target_fixture):
     content, mime = fixture.facade.read_reference(
         7, fixture.target, frozen_request_id=frozen["frozen_request_id"], reference_id=reference["reference_id"]
     )
-    assert hashlib.sha256(content).hexdigest() == reference["sha256"]
+    assert len(content) == reference["size_bytes"]
     assert mime == "image/png"
     fixture.state["project"].metadata["veyra_user_id"] = 8
     with pytest.raises(BridgeNativeFacadeError, match="target_not_found"):
@@ -214,7 +215,7 @@ def test_missing_frozen_reference_plan_does_not_reconstruct_sources(target_fixtu
         fixture.facade.freeze(7, fixture.target)
 
 
-def test_changed_revision_and_reference_bytes_are_blocked(target_fixture):
+def test_changed_revision_is_blocked_but_reference_bytes_are_bound_by_identity(target_fixture):
     fixture = target_fixture
     frozen = fixture.facade.freeze(7, fixture.target)
     fixture.state["project"].updated_at = "2026-10-20T13:00:00Z"
@@ -222,16 +223,17 @@ def test_changed_revision_and_reference_bytes_are_blocked(target_fixture):
         fixture.facade.freeze(7, fixture.target, expected_revision=frozen["target_revision"])
     fixture.state["project"].updated_at = "2026-10-20T12:00:00Z"
     Image.new("RGB", (256, 256), "green").save(fixture.references[0]["file_path"])
-    with pytest.raises(BridgeNativeFacadeError, match="reference_changed"):
-        fixture.facade.freeze(7, fixture.target)
+    replay = fixture.facade.freeze(7, fixture.target)
+    assert replay["frozen_request_id"] == frozen["frozen_request_id"]
+    assert all("sha256" not in item for item in replay["references"])
 
 
 def test_revision_race_during_materialization_is_blocked(target_fixture, monkeypatch):
     fixture = target_fixture
     original = ProductionImageGenerationProvider.materialize_final_prompt
 
-    def mutate_after_freeze(self, request):
-        result = original(self, request)
+    def mutate_after_freeze(self, request, **kwargs):
+        result = original(self, request, **kwargs)
         fixture.state["project"].updated_at = "changed"
         return result
 

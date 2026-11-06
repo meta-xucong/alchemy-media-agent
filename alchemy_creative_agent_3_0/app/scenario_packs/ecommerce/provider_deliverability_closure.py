@@ -315,26 +315,37 @@ def _physical_reference_bindings(metadata: dict[str, Any], job_id: str) -> list[
             return None
         if [item["source_type"] for item in references] != expected_source_types:
             return None
-        if any(not _SHA256.fullmatch(_clean(item.get("content_sha256")).lower()) for item in references):
+        no_image_sha = plan.schema_version == "doc269_physical_renderer_reference_plan_v2"
+        if not no_image_sha and any(
+            not _SHA256.fullmatch(_clean(item.get("content_sha256")).lower())
+            for item in references
+        ):
             return None
         for item in references:
             try:
                 path = Path(_clean(item.get("file_path"))).resolve(strict=True)
-                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                if not path.is_file():
+                    return None
+                if not no_image_sha:
+                    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             except (OSError, RuntimeError, ValueError):
                 return None
-            if not path.is_file() or actual_digest != item["content_sha256"]:
+            if not no_image_sha and actual_digest != item["content_sha256"]:
                 return None
         binding = {
             "ordered_reference_ids": [item["reference_id"] for item in references],
             "ordered_reference_channels": [item["channel"] for item in references],
             "ordered_reference_roles": [item["role"] for item in references],
             "ordered_reference_source_types": [item["source_type"] for item in references],
-            "ordered_reference_sha256": [item["content_sha256"] for item in references],
             "locked_face_output_ids": [item["reference_id"] for item in faces],
             "selected_continuation_output_id": continuation[0]["reference_id"] if continuation else "",
-            "selected_continuation_sha256": continuation[0]["content_sha256"] if continuation else "",
         }
+        if no_image_sha:
+            binding["schema_version"] = "doc271_physical_reference_binding_v2"
+            binding["no_image_sha"] = True
+        else:
+            binding["ordered_reference_sha256"] = [item["content_sha256"] for item in references]
+            binding["selected_continuation_sha256"] = continuation[0]["content_sha256"] if continuation else ""
         bindings.append(
             {
                 "output_index": plan.output_index,
@@ -419,7 +430,6 @@ def _current_source_binding(
     source_keys = {
         "ordinal",
         "asset_id",
-        "content_sha256",
         "source_type",
         "use_policy",
         "persisted_role",
@@ -427,10 +437,16 @@ def _current_source_binding(
         "continuation_role",
         "continuation_channel",
     }
+    schema_version = raw.get("schema_version") if isinstance(raw, dict) else None
+    no_image_sha = schema_version == "doc271_current_project_source_binding_v2"
+    source_keys_for_schema = source_keys | ({"no_image_sha"} if no_image_sha else {"content_sha256"})
     if (
         not isinstance(raw, dict)
         or set(raw) != expected_keys
-        or raw.get("schema_version") != "doc271_current_project_source_binding_v1"
+        or schema_version not in {
+            "doc271_current_project_source_binding_v1",
+            "doc271_current_project_source_binding_v2",
+        }
         or raw.get("authority") != "v3_project_mode"
         or raw.get("project_id") != project_id
         or not isinstance(raw.get("sources"), list)
@@ -438,20 +454,21 @@ def _current_source_binding(
     ):
         return None
     sources = raw["sources"]
-    if not sources or any(not isinstance(item, dict) or set(item) != source_keys for item in sources):
+    if not sources or any(not isinstance(item, dict) or set(item) != source_keys_for_schema for item in sources):
         return None
     canonical_sources: list[dict[str, Any]] = []
     for ordinal, item in enumerate(sources, start=1):
         if (
             item.get("ordinal") != ordinal
             or not all(isinstance(item.get(key), str) and _clean(item.get(key)) for key in source_keys - {"ordinal"})
-            or not _SHA256.fullmatch(_clean(item.get("content_sha256")).lower())
+            or (no_image_sha and item.get("no_image_sha") is not True)
+            or (not no_image_sha and not _SHA256.fullmatch(_clean(item.get("content_sha256")).lower()))
         ):
             return None
         canonical_sources.append(dict(item))
     expected_digest = _digest(
         {
-            "schema_version": "doc271_current_project_source_binding_v1",
+            "schema_version": schema_version,
             "project_id": project_id,
             "sources": canonical_sources,
         }
@@ -484,7 +501,8 @@ def _current_source_binding(
                 or _clean(admission.get("selection_authority")) != "doc265_project_mode"
                 or _clean(admission.get("project_id")) != project_id
                 or _clean(admission.get("output_id")) != item["asset_id"]
-                or _clean(admission.get("content_sha256")).lower() != item["content_sha256"]
+                or (no_image_sha and admission.get("no_image_sha") is not True)
+                or (not no_image_sha and _clean(admission.get("content_sha256")).lower() != item["content_sha256"])
                 or _clean(admission.get("source_type")) != "generated_selected"
                 or _clean(admission.get("use_policy")) != "style"
                 or _clean(admission.get("role")) != "selected_continuation_reference"
@@ -519,11 +537,12 @@ def _current_source_binding(
                 or not path.is_file()
             ):
                 return None
-            try:
-                if hashlib.sha256(path.read_bytes()).hexdigest() != item["content_sha256"]:
+            if not no_image_sha:
+                try:
+                    if hashlib.sha256(path.read_bytes()).hexdigest() != item["content_sha256"]:
+                        return None
+                except OSError:
                     return None
-            except OSError:
-                return None
             continue
         if item["reference_channel"] not in {"product_truth", "uploaded_reference"}:
             return None
@@ -542,11 +561,12 @@ def _current_source_binding(
             or not path.is_file()
         ):
             return None
-        try:
-            if hashlib.sha256(path.read_bytes()).hexdigest() != item["content_sha256"]:
+        if not no_image_sha:
+            try:
+                if hashlib.sha256(path.read_bytes()).hexdigest() != item["content_sha256"]:
+                    return None
+            except OSError:
                 return None
-        except OSError:
-            return None
     try:
         admission = ProductTruthAdmission.from_mapping(
             metadata.get("professional_ecommerce_product_truth_admission")
@@ -556,22 +576,32 @@ def _current_source_binding(
     if admission.project_id != project_id or admission.job_id != job_id:
         return None
     product_sources = [item for item in canonical_sources if item["reference_channel"] == "product_truth"]
-    expected_products = [
-        {
-            "asset_id": item.asset_id,
-            "content_sha256": item.content_sha256,
-            "reference_channel": item.product_truth_channel,
-        }
-        for item in admission.sources
-    ]
-    actual_products = [
-        {
-            "asset_id": item["asset_id"],
-            "content_sha256": item["content_sha256"],
-            "reference_channel": item["reference_channel"],
-        }
-        for item in product_sources
-    ]
+    if no_image_sha:
+        expected_products = [
+            {"asset_id": item.asset_id, "reference_channel": item.product_truth_channel}
+            for item in admission.sources
+        ]
+        actual_products = [
+            {"asset_id": item["asset_id"], "reference_channel": item["reference_channel"]}
+            for item in product_sources
+        ]
+    else:
+        expected_products = [
+            {
+                "asset_id": item.asset_id,
+                "content_sha256": item.content_sha256,
+                "reference_channel": item.product_truth_channel,
+            }
+            for item in admission.sources
+        ]
+        actual_products = [
+            {
+                "asset_id": item["asset_id"],
+                "content_sha256": item["content_sha256"],
+                "reference_channel": item["reference_channel"],
+            }
+            for item in product_sources
+        ]
     if sorted(actual_products, key=lambda item: item["asset_id"]) != sorted(
         expected_products,
         key=lambda item: item["asset_id"],
@@ -584,7 +614,10 @@ def _current_source_binding(
                 item
                 for item in product_sources
                 if item["asset_id"] == binding["ordered_reference_ids"][0]
-                and item["content_sha256"] == binding["ordered_reference_sha256"][0]
+                and (
+                    no_image_sha
+                    or item["content_sha256"] == binding["ordered_reference_sha256"][0]
+                )
             ),
             None,
         )
@@ -601,7 +634,10 @@ def _current_source_binding(
             item = continuation[0]
             if (
                 item["asset_id"] != binding["selected_continuation_output_id"]
-                or item["content_sha256"] != binding["selected_continuation_sha256"]
+                or (
+                    not no_image_sha
+                    and item["content_sha256"] != binding["selected_continuation_sha256"]
+                )
                 or item["source_type"] != "generated_selected"
                 or item["continuation_role"] != "selected_continuation_reference"
                 or item["continuation_channel"] != "generated_selected"

@@ -14,6 +14,7 @@ from .reference_projection import PhysicalProductReferenceProjection, ProductTru
 
 
 DOC269_PHYSICAL_PLAN_SCHEMA = "doc269_physical_renderer_reference_plan_v1"
+DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA = "doc269_physical_renderer_reference_plan_v2"
 # Doc269's professional renderer set is intentionally smaller than the
 # underlying GPT Image 2 transport capacity.  The E-Commerce module owns this
 # product-truth plan cap; the shared Provider may still accept the official
@@ -42,14 +43,14 @@ class PhysicalRendererReferenceEntry(BaseModel):
     channel: Literal["product_truth", "people_identity", "generated_selected"]
     source_type: Literal["uploaded", "visual_asset_library", "generated_selected"]
     file_path: str
-    content_sha256: str
+    content_sha256: str | None = None
     ordinal: int = Field(ge=1)
     selection_binding: "ContinuationSelectionBinding | None" = None
 
     def model_post_init(self, __context: Any) -> None:
         if not all(_clean(value) for value in (self.reference_id, self.source_id, self.file_path)):
             raise ValueError("doc269_reference_identity_required")
-        if not _SHA256.fullmatch(self.content_sha256):
+        if self.content_sha256 is not None and not _SHA256.fullmatch(self.content_sha256):
             raise ValueError("doc269_reference_digest_invalid")
         expected = {
             "product_reference": ("product_truth", "uploaded"),
@@ -81,7 +82,7 @@ class ContinuationSelectionBinding(BaseModel):
     output_id: str
     source_job_id: str
     project_job_ids: tuple[str, ...]
-    content_sha256: str
+    content_sha256: str | None = None
 
     def model_post_init(self, __context: Any) -> None:
         if not all(
@@ -92,7 +93,7 @@ class ContinuationSelectionBinding(BaseModel):
             or self.source_job_id not in self.project_job_ids
             or len(self.project_job_ids) != len(set(self.project_job_ids))
             or any(not _clean(job_id) for job_id in self.project_job_ids)
-            or not _SHA256.fullmatch(self.content_sha256)
+            or (self.content_sha256 is not None and not _SHA256.fullmatch(self.content_sha256))
         ):
             raise ValueError("doc269_continuation_binding_invalid")
 
@@ -102,7 +103,7 @@ class PhysicalRendererReferencePlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[DOC269_PHYSICAL_PLAN_SCHEMA] = DOC269_PHYSICAL_PLAN_SCHEMA
+    schema_version: str = DOC269_PHYSICAL_PLAN_SCHEMA
     job_id: str
     output_index: int = Field(ge=1)
     projection_digest: str
@@ -113,12 +114,20 @@ class PhysicalRendererReferencePlan(BaseModel):
     plan_digest: str
 
     def model_post_init(self, __context: Any) -> None:
+        if self.schema_version not in {DOC269_PHYSICAL_PLAN_SCHEMA, DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA}:
+            raise ValueError("doc269_plan_schema_invalid")
+        no_image_sha = self.schema_version == DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA
         if not _clean(self.job_id) or not _SHA256.fullmatch(self.projection_digest):
             raise ValueError("doc269_plan_binding_invalid")
         if not _SHA256.fullmatch(self.plan_digest):
             raise ValueError("doc269_plan_digest_invalid")
         if self.reference_image_count != len(self.references):
             raise ValueError("doc269_plan_count_invalid")
+        if no_image_sha:
+            if any(item.content_sha256 is not None for item in self.references):
+                raise ValueError("doc269_plan_content_sha_forbidden")
+        elif any(not _SHA256.fullmatch(item.content_sha256 or "") for item in self.references):
+            raise ValueError("doc269_reference_digest_invalid")
         ids = tuple(item.reference_id for item in self.references)
         source_ids = tuple(item.source_id for item in self.references)
         if (
@@ -127,20 +136,21 @@ class PhysicalRendererReferencePlan(BaseModel):
             or len(source_ids) != len(set(source_ids))
         ):
             raise ValueError("doc269_plan_ids_invalid")
-        content_groups: dict[str, list[PhysicalRendererReferenceEntry]] = {}
-        for item in self.references:
-            content_groups.setdefault(item.content_sha256, []).append(item)
-        if any(
-            len(entries) > 1
-            and not all(
-                item.role == "face_reference"
-                and item.channel == "people_identity"
-                and item.source_type == "visual_asset_library"
-                for item in entries
-            )
-            for entries in content_groups.values()
-        ):
-            raise ValueError("doc269_plan_content_duplicate_invalid")
+        if not no_image_sha:
+            content_groups: dict[str, list[PhysicalRendererReferenceEntry]] = {}
+            for item in self.references:
+                content_groups.setdefault(item.content_sha256 or "", []).append(item)
+            if any(
+                len(entries) > 1
+                and not all(
+                    item.role == "face_reference"
+                    and item.channel == "people_identity"
+                    and item.source_type == "visual_asset_library"
+                    for item in entries
+                )
+                for entries in content_groups.values()
+            ):
+                raise ValueError("doc269_plan_content_duplicate_invalid")
         if self.reference_image_count > self.maximum_reference_images:
             raise ValueError("doc269_plan_capacity_invalid")
         if tuple(item.ordinal for item in self.references) != tuple(range(1, len(self.references) + 1)):
@@ -156,13 +166,15 @@ class PhysicalRendererReferencePlan(BaseModel):
                 "output_index": self.output_index,
                 "projection_digest": self.projection_digest,
                 "maximum_reference_images": self.maximum_reference_images,
-                "references": [item.model_dump(mode="json") for item in self.references],
+                "references": [item.model_dump(mode="json", exclude_none=True) for item in self.references],
                 "reference_image_asset_ids": list(self.reference_image_asset_ids),
                 "reference_image_count": self.reference_image_count,
             }
         )
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:  # type: ignore[override]
+        if self.schema_version == DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA:
+            kwargs.setdefault("exclude_none", True)
         return super().model_dump(**kwargs)
 
 
@@ -173,13 +185,15 @@ class NativeEcommerceIdentityBindingEntry(BaseModel):
 
     source_id: str
     file_path: str
-    content_sha256: str
+    content_sha256: str | None = None
     role: Literal["face_reference"] = "face_reference"
     channel: Literal["people_identity"] = "people_identity"
     source_type: Literal["visual_asset_library"] = "visual_asset_library"
 
     def model_post_init(self, __context: Any) -> None:
-        if not _clean(self.source_id) or not _clean(self.file_path) or not _SHA256.fullmatch(self.content_sha256):
+        if not _clean(self.source_id) or not _clean(self.file_path) or (
+            self.content_sha256 is not None and not _SHA256.fullmatch(self.content_sha256)
+        ):
             raise ValueError("native_ecommerce_identity_binding_entry_invalid")
 
 
@@ -245,7 +259,7 @@ class NativeEcommerceBodyReferenceBinding(BaseModel):
     maximum_reference_images: int = Field(ge=1)
     source_id: str
     file_path: str
-    content_sha256: str
+    content_sha256: str | None = None
     role: Literal["body_proportion_reference"] = "body_proportion_reference"
     channel: Literal["body_proportion_reference"] = "body_proportion_reference"
     source_type: Literal["visual_asset_library"] = "visual_asset_library"
@@ -264,7 +278,7 @@ class NativeEcommerceBodyReferenceBinding(BaseModel):
                 )
             )
             or not _SHA256.fullmatch(self.plan_digest)
-            or not _SHA256.fullmatch(self.content_sha256)
+            or (self.content_sha256 is not None and not _SHA256.fullmatch(self.content_sha256))
             or self.maximum_reference_images < 1
         ):
             raise ValueError("native_ecommerce_body_reference_binding_invalid")
@@ -288,6 +302,7 @@ def _file_entry(
     source_type: Literal["uploaded", "visual_asset_library", "generated_selected"],
     ordinal: int,
     selection_binding: ContinuationSelectionBinding | None = None,
+    no_image_sha: bool = False,
 ) -> PhysicalRendererReferenceEntry:
     source_id = _source_id(value)
     try:
@@ -296,10 +311,12 @@ def _file_entry(
         raise ValueError("doc269_reference_file_unreadable") from exc
     if not path.is_file():
         raise ValueError("doc269_reference_file_unreadable")
-    try:
-        content_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as exc:
-        raise ValueError("doc269_reference_file_unreadable") from exc
+    content_sha256 = None
+    if not no_image_sha:
+        try:
+            content_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ValueError("doc269_reference_file_unreadable") from exc
     return PhysicalRendererReferenceEntry(
         reference_id=source_id,
         source_id=source_id,
@@ -321,6 +338,7 @@ def build_physical_renderer_reference_plan(
     locked_identity_references: list[Any],
     selected_continuation_references: list[Any],
     maximum_reference_images: int,
+    no_image_sha: bool = False,
 ) -> PhysicalRendererReferencePlan:
     """Freeze the only physical provider inputs allowed for one output."""
 
@@ -344,15 +362,23 @@ def build_physical_renderer_reference_plan(
         source = products.get(source_id)
         if not source or str(source.get("role") or "").strip() != "product_reference":
             raise ValueError("doc269_product_projection_source_invalid")
-        entry = _file_entry(source, role="product_reference", channel="product_truth", source_type="uploaded", ordinal=len(entries) + 1)
+        entry = _file_entry(
+            source, role="product_reference", channel="product_truth", source_type="uploaded",
+            ordinal=len(entries) + 1, no_image_sha=no_image_sha,
+        )
         admitted_source = next((item for item in admission.sources if item.asset_id == source_id), None)
-        if admitted_source is None or entry.content_sha256 != admitted_source.content_sha256:
+        if admitted_source is None or (
+            not no_image_sha and entry.content_sha256 != admitted_source.content_sha256
+        ):
             raise ValueError("doc269_product_projection_digest_mismatch")
         entries.append(entry)
     for source_id, source in faces.items():
         if str(source.get("role") or "").strip() != "face_reference":
             raise ValueError("doc269_locked_identity_source_invalid")
-        entries.append(_file_entry(source, role="face_reference", channel="people_identity", source_type="visual_asset_library", ordinal=len(entries) + 1))
+        entries.append(_file_entry(
+            source, role="face_reference", channel="people_identity", source_type="visual_asset_library",
+            ordinal=len(entries) + 1, no_image_sha=no_image_sha,
+        ))
     for source_id, (source, binding) in continuation.items():
         entry = _file_entry(
             source,
@@ -361,20 +387,21 @@ def build_physical_renderer_reference_plan(
             source_type="generated_selected",
             ordinal=len(entries) + 1,
             selection_binding=binding,
+            no_image_sha=no_image_sha,
         )
-        if entry.content_sha256 != binding.content_sha256:
+        if not no_image_sha and entry.content_sha256 != binding.content_sha256:
             raise ValueError("doc269_continuation_digest_mismatch")
         entries.append(entry)
     source_ids = tuple(item.reference_id for item in entries)
     if not source_ids or len(source_ids) != len(set(source_ids)):
         raise ValueError("doc269_reference_duplicate")
     payload = {
-        "schema_version": DOC269_PHYSICAL_PLAN_SCHEMA,
+        "schema_version": DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA if no_image_sha else DOC269_PHYSICAL_PLAN_SCHEMA,
         "job_id": admission.job_id,
         "output_index": projection.output_index,
         "projection_digest": projection.projection_digest,
         "maximum_reference_images": maximum_reference_images,
-        "references": [item.model_dump(mode="json") for item in entries],
+        "references": [item.model_dump(mode="json", exclude_none=True) for item in entries],
         "reference_image_asset_ids": list(source_ids),
         "reference_image_count": len(entries),
     }

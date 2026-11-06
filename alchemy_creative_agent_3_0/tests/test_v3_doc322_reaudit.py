@@ -88,6 +88,41 @@ def test_new_ecommerce_binding_is_admitted_without_a_legacy_selected_array(tmp_p
     assert admitted[0]["source_type"] == "generated_selected"
 
 
+def test_bridge_no_image_sha_continuity_anchor_uses_ids_without_reading_image_bytes(tmp_path, monkeypatch):
+    from alchemy_creative_agent_3_0.tests.test_v3_doc281_unified_source_library_smart_matching_phase0 import _general_project
+    from alchemy_creative_agent_3_0.tests.test_v3_doc322_project_workflow import create_source
+
+    handlers, project, _, _ = _general_project(tmp_path)
+    job, output = create_source(handlers, project, count=1, no_image_sha=True)
+    image_path = Path(output.file_path)
+    original_read_bytes = Path.read_bytes
+
+    def reject_image_read(self):
+        if self == image_path:
+            raise AssertionError("continuity binding must not read image bytes")
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_image_read)
+    state = handlers.project_service.get_continuity_anchor(project["project_id"])
+    active = handlers.project_service.bind_continuity_anchor(project["project_id"], {
+        "output_id": output.output_id,
+        "expected_job_id": job.job_id,
+        "expected_version": state["version"],
+        "confirm_binding": True,
+    })
+    anchor = handlers.project_service._anchor_bindings().state(project["project_id"])["active_continuity_anchor"]
+    assert "source_content_sha256" not in anchor
+    assert "content_sha256" not in anchor["reference"]
+    assert anchor["reference"]["no_image_sha"] is True
+
+    stored = handlers.project_service.project_store.get_project(project["project_id"])
+    admitted = handlers.project_service._doc269_selected_continuation_admissions(stored)
+    assert len(admitted) == 1
+    assert admitted[0]["output_id"] == output.output_id
+    assert admitted[0]["candidate_id"] == output.candidate_id
+    assert "content_sha256" not in admitted[0]
+
+
 def test_invalid_legacy_unselect_payload_does_not_drop_current_anchor(tmp_path):
     from alchemy_creative_agent_3_0.tests.test_v3_doc281_unified_source_library_smart_matching_phase0 import _general_project
     from alchemy_creative_agent_3_0.tests.test_v3_doc322_project_workflow import create_source

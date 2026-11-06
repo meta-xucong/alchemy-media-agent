@@ -21,9 +21,22 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 )
 from alchemy_creative_agent_3_0.app.generation_router.providers import ReferenceInputAdmissionError
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService, _doc270_canonical_digest
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
+    DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA,
+    ProductTruthAdmission,
+    ProductTruthSourceNoImageSha,
+    build_physical_product_projection,
+    build_product_truth_admission,
+)
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.physical_renderer_reference_plan import (
+    DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA,
+    NativeEcommerceIdentityBinding,
+    NativeEcommerceIdentityBindingEntry,
     PhysicalRendererReferenceEntry,
     PhysicalRendererReferencePlan,
+    _digest,
+    _file_entry,
 )
 from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_recovery import (
     _handlers,
@@ -40,6 +53,303 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc265_reference_channel_recovery 
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from app.providers.openai_image import OpenAIGPTImageProvider
 from app.services.asset_planning import reference_image_paths
+
+
+def test_bridge_product_truth_admission_uses_asset_binding_without_reading_image_bytes(tmp_path, monkeypatch):
+    image_path = tmp_path / "product-reference.png"
+    image_path.write_bytes(b"fixture bytes are never read by this test")
+    receipt = {
+        "schema_version": "v3_upload_authorization_receipt_v1",
+        "authority": "v3_uploaded_asset_store",
+        "asset_id": "asset-product-1",
+        "content_sha256": "legacy-upload-digest-is-not-consumed",
+        "persisted_role": "product_reference",
+        "reference_channel": "product_truth",
+        "consent_basis": "consent-1",
+        "rights_basis": "rights-1",
+        "receipt_digest": "legacy-upload-receipt-is-not-consumed",
+    }
+    upload = type("Upload", (), {
+        "status": "ready",
+        "role": "product_reference",
+        "file_path": str(image_path),
+        "content_sha256": "legacy-upload-digest-is-not-consumed",
+        "metadata": {"upload_authorization_receipt": receipt},
+    })()
+    service = object.__new__(V3ProductApiService)
+    service.asset_store = type("AssetStore", (), {"get_upload": lambda self, asset_id: upload})()
+    service._planned_job_id_for_request = lambda request: "job-bridge-no-image-sha"
+    request = type("Request", (), {"user_input": "product render"})()
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(AssertionError("image bytes read")))
+
+    admission = service._build_ecommerce_product_truth_admission(
+        request,
+        metadata={"project_id": "project-1", "render_bridge_primary_no_image_sha": True},
+        product_truth_pool_asset_ids=["asset-product-1"],
+    )
+    serialized = admission.model_dump()
+    restored = ProductTruthAdmission.from_mapping(serialized)
+    projection = build_physical_product_projection(
+        job_id=admission.job_id,
+        output_index=1,
+        admission=restored,
+        selected_product_asset_ids=["asset-product-1"],
+        selection_source="test",
+        selection_role="product_truth",
+        cap_reservation=1,
+    )
+
+    assert serialized["schema_version"] == DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA
+    assert "content_sha256" not in serialized["sources"][0]
+    assert isinstance(admission.sources[0], ProductTruthSourceNoImageSha)
+    assert projection.selected_product_asset_ids == ("asset-product-1",)
+
+
+def test_bridge_doc270_binding_uses_asset_ids_without_image_digest_or_byte_reads(monkeypatch):
+    profile = {
+        "schema_version": "doc270_source_evidence_profile_v1",
+        "source_asset_id": "asset-product-1",
+        "evidence": "product photo",
+    }
+    profile["profile_digest"] = _doc270_canonical_digest(profile)
+    analysis = {
+        "schema_version": "doc270_source_analysis_receipt_v1",
+        "authority": "v3_project_source_library",
+        "project_id": "project-1",
+        "reference_id": "reference-1",
+        "asset_id": "asset-product-1",
+        "source_type": "uploaded",
+        "use_policy": "product",
+        "role": "product_reference",
+        "reference_channel": "product_truth",
+        "profile_digest": profile["profile_digest"],
+    }
+    analysis["receipt_digest"] = _doc270_canonical_digest(analysis)
+    entry = {
+        "asset_id": "asset-product-1",
+        "reference_id": "reference-1",
+        "source_type": "uploaded",
+        "use_policy": "product",
+        "role": "product_reference",
+        "reference_channel": "product_truth",
+        "ecommerce_product_eligible": True,
+        "automatic_use_eligible": True,
+        "availability_state": "ready_verified",
+        "profile": profile,
+        "analysis_receipt": analysis,
+    }
+    library = {
+        "schema_version": "doc270_project_source_library_v1",
+        "project_id": "project-1",
+        "entries": [entry],
+    }
+    library["snapshot_digest"] = _doc270_canonical_digest(
+        {key: value for key, value in library.items() if key != "snapshot_digest"}
+    )
+    admission = build_product_truth_admission(
+        project_id="project-1",
+        job_id="job-1",
+        sources=[ProductTruthSourceNoImageSha(
+            asset_id="asset-product-1",
+            consent_reference="consent-1",
+            rights_reference="rights-1",
+            role="product_reference",
+            product_truth_channel="product_truth",
+            readiness="ready",
+            provenance="v3_uploaded_project_reference",
+        )],
+        product_truth_plan_digest="b" * 64,
+    )
+    projection = build_physical_product_projection(
+        job_id="job-1",
+        output_index=1,
+        admission=admission,
+        selected_product_asset_ids=["asset-product-1"],
+        selection_source="test",
+        selection_role="product_truth",
+        cap_reservation=1,
+    )
+    service = object.__new__(V3ProductApiService)
+    service.asset_store = type("AssetStore", (), {"get_upload": lambda self, _asset_id: object()})()
+    service.doc270_source_library_snapshot_lookup = lambda _project_id: library
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(AssertionError("image bytes read")))
+
+    receipts = service._bind_doc270_source_library_binding_receipts(
+        metadata={
+            "doc270_project_source_library": library,
+            "render_bridge_primary_no_image_sha": True,
+        },
+        admission=admission,
+        projections={"1": projection.model_dump()},
+    )
+
+    binding = receipts[0]["selected_source_bindings"][0]
+    assert binding["asset_id"] == "asset-product-1"
+    assert "content_sha256" not in binding
+
+
+def test_bridge_output_delivery_closure_v2_validates_by_output_identity_without_image_bytes(tmp_path, monkeypatch):
+    image_path = tmp_path / "delivery.png"
+    image_path.write_bytes(b"persisted output bytes are not read")
+    record = type("OutputRecord", (), {
+        "output_id": "output-1",
+        "job_id": "job-1",
+        "asset_id": "asset-1",
+        "candidate_id": "candidate-1",
+        "file_path": str(image_path),
+        "metadata": {
+            "capability_execution_envelope": {
+                "execution_fingerprint": "fingerprint-1",
+                "envelope_id": "envelope-1",
+                "resolved_constraint_ledger": {
+                    "ledger_id": "ledger-1",
+                    "provider_projection": {"capability_projection": {}},
+                },
+            },
+        },
+    })()
+    closure = {
+        "schema_version": "v3_output_delivery_closure_v2",
+        "job_id": "job-1",
+        "status": "complete",
+        "review_evidence_receipt_status": "complete",
+        "final_delivery_status": "ready",
+        "automatic_delivery_available": True,
+        "eligible_output_ids": ["output-1"],
+        "execution_fingerprint": "fingerprint-1",
+        "envelope_id": "envelope-1",
+        "ledger_id": "ledger-1",
+        "outputs": [{
+            "output_id": "output-1",
+            "asset_id": "asset-1",
+            "candidate_id": "candidate-1",
+        }],
+    }
+    service = object.__new__(V3ProductApiService)
+    service.output_store = type("OutputStore", (), {
+        "file_for_variant": lambda self, _output_id, _variant: (image_path,),
+    })()
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(AssertionError("image bytes read")))
+
+    assert V3ProductApiService._valid_output_store_job_closure(
+        closure,
+        job_id="job-1",
+        records=[record],
+    ) == (True, "closed")
+    assert service._output_store_closure_files_match(closure, [record])
+
+
+def test_bridge_visual_asset_reference_omits_image_integrity_digest_without_reading_bytes(tmp_path, monkeypatch):
+    image_path = tmp_path / "visual-asset.png"
+    image_path.write_bytes(b"identity reference bytes are not read")
+    output = type("OutputRecord", (), {
+        "output_id": "output-face-1",
+        "job_id": "job-source-1",
+        "file_path": str(image_path),
+        "preview_url": "/preview/output-face-1",
+        "mime_type": "image/png",
+    })()
+    service = object.__new__(V3ProductApiService)
+    service.output_store = type("OutputStore", (), {"get_output": lambda self, _output_id: output})()
+    service._library_binding_reference_output_ids = lambda **_kwargs: ["output-face-1"]
+    snapshot = type("Snapshot", (), {
+        "state": "valid",
+        "bindings": [type("Binding", (), {
+            "visual_asset_id": "visual-asset-1",
+            "selected_version_id": "version-1",
+            "owner_scope": "project-1",
+            "approved_evidence_ids": (),
+        })()],
+    })()
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(AssertionError("image bytes read")))
+
+    references = service._library_visual_asset_reference_assets(
+        snapshot,
+        binding_service=object(),
+        no_image_sha=True,
+    )
+
+    assert len(references) == 1
+    assert references[0]["output_id"] == "output-face-1"
+    assert "source_integrity_id" not in references[0]["metadata"]
+
+
+def test_bridge_native_identity_binding_ignores_legacy_image_digest(tmp_path, monkeypatch):
+    image_path = tmp_path / "face-reference.png"
+    image_path.write_bytes(b"native identity reference bytes are not read")
+    admission = build_product_truth_admission(
+        project_id="project-1",
+        job_id="job-1",
+        sources=[ProductTruthSourceNoImageSha(
+            asset_id="asset-product-1",
+            consent_reference="consent-1",
+            rights_reference="rights-1",
+            role="product_reference",
+            product_truth_channel="product_truth",
+            readiness="ready",
+            provenance="v3_uploaded_project_reference",
+        )],
+        product_truth_plan_digest="b" * 64,
+    )
+    projection = build_physical_product_projection(
+        job_id="job-1",
+        output_index=1,
+        admission=admission,
+        selected_product_asset_ids=["asset-product-1"],
+        selection_source="test",
+        selection_role="product_truth",
+        cap_reservation=1,
+    )
+    planned_entry = PhysicalRendererReferenceEntry(
+        reference_id="face-output-1",
+        source_id="face-output-1",
+        role="face_reference",
+        channel="people_identity",
+        source_type="visual_asset_library",
+        file_path=str(image_path.resolve()),
+        ordinal=1,
+    )
+    plan_payload = {
+        "schema_version": DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA,
+        "job_id": "job-1",
+        "output_index": 1,
+        "projection_digest": projection.projection_digest,
+        "maximum_reference_images": 5,
+        "references": [planned_entry.model_dump(mode="json", exclude_none=True)],
+        "reference_image_asset_ids": ["face-output-1"],
+        "reference_image_count": 1,
+    }
+    plan = PhysicalRendererReferencePlan(**plan_payload, plan_digest=_digest(plan_payload))
+    binding = NativeEcommerceIdentityBinding(
+        project_id="project-1",
+        job_id="job-1",
+        asset_id="generated-asset-1",
+        output_index=1,
+        plan_digest=plan.plan_digest,
+        maximum_reference_images=5,
+        entries=(NativeEcommerceIdentityBindingEntry(
+            source_id="face-output-1",
+            file_path=str(image_path.resolve()),
+            content_sha256="a" * 64,
+        ),),
+    )
+    provider = object.__new__(ProductionImageGenerationProvider)
+    provider._reference_content_fingerprint = lambda _path: (_ for _ in ()).throw(
+        AssertionError("Bridge identity validation read image bytes")
+    )
+    request = type("Request", (), {
+        "metadata": {"job_id": "job-1"},
+        "asset_spec": type("AssetSpec", (), {"priority": 1, "asset_id": "generated-asset-1"})(),
+    })()
+
+    provider._validate_doc269_native_identity_binding(
+        request,
+        admission=admission,
+        projection=projection,
+        plan=plan,
+        identity_entries=[planned_entry],
+        binding=binding,
+    )
 
 
 def _ecommerce_fixture(tmp_path):
@@ -768,3 +1078,40 @@ def test_doc269_invalid_final_plan_stops_before_adapter_or_provider_dispatch(tmp
     public_failure = str(failure.value)
     assert str(typed_plan["references"][0]["file_path"]) not in public_failure
     assert str(typed_plan["references"][0]["content_sha256"]) not in public_failure
+
+
+def test_doc269_bridge_plan_uses_reference_ids_without_reading_image_bytes(tmp_path, monkeypatch) -> None:
+    image_path = tmp_path / "bridge-reference.bin"
+    image_path.write_bytes(b"reference-bytes")
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda _path: (_ for _ in ()).throw(AssertionError("Bridge plan read image bytes")),
+    )
+    entry = _file_entry(
+        {"asset_id": "asset_bridge_ref", "file_path": str(image_path)},
+        role="product_reference",
+        channel="product_truth",
+        source_type="uploaded",
+        ordinal=1,
+        no_image_sha=True,
+    )
+    payload = {
+        "schema_version": DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA,
+        "job_id": "job_bridge_doc269",
+        "output_index": 1,
+        "projection_digest": "a" * 64,
+        "maximum_reference_images": 1,
+        "references": [entry.model_dump(mode="json", exclude_none=True)],
+        "reference_image_asset_ids": [entry.reference_id],
+        "reference_image_count": 1,
+    }
+    plan = PhysicalRendererReferencePlan(
+        **payload,
+        plan_digest=_digest(payload),
+    )
+
+    serialized = plan.model_dump(mode="json")
+    assert serialized["schema_version"] == DOC269_PHYSICAL_PLAN_NO_IMAGE_SHA_SCHEMA
+    assert "content_sha256" not in serialized["references"][0]
+    assert serialized["reference_image_asset_ids"] == ["asset_bridge_ref"]

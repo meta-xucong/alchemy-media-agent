@@ -7584,12 +7584,29 @@ class ScenarioRuntime:
             by_id = {str(item.get("asset_id") or item.get("asset_ref_id") or ""): item
                      for item in current if isinstance(item, dict)} if isinstance(current, list) else {}
             admitted = [item for item in frozen.references() if item.get("reference_channel") != "continuity"]
-            context["uploaded_reference_assets"] = [
-                {**source, **by_id.get(source["asset_id"], {}),
-                 "asset_id": source["asset_id"], "file_path": source["file_path"],
-                 "content_sha256": source["content_sha256"], "reference_channel": source["reference_channel"]}
-                for source in admitted
-            ]
+            projected = []
+            no_image_sha = p.get("schema_version") == "v3_reference_input_plan_v4"
+            for source in admitted:
+                item = {
+                    **source,
+                    **by_id.get(source["asset_id"], {}),
+                    "asset_id": source["asset_id"],
+                    "file_path": source["file_path"],
+                    "reference_channel": source["reference_channel"],
+                }
+                if no_image_sha:
+                    item.pop("content_sha256", None)
+                    item.pop("source_integrity_id", None)
+                    nested_metadata = item.get("metadata")
+                    if isinstance(nested_metadata, dict):
+                        nested_metadata = dict(nested_metadata)
+                        nested_metadata.pop("content_sha256", None)
+                        nested_metadata.pop("source_integrity_id", None)
+                        item["metadata"] = nested_metadata
+                else:
+                    item["content_sha256"] = source["content_sha256"]
+                projected.append(item)
+            context["uploaded_reference_assets"] = projected
             context["reference_input_summary"] = frozen.facts()
             metadata["project_context_snapshot"] = context
             return request.model_copy(update={"metadata":metadata})

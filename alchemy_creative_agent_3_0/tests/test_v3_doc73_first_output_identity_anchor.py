@@ -1186,3 +1186,80 @@ def test_doc73_auto_anchor_with_missing_canonical_record_fails_closed(tmp_path) 
     )
     assert resolution.status == "unbound"
     assert resolution.file_path is None
+
+
+def test_bridge_no_image_sha_keeps_doc73_continuity_by_output_identity(tmp_path, monkeypatch) -> None:
+    job_id = "job_doc73_bridge_no_hash"
+    project_id = "project_doc73_bridge_no_hash"
+    asset_id = "asset_doc73_bridge_no_hash"
+    candidate_id = "candidate_doc73_bridge_no_hash"
+    batch_digest = doc73_batch_plan_digest(
+        job_id=job_id,
+        assets=[{"asset_id": asset_id, "asset_type": "single_image", "aspect_ratio": "1:1"}],
+    )
+    metadata = {
+        "project_id": project_id,
+        "doc73_batch_plan_digest": batch_digest,
+        "auto_batch_identity_anchor_policy": {"enabled": True},
+        "render_bridge_primary_no_image_sha": True,
+    }
+    skeleton = issue_doc73_auto_identity_anchor_source_skeleton(
+        metadata,
+        job_id=job_id,
+        project_id=project_id,
+        asset_id=asset_id,
+        plan_position=0,
+        output_index=1,
+        candidate_id=candidate_id,
+    )
+    store = V3GeneratedOutputStore(tmp_path / "records")
+    record = store.save_base64_output(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        asset_id=asset_id,
+        provider="bridge_no_image_sha_test",
+        model="test",
+        encoded_image=_encoded_test_png((100, 160, 210)),
+        metadata={**metadata, "doc73_auto_identity_anchor_skeleton": skeleton},
+        include_content_hash=False,
+    )
+    receipt = dict(record.metadata[DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY])
+
+    assert "content_sha256" not in record.metadata
+    assert "source_content_sha256" not in receipt
+    assert validate_doc73_binding(
+        receipt,
+        expected_job_id=job_id,
+        expected_project_id=project_id,
+        expected_batch_plan_digest=batch_digest,
+        expected_output_id=record.output_id,
+        expected_source_asset_id=asset_id,
+        expected_source_plan_position=0,
+        expected_source_candidate_id=candidate_id,
+    )
+
+    reference = {
+        "asset_id": record.output_id,
+        "output_id": record.output_id,
+        "candidate_id": candidate_id,
+        "source_type": "auto_batch_continuity",
+        "origin": "auto_batch_continuity",
+        "role": "continuity_reference",
+        "use_policy": "continuity",
+        "file_path": str(record.file_path),
+        "metadata": {DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: receipt},
+        DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: receipt,
+    }
+    plan = ReferenceInputPlan.freeze(
+        job_id=job_id,
+        project_id=project_id,
+        mode="standard",
+        inputs=[],
+        no_image_sha=True,
+    )
+    monkeypatch.setattr(Path, "read_bytes", lambda _path: (_ for _ in ()).throw(AssertionError("unexpected image bytes read")))
+    continued = plan.with_same_batch_continuity_reference(reference, receipt=receipt)
+    saved = continued.as_dict()
+    saved_reference = saved["same_batch_continuity_reference"]["reference"]
+    assert "content_sha256" not in saved_reference
+    assert saved_reference["asset_id"] == record.output_id

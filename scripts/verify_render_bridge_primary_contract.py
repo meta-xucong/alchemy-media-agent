@@ -19,7 +19,7 @@ if not (bridge_source / "render_bridge" / "api.py").is_file():
     parser.error("Bridge checkout has no src/render_bridge/api.py")
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(bridge_source)]
 import httpx
-from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryRequest
+from render_bridge_primary import PrimarySettings, PrimaryTransport, PrimaryRequest, Reference
 from render_bridge_primary.http import BridgeClient, BridgeError
 from render_bridge.domain import BridgeStore,SourceScope
 from render_bridge.api import create_app
@@ -48,13 +48,21 @@ async def verify_codex_adapter():
             settings = PrimarySettings(enabled=True, base_url='https://fixture.invalid', token='fixture-token',
                 profile='codex-image', workspace='workspace', state_dir=root/'ledger')
             transport = PrimaryTransport(settings, client=client)
+            reference_bytes = fixture_png(32, 24)
             def request(key):
                 return PrimaryRequest('v2', 'owner', key, 'Synthetic fixture', {
                     'codex_adapter': 'codex_cli_imagegen_v1',
-                    'image_options': {'schema_version': '1', 'transparent_background': True}})
-            # create_task passes through the real HTTP schema and admission handler.
+                    'image_options': {'schema_version': '1', 'transparent_background': True}},
+                    references=(Reference(reference_bytes, 'image/png', 'fixture-reference'),))
+            # Input upload and task creation pass through the real HTTP schemas,
+            # admission handler and stable input_ref binding.
             first = await transport.resolve(request('first'))
             assert (first.route, first.state) == ('bridge', 'queued'), first
+            admitted = store.get_task(scope, first.task_id)
+            assert len(admitted['request']['references']) == 1, admitted
+            assert set(admitted['request']['references'][0]) == {'input_ref', 'role'}, admitted
+            staged = store.get_input(scope, admitted['request']['references'][0]['input_ref'])
+            assert 'original_sha256' not in staged, staged
             assert (await transport.resolve(request('first'))).task_id == first.task_id
             claim = store.claim_task(scope, first.task_id, node_id='node', executor_instance='instance')
             assert store.start_execution(scope, first.task_id, claim['claim_id'])['may_execute']

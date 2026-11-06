@@ -165,7 +165,8 @@ def _source_request(app_request, *, native_defaults=False):
     canvas = variables.get("identity_repair_canvas_path")
     if canvas:
         paths = [Path(str(canvas)), *paths]
-    references = tuple(Reference(Path(path).read_bytes(), mimetypes.guess_type(str(path))[0] or "application/octet-stream") for path in paths)
+    references = tuple(Reference(Path(path).read_bytes(), mimetypes.guess_type(str(path))[0] or "application/octet-stream",
+                                 reference_key=Path(path).stem) for path in paths)
     # Do not let a missing materialized file silently become text-only generation.
     if any(item.get("provider_input_mode") == "reference_image" and not reference_image_paths({"assets": [item]}, max_images=1)
            for item in assets):
@@ -184,8 +185,7 @@ def _source_request(app_request, *, native_defaults=False):
         "transparent_background": bool(plan.transparent_background or plan.background == "transparent"),
         "background": plan.background if plan.background not in (None, "auto") else None,
         "output_compression": plan.output_compression,
-        "mask": (hashlib.sha256(Path(str(variables["identity_repair_mask_path"])).read_bytes()).hexdigest()
-                 if variables.get("identity_repair_mask_path") else None),
+        "mask": bool(variables.get("identity_repair_mask_path") or variables.get("mask")),
         "input_fidelity": variables.get("input_fidelity"),
         "input_fidelity_required": bool(variables.get("input_fidelity_required")),
         "strong_identity": bool(strong_identity),
@@ -374,13 +374,11 @@ def _durable_original(record, result, *, allow_pending_ack=False):
                 and record.width == expected.get("width")
                 and record.height == expected.get("height"))
     try:
-        content_hash = hashlib.sha256(Path(record.file_path).read_bytes()).hexdigest()
+        size = Path(record.file_path).stat().st_size
     except OSError:
         return False
-    expected = metadata.get("content_sha256")
-    if not expected or content_hash != expected:
-        return False
-    return True
+    return (size > 0 and record.width > 0 and record.height > 0
+            and bool(record.mime_type) and record.id is not None)
 
 
 async def retire_checkpoint(app_request, record):

@@ -12,11 +12,13 @@ from typing import Any
 
 from .creative_core.doc281_output_plan_binding import (
     DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA,
     validate_doc73_binding,
 )
 
 PLAN_KEY = "reference_input_plan"
-SCHEMA = "v3_reference_input_plan_v3"
+SCHEMA = "v3_reference_input_plan_v4"
+LEGACY_SCHEMA = "v3_reference_input_plan_v3"
 MODES = {"standard": "standard_direct_reference", "professional": "professional_asset_binding", "ecommerce": "ecommerce_product_truth"}
 
 
@@ -28,17 +30,28 @@ def _copy(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
 
 
-def _source(raw: Any, *, channel: str) -> dict:
+def _source(raw: Any, *, channel: str, no_image_sha: bool = False) -> dict:
     value = raw.model_dump(mode="json") if hasattr(raw, "model_dump") else dict(raw)
     asset_id = str(value.get("asset_id") or value.get("output_id") or "").strip()
     path = Path(str(value.get("file_path") or ""))
     if not asset_id or not path.is_file():
         raise ValueError("reference_input_source_unavailable")
-    actual = hashlib.sha256(path.read_bytes()).hexdigest()
-    expected = value.get("content_sha256") or (value.get("metadata") or {}).get("content_sha256")
-    if expected and str(expected).removeprefix("sha256:").lower() != actual:
-        raise ValueError("reference_input_source_integrity_mismatch")
-    value.update({"asset_id":asset_id, "file_path":str(path.resolve()), "content_sha256":actual,
+    if no_image_sha:
+        value.pop("content_sha256", None)
+        value.pop("source_integrity_id", None)
+        metadata = value.get("metadata")
+        if isinstance(metadata, dict):
+            metadata = dict(metadata)
+            metadata.pop("content_sha256", None)
+            metadata.pop("source_integrity_id", None)
+            value["metadata"] = metadata
+    else:
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        expected = value.get("content_sha256") or (value.get("metadata") or {}).get("content_sha256")
+        if expected and str(expected).removeprefix("sha256:").lower() != actual:
+            raise ValueError("reference_input_source_integrity_mismatch")
+        value["content_sha256"] = actual
+    value.update({"asset_id":asset_id, "file_path":str(path.resolve()),
         "reference_channel":channel, "provider_input_required":True,
         "selected_representation":"original_full_frame"})
     # Provenance is assigned by the binding/admission owner, not by filenames.
@@ -56,7 +69,7 @@ class ReferenceInputPlan:
     @classmethod
     def freeze(cls, *, job_id: str, project_id: str, mode: str, inputs: list,
                anchor_snapshot: dict | None = None, professional_binding: dict | None = None,
-               ecommerce_contract: dict | None = None) -> "ReferenceInputPlan":
+               ecommerce_contract: dict | None = None, no_image_sha: bool = False) -> "ReferenceInputPlan":
         if mode not in MODES or not job_id:
             raise ValueError("reference_input_mode_invalid")
         state = dict(anchor_snapshot or {"state":"none", "version":0, "auto_enabled":True})
@@ -67,8 +80,8 @@ class ReferenceInputPlan:
             if state.get("state") != "active" or not isinstance(anchor, dict) or not anchor.get("binding_id"):
                 raise ValueError("continuity_anchor_binding_invalid")
             anchor = _copy(anchor)
-            anchor["reference"] = _source(anchor["reference"], channel="continuity")
-        sources = [_source(item, channel={"standard":"direct_reference", "professional":"professional_asset", "ecommerce":"product_truth"}[mode]) for item in inputs]
+            anchor["reference"] = _source(anchor["reference"], channel="continuity", no_image_sha=no_image_sha)
+        sources = [_source(item, channel={"standard":"direct_reference", "professional":"professional_asset", "ecommerce":"product_truth"}[mode], no_image_sha=no_image_sha) for item in inputs]
         # Exact duplicate records can be coalesced; conflicting identities cannot.
         unique = {}
         for item in sources:
@@ -96,23 +109,24 @@ class ReferenceInputPlan:
                 source["reference_channel"] = "ecommerce_identity"
             commerce = {"contract":contract, "references":product_sources, "identity_references":identity_sources}
         refs = ([anchor["reference"]] if anchor else []) + sources
-        payload = {"schema_version":SCHEMA, "job_id":job_id, "project_id":project_id,
+        payload = {"schema_version":SCHEMA if no_image_sha else LEGACY_SCHEMA, "job_id":job_id, "project_id":project_id,
             "project_mode":mode, "reference_mode":MODES[mode], "continuity_anchor":anchor,
             "anchor_version":state.get("version",0), "anchor_auto_enabled":state.get("auto_enabled") is True,
             "direct_references":sources if mode == "standard" else [],
             "professional_binding_set":professional, "ecommerce_product_truth":commerce,
             "derived_evidence":[], "selection_policy":"mode_scoped_inputs_plus_single_continuity_anchor",
             "logical_continuity_reference_count":int(anchor is not None), "logical_mode_input_count":len(sources),
-            "physical_provider_reference_count":len({r["content_sha256"] for r in refs}) if mode == "standard" else None,
+            "physical_provider_reference_count":len({r["asset_id"] for r in refs}) if no_image_sha and mode == "standard" else (len({r["content_sha256"] for r in refs}) if mode == "standard" else None),
             "physical_count_state":"frozen" if mode == "standard" else "pending_specialized_materialization"}
         payload["plan_digest"] = digest(payload)
         return cls.from_dict(payload)
 
     @classmethod
     def from_dict(cls, raw: dict, *, job_id: str | None = None, project_id: str | None = None) -> "ReferenceInputPlan":
-        if not isinstance(raw, dict) or raw.get("schema_version") != SCHEMA:
+        if not isinstance(raw, dict) or raw.get("schema_version") not in {SCHEMA, LEGACY_SCHEMA}:
             raise ValueError("reference_input_plan_invalid")
         payload = _copy(raw)
+        schema = payload.get("schema_version")
         proof = payload.pop("plan_digest", None)
         if proof != digest(payload):
             raise ValueError("reference_input_plan_digest_mismatch")
@@ -182,7 +196,18 @@ class ReferenceInputPlan:
                     or receipt.get("job_id") != payload.get("job_id")
                     or receipt.get("project_id") != payload.get("project_id")
                     or receipt.get("source_output_id") != same_batch_reference.get("output_id")
-                    or receipt.get("source_content_sha256") != same_batch_reference.get("content_sha256")
+                    or (
+                        schema == LEGACY_SCHEMA
+                        and receipt.get("source_content_sha256") != same_batch_reference.get("content_sha256")
+                    )
+                    or (
+                        schema == SCHEMA
+                        and (
+                            receipt.get("schema_version") != DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA
+                            or "source_content_sha256" in receipt
+                            or "content_sha256" in same_batch_reference
+                        )
+                    )
                     or receipt != same_batch_reference.get("metadata", {}).get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
                     or same_batch_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) not in (None, receipt)
                     or not validate_doc73_binding(
@@ -199,15 +224,24 @@ class ReferenceInputPlan:
         for source in all_sources:
             if not isinstance(source,dict) or not isinstance(source.get("asset_id"),str) or not source["asset_id"] or not isinstance(source.get("file_path"),str):
                 raise ValueError("reference_input_plan_source_invalid")
-            sha=source.get("content_sha256")
-            if not isinstance(sha,str) or len(sha)!=64 or any(c not in "0123456789abcdef" for c in sha):
+            if schema == LEGACY_SCHEMA:
+                sha=source.get("content_sha256")
+                if not isinstance(sha,str) or len(sha)!=64 or any(c not in "0123456789abcdef" for c in sha):
+                    raise ValueError("reference_input_plan_source_invalid")
+            elif (
+                "content_sha256" in source
+                or "source_integrity_id" in source
+                or "content_sha256" in (source.get("metadata") or {})
+                or "source_integrity_id" in (source.get("metadata") or {})
+            ):
                 raise ValueError("reference_input_plan_source_invalid")
         if type(payload.get("logical_continuity_reference_count")) is not int or payload["logical_continuity_reference_count"] != int(anchor is not None) or type(payload.get("logical_mode_input_count")) is not int or payload["logical_mode_input_count"] != len(sources):
             raise ValueError("reference_input_plan_count_invalid")
         if payload.get("derived_evidence") != []:
             raise ValueError("reference_input_plan_unapproved_representation")
         if mode == "standard":
-            if type(payload.get("physical_provider_reference_count")) is not int or payload["physical_provider_reference_count"] != len({r["content_sha256"] for r in all_sources}) or payload.get("physical_count_state") != "frozen":
+            count_key = "content_sha256" if schema == LEGACY_SCHEMA else "asset_id"
+            if type(payload.get("physical_provider_reference_count")) is not int or payload["physical_provider_reference_count"] != len({r[count_key] for r in all_sources}) or payload.get("physical_count_state") != "frozen":
                 raise ValueError("reference_input_plan_count_invalid")
             if any(r.get("selected_representation") != "original_full_frame" for r in all_sources):
                 raise ValueError("reference_input_plan_unapproved_representation")
@@ -229,14 +263,19 @@ class ReferenceInputPlan:
         if isinstance(same_batch, dict) and isinstance(same_batch.get("reference"), dict):
             result.append(same_batch["reference"])
         result.extend(sources)
+        legacy_digest_validation = p.get("schema_version") == LEGACY_SCHEMA
         for item in result:
             if verify_bytes:
                 try:
-                    actual = hashlib.sha256(Path(item["file_path"]).read_bytes()).hexdigest()
+                    path = Path(item["file_path"])
+                    if legacy_digest_validation:
+                        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                        if actual != str(item.get("content_sha256") or "").lower():
+                            raise ValueError("reference_input_source_integrity_mismatch")
+                    else:
+                        path.stat()
                 except (OSError, KeyError) as exc:
                     raise ValueError("reference_input_source_unavailable") from exc
-                if actual != item.get("content_sha256"):
-                    raise ValueError("reference_input_source_integrity_mismatch")
         return result
 
     def with_same_batch_continuity_reference(self, reference: dict, *, receipt: dict) -> "ReferenceInputPlan":
@@ -248,13 +287,22 @@ class ReferenceInputPlan:
         if not isinstance(reference, dict) or not isinstance(receipt, dict):
             raise ValueError("reference_input_same_batch_continuity_invalid")
         output_id = str(reference.get("output_id") or "").strip()
+        no_image_sha = payload.get("schema_version") == SCHEMA
         expected_sha = str(receipt.get("source_content_sha256") or "").strip().lower()
         if (not output_id or output_id != str(receipt.get("source_output_id") or "").strip()
                 or receipt.get("job_id") != payload.get("job_id")
                 or receipt.get("project_id") != payload.get("project_id")
-                or not expected_sha or len(expected_sha) != 64):
+                or (not no_image_sha and (not expected_sha or len(expected_sha) != 64))
+                or (no_image_sha and (
+                    receipt.get("schema_version") != DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA
+                    or "source_content_sha256" in receipt
+                ))):
             raise ValueError("reference_input_same_batch_continuity_invalid")
-        normalized = _source({**reference, "asset_id": output_id, "content_sha256": expected_sha}, channel="same_batch_continuity")
+        normalized = _source(
+            {**reference, "asset_id": output_id, **({"content_sha256": expected_sha} if not no_image_sha else {})},
+            channel="same_batch_continuity",
+            no_image_sha=no_image_sha,
+        )
         if (normalized.get("source_type") != "auto_batch_continuity"
                 or normalized.get("origin") != "auto_batch_continuity"
                 or normalized.get("output_id") != output_id
@@ -269,12 +317,16 @@ class ReferenceInputPlan:
                     expected_source_plan_position=0,
                     expected_source_candidate_id=normalized.get("candidate_id"),
                 )
-                or expected_sha != hashlib.sha256(Path(normalized["file_path"]).read_bytes()).hexdigest()):
+                or (
+                    not no_image_sha
+                    and expected_sha != hashlib.sha256(Path(normalized["file_path"]).read_bytes()).hexdigest()
+                )):
             raise ValueError("reference_input_same_batch_continuity_invalid")
         payload["same_batch_continuity_reference"] = {"reference": normalized, "receipt": _copy(receipt)}
         refs = ([payload["continuity_anchor"]["reference"]] if payload["continuity_anchor"] else []) + [normalized]
         refs.extend(payload["direct_references"])
-        payload["physical_provider_reference_count"] = len({item["content_sha256"] for item in refs})
+        key = "asset_id" if payload.get("schema_version") == SCHEMA else "content_sha256"
+        payload["physical_provider_reference_count"] = len({item[key] for item in refs})
         payload.pop("plan_digest", None)
         payload["plan_digest"] = digest(payload)
         return self.from_dict(payload, job_id=payload.get("job_id"), project_id=payload.get("project_id"))
