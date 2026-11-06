@@ -5495,6 +5495,28 @@ class V3ProductApiService:
             "formal_delivery": False, "development_only": True, "retry_safe": False,
             "billing": {"mode": "v3_zero_credit_stub", "charged": False, "upstream_may_charge": True}}
 
+    @staticmethod
+    def _matches_render_bridge_registration(saved, binding) -> bool:
+        if not isinstance(saved, dict):
+            return False
+        expected = binding.safe_metadata()
+        identity_fields = (
+            "registration_key",
+            "project_id",
+            "job_id",
+            "asset_id",
+            "frozen_request_id",
+            "target_revision",
+            "prompt_sha256",
+            "receipt_id",
+            "execution_profile_id",
+            "execution_profile_revision",
+            "uploaded_asset_ids",
+            "size",
+            "output_format",
+        )
+        return all(saved.get(field) == expected.get(field) for field in identity_fields)
+
     def lookup_render_bridge_registration(self, binding) -> dict[str, Any]:
         """Read the service-owned native checkpoint, not an integration claim."""
 
@@ -5507,16 +5529,23 @@ class V3ProductApiService:
         if record is None:
             return {"status": "rejected", "reason_code": "render_bridge_target_not_found"}
         if output is None:
+            output = next((candidate for candidate in self.output_store.list_by_job(binding.job_id)
+                           if self._matches_render_bridge_registration(
+                               dict(candidate.metadata or {}).get("provider_raw_summary", {}).get(
+                                   "render_bridge_registration"), binding)), None)
+        if output is None:
             return {"status": "not_registered"}
         receipt = dict(output.metadata or {}).get("provider_raw_summary", {}).get("render_bridge_registration")
-        if receipt != binding.safe_metadata():
+        if not self._matches_render_bridge_registration(receipt, binding):
             raise ValueError("render_bridge_native_checkpoint_conflict")
         result = record.generation_result
         committed = (
             result is not None
-            and result.metadata.get("render_bridge_registration") == binding.safe_metadata()
+            and self._matches_render_bridge_registration(
+                result.metadata.get("render_bridge_registration"), binding
+            )
             and any(
-                asset.metadata.get("output_id") == binding.output_id
+                asset.metadata.get("output_id") == output.output_id
                 for asset in result.asset_pack.assets
             )
         )
@@ -5524,7 +5553,7 @@ class V3ProductApiService:
             return {"status": "output_checkpointed", "retry_safe": True}
         return {
             "status": "registered",
-            "native_registration_ref": binding.output_id,
+            "native_registration_ref": output.output_id,
             "review_status": str(record.status),
             "current_review_status": str(record.status),
             "review_pending": self._render_bridge_review_pending(record),
