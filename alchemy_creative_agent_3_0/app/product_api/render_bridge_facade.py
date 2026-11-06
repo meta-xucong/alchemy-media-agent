@@ -198,12 +198,10 @@ class RenderBridgeNativeFacade:
             raise BridgeNativeFacadeError("render_bridge_existing_channel_unsupported")
         if generation_plan.metadata.get("requested_image_count", 1) != 1:
             raise BridgeNativeFacadeError("render_bridge_single_image_target_required")
-        # Bound reads before invoking the shared materializer, which verifies
-        # exact bytes/order against this server-owned reference plan itself.
+        # Bound reads before invoking the shared materializer; the persisted
+        # target revision and ordered asset identities bind this reference set.
         for source in logical.references(verify_bytes=False):
-            content = self._read_reference_bytes(Path(source["file_path"]))
-            if hashlib.sha256(content).hexdigest() != source["content_sha256"]:
-                raise BridgeNativeFacadeError("render_bridge_reference_changed")
+            self._read_reference_bytes(Path(source["file_path"]))
         request = build_provider_generation_request(
             asset_spec=plan.series_plan.assets[0],
             layout_plan=one(plan.layout_plans),
@@ -214,7 +212,7 @@ class RenderBridgeNativeFacade:
         )
         materializer = ProductionImageGenerationProvider(output_store=object())
         try:
-            materialization = materializer.materialize_final_prompt(request)
+            materialization = materializer.materialize_final_prompt(request, bridge_transport=True)
         except Exception:
             raise BridgeNativeFacadeError("render_bridge_canonical_materialization_blocked") from None
         if materialization.prompt_source != "remote_brain_canonical":
@@ -226,14 +224,12 @@ class RenderBridgeNativeFacade:
         for index, item in enumerate(materialization.reference_assets):
             path = Path(item["file_path"])
             content = self._read_reference_bytes(path)
-            content_hash = hashlib.sha256(content).hexdigest()
             paths.append(path)
             references.append(
                 {
-                    "reference_id": f"reference_{index}_{content_hash}",
+                    "reference_id": f"reference_{index}",
                     "asset_id": item.get("asset_id"),
                     "index": index,
-                    "sha256": content_hash,
                     "size_bytes": len(content),
                     "mime_type": item.get("mime_type"),
                     "role": item.get("role"),
@@ -299,7 +295,7 @@ class RenderBridgeNativeFacade:
         frozen_request_id: str,
         reference_id: str,
     ) -> tuple[bytes, str]:
-        """Recheck current authority and hash; never accept a caller file path."""
+        """Recheck current authority; never accept a caller file path."""
 
         snapshot, paths = self._freeze(actor_user_id, target)
         if snapshot["frozen_request_id"] != frozen_request_id:
@@ -307,7 +303,7 @@ class RenderBridgeNativeFacade:
         for reference, path in zip(snapshot["references"], paths, strict=True):
             if reference["reference_id"] == reference_id:
                 content = self._read_reference_bytes(path)
-                if hashlib.sha256(content).hexdigest() != reference["sha256"]:
+                if len(content) != reference["size_bytes"]:
                     raise BridgeNativeFacadeError("render_bridge_reference_changed")
                 # Authority is checked again after the file read.
                 self._target_revision(actor_user_id, target, snapshot["target_revision"])

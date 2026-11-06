@@ -31,6 +31,7 @@ class Client:
             'limits': {'max_input_bytes':16*1024*1024,'max_input_image_pixels':16*1024*1024,
                        'max_output_bytes':16777216}}]}
     async def create_input(self, payload):
+        self.created_input = payload
         return {'input_id':payload['input_key']}
     async def upload_input(self, input_id, content, mime_type):
         self.uploaded=(input_id,content,mime_type)
@@ -191,8 +192,8 @@ def test_2986403_byte_reference_is_sent_to_bridge_unchanged(tmp_path):
     assert result.route=='bridge'
     input_id='rb_'+PrimaryRequest(product='v3',owner_id='u',unit_id='job:0',prompt='image',parameters={}).key+'_0'
     assert client.uploaded==(input_id,original,'image/png')
-    assert client.payload['references']==[{'input_ref':input_id,'role':'reference',
-                                           'hash':hashlib.sha256(original).hexdigest()}]
+    assert client.payload['references']==[{'input_ref':input_id,'role':'reference'}]
+    assert client.created_input == {'input_key': input_id, 'size': len(original), 'mime_type': 'image/png'}
 
 
 def test_12_mib_reference_is_sent_to_bridge_unchanged(tmp_path):

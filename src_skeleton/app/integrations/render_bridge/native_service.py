@@ -326,13 +326,13 @@ class NativeBridgeService(PreviewService):
             await self._freeze_inputs(record)
             references = []
             for index, (content, metadata) in enumerate(await self.local(self.store.inputs, record["id"])):
-                payload = {key: metadata[key] for key in ("original_sha256", "size", "mime_type")}
+                payload = {key: metadata[key] for key in ("size", "mime_type")}
                 payload["input_key"] = f"{record['origin_key']}_{index}"
                 result = await self.client.create_input(payload)
                 if any(result.get(key) != value for key, value in payload.items()):
                     raise BridgeError("input_binding_mismatch", retryable=False)
                 await self.client.upload_input(result["input_id"], content, metadata["mime_type"])
-                references.append({"input_ref": result["input_id"], "role": "reference", "hash": metadata["original_sha256"]})
+                references.append({"input_ref": result["input_id"], "role": "reference"})
             parameters = {**dimensions, "seed": 0}
             if profile.get("negotiated_image_options"):
                 parameters["image_options"] = profile["negotiated_image_options"]
@@ -405,8 +405,7 @@ class NativeBridgeService(PreviewService):
         if headers.get("content-type", "").split(";")[0] != mime or receipt["mime_type"] != mime:
             raise BridgeError("native_output_format_mismatch", retryable=False)
         metadata = await self.local(validate_image, content, mime, expected_size=receipt["size"], max_bytes=limit,
-                                   max_pixels=40000000 if profile_id == "codex-image" else 1048576,
-                                   include_hash=False)
+                                   max_pixels=40000000 if profile_id == "codex-image" else 1048576)
         if (receipt["dimensions"] != metadata["dimensions"]
                 or (profile_id != "codex-image" and metadata["dimensions"] != dimensions)):
             raise BridgeError("native_fixture_dimensions_required", retryable=False)
@@ -576,8 +575,7 @@ class NativeBridgeService(PreviewService):
                 frozen_request_id=record["frozen"]["frozen_request_id"], reference_id=reference["reference_id"],
                 **({"execution_profile_id": record["request"]["profile_id"]} if record["request"]["profile_id"] != "fake-image" else {}))
             content, mime = value["content"], value["mime_type"]
-            metadata = await self.local(validate_image, content, mime, expected_hash=reference["sha256"],
-                                       expected_size=reference["size_bytes"],
+            metadata = await self.local(validate_image, content, mime, expected_size=reference["size_bytes"],
                                        max_bytes=MAX_REFERENCE_INPUT_BYTES,
                                        max_pixels=MAX_REFERENCE_INPUT_PIXELS)
             inputs.append((content, metadata))

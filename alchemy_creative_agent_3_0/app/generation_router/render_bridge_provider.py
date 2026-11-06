@@ -46,7 +46,7 @@ def render_bridge_inputs(uploaded_asset_ids=None, size="1024x1024") -> tuple[lis
 def _compatible_identity(value) -> dict[str, Any]:
     """Keep old square/no-reference journal and checkpoint identities stable."""
     result = asdict(value)
-    for field, default in (("uploaded_asset_ids", ()), ("reference_sha256", ()), ("size", "1024x1024"), ("output_format", "png")):
+    for field, default in (("uploaded_asset_ids", ()), ("size", "1024x1024"), ("output_format", "png")):
         if field in result:
             if result[field] == default or (default == () and not result[field]):
                 result.pop(field)
@@ -95,7 +95,6 @@ class RenderBridgeRegistration:
     execution_profile_id: str = "fake-image"
     execution_profile_revision: str = "1"
     uploaded_asset_ids: tuple[str, ...] = ()
-    reference_sha256: tuple[str, ...] = ()
     size: str = "1024x1024"
     output_format: str = "png"
 
@@ -148,9 +147,9 @@ class RenderBridgeReceiptProvider(ProductionImageGenerationProvider):
     def _validate_references(self, reference_assets) -> None:
         if (
             [item.get("asset_id") for item in reference_assets] != list(self.binding.uploaded_asset_ids)
-            or [hashlib.sha256(Path(item["file_path"]).read_bytes()).hexdigest() for item in reference_assets]
-            != list(self.binding.reference_sha256)
         ):
+            raise ValueError("render_bridge_frozen_references_mismatch")
+        if any(not Path(item["file_path"]).is_file() for item in reference_assets):
             raise ValueError("render_bridge_frozen_references_mismatch")
 
     def _run_app_provider_with_timeout_retry(
@@ -235,6 +234,7 @@ class RenderBridgeCloudProvider(ProductionImageGenerationProvider):
         super().__init__(output_store=output_store)
         if not isinstance(binding, RenderBridgeCloudContinuation):
             raise ValueError("render_bridge_cloud_binding_untrusted")
+        self._bridge_transport = True
         self.binding = binding
         self.assert_current = assert_current
 
@@ -250,8 +250,6 @@ class RenderBridgeCloudProvider(ProductionImageGenerationProvider):
             or any(getattr(plan, field, None) != options[field] for field in options if field != "input_fidelity")
             or plan.variables.get("input_fidelity") != options["input_fidelity"]
             or [item.get("asset_id") for item in references] != [item["asset_id"] for item in frozen["references"]]
-            or [hashlib.sha256(Path(item["file_path"]).read_bytes()).hexdigest() for item in references]
-            != [item["sha256"] for item in frozen["references"]]
         ):
             raise ValueError("render_bridge_cloud_frozen_contract_mismatch")
         self.assert_current()

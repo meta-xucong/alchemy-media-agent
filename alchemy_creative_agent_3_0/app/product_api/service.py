@@ -61,6 +61,7 @@ from ..scenario_packs.ecommerce.reference_projection import (
     PhysicalProductReferenceProjection,
     ProductTruthAdmission,
     ProductTruthSource,
+    ProductTruthSourceNoImageSha,
     build_physical_product_projection,
     build_product_truth_admission,
 )
@@ -1668,6 +1669,7 @@ class V3ProductApiService:
                 "requested_image_count": 1,
                 "requested_image_size": size,
                 "require_real_images": True,
+                "render_bridge_primary_no_image_sha": True,
             },
         )
         return request, identity
@@ -2039,6 +2041,7 @@ class V3ProductApiService:
             self._bind_project_visual_asset_library_snapshot(
                 create_request,
                 binding_service=project_visual_asset_binding_service,
+                no_image_sha=create_request.metadata.get("render_bridge_primary_no_image_sha") is True,
             )
         if trusted_professional_anchor_preparation:
             if professional_anchor_view_role is None:
@@ -2052,6 +2055,7 @@ class V3ProductApiService:
                 view_role=professional_anchor_view_role,
                 capture_scope=professional_anchor_capture_scope,
                 reference_evidence_ids=professional_anchor_reference_evidence_ids,
+                no_image_sha=create_request.metadata.get("render_bridge_primary_no_image_sha") is True,
             )
             create_request.metadata = {
                 **dict(create_request.metadata or {}),
@@ -2235,6 +2239,7 @@ class V3ProductApiService:
                         professional_character_card_body_source_admission,
                         source_class=professional_character_card_source_class,
                         face_reference_output_ids=reference_ids,
+                        no_image_sha=create_request.metadata.get("render_bridge_primary_no_image_sha") is True,
                     ),
                 ],
                 "generation_channel": generation_channel,
@@ -2699,6 +2704,7 @@ class V3ProductApiService:
         ],
         capture_scope: Literal["anchor_pack", "character_card_face_identity"] = "anchor_pack",
         reference_evidence_ids: list[str] | None,
+        no_image_sha: bool = False,
     ) -> list[dict[str, Any]]:
         """Resolve one server-owned root/winner chain for shared execution."""
 
@@ -2794,7 +2800,11 @@ class V3ProductApiService:
                         "canonical_output_binding": True,
                         "professional_anchor_lineage_evidence": True,
                         "professional_anchor_lineage_role": "prior_view_winner",
-                        "source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                        **(
+                            {}
+                            if no_image_sha
+                            else {"source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
+                        ),
                     },
                 }
             )
@@ -2922,6 +2932,7 @@ class V3ProductApiService:
         *,
         source_class: str | None,
         face_reference_output_ids: list[str],
+        no_image_sha: bool = False,
     ) -> dict[str, Any]:
         if not isinstance(raw, dict):
             raise ValueError("professional_character_card_body_source_admission_invalid")
@@ -3033,7 +3044,11 @@ class V3ProductApiService:
                         "canonical_body_source_binding": True,
                         "reference_truth_layer": "body_proportion_truth",
                         "body_reference_policy": "body_scale_neck_shoulder_torso_limb_developmental_stage_only",
-                        "source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                        **(
+                            {}
+                            if no_image_sha
+                            else {"source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
+                        ),
                     },
                 }
             )
@@ -3599,26 +3614,27 @@ class V3ProductApiService:
     def _close_post_generation_review_finalization(self, record: ProductJobRecord) -> ProductJobStatus | None:
         """Retain persisted pixels when only review finalization cannot complete."""
 
+        no_image_sha = dict(record.request.metadata or {}).get("render_bridge_primary_no_image_sha") is True
         pixel_bindings: list[dict[str, str]] = []
         for output in self.output_store.list_by_job(record.job_id):
             path = Path(output.file_path) if output.file_path else None
             expected_sha256 = str(dict(output.metadata or {}).get("content_sha256") or "").strip()
-            if path is None or not path.is_file() or not expected_sha256:
+            if path is None or not path.is_file() or (not no_image_sha and not expected_sha256):
                 return None
-            try:
-                actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-            except OSError:
-                return None
-            if actual_sha256 != expected_sha256:
-                return None
-            pixel_bindings.append(
-                {
-                    "output_id": output.output_id,
-                    "asset_id": output.asset_id,
-                    "candidate_id": output.candidate_id,
-                    "content_sha256": actual_sha256,
-                }
-            )
+            binding = {
+                "output_id": output.output_id,
+                "asset_id": output.asset_id,
+                "candidate_id": output.candidate_id,
+            }
+            if not no_image_sha:
+                try:
+                    actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError:
+                    return None
+                if actual_sha256 != expected_sha256:
+                    return None
+                binding["content_sha256"] = actual_sha256
+            pixel_bindings.append(binding)
         if not pixel_bindings:
             return None
 
@@ -3627,7 +3643,7 @@ class V3ProductApiService:
             return self._status_from_record(record)
 
         closure = {
-            "schema_version": "doc267_post_generation_review_closure_v1",
+            "schema_version": "doc267_post_generation_review_closure_v2" if no_image_sha else "doc267_post_generation_review_closure_v1",
             "authority": "v3_product_api",
             "state": "review_withheld_finalization_failed",
             "job_id": record.job_id,
@@ -3679,7 +3695,9 @@ class V3ProductApiService:
                 "asset_id": binding["asset_id"],
                 "output_id": binding["output_id"],
                 "status": "ready",
-                "metadata": {"content_sha256": binding["content_sha256"]},
+                "metadata": (
+                    {} if "content_sha256" not in binding else {"content_sha256": binding["content_sha256"]}
+                ),
             }
             for binding in pixel_bindings
         ]
@@ -6592,6 +6610,7 @@ class V3ProductApiService:
         create_request.metadata = {
             **dict(create_request.metadata or {}),
             "require_real_images": True,
+            "render_bridge_primary_no_image_sha": True,
         }
 
     def _generation_failure_message(self, exc: Exception, provider_strategy: ProviderStrategy) -> str:
@@ -9313,6 +9332,7 @@ class V3ProductApiService:
         if not execution_fingerprint or not envelope_id or not ledger_id:
             return False
         bindings: list[dict[str, Any]] = []
+        no_image_sha = dict(record.request.metadata or {}).get("render_bridge_primary_no_image_sha") is True
         for output_id in output_ids:
             output = output_records[output_id]
             metadata = dict(output.metadata or {})
@@ -9332,19 +9352,22 @@ class V3ProductApiService:
                 or not isinstance(stored_projection.get("capability_projection"), dict)
             ):
                 return False
-            content_sha256 = str(metadata.get("content_sha256") or "").strip().lower()
-            if len(content_sha256) != 64 or not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
-                return False
-            bindings.append(
-                {
-                    "output_id": output_id,
-                    "asset_id": str(output.asset_id or "").strip(),
-                    "candidate_id": str(output.candidate_id or "").strip(),
-                    "content_sha256": content_sha256,
-                }
-            )
+            binding = {
+                "output_id": output_id,
+                "asset_id": str(output.asset_id or "").strip(),
+                "candidate_id": str(output.candidate_id or "").strip(),
+            }
+            if no_image_sha:
+                if "content_sha256" in metadata:
+                    return False
+            else:
+                content_sha256 = str(metadata.get("content_sha256") or "").strip().lower()
+                if len(content_sha256) != 64 or not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
+                    return False
+                binding["content_sha256"] = content_sha256
+            bindings.append(binding)
         closure = {
-            "schema_version": "v3_output_delivery_closure_v1",
+            "schema_version": "v3_output_delivery_closure_v2" if no_image_sha else "v3_output_delivery_closure_v1",
             "job_id": record.job_id,
             "status": "complete",
             "review_evidence_receipt_status": "complete",
@@ -9380,8 +9403,10 @@ class V3ProductApiService:
 
         if not isinstance(closure, dict):
             return False, "closure_missing"
+        schema_version = closure.get("schema_version")
+        no_image_sha = schema_version == "v3_output_delivery_closure_v2"
         if (
-            closure.get("schema_version") != "v3_output_delivery_closure_v1"
+            schema_version not in {"v3_output_delivery_closure_v1", "v3_output_delivery_closure_v2"}
             or closure.get("job_id") != job_id
             or closure.get("status") != "complete"
             or closure.get("review_evidence_receipt_status") != "complete"
@@ -9426,15 +9451,23 @@ class V3ProductApiService:
                 return False, "closure_output_mismatch"
             output_ids.add(output_id)
             output = records_by_id[output_id]
-            if (
+            binding_invalid = (
                 str(item.get("job_id") or job_id).strip() != job_id
                 or str(item.get("asset_id") or "").strip() != str(output.asset_id or "").strip()
                 or str(item.get("candidate_id") or "").strip() != str(output.candidate_id or "").strip()
-                or str(item.get("content_sha256") or "").strip().lower()
-                != str(dict(output.metadata or {}).get("content_sha256") or "").strip().lower()
-            ):
-                return False, "closure_output_binding_invalid"
-            if not re.fullmatch(r"[0-9a-f]{64}", str(item.get("content_sha256") or "").strip().lower()):
+            )
+            output_metadata = dict(output.metadata or {})
+            if no_image_sha:
+                binding_invalid = binding_invalid or (
+                    "content_sha256" in item or "content_sha256" in output_metadata
+                )
+            else:
+                binding_invalid = binding_invalid or (
+                    str(item.get("content_sha256") or "").strip().lower()
+                    != str(output_metadata.get("content_sha256") or "").strip().lower()
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("content_sha256") or "").strip().lower())
+                )
+            if binding_invalid:
                 return False, "closure_output_binding_invalid"
             stored_envelope = dict(output.metadata or {}).get("capability_execution_envelope")
             stored_ledger = stored_envelope.get("resolved_constraint_ledger") if isinstance(stored_envelope, dict) else None
@@ -9478,7 +9511,7 @@ class V3ProductApiService:
         closure: dict[str, Any],
         records: dict[str, V3GeneratedOutputRecord] | list[V3GeneratedOutputRecord],
     ) -> bool:
-        """Verify closure hashes against canonical bytes before publication."""
+        """Verify each output closure binding using its schema's identity contract."""
 
         resolver = getattr(self.output_store, "file_for_variant", None)
         if not callable(resolver):
@@ -9492,12 +9525,24 @@ class V3ProductApiService:
                 if str(item.output_id or "").strip()
             }
         )
+        no_image_sha = closure.get("schema_version") == "v3_output_delivery_closure_v2"
         for binding in closure.get("outputs", []) if isinstance(closure, dict) else []:
             if not isinstance(binding, dict):
                 return False
             output_id = str(binding.get("output_id") or "").strip()
-            expected = str(binding.get("content_sha256") or "").strip().lower()
             record = records_by_id.get(output_id)
+            if no_image_sha:
+                if record is None or "content_sha256" in dict(record.metadata or {}) or "content_sha256" in binding:
+                    return False
+                try:
+                    resolved = resolver(output_id, "download")
+                    path = Path(resolved[0]) if isinstance(resolved, tuple) and resolved else None
+                    if path is None or not path.is_file():
+                        return False
+                except (OSError, TypeError, ValueError, IndexError):
+                    return False
+                continue
+            expected = str(binding.get("content_sha256") or "").strip().lower()
             if record is None or not re.fullmatch(r"[0-9a-f]{64}", expected):
                 return False
             try:
@@ -10050,11 +10095,19 @@ class V3ProductApiService:
         ):
             return {}
         source_path = Path(source_record.file_path)
+        no_image_sha = (
+            result_metadata.get("render_bridge_primary_no_image_sha") is True
+            or record_metadata.get("render_bridge_primary_no_image_sha") is True
+            or "source_content_sha256" not in receipt
+        )
         try:
             if (
                 not source_path.is_file()
-                or hashlib.sha256(source_path.read_bytes()).hexdigest()
-                != str(receipt.get("source_content_sha256") or "").strip().lower()
+                or (
+                    not no_image_sha
+                    and hashlib.sha256(source_path.read_bytes()).hexdigest()
+                    != str(receipt.get("source_content_sha256") or "").strip().lower()
+                )
             ):
                 return {}
         except OSError:
@@ -13667,6 +13720,7 @@ class V3ProductApiService:
 
         if not self._is_ecommerce_request(record.request):
             return None
+        no_image_sha = dict(record.request.metadata or {}).get("render_bridge_primary_no_image_sha") is True
         result = record.generation_result
         if result is None:
             if record.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
@@ -13728,7 +13782,7 @@ class V3ProductApiService:
         if set(outputs_by_id) != expected_output_ids:
             # OutputStore is append-only across retries. Superseded attempts
             # may remain beside the exact current package; only a complete,
-            # byte-verified closure can establish that the package is the
+            # schema-verified closure can establish that the package is the
             # current job's immutable output subset.
             closure = self._output_store_job_closure(record.job_id)
             closure_valid, _closure_reason = self._valid_output_store_job_closure(
@@ -13770,13 +13824,19 @@ class V3ProductApiService:
                 or str(output.asset_id or "").strip() != str(inspection.get("asset_id") or "").strip()
             ):
                 return None
-            try:
-                content = Path(str(output.file_path or "")).read_bytes()
-            except OSError:
-                return None
-            actual_sha = hashlib.sha256(content).hexdigest()
-            if actual_sha != str(dict(output.metadata or {}).get("content_sha256") or "").strip():
-                return None
+            output_path = Path(str(output.file_path or ""))
+            output_metadata = dict(output.metadata or {})
+            if no_image_sha:
+                if not output_path.is_file() or "content_sha256" in output_metadata:
+                    return None
+            else:
+                try:
+                    content = output_path.read_bytes()
+                except OSError:
+                    return None
+                actual_sha = hashlib.sha256(content).hexdigest()
+                if actual_sha != str(output_metadata.get("content_sha256") or "").strip():
+                    return None
             persisted_delivery = dict(dict(output.metadata or {}).get("final_delivery") or {})
             inspection_status = str(inspection.get("status") or "").strip().lower()
             per_output_state = (
@@ -17353,7 +17413,8 @@ class V3ProductApiService:
             refs = uploads
         plan = ReferenceInputPlan.freeze(job_id=self._planned_job_id_for_request(request),
             project_id=str(metadata.get("project_id") or ""), mode=mode, inputs=refs,
-            anchor_snapshot=continuity_snapshot, professional_binding=professional, ecommerce_contract=commerce)
+            anchor_snapshot=continuity_snapshot, professional_binding=professional, ecommerce_contract=commerce,
+            no_image_sha=metadata.get("render_bridge_primary_no_image_sha") is True)
         request.metadata = {**metadata, PLAN_KEY:plan.as_dict(), "reference_input_summary":plan.facts()}
 
     def _runtime_request_payload(
@@ -17695,12 +17756,14 @@ class V3ProductApiService:
         if not decision:
             return {}
         source_metadata = dict(source.request.metadata or {})
+        no_image_sha = dict(request.metadata or {}).get("render_bridge_primary_no_image_sha") is True
         source_binding = self._professional_anchor_view_decision_binding(
             source.request,
             view_role=str(source_metadata.get("professional_reference_stage") or ""),
             capture_scope=str(source_metadata.get("professional_anchor_capture_scope") or "anchor_pack"),
             reference_evidence_ids=list(source.request.uploaded_asset_ids),
             mcp_operation_id=str(source_metadata.get("mcp_operation_id") or ""),
+            no_image_sha=no_image_sha,
         )
         current_binding = self._professional_anchor_view_decision_binding(
             request,
@@ -17708,10 +17771,15 @@ class V3ProductApiService:
             capture_scope=capture_scope,
             reference_evidence_ids=reference_evidence_ids,
             mcp_operation_id=mcp_operation_id,
+            no_image_sha=no_image_sha,
         )
         if not source_binding or not current_binding:
             raise ValueError("professional_anchor_view_decision_reuse_binding_missing")
-        for field in self._PROFESSIONAL_ANCHOR_VIEW_DECISION_REUSE_BINDING_FIELDS:
+        fields = self._PROFESSIONAL_ANCHOR_VIEW_DECISION_REUSE_BINDING_FIELDS
+        if no_image_sha:
+            fields = tuple(field for field in fields if field != "source_sha256")
+            source_binding.pop("source_sha256", None)
+        for field in fields:
             if str(source_binding.get(field) or "") != str(current_binding.get(field) or ""):
                 raise ValueError("professional_anchor_view_decision_reuse_source_mismatch")
         return {
@@ -17756,6 +17824,7 @@ class V3ProductApiService:
         capture_scope: str,
         reference_evidence_ids: list[str] | None,
         mcp_operation_id: str | None,
+        no_image_sha: bool = False,
     ) -> dict[str, str]:
         metadata = dict(request.metadata or {})
         project_id = str(metadata.get("project_id") or "").strip()
@@ -17773,7 +17842,7 @@ class V3ProductApiService:
         path = Path(root.file_path) if root is not None and root.file_path else None
         if root is None or path is None or not path.is_file():
             return {}
-        source_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        source_sha256 = None if no_image_sha else hashlib.sha256(path.read_bytes()).hexdigest()
         view = str(view_role or "").strip()
         initial_multi_source = view == "standard_front" and len(evidence_ids) == 2
         reference_semantics = (
@@ -17787,10 +17856,9 @@ class V3ProductApiService:
         if not operation_context or not candidate_index or not rendering_contract:
             return {}
         candidate_contract = f"{view}:candidate:{candidate_index}"
-        return {
+        binding = {
             "project_id": project_id,
             "source_asset_id": root_asset_id,
-            "source_sha256": source_sha256,
             "target_view_role": view,
             "capture_scope": str(capture_scope or "anchor_pack").strip() or "anchor_pack",
             "reference_semantics": reference_semantics,
@@ -17798,6 +17866,9 @@ class V3ProductApiService:
             "candidate_contract": candidate_contract,
             "operation_context": operation_context,
         }
+        if source_sha256 is not None:
+            binding["source_sha256"] = source_sha256
+        return binding
 
     @staticmethod
     def _professional_anchor_rendering_contract(metadata: dict[str, Any]) -> str:
@@ -17943,6 +18014,7 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         *,
         binding_service: ProjectVisualAssetBindingService,
+        no_image_sha: bool = False,
     ) -> None:
         """Freeze the current explicit library selection for this fresh Job.
 
@@ -17962,6 +18034,7 @@ class V3ProductApiService:
             references = self._library_visual_asset_reference_assets(
                 snapshot,
                 binding_service=binding_service,
+                no_image_sha=no_image_sha,
             )
             formal_face_chain_bindings = self._library_formal_face_chain_bindings(
                 snapshot,
@@ -18107,6 +18180,7 @@ class V3ProductApiService:
         snapshot: FrozenVisualAssetBindingSet,
         *,
         binding_service: ProjectVisualAssetBindingService,
+        no_image_sha: bool = False,
     ) -> list[dict[str, Any]]:
         """Resolve a frozen library binding to its canonical face outputs.
 
@@ -18136,8 +18210,7 @@ class V3ProductApiService:
                 path = Path(output.file_path) if output is not None and output.file_path else None
                 if output is None or path is None or not path.is_file():
                     raise ValueError("visual_asset_library_evidence_not_materialized")
-                references.append(
-                    {
+                reference = {
                         "asset_id": output.output_id,
                         "output_id": output.output_id,
                         "role": "face_reference",
@@ -18160,10 +18233,13 @@ class V3ProductApiService:
                             "provider_input_required": True,
                             "canonical_output_binding": True,
                             "visual_asset_library_evidence": True,
-                            "source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
                         },
                     }
-                )
+                if not no_image_sha:
+                    reference["metadata"]["source_integrity_id"] = (
+                        "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                    )
+                references.append(reference)
         if snapshot.state == "valid" and not references:
             raise ValueError("visual_asset_library_evidence_missing")
         return references
@@ -18908,7 +18984,8 @@ class V3ProductApiService:
         """Freeze product originals from V3 upload records before Brain planning."""
 
         product_ids = list(product_truth_pool_asset_ids)
-        sources: list[ProductTruthSource] = []
+        no_image_sha = metadata.get("render_bridge_primary_no_image_sha") is True
+        sources: list[ProductTruthSource | ProductTruthSourceNoImageSha] = []
         for asset_id in product_ids:
             record = self.asset_store.get_upload(asset_id)
             if record is None or record.status != V3AssetUploadStatusValue.READY:
@@ -18918,17 +18995,21 @@ class V3ProductApiService:
                 raise EcommerceProductInputNeedsAttention()
             path = Path(str(record.file_path or ""))
             expected_digest = str(record.content_sha256 or "").strip().lower()
-            if not path.is_file() or not expected_digest:
+            if not path.is_file() or (not no_image_sha and not expected_digest):
                 raise EcommerceProductInputNeedsAttention()
-            try:
-                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            except OSError as exc:
-                raise EcommerceProductInputNeedsAttention() from exc
-            if actual_digest != expected_digest:
-                raise EcommerceProductInputNeedsAttention()
+            actual_digest = None
+            if not no_image_sha:
+                try:
+                    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    raise EcommerceProductInputNeedsAttention() from exc
+                if actual_digest != expected_digest:
+                    raise EcommerceProductInputNeedsAttention()
             record_metadata = dict(record.metadata or {})
             receipt = record_metadata.get("upload_authorization_receipt")
             if receipt is None:
+                if no_image_sha:
+                    raise EcommerceProductInputNeedsAttention()
                 receipt = self._reattest_legacy_ecommerce_product_upload(
                     record=record,
                     actual_digest=actual_digest,
@@ -18954,32 +19035,37 @@ class V3ProductApiService:
             receipt_digest = str(receipt.get("receipt_digest") or "").strip().lower()
             receipt_role = str(receipt.get("persisted_role") or "").strip().lower()
             receipt_channel = str(receipt.get("reference_channel") or "").strip().lower()
-            receipt_payload = "|".join(
-                (
-                    "v3_upload_authorization_receipt_v1",
-                    asset_id,
-                    actual_digest,
-                    role,
-                    "product_truth",
-                    consent_reference,
-                    rights_reference,
+            expected_receipt_digest = None
+            if not no_image_sha:
+                receipt_payload = "|".join(
+                    (
+                        "v3_upload_authorization_receipt_v1",
+                        asset_id,
+                        actual_digest,
+                        role,
+                        "product_truth",
+                        consent_reference,
+                        rights_reference,
+                    )
                 )
-            )
-            expected_receipt_digest = hashlib.sha256(receipt_payload.encode("utf-8")).hexdigest()
+                expected_receipt_digest = hashlib.sha256(receipt_payload.encode("utf-8")).hexdigest()
             if (
                 receipt.get("schema_version") != "v3_upload_authorization_receipt_v1"
                 or receipt.get("authority") != "v3_uploaded_asset_store"
                 or str(receipt.get("asset_id") or "").strip() != asset_id
-                or str(receipt.get("content_sha256") or "").strip().lower() != actual_digest
+                or (
+                    not no_image_sha
+                    and str(receipt.get("content_sha256") or "").strip().lower() != actual_digest
+                )
                 or receipt_role != role
                 or receipt_channel != "product_truth"
                 or not consent_reference
                 or not rights_reference
-                or receipt_digest != expected_receipt_digest
+                or (not no_image_sha and receipt_digest != expected_receipt_digest)
             ):
                 raise EcommerceProductInputNeedsAttention()
             legacy_facts = record_metadata.get("legacy_upload_authorization_facts")
-            if isinstance(legacy_facts, dict):
+            if not no_image_sha and isinstance(legacy_facts, dict):
                 expected_marker = {
                     "schema_version": "doc264_legacy_product_reference_reattestation_v1",
                     "authority": "v3_product_api",
@@ -18992,7 +19078,17 @@ class V3ProductApiService:
                 if record_metadata.get("legacy_product_reference_reattestation") != expected_marker:
                     raise EcommerceProductInputNeedsAttention()
             sources.append(
-                ProductTruthSource(
+                ProductTruthSourceNoImageSha(
+                    asset_id=asset_id,
+                    consent_reference=consent_reference,
+                    rights_reference=rights_reference,
+                    role="product_reference",
+                    product_truth_channel="product_truth",
+                    readiness="ready",
+                    provenance="v3_uploaded_project_reference",
+                )
+                if no_image_sha
+                else ProductTruthSource(
                     asset_id=asset_id,
                     content_sha256=expected_digest,
                     consent_reference=consent_reference,
@@ -19429,6 +19525,7 @@ class V3ProductApiService:
         entries_by_id: dict[str, dict[str, Any]] = {}
         eligible_product_entries: dict[str, dict[str, Any]] = {}
         seen_reference_ids: set[str] = set()
+        no_image_sha = metadata.get("render_bridge_primary_no_image_sha") is True
         for item in library["entries"]:
             if not isinstance(item, dict):
                 raise ValueError("doc270_source_library_invalid")
@@ -19458,7 +19555,7 @@ class V3ProductApiService:
             if (
                 profile.get("schema_version") != "doc270_source_evidence_profile_v1"
                 or profile.get("source_asset_id") != asset_id
-                or profile.get("content_sha256") != item.get("content_sha256")
+                or (not no_image_sha and profile.get("content_sha256") != item.get("content_sha256"))
                 or profile_digest != _doc270_canonical_digest(canonical_profile)
                 or analysis.get("schema_version") != "doc270_source_analysis_receipt_v1"
                 or analysis.get("authority") != "v3_project_source_library"
@@ -19469,7 +19566,7 @@ class V3ProductApiService:
                 or analysis.get("use_policy") != item.get("use_policy")
                 or analysis.get("role") != item.get("role")
                 or analysis.get("reference_channel") != item.get("reference_channel")
-                or analysis.get("content_sha256") != item.get("content_sha256")
+                or (not no_image_sha and analysis.get("content_sha256") != item.get("content_sha256"))
                 or analysis.get("profile_digest") != profile_digest
                 or str(analysis.get("receipt_digest") or "").strip().lower()
                 != _doc270_canonical_digest(canonical_analysis)
@@ -19495,16 +19592,17 @@ class V3ProductApiService:
             upload = self.asset_store.get_upload(source.asset_id)
             if upload is None:
                 raise ValueError("doc270_source_library_admission_mismatch")
-            path = Path(str(upload.file_path or ""))
-            try:
-                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            except OSError as exc:
-                raise ValueError("doc270_source_library_admission_mismatch") from exc
-            if (
-                str(entry.get("content_sha256") or "").strip().lower() != source.content_sha256
-                or actual_digest != source.content_sha256
-            ):
-                raise ValueError("doc270_source_library_admission_mismatch")
+            if not no_image_sha:
+                path = Path(str(upload.file_path or ""))
+                try:
+                    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    raise ValueError("doc270_source_library_admission_mismatch") from exc
+                if (
+                    str(entry.get("content_sha256") or "").strip().lower() != source.content_sha256
+                    or actual_digest != source.content_sha256
+                ):
+                    raise ValueError("doc270_source_library_admission_mismatch")
         receipts: list[dict[str, Any]] = []
         for output_index in sorted(int(key) for key in projections):
             projection = PhysicalProductReferenceProjection.from_mapping(projections[str(output_index)])
@@ -19530,9 +19628,9 @@ class V3ProductApiService:
                         "source_type": str(item["source_type"]),
                         "use_policy": str(item["use_policy"]),
                         "role": str(item["role"]),
-                        "content_sha256": str(item["content_sha256"]),
                         "profile_digest": str(item["profile"]["profile_digest"]),
                         "analysis_receipt_digest": str(item["analysis_receipt"]["receipt_digest"]),
+                        **({} if no_image_sha else {"content_sha256": str(item["content_sha256"])}),
                     }
                     for item in sources
                 ],
@@ -19640,6 +19738,7 @@ class V3ProductApiService:
                     locked_identity_references=locked_identity_references,
                     selected_continuation_references=selected_continuations,
                     maximum_reference_images=maximum_reference_images,
+                    no_image_sha=metadata.get("render_bridge_primary_no_image_sha") is True,
                 )
             except ValueError as exc:
                 raise ValueError("doc269_physical_renderer_reference_plan_invalid") from exc
@@ -19660,6 +19759,7 @@ class V3ProductApiService:
         if not isinstance(raw_admissions, list) or len(raw_admissions) > 1:
             raise ValueError("doc269_continuation_admission_invalid")
         project_id = str(metadata.get("project_id") or "").strip()
+        no_image_sha = metadata.get("render_bridge_primary_no_image_sha") is True
         resolved: list[dict[str, Any]] = []
         for raw_admission in raw_admissions:
             if not isinstance(raw_admission, dict):
@@ -19680,7 +19780,7 @@ class V3ProductApiService:
             output_id = str(raw_admission.get("output_id") or "").strip()
             source_job_id = str(raw_admission.get("source_job_id") or "").strip()
             reference_id = str(raw_admission.get("reference_id") or "").strip()
-            expected_digest = str(raw_admission.get("content_sha256") or "").strip().lower()
+            expected_digest = "" if no_image_sha else str(raw_admission.get("content_sha256") or "").strip().lower()
             project_job_ids = raw_admission.get("project_job_ids")
             if (
                 not output_id
@@ -19690,7 +19790,7 @@ class V3ProductApiService:
                 or source_job_id not in project_job_ids
                 or len(project_job_ids) != len(set(project_job_ids))
                 or any(not str(job_id or "").strip() for job_id in project_job_ids)
-                or not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+                or (not no_image_sha and not re.fullmatch(r"[0-9a-f]{64}", expected_digest))
             ):
                 raise ValueError("doc269_continuation_admission_invalid")
             record = self.output_store.get_output(output_id)
@@ -19703,27 +19803,31 @@ class V3ProductApiService:
                 or not path.is_file()
             ):
                 raise ValueError("doc269_continuation_admission_invalid")
-            try:
-                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            except OSError as exc:
-                raise ValueError("doc269_continuation_admission_invalid") from exc
-            if actual_digest != expected_digest:
-                raise ValueError("doc269_continuation_admission_invalid")
+            actual_digest = None
+            if not no_image_sha:
+                try:
+                    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    raise ValueError("doc269_continuation_admission_invalid") from exc
+                if actual_digest != expected_digest:
+                    raise ValueError("doc269_continuation_admission_invalid")
+            selection_binding = {
+                "selection_authority": "doc265_project_mode",
+                "project_id": project_id,
+                "reference_id": reference_id,
+                "output_id": output_id,
+                "source_job_id": source_job_id,
+                "project_job_ids": [str(job_id).strip() for job_id in project_job_ids],
+            }
+            if not no_image_sha:
+                selection_binding["content_sha256"] = actual_digest
             resolved.append(
                 {
                     "output_id": output_id,
                     "source_type": "generated_selected",
                     "role": "selected_continuation_reference",
                     "file_path": str(path.resolve()),
-                    "selection_binding": {
-                        "selection_authority": "doc265_project_mode",
-                        "project_id": project_id,
-                        "reference_id": reference_id,
-                        "output_id": output_id,
-                        "source_job_id": source_job_id,
-                        "project_job_ids": [str(job_id).strip() for job_id in project_job_ids],
-                        "content_sha256": actual_digest,
-                    },
+                    "selection_binding": selection_binding,
                 }
             )
         return resolved

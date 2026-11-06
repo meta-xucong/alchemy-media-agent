@@ -18,6 +18,7 @@ _DIGEST_LENGTH = 64
 DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY = "doc73_auto_identity_anchor_binding"
 DOC73_AUTO_IDENTITY_ANCHOR_SKELETON_KEY = "doc73_auto_identity_anchor_skeleton"
 DOC73_AUTO_IDENTITY_ANCHOR_SCHEMA = "doc73_auto_identity_anchor_binding_v1"
+DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA = "doc73_auto_identity_anchor_binding_v2"
 DOC73_AUTO_IDENTITY_ANCHOR_ORIGIN = "auto_batch_continuity"
 DOC73_AUTO_IDENTITY_ANCHOR_POLICY_VERSION = "doc73_v1"
 
@@ -41,6 +42,13 @@ _DOC73_SOURCE_BINDING_KEYS = frozenset(
         *_DOC73_SOURCE_SKELETON_KEYS,
         "source_output_id",
         "source_content_sha256",
+        "source_record_binding_digest",
+    }
+)
+_DOC73_SOURCE_BINDING_NO_IMAGE_SHA_KEYS = frozenset(
+    {
+        *_DOC73_SOURCE_SKELETON_KEYS,
+        "source_output_id",
         "source_record_binding_digest",
     }
 )
@@ -147,8 +155,13 @@ def issue_doc73_auto_identity_anchor_source_skeleton(
 
     policy = metadata.get("auto_batch_identity_anchor_policy") if isinstance(metadata, Mapping) else None
     batch_digest = _digest(metadata.get("doc73_batch_plan_digest")) if isinstance(metadata, Mapping) else ""
+    schema = (
+        DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA
+        if isinstance(metadata, Mapping) and metadata.get("render_bridge_primary_no_image_sha") is True
+        else DOC73_AUTO_IDENTITY_ANCHOR_SCHEMA
+    )
     values = {
-        "schema_version": DOC73_AUTO_IDENTITY_ANCHOR_SCHEMA,
+        "schema_version": schema,
         "origin": DOC73_AUTO_IDENTITY_ANCHOR_ORIGIN,
         "policy_version": DOC73_AUTO_IDENTITY_ANCHOR_POLICY_VERSION,
         "job_id": str(job_id or "").strip(),
@@ -196,7 +209,7 @@ def issue_doc73_auto_identity_anchor_target_skeleton(
     source_output_id = str(source_binding.get("source_output_id") or "").strip()
     source_binding_digest = _digest(source_binding.get("binding_digest"))
     values = {
-        "schema_version": DOC73_AUTO_IDENTITY_ANCHOR_SCHEMA,
+        "schema_version": str(source_binding.get("schema_version") or ""),
         "origin": DOC73_AUTO_IDENTITY_ANCHOR_ORIGIN,
         "policy_version": DOC73_AUTO_IDENTITY_ANCHOR_POLICY_VERSION,
         "job_id": str(job_id or "").strip(),
@@ -246,13 +259,16 @@ def finalize_doc73_auto_identity_anchor_binding(
     if not isinstance(skeleton, Mapping):
         return result
     skeleton_keys = set(skeleton)
+    skeleton_schema = skeleton.get("schema_version")
     if (
-        skeleton_keys not in (_DOC73_SOURCE_SKELETON_KEYS, _DOC73_TARGET_SKELETON_KEYS)
+        skeleton_schema not in {DOC73_AUTO_IDENTITY_ANCHOR_SCHEMA, DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA}
+        or skeleton_keys not in (_DOC73_SOURCE_SKELETON_KEYS, _DOC73_TARGET_SKELETON_KEYS)
         or not _is_digest(skeleton.get("binding_digest"))
         or _binding_digest(skeleton) != skeleton.get("binding_digest")
     ):
         return result
-    if not _is_digest(content_sha256):
+    no_image_sha = skeleton_schema == DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA
+    if not no_image_sha and not _is_digest(content_sha256):
         return result
     common = {
         "job_id": str(job_id or "").strip(),
@@ -278,9 +294,10 @@ def finalize_doc73_auto_identity_anchor_binding(
         binding.update(
             {
                 "source_output_id": str(output_id or "").strip(),
-                "source_content_sha256": str(content_sha256).strip().lower(),
             }
         )
+        if not no_image_sha:
+            binding["source_content_sha256"] = str(content_sha256).strip().lower()
         binding["binding_digest"] = _binding_digest(binding)
         binding["source_record_binding_digest"] = _record_binding_digest(binding, "source_record_binding_digest")
         if validate_doc73_binding(
@@ -343,12 +360,14 @@ def validate_doc73_binding(
     if not isinstance(value, Mapping):
         return False
     keys = set(value)
-    is_source = keys == _DOC73_SOURCE_BINDING_KEYS
+    schema = value.get("schema_version")
+    no_image_sha = schema == DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA
+    is_source = keys == (_DOC73_SOURCE_BINDING_NO_IMAGE_SHA_KEYS if no_image_sha else _DOC73_SOURCE_BINDING_KEYS)
     is_target = keys == _DOC73_TARGET_BINDING_KEYS
     if not (is_source or is_target):
         return False
     if (
-        value.get("schema_version") != DOC73_AUTO_IDENTITY_ANCHOR_SCHEMA
+        schema not in {DOC73_AUTO_IDENTITY_ANCHOR_SCHEMA, DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA}
         or value.get("origin") != DOC73_AUTO_IDENTITY_ANCHOR_ORIGIN
         or value.get("policy_version") != DOC73_AUTO_IDENTITY_ANCHOR_POLICY_VERSION
     ):
@@ -374,7 +393,7 @@ def validate_doc73_binding(
             or not str(value.get("source_asset_id") or "").strip()
             or not str(value.get("source_candidate_id") or "").strip()
             or not str(value.get("source_output_id") or "").strip()
-            or not _is_digest(value.get("source_content_sha256"))
+            or (not no_image_sha and not _is_digest(value.get("source_content_sha256")))
             or not _is_digest(value.get("source_record_binding_digest"))
         ):
             return False

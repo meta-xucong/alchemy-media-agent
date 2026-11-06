@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from ..reference_input_plan import digest
 
 NAMESPACE = "doc322_continuity_anchor_bindings_v1"
+_ANCHOR_EVENT_V1 = "v3_continuity_anchor_binding_v1"
+_ANCHOR_EVENT_NO_IMAGE_SHA_V2 = "v3_continuity_anchor_binding_v2"
+_ANCHOR_OUTPUT_NO_IMAGE_SHA_V2 = "v3_continuity_anchor_output_v2"
 
 
 class ContinuityAnchorConflict(ValueError):
@@ -28,11 +31,20 @@ class ContinuityAnchorBindingService:
             payload = {k:v for k,v in event.items() if k != "identity_digest"}
             if event.get("identity_digest") != digest(payload) or event.get("previous_digest") != previous or event.get("version") != version or event.get("project_id") != project_id:
                 raise ValueError("continuity_anchor_history_invalid")
-            if (event.get("schema_version") != "v3_continuity_anchor_binding_v1"
+            if (event.get("schema_version") not in {_ANCHOR_EVENT_V1, _ANCHOR_EVENT_NO_IMAGE_SHA_V2}
                 or type(event.get("version")) is not int or type(event.get("auto_enabled")) is not bool
                 or event.get("state") not in {"none", "active", "unbound"}
                 or (event.get("state") == "active") != isinstance(event.get("active_continuity_anchor"), dict)
                 or (event.get("state") != "none" and event.get("auto_enabled") is not False)):
+                raise ValueError("continuity_anchor_history_invalid")
+            anchor = event.get("active_continuity_anchor")
+            if event.get("schema_version") == _ANCHOR_EVENT_NO_IMAGE_SHA_V2 and (
+                not isinstance(anchor, dict)
+                or anchor.get("binding_schema_version") != _ANCHOR_OUTPUT_NO_IMAGE_SHA_V2
+                or "source_content_sha256" in anchor
+                or not isinstance(anchor.get("reference"), dict)
+                or anchor["reference"].get("no_image_sha") is not True
+            ):
                 raise ValueError("continuity_anchor_history_invalid")
             current = dict(event)
             previous = event["identity_digest"]
@@ -40,7 +52,17 @@ class ContinuityAnchorBindingService:
         if anchor and verify_source:
             try:
                 resolved = self.resolve_output(project_id, anchor["output_id"], anchor["source_job_id"])
-                if resolved["content_sha256"] != anchor["source_content_sha256"]:
+                if anchor.get("binding_schema_version") == _ANCHOR_OUTPUT_NO_IMAGE_SHA_V2:
+                    expected_identity = {
+                        "output_id": anchor.get("output_id"),
+                        "job_id": anchor.get("source_job_id"),
+                        "candidate_id": anchor.get("source_candidate_id"),
+                        "source_asset_id": anchor.get("source_asset_id"),
+                    }
+                    actual_identity = {key: resolved.get(key) for key in expected_identity}
+                    if resolved.get("no_image_sha") is not True or actual_identity != expected_identity:
+                        raise ValueError("continuity_anchor_integrity_mismatch")
+                elif resolved["content_sha256"] != anchor["source_content_sha256"]:
                     raise ValueError("continuity_anchor_integrity_mismatch")
             except (ValueError, KeyError, OSError):
                 return {**current, "state":"invalid", "auto_enabled":False, "active_continuity_anchor":None}
@@ -56,14 +78,21 @@ class ContinuityAnchorBindingService:
         if mode == "auto_first_formal" and (current["state"] != "none" or current.get("auto_enabled") is not True):
             raise ContinuityAnchorConflict()
         anchor = None
+        event_schema = _ANCHOR_EVENT_V1
         if output_id is not None:
             reference = self.resolve_output(project_id, output_id, expected_job_id)
+            no_image_sha = reference.get("no_image_sha") is True
+            event_schema = _ANCHOR_EVENT_NO_IMAGE_SHA_V2 if no_image_sha else _ANCHOR_EVENT_V1
             anchor = {"binding_id":"anchor_binding_"+uuid4().hex, "output_id":output_id,
                 "source_job_id":reference["job_id"], "source_candidate_id":reference["candidate_id"],
                 "source_asset_id":reference.get("source_asset_id") or reference["asset_id"],
-                "source_content_sha256":reference["content_sha256"], "binding_mode":mode,
+                "binding_mode":mode,
                 "state":"active", "reference":reference}
-        event = {"schema_version":"v3_continuity_anchor_binding_v1", "project_id":project_id,
+            if no_image_sha:
+                anchor["binding_schema_version"] = _ANCHOR_OUTPUT_NO_IMAGE_SHA_V2
+            else:
+                anchor["source_content_sha256"] = reference["content_sha256"]
+        event = {"schema_version":event_schema, "project_id":project_id,
             "version":expected_version+1, "previous_digest":current.get("identity_digest", ""),
             "state":"active" if anchor else "unbound", "auto_enabled":False,
             "active_continuity_anchor":anchor, "binding_mode":mode, "migration":migration,

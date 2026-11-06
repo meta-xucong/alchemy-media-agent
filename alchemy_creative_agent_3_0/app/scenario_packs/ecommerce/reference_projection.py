@@ -10,6 +10,7 @@ from typing import Any
 
 
 DOC263_ADMISSION_SCHEMA = "doc263_product_truth_admission_v1"
+DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA = "doc263_product_truth_admission_v2"
 DOC263_PROJECTION_SCHEMA = "doc263_physical_product_reference_projection_v1"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
@@ -104,11 +105,36 @@ class ProductTruthSource:
 
 
 @dataclass(frozen=True, slots=True)
+class ProductTruthSourceNoImageSha:
+    """Product source binding for Bridge requests, keyed by the existing asset ID."""
+
+    asset_id: str
+    consent_reference: str
+    rights_reference: str
+    role: str
+    product_truth_channel: str
+    readiness: str
+    provenance: str
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(value, str) for value in asdict(self).values()):
+            raise ValueError("doc263_product_truth_source_shape_invalid")
+        if not _clean(self.asset_id) or not _clean(self.provenance):
+            raise ValueError("doc263_product_truth_source_identity_required")
+        if not _clean(self.consent_reference) or not _clean(self.rights_reference):
+            raise ValueError("doc263_product_truth_source_receipts_required")
+        if self.role != "product_reference" or self.product_truth_channel != "product_truth":
+            raise ValueError("doc263_product_truth_source_role_invalid")
+        if self.readiness != "ready":
+            raise ValueError("doc263_product_truth_source_not_ready")
+
+
+@dataclass(frozen=True, slots=True)
 class ProductTruthAdmission:
     project_id: str
     job_id: str
     canonical_asset_ids: tuple[str, ...]
-    sources: tuple[ProductTruthSource, ...]
+    sources: tuple[ProductTruthSource | ProductTruthSourceNoImageSha, ...]
     source_binding_digest: str
     product_truth_plan_digest: str
     schema_version: str = DOC263_ADMISSION_SCHEMA
@@ -125,7 +151,7 @@ class ProductTruthAdmission:
             )
         ):
             raise ValueError("doc263_product_truth_admission_shape_invalid")
-        if self.schema_version != DOC263_ADMISSION_SCHEMA:
+        if self.schema_version not in {DOC263_ADMISSION_SCHEMA, DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA}:
             raise ValueError("doc263_product_truth_admission_schema_invalid")
         if not _clean(self.project_id) or not _clean(self.job_id):
             raise ValueError("doc263_product_truth_admission_binding_required")
@@ -142,10 +168,18 @@ class ProductTruthAdmission:
             and _SHA256_PATTERN.fullmatch(self.product_truth_plan_digest)
         ):
             raise ValueError("doc263_product_truth_admission_digest_invalid")
+        expected_source_types = (
+            ProductTruthSourceNoImageSha
+            if self.schema_version == DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA
+            else ProductTruthSource
+        )
+        if any(not isinstance(item, expected_source_types) for item in self.sources):
+            raise ValueError("doc263_product_truth_admission_source_invalid")
         if self.source_binding_digest != _admission_digest(
             project_id=self.project_id,
             job_id=self.job_id,
             sources=self.sources,
+            schema_version=self.schema_version,
         ):
             raise ValueError("doc263_product_truth_admission_digest_mismatch")
 
@@ -175,7 +209,8 @@ class ProductTruthAdmission:
             )
         ):
             raise ValueError("doc263_product_truth_admission_shape_invalid")
-        if str(value.get("schema_version") or "") != DOC263_ADMISSION_SCHEMA:
+        schema_version = str(value.get("schema_version") or "")
+        if schema_version not in {DOC263_ADMISSION_SCHEMA, DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA}:
             raise ValueError("doc263_product_truth_admission_schema_invalid")
         raw_ids = value["canonical_asset_ids"]
         raw_sources = value["sources"]
@@ -195,13 +230,28 @@ class ProductTruthAdmission:
             "file_integrity",
             "provenance",
         }
+        no_image_sha_source_keys = {
+            "asset_id",
+            "consent_reference",
+            "rights_reference",
+            "role",
+            "product_truth_channel",
+            "readiness",
+            "provenance",
+        }
         sources = []
         for item in raw_sources:
-            if not isinstance(item, dict) or set(item) != source_keys:
+            expected_keys = no_image_sha_source_keys if schema_version == DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA else source_keys
+            if not isinstance(item, dict) or set(item) != expected_keys:
                 raise ValueError("doc263_product_truth_admission_source_shape_invalid")
-            if any(not isinstance(item[key], str) for key in source_keys):
+            if any(not isinstance(item[key], str) for key in expected_keys):
                 raise ValueError("doc263_product_truth_admission_source_shape_invalid")
-            sources.append(ProductTruthSource(**item))
+            source_model = (
+                ProductTruthSourceNoImageSha
+                if schema_version == DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA
+                else ProductTruthSource
+            )
+            sources.append(source_model(**item))
         return cls(
             schema_version=value["schema_version"],
             project_id=value["project_id"],
@@ -379,12 +429,17 @@ def build_product_truth_admission(
     *,
     project_id: str,
     job_id: str,
-    sources: list[ProductTruthSource],
+    sources: list[ProductTruthSource | ProductTruthSourceNoImageSha],
     product_truth_plan_digest: str,
 ) -> ProductTruthAdmission:
     canonical_asset_ids = tuple(item.asset_id for item in sources)
+    schema_version = (
+        DOC263_ADMISSION_NO_IMAGE_SHA_SCHEMA
+        if sources and isinstance(sources[0], ProductTruthSourceNoImageSha)
+        else DOC263_ADMISSION_SCHEMA
+    )
     binding_payload = {
-        "schema_version": DOC263_ADMISSION_SCHEMA,
+        "schema_version": schema_version,
         "project_id": project_id,
         "job_id": job_id,
         "sources": [asdict(item) for item in sources],
@@ -396,6 +451,7 @@ def build_product_truth_admission(
         sources=tuple(sources),
         source_binding_digest=_digest(binding_payload),
         product_truth_plan_digest=product_truth_plan_digest,
+        schema_version=schema_version,
     )
 
 
@@ -403,11 +459,12 @@ def _admission_digest(
     *,
     project_id: str,
     job_id: str,
-    sources: tuple[ProductTruthSource, ...],
+    sources: tuple[ProductTruthSource | ProductTruthSourceNoImageSha, ...],
+    schema_version: str = DOC263_ADMISSION_SCHEMA,
 ) -> str:
     return _digest(
         {
-            "schema_version": DOC263_ADMISSION_SCHEMA,
+            "schema_version": schema_version,
             "project_id": project_id,
             "job_id": job_id,
             "sources": [asdict(item) for item in sources],

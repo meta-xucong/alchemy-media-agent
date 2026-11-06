@@ -141,6 +141,7 @@ def test_bridge_enabled_new_v3_provider_job_freezes_real_image_strategy(tmp_path
 
     record = SimpleNamespace(request=create_request)
     assert create_request.metadata["require_real_images"] is True
+    assert create_request.metadata["render_bridge_primary_no_image_sha"] is True
     assert service._provider_strategy_for_generate(record, GenerateJobRequest()) == ProviderStrategy.DEFAULT_IMAGE_PROVIDER
 
 
@@ -154,7 +155,7 @@ def test_actual_entrance_preserves_original_and_replays_checkpoint(rig):
     from pathlib import Path
     assert Path(record.file_path).read_bytes() == rig.client.content
     assert (record.width, record.height) == (73, 41)
-    assert record.metadata['content_sha256'] == hashlib.sha256(rig.client.content).hexdigest()
+    assert 'content_sha256' not in record.metadata
     assert 'aspect_ratio_normalization' not in record.metadata
     assert len(rig.client.acks) == rig.client.calls == 1
     assert rig.api_calls == []
@@ -222,6 +223,10 @@ def test_unsupported_requirement_exposes_safe_diagnostic_and_keeps_api_route(rig
     assert provenance['capability_rejection'] == {'code': 'hard_requirement_not_advertised'}
     assert 'private-value' not in repr(provenance)
     assert rig.client.calls == 0
+    fallback_outputs = rig.store.list_outputs()
+    assert len(fallback_outputs) == 1
+    assert 'content_sha256' not in fallback_outputs[0].metadata
+    assert 'source_integrity_id' not in fallback_outputs[0].metadata
 
 
 @pytest.mark.parametrize('malformed', [
@@ -394,8 +399,11 @@ def test_high_resolution_bridge_wait_uses_outer_request_budget(rig, monkeypatch)
 def test_queue_full_then_same_unit_api_is_single_claim(rig):
     rig.client.error = BridgeError('queue_capacity', status=429)
     rig.provider.generate(rig.request)
-    rig.provider.generate(rig.request)
+    response = rig.provider.generate(rig.request)
     assert rig.client.calls == 1 and len(rig.api_calls) == 1
+    output = rig.store.get_output(response.candidates[0].metadata['output_id'])
+    assert 'content_sha256' not in output.metadata
+    assert 'source_integrity_id' not in output.metadata
 
 
 def test_frozen_unit_rejects_changed_prompt_after_admission(rig):
@@ -610,9 +618,7 @@ def test_materialized_identity_reference_uses_native_defaults_and_keeps_image(ri
     assert response.candidates[0].provider == 'render_bridge'
     assert rig.client.calls == 1 and not rig.api_calls
     assert len(rig.client.uploads) == len(frozen.references)
-    assert sorted(hashlib.sha256(item[1]).hexdigest() for item in rig.client.uploads) == sorted(
-        hashlib.sha256(reference.content).hexdigest() for reference in frozen.references
-    )
+    assert [item[1] for item in rig.client.uploads] == [reference.content for reference in frozen.references]
     assert response.candidates[0].metadata[adapter.PROVENANCE]['route'] == 'bridge'
 
 

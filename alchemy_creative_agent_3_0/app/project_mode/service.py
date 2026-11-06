@@ -22,6 +22,7 @@ from ..app_shell.routes import API_NAMESPACE
 from ..browse_protocol import BrowseScope, BrowseOutputs, BrowseJobRead, BrowseCheckpoint, drive_browse_reads
 from ..creative_core.doc281_output_plan_binding import (
     DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA,
     validate_doc73_binding,
 )
 from ..creative_core.rules import stable_id
@@ -1956,6 +1957,7 @@ class V3ProjectModeService:
         if status not in {"blocked", "failed"}:
             return False
         metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+        no_image_sha = metadata.get("render_bridge_primary_no_image_sha") is True
         failure = metadata.get("generation_lifecycle_failure")
         if not isinstance(failure, dict) or failure.get("schema_version") != "v3_generation_lifecycle_failure_v1":
             return False
@@ -5195,7 +5197,10 @@ class V3ProjectModeService:
             # Product API admission can accept a product whose source-library
             # snapshot is empty, which is a false cross-authority mismatch.
             # Empty pools remain the established text-to-image path.
-            initial_canonical_product_ids = self._ecommerce_product_reference_asset_ids(project, [])
+            bridge_no_image_sha = job_request.metadata.get("render_bridge_primary_no_image_sha") is True
+            initial_canonical_product_ids = self._ecommerce_product_reference_asset_ids(
+                project, [], no_image_sha=bridge_no_image_sha
+            )
             if initial_canonical_product_ids:
                 self._persist_job_uploaded_references(
                     project,
@@ -5206,9 +5211,13 @@ class V3ProjectModeService:
             # Reconcile canonical refs after association materialization so a
             # first submission and its immediate replay observe the same
             # server-owned product pool.
-            self._ensure_project_product_reference_integrity(project)
-            uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, [])
-            current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+            self._ensure_project_product_reference_integrity(project, no_image_sha=bridge_no_image_sha)
+            uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(
+                project, [], no_image_sha=bridge_no_image_sha
+            )
+            current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(
+                project, no_image_sha=bridge_no_image_sha
+            )
             doc270_ecommerce_view_activation_enabled = False
             doc270_requested_output_count = (
                 _bounded_requested_image_count(job_request.metadata.get("requested_image_count"))
@@ -5235,6 +5244,7 @@ class V3ProjectModeService:
                 doc271_current_source_binding = self._doc271_current_source_binding(
                     project,
                     selected_continuation_admissions=doc269_selected_continuation_admissions,
+                    no_image_sha=job_request.metadata.get("render_bridge_primary_no_image_sha") is True,
                 )
             except (OSError, ValueError, KeyError):
                 # A legacy or unselected generated-history reference remains
@@ -7628,17 +7638,34 @@ class V3ProjectModeService:
         if anchor is None:
             return []
         reference = self._continuity_output(project.project_id, anchor["output_id"], anchor["source_job_id"])
-        if reference["content_sha256"] != anchor["source_content_sha256"]:
+        no_image_sha = anchor.get("binding_schema_version") == "v3_continuity_anchor_output_v2"
+        if no_image_sha:
+            identity = {
+                "output_id": anchor.get("output_id"),
+                "job_id": anchor.get("source_job_id"),
+                "candidate_id": anchor.get("source_candidate_id"),
+                "source_asset_id": anchor.get("source_asset_id"),
+            }
+            if reference.get("no_image_sha") is not True or any(
+                reference.get(key) != value for key, value in identity.items()
+            ):
+                raise ValueError("continuity_anchor_integrity_mismatch")
+        elif reference["content_sha256"] != anchor["source_content_sha256"]:
             raise ValueError("continuity_anchor_integrity_mismatch")
-        return [{
+        admission = {
             "selection_authority": "doc265_project_mode", "project_id": project.project_id,
             "reference_id": anchor["binding_id"], "output_id": anchor["output_id"],
             "source_job_id": anchor["source_job_id"], "candidate_id": reference["candidate_id"],
-            "project_job_ids": list(project.job_ids), "content_sha256": reference["content_sha256"],
+            "project_job_ids": list(project.job_ids),
             "source_type": "generated_selected", "use_policy": "style",
             "role": "selected_continuation_reference", "channel": "generated_selected",
             "file_path": reference["file_path"],
-        }]
+        }
+        if not no_image_sha:
+            admission["content_sha256"] = reference["content_sha256"]
+        else:
+            admission["no_image_sha"] = True
+        return [admission]
 
     def _validate_ecommerce_selected_output_reference(
         self,
@@ -7716,6 +7743,8 @@ class V3ProjectModeService:
         self,
         project: ProjectRecord,
         request_asset_ids: list[str],
+        *,
+        no_image_sha: bool = False,
     ) -> list[str]:
         product_asset_ids: list[str] = []
         invalid_request_ids: list[str] = []
@@ -7740,7 +7769,11 @@ class V3ProjectModeService:
 
         if invalid_request_ids:
             raise ValueError("商品图还没有上传完成或不是有效的商品参考图，请重新上传商品图。")
-        return self._dedupe_uploaded_asset_ids_by_content(product_asset_ids)
+        return (
+            list(dict.fromkeys(product_asset_ids))
+            if no_image_sha
+            else self._dedupe_uploaded_asset_ids_by_content(product_asset_ids)
+        )
 
     def _project_product_reference_candidates(self, project: ProjectRecord) -> list[str]:
         active_product_references = [
@@ -7831,7 +7864,11 @@ class V3ProjectModeService:
         ).strip()
         return source_template == ECOMMERCE_TEMPLATE_ID
 
-    def _ensure_project_product_reference_integrity(self, project: ProjectRecord) -> None:
+    def _ensure_project_product_reference_integrity(
+        self, project: ProjectRecord, *, no_image_sha: bool = False
+    ) -> None:
+        if no_image_sha:
+            return
         changed = self._soft_suppress_duplicate_product_references(
             project,
             now=_utc_now_iso(),
@@ -7841,7 +7878,9 @@ class V3ProjectModeService:
             project.updated_at = _utc_now_iso()
             self.project_store.save_project(project)
 
-    def _ecommerce_current_reference_binding_digest(self, project: ProjectRecord) -> str:
+    def _ecommerce_current_reference_binding_digest(
+        self, project: ProjectRecord, *, no_image_sha: bool = False
+    ) -> str:
         """Hash current canonical project inputs without trusting request metadata."""
 
         sources: list[dict[str, str]] = []
@@ -7851,27 +7890,31 @@ class V3ProjectModeService:
                 continue
             upload = self.product_service.get_uploaded_asset(asset_id)
             if reference.source_type == ProjectReferenceSourceType.UPLOADED:
-                sources.append(
-                    {
-                        "asset_id": asset_id,
-                        "source_type": reference.source_type.value,
-                        "use_policy": reference.use_policy.value,
-                        "content_sha256": self._uploaded_asset_content_sha256(upload) or "",
-                    }
-                )
+                source = {
+                    "asset_id": asset_id,
+                    "source_type": reference.source_type.value,
+                    "use_policy": reference.use_policy.value,
+                }
+                if not no_image_sha:
+                    source["content_sha256"] = self._uploaded_asset_content_sha256(upload) or ""
+                sources.append(source)
             elif reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
-                sources.append(
-                    {
-                        "asset_id": asset_id,
-                        "source_type": reference.source_type.value,
-                        "use_policy": reference.use_policy.value,
-                        "content_sha256": str(
-                            reference.metadata.get("source_integrity_id") or ""
-                        ).strip(),
-                    }
-                )
+                source = {
+                    "asset_id": asset_id,
+                    "source_type": reference.source_type.value,
+                    "use_policy": reference.use_policy.value,
+                }
+                if not no_image_sha:
+                    source["content_sha256"] = str(
+                        reference.metadata.get("source_integrity_id") or ""
+                    ).strip()
+                sources.append(source)
         payload = {
-            "schema_version": "doc263_current_reference_binding_v1",
+            "schema_version": (
+                "doc263_current_reference_binding_v2"
+                if no_image_sha
+                else "doc263_current_reference_binding_v1"
+            ),
             "project_id": project.project_id,
             "sources": sources,
         }
@@ -7884,6 +7927,7 @@ class V3ProjectModeService:
         project: ProjectRecord,
         *,
         selected_continuation_admissions: list[dict[str, str]],
+        no_image_sha: bool = False,
     ) -> dict[str, Any] | None:
         """Freeze every active source's actual authority facts for Doc271.
 
@@ -7897,6 +7941,9 @@ class V3ProjectModeService:
             for item in selected_continuation_admissions
             if isinstance(item, dict) and str(item.get("output_id") or "").strip()
         }
+        no_image_sha = no_image_sha or any(
+            item.get("no_image_sha") is True for item in selected_by_output.values()
+        )
         sources: list[dict[str, Any]] = []
         ordered_references = sorted(
             self._active_project_references(project),
@@ -7913,13 +7960,21 @@ class V3ProjectModeService:
             if reference.source_type == ProjectReferenceSourceType.UPLOADED:
                 upload = self.product_service.get_uploaded_asset(asset_id)
                 path = Path(str(getattr(upload, "file_path", "") or "")) if upload else None
-                actual_sha = self._file_content_fingerprint(path) if path is not None else ""
                 if (
                     upload is None
-                    or not actual_sha
-                    or self._uploaded_asset_content_sha256(upload) != actual_sha
+                    or path is None
+                    or not path.is_file()
+                    or (
+                        not no_image_sha
+                        and (
+                            not (actual_sha := self._file_content_fingerprint(path))
+                            or self._uploaded_asset_content_sha256(upload) != actual_sha
+                        )
+                    )
                 ):
                     raise ValueError("current project reference binding unavailable")
+                if no_image_sha:
+                    actual_sha = None
                 persisted_role = str(getattr(upload, "role", "") or "").strip()
                 if not persisted_role:
                     raise ValueError("current project reference binding unavailable")
@@ -7935,9 +7990,15 @@ class V3ProjectModeService:
                 if not isinstance(admission, dict):
                     raise ValueError("current project reference binding unavailable")
                 path = Path(str(admission.get("file_path") or ""))
-                actual_sha = self._file_content_fingerprint(path)
-                if not actual_sha or actual_sha != str(admission.get("content_sha256") or "").lower():
-                    raise ValueError("current project reference binding unavailable")
+                source_no_image_sha = no_image_sha or admission.get("no_image_sha") is True
+                if source_no_image_sha:
+                    if not path.is_file():
+                        raise ValueError("current project reference binding unavailable")
+                    actual_sha = None
+                else:
+                    actual_sha = self._file_content_fingerprint(path)
+                    if not actual_sha or actual_sha != str(admission.get("content_sha256") or "").lower():
+                        raise ValueError("current project reference binding unavailable")
                 persisted_role = "generated_output"
                 reference_channel = str(admission.get("channel") or "").strip()
                 continuation_role = str(admission.get("role") or "").strip()
@@ -7946,25 +8007,31 @@ class V3ProjectModeService:
                     raise ValueError("current project reference binding unavailable")
             else:
                 raise ValueError("current project reference binding unavailable")
-            sources.append(
-                {
-                    "ordinal": len(sources) + 1,
-                    "asset_id": asset_id,
-                    "content_sha256": actual_sha,
-                    "source_type": reference.source_type.value,
-                    "use_policy": reference.use_policy.value,
-                    "persisted_role": persisted_role,
-                    "reference_channel": reference_channel,
-                    "continuation_role": continuation_role,
-                    "continuation_channel": continuation_channel,
-                }
-            )
+            source = {
+                "ordinal": len(sources) + 1,
+                "asset_id": asset_id,
+                "source_type": reference.source_type.value,
+                "use_policy": reference.use_policy.value,
+                "persisted_role": persisted_role,
+                "reference_channel": reference_channel,
+                "continuation_role": continuation_role,
+                "continuation_channel": continuation_channel,
+            }
+            if no_image_sha:
+                source["no_image_sha"] = True
+            if actual_sha is not None:
+                source["content_sha256"] = actual_sha
+            sources.append(source)
         # Existing no-product/text-only and history-only E-Commerce flows do
         # not form a Doc271 closure. They retain their established paths.
         if not sources:
             return None
         payload = {
-            "schema_version": "doc271_current_project_source_binding_v1",
+            "schema_version": (
+                "doc271_current_project_source_binding_v2"
+                if no_image_sha
+                else "doc271_current_project_source_binding_v1"
+            ),
             "project_id": project.project_id,
             "sources": sources,
         }
@@ -8221,28 +8288,34 @@ class V3ProjectModeService:
             if reference.source_type == ProjectReferenceSourceType.UPLOADED
             and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
         }
-        reference_sets: list[tuple[list[Any], list[Any], int]] = []
+        reference_sets: list[tuple[list[Any], list[Any], int, bool]] = []
         for item in bindings:
             binding = item.get("reference_binding") if isinstance(item, dict) else None
             if not isinstance(binding, dict) or item.get("reference_binding_digest") != self._doc271_digest(binding):
                 return False
             ids = binding.get("ordered_reference_ids")
             digests = binding.get("ordered_reference_sha256")
+            no_image_sha = binding.get("schema_version") == "doc271_physical_reference_binding_v2"
             channels = binding.get("ordered_reference_channels")
             roles = binding.get("ordered_reference_roles")
             source_types = binding.get("ordered_reference_source_types")
             locked_face_ids = binding.get("locked_face_output_ids")
             if (
                 not isinstance(ids, list)
-                or not isinstance(digests, list)
+                or (not no_image_sha and not isinstance(digests, list))
                 or not isinstance(channels, list)
                 or not isinstance(roles, list)
                 or not isinstance(source_types, list)
                 or not isinstance(locked_face_ids, list)
-                or len(ids) != len(digests)
+                or (not no_image_sha and len(ids) != len(digests))
                 or len(ids) != len(roles)
                 or len(ids) != len(source_types)
                 or any(not str(face_id or "").strip() for face_id in locked_face_ids)
+                or (no_image_sha and (
+                    binding.get("no_image_sha") is not True
+                    or "ordered_reference_sha256" in binding
+                    or "selected_continuation_sha256" in binding
+                ))
             ):
                 return False
             face_count = len(locked_face_ids)
@@ -8273,11 +8346,14 @@ class V3ProjectModeService:
                 str(ids[0]) not in active_product_ids
                 or product_path is None
                 or not product_path.is_file()
-                or self._uploaded_asset_content_sha256(product) != str(digests[0]).lower()
+                or (
+                    not no_image_sha
+                    and self._uploaded_asset_content_sha256(product) != str(digests[0]).lower()
+                )
             ):
                 return False
-            reference_sets.append((ids, digests, face_count))
-        face_counts = {face_count for _ids, _digests, face_count in reference_sets}
+            reference_sets.append((ids, digests or [], face_count, no_image_sha))
+        face_counts = {face_count for _ids, _digests, face_count, _no_image_sha in reference_sets}
         if len(face_counts) != 1:
             return False
         locked_face_count = face_counts.pop()
@@ -8291,6 +8367,7 @@ class V3ProjectModeService:
                 current_faces = self.product_service._library_visual_asset_reference_assets(  # noqa: SLF001
                     current_binding,
                     binding_service=self.project_visual_asset_binding_service,
+                    no_image_sha=any(item[3] for item in reference_sets),
                 )
             except (OSError, ValueError, KeyError):
                 return False
@@ -8301,30 +8378,53 @@ class V3ProjectModeService:
             }
             if len(face_by_id) != locked_face_count:
                 return False
-            for ids, digests, _face_count in reference_sets:
-                for source_id, digest in zip(ids[1 : 1 + locked_face_count], digests[1 : 1 + locked_face_count], strict=True):
+            for ids, digests, _face_count, no_image_sha in reference_sets:
+                face_digests = digests[1 : 1 + locked_face_count]
+                if not no_image_sha and len(face_digests) != locked_face_count:
+                    return False
+                face_sources = ids[1 : 1 + locked_face_count]
+                for face_index, source_id in enumerate(face_sources):
                     face = face_by_id.get(str(source_id))
                     path = Path(str(face.get("file_path") or "")) if isinstance(face, dict) else None
                     if path is None or not path.is_file():
                         return False
-                    try:
-                        if hashlib.sha256(path.read_bytes()).hexdigest() != str(digest).lower():
+                    if not no_image_sha:
+                        try:
+                            if hashlib.sha256(path.read_bytes()).hexdigest() != str(face_digests[face_index]).lower():
+                                return False
+                        except OSError:
                             return False
-                    except OSError:
-                        return False
         continuation = selected_continuation_admissions[0] if selected_continuation_admissions else None
         continuation_index = 1 + locked_face_count
         continuation_ids = {
             str(ids[continuation_index])
-            for ids, _digests, _face_count in reference_sets
+            for ids, _digests, _face_count, _no_image_sha in reference_sets
             if len(ids) == continuation_index + 1
         }
         continuation_digests = {
             str(digests[continuation_index]).lower()
-            for ids, digests, _face_count in reference_sets
+            for ids, digests, _face_count, no_image_sha in reference_sets
             if len(ids) == continuation_index + 1
+            and not no_image_sha
         }
-        if continuation_ids:
+        no_image_continuation_ids = {
+            str(ids[continuation_index])
+            for ids, _digests, _face_count, no_image_sha in reference_sets
+            if len(ids) == continuation_index + 1 and no_image_sha
+        }
+        if no_image_continuation_ids:
+            path = Path(str(continuation.get("file_path") or "")) if isinstance(continuation, dict) else None
+            if (
+                len(no_image_continuation_ids) != 1
+                or continuation_ids != no_image_continuation_ids
+                or not isinstance(continuation, dict)
+                or continuation.get("no_image_sha") is not True
+                or str(continuation.get("output_id") or "") not in no_image_continuation_ids
+                or path is None
+                or not path.is_file()
+            ):
+                return False
+        elif continuation_ids:
             path = Path(str(continuation.get("file_path") or "")) if isinstance(continuation, dict) else None
             if len(continuation_ids) != 1 or len(continuation_digests) != 1 or not isinstance(continuation, dict) or str(continuation.get("output_id") or "") not in continuation_ids or str(continuation.get("content_sha256") or "").lower() not in continuation_digests or path is None or not path.is_file():
                 return False
@@ -8439,7 +8539,9 @@ class V3ProjectModeService:
             )
         except ValueError:
             return None
-        current_product_ids = self._ecommerce_product_reference_asset_ids(project, [])
+        current_product_ids = self._ecommerce_product_reference_asset_ids(
+            project, [], no_image_sha=no_image_sha
+        )
         if (
             admission.project_id != project.project_id
             or admission.job_id != record.job_id
@@ -8471,13 +8573,14 @@ class V3ProjectModeService:
                 source_binding = self._doc271_current_source_binding(
                     project,
                     selected_continuation_admissions=admissions,
+                    no_image_sha=no_image_sha,
                 )
             except (OSError, ValueError, KeyError):
                 return None
         reference_binding_digest = (
             current_reference_binding_digest
             if current_reference_binding_digest is not None
-            else self._ecommerce_current_reference_binding_digest(project)
+            else self._ecommerce_current_reference_binding_digest(project, no_image_sha=no_image_sha)
         )
         if (
             not isinstance(source_binding, dict)
@@ -8537,8 +8640,12 @@ class V3ProjectModeService:
             source_binding = self._doc271_current_source_binding(
                 project,
                 selected_continuation_admissions=admissions,
+                no_image_sha=record.request.metadata.get("render_bridge_primary_no_image_sha") is True,
             )
-            reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+            reference_binding_digest = self._ecommerce_current_reference_binding_digest(
+                project,
+                no_image_sha=record.request.metadata.get("render_bridge_primary_no_image_sha") is True,
+            )
         except (OSError, ValueError, KeyError):
             return None
         candidate = build_transparent_predecessor_receipt(
@@ -8714,12 +8821,28 @@ class V3ProjectModeService:
         """Read the current E32 operation and whether E33 made it reachable."""
 
         try:
+            latest_record = next(
+                (
+                    record
+                    for job_id in reversed(project.job_ids)
+                    if (record := self.product_service.get_job_record(job_id)) is not None
+                ),
+                None,
+            )
+            no_image_sha = bool(
+                latest_record is not None
+                and latest_record.request.metadata.get("render_bridge_primary_no_image_sha") is True
+            )
             admissions = self._doc269_selected_continuation_admissions(project)
             source_binding = self._doc271_current_source_binding(
                 project,
                 selected_continuation_admissions=admissions,
+                no_image_sha=no_image_sha,
             )
-            reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+            reference_binding_digest = self._ecommerce_current_reference_binding_digest(
+                project,
+                no_image_sha=no_image_sha,
+            )
         except (OSError, ValueError, KeyError):
             return None, False
         return self._doc279_matching_opaque_provider_hold(
@@ -12517,6 +12640,7 @@ class V3ProjectModeService:
                     current_source_binding = self._doc271_current_source_binding(
                         project,
                         selected_continuation_admissions=current_admissions,
+                        no_image_sha=record.request.metadata.get("render_bridge_primary_no_image_sha") is True,
                     )
                 except (OSError, ValueError, KeyError):
                     current_source_binding = None
@@ -12555,9 +12679,11 @@ class V3ProjectModeService:
                     current_source_binding = self._doc271_current_source_binding(
                         project,
                         selected_continuation_admissions=current_admissions,
+                        no_image_sha=record.request.metadata.get("render_bridge_primary_no_image_sha") is True,
                     )
                     current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(
-                        project
+                        project,
+                        no_image_sha=record.request.metadata.get("render_bridge_primary_no_image_sha") is True,
                     )
                 except (OSError, ValueError, KeyError):
                     current_admissions = []
@@ -13280,22 +13406,32 @@ class V3ProjectModeService:
                     expected_source_candidate_id=str(getattr(record, "candidate_id", "") or "").strip(),
                 ):
                     continue
+                no_image_sha = binding.get("schema_version") == DOC73_AUTO_IDENTITY_ANCHOR_NO_IMAGE_SHA_SCHEMA
                 try:
                     if receipt_reader(clean_job_id) != binding:
                         continue
                     path = Path(str(getattr(record, "file_path", "") or ""))
-                    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                    if no_image_sha:
+                        if (
+                            not path.is_file()
+                            or "content_sha256" in metadata
+                            or "source_integrity_id" in metadata
+                        ):
+                            continue
+                    else:
+                        actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
                 except (OSError, ValueError, TypeError):
                     continue
-                expected_digest = str(binding.get("source_content_sha256") or "").strip().lower()
-                if expected_digest.startswith("sha256:"):
-                    expected_digest = expected_digest.split(":", 1)[1].strip()
-                if (
-                    len(expected_digest) != 64
-                    or any(character not in "0123456789abcdef" for character in expected_digest)
-                    or actual_digest != expected_digest
-                ):
-                    continue
+                if not no_image_sha:
+                    expected_digest = str(binding.get("source_content_sha256") or "").strip().lower()
+                    if expected_digest.startswith("sha256:"):
+                        expected_digest = expected_digest.split(":", 1)[1].strip()
+                    if (
+                        len(expected_digest) != 64
+                        or any(character not in "0123456789abcdef" for character in expected_digest)
+                        or actual_digest != expected_digest
+                    ):
+                        continue
                 control_state = self._doc73_auto_identity_anchor_control_state(
                     project.project_id,
                     clean_job_id,
@@ -13681,8 +13817,13 @@ class V3ProjectModeService:
             return False
         output_ids = closure.get("output_ids")
         pixel_bindings = closure.get("pixel_bindings")
+        schema_version = closure.get("schema_version")
+        no_image_sha = schema_version == "doc267_post_generation_review_closure_v2"
         if (
-            closure.get("schema_version") != "doc267_post_generation_review_closure_v1"
+            schema_version not in {
+                "doc267_post_generation_review_closure_v1",
+                "doc267_post_generation_review_closure_v2",
+            }
             or closure.get("authority") != "v3_product_api"
             or closure.get("state") != "review_withheld_finalization_failed"
             or str(closure.get("job_id") or "").strip() != job_id
@@ -13708,7 +13849,10 @@ class V3ProjectModeService:
                 not output_id
                 or not str(binding.get("asset_id") or "").strip()
                 or not str(binding.get("candidate_id") or "").strip()
-                or len(str(binding.get("content_sha256") or "").strip()) != 64
+                or (
+                    not no_image_sha
+                    and len(str(binding.get("content_sha256") or "").strip()) != 64
+                )
             ):
                 return False
             binding_output_ids.append(output_id)
@@ -14679,9 +14823,24 @@ class V3ProjectModeService:
         return strict_integrity_id or f"output:{record.output_id}"
 
     def _doc265_output_source_integrity_id(self, record: Any) -> str:
+        if self._output_uses_no_image_sha(record):
+            return f"output:{record.output_id}"
         file_path = Path(str(getattr(record, "file_path", "") or ""))
         digest = self._file_content_fingerprint(file_path)
         return f"sha256:{digest}" if digest else ""
+
+    def _output_uses_no_image_sha(self, record: Any) -> bool:
+        metadata = dict(getattr(record, "metadata", {}) or {})
+        if metadata.get("render_bridge_primary_no_image_sha") is True:
+            return True
+        if "content_sha256" in metadata:
+            return False
+        job_id = str(getattr(record, "job_id", "") or "").strip()
+        job = self.product_service.get_job_record(job_id) if job_id else None
+        return bool(
+            job is not None
+            and job.request.metadata.get("render_bridge_primary_no_image_sha") is True
+        )
 
     def _file_content_fingerprint(self, file_path: Path) -> str:
         try:
@@ -14737,15 +14896,31 @@ class V3ProjectModeService:
             project_id=project_id, job_id=record.job_id, candidate_id=record.candidate_id, asset_id=record.asset_id, output_id=output_id)
         if self._selected_output_state_map(project).get(self._output_identity(ref)) == ProjectOutputSelectionStateValue.REJECTED:
             raise ValueError("continuity_anchor_not_formally_accepted")
-        expected = str(record.metadata.get("content_sha256") or "").removeprefix("sha256:")
-        actual = hashlib.sha256(Path(record.file_path).read_bytes()).hexdigest()
-        if len(expected) != 64 or actual != expected:
-            raise ValueError("continuity_anchor_integrity_mismatch")
-        return {"asset_id":output_id, "output_id":output_id, "job_id":record.job_id,
+        no_image_sha = record.metadata.get("render_bridge_primary_no_image_sha") is True or bool(
+            job is not None
+            and job.request.metadata.get("render_bridge_primary_no_image_sha") is True
+            and "content_sha256" not in record.metadata
+        )
+        file_path = Path(record.file_path)
+        if no_image_sha:
+            if not file_path.is_file() or "content_sha256" in record.metadata:
+                raise ValueError("continuity_anchor_integrity_mismatch")
+            actual = None
+        else:
+            expected = str(record.metadata.get("content_sha256") or "").removeprefix("sha256:")
+            actual = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            if len(expected) != 64 or actual != expected:
+                raise ValueError("continuity_anchor_integrity_mismatch")
+        reference = {"asset_id":output_id, "output_id":output_id, "job_id":record.job_id,
             "candidate_id":record.candidate_id, "source_asset_id":record.asset_id,
-            "content_sha256":actual, "file_path":record.file_path, "mime_type":record.mime_type,
+            "file_path":record.file_path, "mime_type":record.mime_type,
             "source_type":"continuity_anchor", "role":"continuity_reference", "use_policy":"continuity",
             "provider_input_required":True, "metadata":{"canonical_output_binding":True,"project_id":project_id}}
+        if no_image_sha:
+            reference["no_image_sha"] = True
+        else:
+            reference["content_sha256"] = actual
+        return reference
 
     def _continuity_state(self, project: ProjectRecord) -> dict:
         service = self._anchor_bindings()

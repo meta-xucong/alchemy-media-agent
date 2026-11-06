@@ -103,8 +103,7 @@ class NativeGatewayDouble:
             raise ValueError("canceled")
         return {"frozen_request_id": self.revision, "target_revision": "target_r1",
                 "prompt": "Exact approved canonical prompt", "prompt_sha256": "1"*64,
-                "references": [{"reference_id": name, "sha256": hashlib.sha256(self.originals[name]).hexdigest(),
-                                "size_bytes": len(self.originals[name]), "mime_type": "image/png"}
+                "references": [{"reference_id": name, "size_bytes": len(self.originals[name]), "mime_type": "image/png"}
                                for name in self.selected],
                 "image_options": {"size": self.size, "quality": "auto", "output_format": "png"},
                 "execution_profile_id": self.profile_id, "execution_profile_revision": "1", "test_fixture": True, "submission_ready": True}
@@ -167,7 +166,7 @@ def test_frozen_reference_validation_uses_shared_input_limits(tmp_path, monkeypa
             "target": {"project_id": "project_1", "job_id": "job_1", "asset_id": "asset_1"},
             "request": {"profile_id": "fake-image"}, "inputs_frozen": False,
             "frozen": {"frozen_request_id": "frozen_1", "references": [{
-                "reference_id": "reference_a", "sha256": "fixture", "size_bytes": len(reference_bytes),
+                "reference_id": "reference_a", "size_bytes": len(reference_bytes),
             }]},
         }
         captured = []
@@ -192,7 +191,7 @@ def test_frozen_reference_validation_uses_shared_input_limits(tmp_path, monkeypa
             await svc._freeze_inputs(record)
             assert record["inputs_frozen"] is True
             assert captured == [{
-                "expected_hash": "fixture", "expected_size": len(reference_bytes),
+                "expected_size": len(reference_bytes),
                 "max_bytes": MAX_REFERENCE_INPUT_BYTES, "max_pixels": MAX_REFERENCE_INPUT_PIXELS,
             }]
         finally:
@@ -384,8 +383,8 @@ def test_ordered_frozen_originals_and_non_square_native_registration(tmp_path, s
             assert [content for content, _ in frozen_inputs] == [gateway.originals[name] for name in selected]
             wire = next(iter(bridge.tasks.values()))["request"]
             assert wire["parameters"] == {"width": dimensions[0], "height": dimensions[1], "seed": 0}
-            assert [item["hash"] for item in wire["references"]] == [
-                hashlib.sha256(gateway.originals[name]).hexdigest() for name in selected]
+            assert all(set(item) == {"input_ref", "role"} for item in wire["references"])
+            assert all("original_sha256" not in value for value in bridge.inputs.values())
             assert len(bridge.inputs) == 2 and len(bridge.acks) == 1
             assert svc.public(final)["reference_count"] == 2
             assert svc.public(final)["reference_effect_verified"] is False

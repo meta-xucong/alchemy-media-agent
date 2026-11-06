@@ -73,7 +73,8 @@ def freeze(request: CreateImageJobRequest, job_id: str, created_at: datetime, qr
         if path is None or not path.is_file():
             requirements["missing_reference"] = True
             continue
-        references.append({"content": base64.b64encode(path.read_bytes()).decode(), "mime_type": image.mime_type or "image/png"})
+        references.append({"content": base64.b64encode(path.read_bytes()).decode(),
+                           "mime_type": image.mime_type or "image/png", "reference_key": image.asset_id})
         if image.constraint_strength in {"strong", "required"}:
             requirements["reference_fusion"] = True
             requirements["input_fidelity"] = "high"
@@ -113,7 +114,9 @@ def primary_request(record: dict):
         prompt += "\nNegative constraints:\n" + request.prompt_plan.negative_prompt
     return PrimaryRequest(product="v2", owner_id=str(request.veyra_user_id or "local"),
         unit_id=record["job_id"], prompt=prompt, parameters=params,
-        references=tuple(Reference(content=base64.b64decode(ref["content"]), mime_type=ref["mime_type"]) for ref in record["references"]),
+        references=tuple(Reference(content=base64.b64decode(ref["content"]), mime_type=ref["mime_type"],
+                                   reference_key=ref.get("reference_key") or str(index))
+                         for index, ref in enumerate(record["references"])),
         hard_requirements=requirements)
 
 

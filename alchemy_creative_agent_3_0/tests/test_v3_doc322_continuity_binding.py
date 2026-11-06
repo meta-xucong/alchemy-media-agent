@@ -31,6 +31,40 @@ def test_replace_unbind_and_restart_do_not_resurrect_history(tmp_path,persistent
     assert service.change("project_test",output_id="manual",expected_version=3)["state"]=="active"
 
 
+def test_no_image_sha_output_uses_identity_bound_v2_anchor_and_survives_reload(tmp_path):
+    store = PersistentProjectStore(tmp_path)
+
+    def resolve_no_image_sha(project, output, job):
+        assert project == "project_test"
+        assert output == "bridge-output"
+        assert job == "job_source"
+        return {
+            "output_id": output,
+            "asset_id": output,
+            "job_id": job,
+            "candidate_id": "bridge-candidate",
+            "source_asset_id": "bridge-asset",
+            "file_path": "canonical-output.png",
+            "no_image_sha": True,
+        }
+
+    service = ContinuityAnchorBindingService(store, resolve_no_image_sha)
+    active = service.change(
+        "project_test",
+        output_id="bridge-output",
+        expected_version=0,
+        expected_job_id="job_source",
+    )
+    anchor = active["active_continuity_anchor"]
+
+    assert active["schema_version"] == "v3_continuity_anchor_binding_v2"
+    assert anchor["binding_schema_version"] == "v3_continuity_anchor_output_v2"
+    assert "source_content_sha256" not in anchor
+    assert "content_sha256" not in anchor["reference"]
+    restored = ContinuityAnchorBindingService(store, resolve_no_image_sha).state("project_test")
+    assert restored == active
+
+
 def test_two_store_instances_and_threads_cannot_overwrite_newer_binding(tmp_path):
     services=[ContinuityAnchorBindingService(PersistentProjectStore(tmp_path),resolve) for _ in range(8)]
     def bind(pair):
