@@ -50,6 +50,7 @@ class NativeRenderBridgeGateway:
     @staticmethod
     def _registration_from_journal(value):
         fields = dict(value)
+        fields.pop("original_sha256", None)
         fields.pop("reference_sha256", None)
         return RenderBridgeRegistration(**fields)
 
