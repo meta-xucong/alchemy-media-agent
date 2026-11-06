@@ -230,6 +230,7 @@ class RenderBridgeNativeFacade:
                     "reference_id": f"reference_{index}",
                     "asset_id": item.get("asset_id"),
                     "index": index,
+                    "size_bytes": len(content),
                     "mime_type": item.get("mime_type"),
                     "role": item.get("role"),
                     "source_type": item.get("source_type"),
@@ -259,12 +260,19 @@ class RenderBridgeNativeFacade:
         _latest, _latest_project, latest_revision = self._target(actor_user_id, target)
         if latest_revision != revision:
             raise BridgeNativeFacadeError("render_bridge_target_revision_changed")
+        identity_contract = {
+            **contract,
+            "references": [
+                {key: value for key, value in item.items() if key != "size_bytes"}
+                for item in references
+            ],
+        }
         return {
             "schema_version": "alchemy_render_bridge_frozen_input_v1",
             "status": "frozen",
             "target": asdict(target),
             "target_revision": revision,
-            "frozen_request_id": "rb_freeze_" + _digest({"revision": revision, "contract": contract}),
+            "frozen_request_id": "rb_freeze_" + _digest({"revision": revision, "contract": identity_contract}),
             **contract,
             "native_registration_connected": False,
             "submission_ready": False,
