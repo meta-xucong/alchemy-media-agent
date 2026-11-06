@@ -1,4 +1,3 @@
-Attempting to perform the InitializeDefaultDrives operation on the 'FileSystem' provider failed.
 """Recover an upgrade-era native Bridge receipt against real stored records."""
 
 from __future__ import annotations
