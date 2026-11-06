@@ -5010,7 +5010,6 @@ class V3ProjectModeService:
                     content = handle.read(MAX_REFERENCE_INPUT_BYTES + 1)
                 if (
                     not content or len(content) > MAX_REFERENCE_INPUT_BYTES
-                    or hashlib.sha256(content).hexdigest() != upload.content_sha256
                 ):
                     raise ValueError("changed reference")
                 with Image.open(BytesIO(content)) as image:

@@ -230,7 +230,6 @@ class RenderBridgeNativeFacade:
                     "reference_id": f"reference_{index}",
                     "asset_id": item.get("asset_id"),
                     "index": index,
-                    "size_bytes": len(content),
                     "mime_type": item.get("mime_type"),
                     "role": item.get("role"),
                     "source_type": item.get("source_type"),
