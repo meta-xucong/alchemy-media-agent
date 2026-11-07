@@ -985,6 +985,109 @@ def test_doc260_current_job_selected_output_reference_remains_invalid(tmp_path) 
     assert "review_evidence_person_identity_reference_output_job_binding" in person_channel["reason_codes"]
 
 
+def test_doc260_bridge_no_image_sha_target_uses_store_identity_without_reading_image_bytes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = _service(tmp_path, output_store=output_store)
+    created = _create_general_job(service)
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    project_id = "project_doc260_bridge_no_image_sha"
+    record.request = record.request.model_copy(
+        update={
+            "metadata": {
+                **dict(record.request.metadata),
+                "project_id": project_id,
+                "render_bridge_primary_no_image_sha": True,
+            }
+        }
+    )
+    output = output_store.save_base64_output(
+        job_id=created.job_id,
+        candidate_id="candidate_doc260_bridge_no_image_sha",
+        asset_id="asset_doc260_bridge_no_image_sha",
+        provider="render_bridge",
+        model="codex-image",
+        encoded_image=_png_base64(),
+        mime_type="image/png",
+        output_format="png",
+        metadata={"project_id": project_id},
+        preserve_original_bytes=True,
+        include_content_hash=False,
+    )
+    assert "content_sha256" not in output.metadata
+    assert "source_integrity_id" not in output.metadata
+    resolution = GeneratedOutputResolver(output_store).resolve_asset(
+        created.job_id,
+        asset=type(
+            "Asset",
+            (),
+            {
+                "metadata": {"candidate_metadata": {"output_id": output.output_id}},
+                "asset_id": output.asset_id,
+                "file_path": output.file_path,
+            },
+        )(),
+        project_id=project_id,
+    )
+
+    target_path = Path(output.file_path).resolve()
+    original_read_bytes = Path.read_bytes
+
+    def reject_target_image_bytes(path: Path) -> bytes:
+        if path.resolve() == target_path:
+            raise AssertionError("Bridge no-image-SHA review must not read image bytes")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_target_image_bytes)
+    metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    selected_output = metadata["review_evidence_plan"]["channels"]["selected_output"]
+
+    assert selected_output["evidence_state"] == "available"
+    assert selected_output["evidence_ids"] == [output.output_id]
+    assert selected_output["source_type"] == "generated_output"
+    assert metadata["review_evidence_plan"]["review_mode"] == "real_pixel"
+
+    wrong_job_resolution = resolution.model_copy(update={"job_id": "job_doc260_wrong_binding"})
+    wrong_job_metadata = service._admitted_review_reference_metadata(record, wrong_job_resolution)  # noqa: SLF001
+    assert wrong_job_metadata["review_evidence_plan"]["channels"]["selected_output"]["evidence_state"] == "invalid"
+    wrong_candidate_resolution = resolution.model_copy(update={"candidate_id": "candidate_doc260_wrong_binding"})
+    wrong_candidate_metadata = service._admitted_review_reference_metadata(record, wrong_candidate_resolution)  # noqa: SLF001
+    assert wrong_candidate_metadata["review_evidence_plan"]["channels"]["selected_output"]["evidence_state"] == "invalid"
+    wrong_asset_resolution = resolution.model_copy(update={"asset_id": "asset_doc260_wrong_binding"})
+    wrong_asset_metadata = service._admitted_review_reference_metadata(record, wrong_asset_resolution)  # noqa: SLF001
+    assert wrong_asset_metadata["review_evidence_plan"]["channels"]["selected_output"]["evidence_state"] == "invalid"
+    wrong_path_resolution = resolution.model_copy(update={"file_path": output.preview_path})
+    wrong_path_metadata = service._admitted_review_reference_metadata(record, wrong_path_resolution)  # noqa: SLF001
+    assert wrong_path_metadata["review_evidence_plan"]["channels"]["selected_output"]["evidence_state"] == "invalid"
+
+    record.request = record.request.model_copy(
+        update={
+            "metadata": {
+                key: value
+                for key, value in dict(record.request.metadata).items()
+                if key != "render_bridge_primary_no_image_sha"
+            }
+        }
+    )
+    with pytest.raises(AssertionError, match="Bridge no-image-SHA review must not read image bytes"):
+        service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+
+
+def test_doc260_bridge_no_image_sha_marker_is_server_owned() -> None:
+    service = _service(Path("doc260-bridge-no-sha-server-owned"))
+
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned: render_bridge_primary_no_image_sha"):
+        service.create_job(
+            {
+                "user_input": "Create one neutral still-life image.",
+                "metadata": {"render_bridge_primary_no_image_sha": True},
+            }
+        )
+
+
 def test_doc260_wrong_job_source_binding_is_invalid_and_does_not_fallback(
     tmp_path,
 ) -> None:

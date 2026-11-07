@@ -17719,6 +17719,7 @@ class V3ProductApiService:
             "provider_image_options",
             "render_bridge_native_plan",
             "render_bridge_project_binding",
+            "render_bridge_primary_no_image_sha",
             "doc73_batch_plan_digest",
             "doc73_auto_identity_anchor_receipt",
             "doc73_auto_identity_anchor_reference",

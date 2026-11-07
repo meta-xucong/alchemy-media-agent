@@ -176,7 +176,25 @@ plan identifies exact output IDs, use targeted resolution. If the required
 binding is ambiguous, fail closed as `invalid` or `unavailable` according to
 whether the record is contradictory or merely inaccessible.
 
-### 2.3 Public metadata is not an authority
+### 2.3 Bridge target output identity when image SHA is disabled
+
+For a V3 Bridge-primary job, the server-owned
+`render_bridge_primary_no_image_sha=true` contract forbids generating or
+checking an image-content digest. The required `selected_output` channel still
+binds the exact pixels under review through the canonical V3 output record:
+the record must match the review's job, output, candidate, asset and file path,
+and both the record and target file must be available. This identity receipt
+marks the target `selected_output` evidence as available so the ordinary
+real-pixel Vision review can run. The marker is server-owned and rejected from
+public job metadata. It does not create a pass or winner itself.
+
+This rule applies only to the current generated target in the server-marked
+Bridge no-image-SHA mode. It does not relax integrity requirements for uploaded
+or previously selected reference evidence, nor for outputs from other
+generation channels. A mismatched or missing output record/file remains
+unavailable or invalid and cannot certify delivery.
+
+### 2.4 Public metadata is not an authority
 
 Public Job, Project, Browser, and frontend metadata may display safe review
 summaries, but it cannot create or repair a `ReviewEvidencePlan`. In

@@ -131,6 +131,10 @@ class ExactReviewEvidenceResolver:
             resolution=resolution,
             binding_reasons=binding_reasons,
             expected_integrity_id=selected_expected_integrity_id,
+            allow_identity_only=(
+                isinstance(getattr(request, "metadata", None), dict)
+                and request.metadata.get("render_bridge_primary_no_image_sha") is True
+            ),
         )
         channels["selected_output"] = ReviewEvidenceChannel(
             applicability="required",
@@ -1043,6 +1047,7 @@ class ExactReviewEvidenceResolver:
         resolution: Any,
         binding_reasons: list[str],
         expected_integrity_id: str | None = None,
+        allow_identity_only: bool = False,
     ) -> tuple[str, list[str]]:
         if binding_reasons:
             return "invalid", binding_reasons
@@ -1051,6 +1056,31 @@ class ExactReviewEvidenceResolver:
         path = Path(str(getattr(resolution, "file_path", "") or ""))
         if not path.is_file():
             return "unavailable", ["selected_output_unreadable"]
+        if allow_identity_only:
+            getter = getattr(self.output_store, "get_output", None)
+            output_record = getter(output_id) if callable(getter) else None
+            if output_record is None:
+                return "invalid", ["selected_output_record_missing"]
+            candidate_id = str(getattr(resolution, "candidate_id", "") or "").strip()
+            asset_id = str(getattr(resolution, "asset_id", "") or "").strip()
+            if (
+                str(getattr(output_record, "output_id", "") or "").strip() != output_id
+                or str(getattr(output_record, "job_id", "") or "").strip() != job_id
+                or not candidate_id
+                or str(getattr(output_record, "candidate_id", "") or "").strip() != candidate_id
+                or not asset_id
+                or str(getattr(output_record, "asset_id", "") or "").strip() != asset_id
+            ):
+                return "invalid", ["selected_output_record_binding"]
+            record_path = Path(str(getattr(output_record, "file_path", "") or ""))
+            if not record_path.is_file():
+                return "unavailable", ["selected_output_unreadable"]
+            try:
+                if record_path.resolve(strict=True) != path.resolve(strict=True):
+                    return "invalid", ["selected_output_file_binding"]
+            except (OSError, RuntimeError, ValueError):
+                return "unavailable", ["selected_output_unreadable"]
+            return "available", []
         metadata = resolution.metadata if isinstance(getattr(resolution, "metadata", None), dict) else {}
         output_record = metadata.get("output_record") if isinstance(metadata.get("output_record"), dict) else {}
         output_metadata = output_record.get("metadata") if isinstance(output_record.get("metadata"), dict) else {}
