@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Read-only gate preventing candidate V3 smoke from falling back to an API renderer."""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from typing import Any
+
+from render_bridge_primary.core import PrimaryError, PrimaryRequest, PrimarySettings, PrimaryTransport
+from render_bridge_primary.http import BridgeClient
+
+
+class CandidateBridgePreflightError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def validate_candidate_v3_bridge_state(settings: Any, capabilities: object) -> None:
+    """Apply the same profile and admission boundaries as the V3 route resolver."""
+    if not bool(getattr(settings, "enabled", False)) or str(getattr(settings, "profile", "")) != "codex-image":
+        raise CandidateBridgePreflightError("candidate_bridge_profile_not_enabled")
+    if not all(
+        isinstance(getattr(settings, name, None), str) and getattr(settings, name).strip()
+        for name in ("base_url", "token", "workspace")
+    ):
+        raise CandidateBridgePreflightError("candidate_bridge_configuration_invalid")
+    if not isinstance(capabilities, dict):
+        raise CandidateBridgePreflightError("candidate_bridge_capabilities_invalid")
+
+    admission = capabilities.get("admission")
+    if not isinstance(admission, dict) or admission.get("accepting_new_tasks") is not True:
+        raise CandidateBridgePreflightError("candidate_bridge_admission_not_open")
+
+    # Match the actual Codex V3 primary payload without creating a task. The
+    # real prompt is frozen later by V3; this probe uses a neutral placeholder
+    # and the same 1024 square, PNG, auto-quality contract.
+    request = PrimaryRequest(
+        product="v3",
+        owner_id="candidate-preflight",
+        unit_id="candidate-preflight",
+        prompt="A neutral still-life image.",
+        parameters={
+            "width": 1024,
+            "height": 1024,
+            "image_options": {"schema_version": "1", "quality": "auto", "output_format": "png"},
+            "codex_adapter": "codex_cli_imagegen_v1",
+        },
+        hard_requirements={"output_format": "png"},
+    )
+    rejection = PrimaryTransport._safe_support_rejection(  # noqa: SLF001 - exact route preflight
+        request,
+        capabilities,
+        "codex-image",
+    )
+    if rejection is not None:
+        raise CandidateBridgePreflightError("candidate_bridge_request_unsupported")
+
+
+async def _read_capabilities(settings: PrimarySettings) -> dict[str, Any]:
+    client = BridgeClient(settings.base_url, settings.token)
+    try:
+        return await client.capabilities()
+    finally:
+        await client.close()
+
+
+def main() -> int:
+    try:
+        settings = PrimarySettings.from_env(product="v3")
+    except PrimaryError:
+        print("candidate_bridge_configuration_invalid", file=sys.stderr)
+        return 2
+    try:
+        if not settings.enabled or settings.profile != "codex-image":
+            raise CandidateBridgePreflightError("candidate_bridge_profile_not_enabled")
+        capabilities = asyncio.run(_read_capabilities(settings))
+        validate_candidate_v3_bridge_state(settings, capabilities)
+    except CandidateBridgePreflightError as exc:
+        print(exc.code, file=sys.stderr)
+        return 2
+    except Exception:
+        # Transport errors can contain URLs or low-level details. Keep the
+        # action log limited to a stable, non-secret diagnostic.
+        print("candidate_bridge_capabilities_unavailable", file=sys.stderr)
+        return 2
+    print("GUARDED_CANDIDATE_V3_BRIDGE_PREFLIGHT=pass")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

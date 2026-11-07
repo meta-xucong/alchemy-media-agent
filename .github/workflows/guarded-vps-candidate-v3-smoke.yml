@@ -277,6 +277,21 @@ jobs:
             exit 2
           fi
 
+          bridge_preflight_log="$RUNNER_TEMP/candidate-v3-bridge-preflight.log"
+          if ! ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" "docker exec -i '$container' python -" \
+            < scripts/vps_candidate_v3_bridge_preflight.py >"$bridge_preflight_log" 2>&1; then
+            cat "$bridge_preflight_log" >&2
+            echo "candidate_v3_bridge_preflight_failed" >&2
+            exit 2
+          fi
+          grep -Fxq 'GUARDED_CANDIDATE_V3_BRIDGE_PREFLIGHT=pass' "$bridge_preflight_log" || {
+            cat "$bridge_preflight_log" >&2
+            echo "candidate_v3_bridge_preflight_receipt_missing" >&2
+            exit 2
+          }
+          cat "$bridge_preflight_log"
+
           ssh -i ~/.ssh/id_ed25519 -N -L "${api_port}:127.0.0.1:${api_port}" -p "$VPS_PORT" \
             -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$remote" \
             >"$RUNNER_TEMP/candidate-v3-tunnel.log" 2>&1 &

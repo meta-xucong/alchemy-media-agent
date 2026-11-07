@@ -153,6 +153,63 @@ def _find_route_value(value: object, depth: int = 0) -> tuple[str, str]:
     return "", ""
 
 
+def _require_bridge_route(route: str) -> None:
+    if str(route or "").strip().lower() != "bridge":
+        raise SafeApiError("candidate_v3_bridge_route_not_confirmed")
+
+
+def _final_delivery_item(outputs: object, project_id: str, job_id: str) -> dict:
+    """Resolve only the job's normal user-facing delivery projection."""
+    root = _mapping(outputs)
+    items = root.get("items")
+    if not isinstance(items, list):
+        items = []
+    matches = [
+        item for item in items
+        if isinstance(item, dict) and str(item.get("job_id") or "").strip() == job_id
+    ]
+    if len(matches) != 1:
+        raise SafeApiError("candidate_v3_delivery_output_count_invalid")
+
+    item = matches[0]
+    output_id = str(item.get("output_id") or "").strip()
+    if (
+        not ID_PATTERN.fullmatch(output_id)
+        or str(item.get("project_id") or "").strip() != project_id
+        or str(item.get("delivery_state") or "").strip().lower() != "final_delivery"
+    ):
+        raise SafeApiError("candidate_v3_delivery_output_binding_invalid")
+
+    if (
+        str(item.get("review_mode") or "").strip().lower() not in {"vision_model", "hybrid"}
+        or str(item.get("review_status") or "").strip().lower() not in {"pass", "warning"}
+        or str(item.get("verification_state") or "").strip().lower() != "verified"
+        or str(item.get("certification_state") or "").strip().lower() != "certified"
+        or str(item.get("public_delivery_state") or "").strip().lower() != "ready"
+    ):
+        raise SafeApiError("candidate_v3_delivery_output_not_certified")
+
+    expected_preview = f"/api/v3/creative-agent/outputs/{quote(output_id, safe='')}/preview"
+    expected_download = f"/api/v3/creative-agent/outputs/{quote(output_id, safe='')}/download"
+    if item.get("preview_url") != expected_preview or item.get("download_url") != expected_download:
+        raise SafeApiError("candidate_v3_delivery_output_binding_invalid")
+    return item
+
+
+def _validate_image_response(raw: object, headers: dict[str, str], *, kind: str) -> None:
+    if not isinstance(raw, bytes):
+        raise SafeApiError(f"candidate_v3_{kind}_not_image")
+    content_type = str(headers.get("content-type", "")).split(";", 1)[0].strip().lower()
+    signature_type = next(
+        (mime for signature, mime in IMAGE_SIGNATURES if raw.startswith(signature)),
+        None,
+    )
+    if signature_type is None and len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        signature_type = "image/webp"
+    if len(raw) < 1024 or content_type != signature_type:
+        raise SafeApiError(f"candidate_v3_{kind}_invalid")
+
+
 def _reserve_once() -> None:
     expected_sha = os.getenv("EXPECTED_CANDIDATE_SHA", "")
     run_id = os.getenv("GITHUB_RUN_ID", "")
@@ -226,6 +283,9 @@ def _write_summary(data: dict) -> None:
         f"- Job status: `{data.get('job_status', 'unknown')}`",
         f"- Outputs: `{data.get('output_count', 0)}`",
         f"- Preview checks: `{data.get('preview_checks', 0)}`",
+        f"- Download checks: `{data.get('download_checks', 0)}`",
+        f"- Review: `{data.get('review_status', 'unknown')}` / `{data.get('certification_state', 'unknown')}`",
+        f"- Delivery state: `{data.get('delivery_state', 'unknown')}`",
         f"- Observed provider route: `{data.get('route') or 'unknown'}`",
         f"- Route reason: `{data.get('route_reason') or 'unavailable'}`",
         "",
@@ -245,6 +305,10 @@ def _run() -> int:
         "job_status": "unknown",
         "output_count": 0,
         "preview_checks": 0,
+        "download_checks": 0,
+        "review_status": "unknown",
+        "certification_state": "unknown",
+        "delivery_state": "unknown",
         "route": "",
         "route_reason": "",
     }
@@ -357,42 +421,23 @@ def _run() -> int:
         if result["job_status"] != "generated":
             raise SafeApiError(f"candidate_v3_job_{result['job_status'] or 'not_generated'}")
 
+        _require_bridge_route(result["route"])
+
         query = urlencode({"project_id": project_id, "compact": "true", "limit": "60"})
         outputs, _ = _request("GET", f"/api/v3/creative-agent/project-outputs?{query}", token)
-        output_root = _mapping(outputs)
-        items: list[dict] = []
-        for key in ("items", "review_items", "history_items"):
-            value = output_root.get(key)
-            if isinstance(value, list):
-                items.extend(item for item in value if isinstance(item, dict))
-        ids: list[str] = []
-        for item in items:
-            output_id = str(item.get("output_id") or "").strip()
-            if output_id and ID_PATTERN.fullmatch(output_id) and output_id not in ids:
-                ids.append(output_id)
-        if not ids:
-            raise SafeApiError("candidate_v3_outputs_missing")
-        result["output_count"] = len(ids)
-        route, reason = _find_route_value(outputs)
-        if route and not result["route"]:
-            result["route"], result["route_reason"] = route, reason
+        item = _final_delivery_item(outputs, project_id, job_id)
+        result["output_count"] = 1
+        result["review_status"] = item["review_status"]
+        result["certification_state"] = item["certification_state"]
+        result["delivery_state"] = item["delivery_state"]
 
-        preview_checks = 0
-        for output_id in ids[:3]:
-            raw, headers = _request(
-                "GET",
-                f"/api/v3/creative-agent/outputs/{quote(output_id, safe='')}/preview",
-                token,
-            )
-            if not isinstance(raw, bytes):
-                raise SafeApiError("candidate_v3_preview_not_image")
-            content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
-            valid_signature = any(raw.startswith(signature) for signature, _ in IMAGE_SIGNATURES)
-            valid_signature = valid_signature or (len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
-            if not content_type.startswith("image/") or not valid_signature or len(raw) < 1024:
-                raise SafeApiError("candidate_v3_preview_invalid")
-            preview_checks += 1
-        result["preview_checks"] = preview_checks
+        preview, preview_headers = _request("GET", item["preview_url"], token)
+        _validate_image_response(preview, preview_headers, kind="preview")
+        result["preview_checks"] = 1
+
+        download, download_headers = _request("GET", item["download_url"], token)
+        _validate_image_response(download, download_headers, kind="download")
+        result["download_checks"] = 1
         result["result"] = "pass"
         print(json.dumps({key: value for key, value in result.items() if key != "operation_id"}, separators=(",", ":")))
         return 0
