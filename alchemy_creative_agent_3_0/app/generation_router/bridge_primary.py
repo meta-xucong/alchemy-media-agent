@@ -339,6 +339,15 @@ def _projection(result):
     rejection = result.provenance.get("capability_rejection")
     if isinstance(rejection, dict):
         projection["capability_rejection"] = rejection
+    failure_stage = result.provenance.get("bridge_failure_stage")
+    if isinstance(failure_stage, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", failure_stage):
+        projection["bridge_failure_stage"] = failure_stage
+    bridge_error_code = result.provenance.get("bridge_error_code")
+    if isinstance(bridge_error_code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", bridge_error_code):
+        projection["bridge_error_code"] = bridge_error_code
+    bridge_http_status = result.provenance.get("bridge_http_status")
+    if type(bridge_http_status) is int and 100 <= bridge_http_status <= 599:
+        projection["bridge_http_status"] = bridge_http_status
     attention_code = result.provenance.get("attention_code")
     if isinstance(attention_code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", attention_code):
         projection["attention_code"] = attention_code

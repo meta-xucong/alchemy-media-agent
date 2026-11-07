@@ -563,6 +563,118 @@ def test_expired_bridge_task_is_terminal_but_same_queue_task_can_resume(isolated
         assert conn.execute("SELECT status FROM v2_tasks WHERE task_id=?", (task_id,)).fetchone()[0] == "completed"
 
 
+def test_sync_creative_run_resumes_same_direct_bridge_job_and_updates_projection(isolated, monkeypatch):
+    from app import main
+    from app.schemas import CreateCreativeRunRequest, CreativeRun, ImageJob
+
+    now = generation.utc_now()
+    req = request().model_copy(update={"run_id": "direct-bridge-run", "veyra_user_id": 17})
+    job = ImageJob(job_id="direct-bridge-job", run_id=req.run_id, veyra_user_id=17, status="queued",
+        provider_id="render_bridge", model="render-bridge-primary", prompt_plan=req.prompt_plan,
+        outputs=[], error={"provider": "render_bridge", "error_code": "bridge_wait", "retryable": True,
+            "detail": {"state": "artifacts_ready"}}, created_at=now, updated_at=now)
+    run = CreativeRun(run_id=req.run_id, status="generating", mode="smart_enhance", intent_summary="direct",
+        trace_id="direct-bridge-trace", created_at=now, updated_at=now, generation_jobs=[job])
+    repository.save_creative_run(run)
+    frozen = {"job_id": job.job_id, "request": req.model_dump(mode="json"), "created_at": now.isoformat(),
+        "qr": False, "queue_task_id": None}
+    monkeypatch.setattr(bridge, "load_frozen", lambda job_id=None: frozen)
+    monkeypatch.setattr(main, "_DIRECT_BRIDGE_RESUME_POLL_SECONDS", 0)
+    completed = job.model_copy(update={"status": "completed", "error": None, "updated_at": generation.utc_now()})
+
+    async def create_image_job(frozen_request, *, job_id, created_at, _qr_preservation_enabled):
+        assert frozen_request.run_id == req.run_id
+        assert job_id == job.job_id
+        assert created_at == now
+        assert _qr_preservation_enabled is False
+        return completed
+
+    async def manager_run(_request):
+        return run
+
+    async def run_capacity(operation):
+        return await operation()
+
+    monkeypatch.setattr(main, "create_image_job", create_image_job)
+    monkeypatch.setattr(main.creative_manager, "run", manager_run)
+    monkeypatch.setattr(main, "_with_veyra_user", lambda body, request, authorization: req)
+    monkeypatch.setattr(main, "_require_creative_asset_count", lambda _assets: None)
+    monkeypatch.setattr(main, "run_with_generation_capacity", run_capacity)
+    request_context = main.Request({"type": "http", "method": "POST", "path": "/api/v2/creative/runs", "headers": []})
+
+    result = asyncio.run(main.create_creative_run(CreateCreativeRunRequest(user_prompt="resume"), request_context, ""))
+
+    assert result.status == "completed"
+    assert result.generation_jobs[0].job_id == job.job_id
+    assert result.generation_jobs[0].status == "completed"
+    saved = repository.get_creative_run(req.run_id)
+    assert saved.status == "completed"
+    assert saved.generation_jobs[0].status == "completed"
+
+
+def test_direct_bridge_resume_budget_returns_terminal_run_error(isolated, monkeypatch):
+    from app import main
+    from app.schemas import CreativeRun, ImageJob
+
+    now = generation.utc_now()
+    req = request().model_copy(update={"run_id": "direct-bridge-timeout"})
+    job = ImageJob(job_id="direct-bridge-timeout-job", run_id=req.run_id, status="queued",
+        provider_id="render_bridge", model="render-bridge-primary", prompt_plan=req.prompt_plan,
+        outputs=[], error={"provider": "render_bridge", "error_code": "bridge_wait", "retryable": True,
+            "detail": {"state": "running"}}, created_at=now, updated_at=now)
+    run = CreativeRun(run_id=req.run_id, status="generating", mode="smart_enhance", intent_summary="timeout",
+        trace_id="direct-bridge-timeout-trace", created_at=now, updated_at=now, generation_jobs=[job])
+    frozen = {"job_id": job.job_id, "request": req.model_dump(mode="json"), "created_at": now.isoformat(),
+        "qr": False, "queue_task_id": None}
+    monkeypatch.setattr(bridge, "load_frozen", lambda job_id=None: frozen)
+    monkeypatch.setattr(main, "_DIRECT_BRIDGE_RESUME_BUDGET_SECONDS", 0)
+
+    result = asyncio.run(main._resume_direct_bridge_run(run))
+
+    assert result.status == "failed"
+    assert result.generation_jobs[0].status == "failed"
+    assert result.generation_jobs[0].error["retryable"] is False
+    assert result.generation_jobs[0].error["detail"]["state"] == "bridge_wait_budget_exhausted"
+    assert "API fallback was not started" in result.next_actions[0]
+
+
+def test_direct_bridge_resume_updates_repository_run_projection(isolated, monkeypatch):
+    from app import main
+    from app.schemas import CreativeRun, ImageJob
+
+    now = generation.utc_now()
+    req = request().model_copy(update={"run_id": "direct-bridge-resume-projection", "veyra_user_id": 17})
+    job = ImageJob(job_id="direct-bridge-resume-projection-job", run_id=req.run_id, veyra_user_id=17,
+        status="queued", provider_id="render_bridge", model="render-bridge-primary", prompt_plan=req.prompt_plan,
+        outputs=[], error={"provider": "render_bridge", "error_code": "bridge_wait", "retryable": True,
+            "detail": {"state": "artifacts_ready"}}, created_at=now, updated_at=now)
+    run = CreativeRun(run_id=req.run_id, status="generating", mode="smart_enhance", intent_summary="resume",
+        trace_id="direct-bridge-resume-projection-trace", created_at=now, updated_at=now, generation_jobs=[job])
+    repository.save_creative_run(run)
+    frozen = {"job_id": job.job_id, "request": req.model_dump(mode="json"), "created_at": now.isoformat(),
+        "qr": False, "queue_task_id": None}
+    completed = job.model_copy(update={"status": "completed", "error": None, "updated_at": generation.utc_now()})
+
+    async def create_image_job(frozen_request, *, job_id):
+        assert frozen_request.run_id == req.run_id
+        assert job_id == job.job_id
+        return completed
+
+    async def run_capacity(operation):
+        return await operation()
+
+    monkeypatch.setattr(main, "_bridge_job_request", lambda *args, **kwargs: frozen)
+    monkeypatch.setattr(main, "create_image_job", create_image_job)
+    monkeypatch.setattr(main, "run_with_generation_capacity", run_capacity)
+
+    resumed = asyncio.run(main.resume_bridge_image_job(job.job_id, object(), ""))
+
+    assert resumed.status == "completed"
+    saved = repository.get_creative_run(req.run_id)
+    assert saved.status == "completed"
+    assert saved.generation_jobs[0].status == "completed"
+
+
 def test_cancel_addresses_same_unit_only(isolated):
     frozen = bridge.freeze(request(2), "cancel-job", generation.utc_now(), False)
     asyncio.run(bridge.cancel(frozen))

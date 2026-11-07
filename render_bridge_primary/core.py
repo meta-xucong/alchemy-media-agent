@@ -318,6 +318,9 @@ class PrimaryTransport:
         if row['image'] is not None and not data.get('cancel_requested'):
             meta=data['image']; image=OriginalImage(bytes(row['image']),meta['mime_type'],meta['width'],meta['height'])
         provenance={k:v for k,v in data.items() if k in {'product','profile','route','state','reason','origin_key','execution_key','task_id','receipt_id','attempt_id','image','queue_active_count','queue_limit','queue_observed_at','capability_rejection'}}
+        for field in ('bridge_failure_stage', 'bridge_error_code', 'bridge_http_status'):
+            if field in data:
+                provenance[field] = data[field]
         deadline = (data.get('payload') or {}).get('deadline')
         if isinstance(deadline, str): provenance['deadline'] = deadline
         if isinstance(data.get('attention_code'), str): provenance['attention_code'] = data['attention_code']
@@ -353,8 +356,16 @@ class PrimaryTransport:
 
     has_unit = has_binding
 
-    def _api(self, request, data, reason, *, first_create=False):
+    def _api(self, request, data, reason, *, first_create=False, failure_stage=None, error=None):
         data.update(route='api',state='api_ready',reason=reason)
+        if request.product == 'v3' and failure_stage:
+            data['bridge_failure_stage'] = failure_stage
+            code = getattr(error, 'code', None)
+            if isinstance(code, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,120}', code):
+                data['bridge_error_code'] = code
+            status = getattr(error, 'status', None)
+            if type(status) is int and 100 <= status <= 599:
+                data['bridge_http_status'] = status
         expected = 'bridge_submission_unknown' if first_create else 'preflight'
         key = self._key(request)
         with self._db() as db:
@@ -553,9 +564,13 @@ class PrimaryTransport:
             raise PrimaryError('bridge_scope_changed')
         if data['state']=='preflight':
             if not self.settings.enabled: return self._api(request,data,'bridge_disabled')
-            if not self.settings.base_url or not self.settings.token: return self._api(request,data,'bridge_unavailable')
+            if not self.settings.base_url or not self.settings.token:
+                reason = 'bridge_configuration_unavailable' if request.product == 'v3' else 'bridge_unavailable'
+                return self._api(request,data,reason,failure_stage='configuration')
             try: caps=await self.client.capabilities()
-            except BridgeError: return self._api(request,data,'bridge_unavailable')
+            except BridgeError as error:
+                reason = 'bridge_capabilities_unavailable' if request.product == 'v3' else 'bridge_unavailable'
+                return self._api(request,data,reason,failure_stage='capabilities',error=error)
             queue=caps.get('queue',{})
             if isinstance(queue,dict):
                 for source,target in (('active_tasks','queue_active_count'),('max_queued_tasks','queue_limit')):
@@ -571,7 +586,9 @@ class PrimaryTransport:
                 # reference bytes, or option values in the transport journal.
                 if request.product=='v3': data['capability_rejection']=rejection
                 return self._api(request,data,'bridge_capability_unsupported')
-            if caps.get('admission',{}).get('accepting_new_tasks') is False: return self._api(request,data,'bridge_unavailable')
+            if caps.get('admission',{}).get('accepting_new_tasks') is False:
+                reason = 'bridge_admission_closed' if request.product == 'v3' else 'bridge_unavailable'
+                return self._api(request,data,reason,failure_stage='admission')
             # Profile health is execution telemetry, not task-admission authority.
             # Capabilities plus accepting admission decide whether this request
             # may reach Bridge; executor attention is reported by the owned task.
@@ -590,7 +607,8 @@ class PrimaryTransport:
                     provenance=dict(pending.provenance)
                     provenance.update(state='failed',reason='bridge_store_busy')
                     return replace(pending,state='failed',reason='bridge_store_busy',provenance=provenance)
-                return self._api(request,data,'bridge_unavailable')
+                reason = 'bridge_reference_upload_unavailable' if request.product == 'v3' else 'bridge_unavailable'
+                return self._api(request,data,reason,failure_stage='reference_upload',error=error)
             payload=dict(schema_version='1',origin_key=data['origin_key'],binding_id=request.binding_id or self._key(request),
                          operation='image.generate',execution_profile_id=self.settings.profile,execution_profile_revision='1',
                          prompt=request.prompt,parameters=payload_request.parameters,references=references,output_slot={'slot_id':'primary','count':1},
@@ -603,7 +621,11 @@ class PrimaryTransport:
             try: task=await self.client.create_task(payload)
             except BridgeError as error:
                 if (error.code,error.status) in {('queue_capacity',429),('bridge_draining',503),('node_unavailable',503)}:
-                    return self._api(request,data,'bridge_queue_capacity' if error.code=='queue_capacity' else 'bridge_unavailable', first_create=True)
+                    if error.code == 'queue_capacity':
+                        reason = 'bridge_queue_capacity'
+                    else:
+                        reason = 'bridge_task_submission_unavailable' if request.product == 'v3' else 'bridge_unavailable'
+                    return self._api(request,data,reason,first_create=True,failure_stage='task_submission',error=error)
                 return self._result(self._read(request))
         else:
             try: task=await self.client.by_origin(data['origin_key'])

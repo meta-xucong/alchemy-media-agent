@@ -32,12 +32,15 @@ class Client:
         self.uploads = []
         self.state = 'artifacts_ready'
         self.error = None
+        self.capability_error = None
         self.input_error = None
         self.transparent_supported = True
         self.state = 'artifacts_ready'
         self.action_required_code = None
 
     async def capabilities(self):
+        if self.capability_error:
+            raise self.capability_error
         result = {'admission': {'accepting_new_tasks': True},
             'limits': {'max_input_bytes': 16*1024*1024, 'max_input_image_pixels': 16*1024*1024},
             'routing_availability_v1': {'profiles': [{'profile_id': 'codex-image', 'health': 'available', 'valid_until': '2099-01-01T00:00:00+00:00'}]},
@@ -160,6 +163,23 @@ def test_actual_entrance_preserves_original_and_replays_checkpoint(rig):
     assert len(rig.client.acks) == rig.client.calls == 1
     assert rig.api_calls == []
     assert a.metadata['runtime_mode'] == 'production_image_generation'
+
+
+def test_capabilities_fallback_keeps_api_and_exposes_safe_bridge_failure(rig):
+    rig.client.capability_error = BridgeError('connection_timeout', status=503)
+
+    result = rig.provider.generate(rig.request)
+
+    candidate = result.candidates[0]
+    provenance = candidate.metadata[adapter.PROVENANCE]
+    assert candidate.provider == 'legacy'
+    assert provenance['route'] == 'api'
+    assert provenance['reason'] == 'bridge_capabilities_unavailable'
+    assert provenance['bridge_failure_stage'] == 'capabilities'
+    assert provenance['bridge_error_code'] == 'connection_timeout'
+    assert provenance['bridge_http_status'] == 503
+    assert len(rig.api_calls) == 1
+    assert rig.client.calls == 0
 
 
 @pytest.mark.parametrize('optional_controls', [

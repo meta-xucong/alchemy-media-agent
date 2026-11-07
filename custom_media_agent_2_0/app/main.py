@@ -6,6 +6,7 @@ import json
 import logging
 from collections import OrderedDict
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -601,14 +602,100 @@ async def _require_output_visible(request: Request, output_id: str, authorizatio
 @app.post("/api/v2/creative/runs", status_code=202)
 async def create_creative_run(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
     _require_creative_asset_count(body.assets)
+    run_request = _with_veyra_user(body, request, authorization)
+
+    async def run_and_reconcile_bridge_wait():
+        run = await creative_manager.run(run_request)
+        return await _resume_direct_bridge_run(run)
+
     try:
-        return await run_with_generation_capacity(
-            lambda: creative_manager.run(_with_veyra_user(body, request, authorization))
-        )
+        return await run_with_generation_capacity(run_and_reconcile_bridge_wait)
     except GenerationCapacityExceeded as exc:
         raise _generation_capacity_http_error() from exc
     except GenerationCapacityStorageBusy as exc:
         raise _local_database_busy_http_error() from exc
+
+
+_DIRECT_BRIDGE_RESUME_BUDGET_SECONDS = 600.0
+_DIRECT_BRIDGE_RESUME_POLL_SECONDS = 1.0
+
+
+async def _save_direct_bridge_run_projection(run: CreativeRun, job):
+    matches = [index for index, item in enumerate(run.generation_jobs) if item.job_id == job.job_id]
+    if len(matches) != 1:
+        return run
+    jobs = list(run.generation_jobs)
+    jobs[matches[0]] = job
+    if job.status == "completed" and all(item.status == "completed" for item in jobs):
+        status = "completed"
+        next_actions = ["Review generated outputs."]
+    elif job.status in {"failed", "cancelled"}:
+        status = "failed"
+        next_actions = [str((job.error or {}).get("message") or "Render Bridge image generation failed.")]
+    else:
+        status = "generating"
+        next_actions = ["Waiting for the existing Render Bridge task to finish."]
+    updated = run.model_copy(update={
+        "status": status,
+        "generation_jobs": jobs,
+        "prompt_plan": job.prompt_plan,
+        "next_actions": next_actions,
+        "updated_at": job.updated_at,
+    })
+    return await _run_sqlite_api_call(repository.save_creative_run, updated)
+
+
+async def _resume_direct_bridge_run(run: CreativeRun) -> CreativeRun:
+    from app.services import render_bridge_primary
+
+    pending = next((job for job in run.generation_jobs
+                    if job.provider_id == "render_bridge"
+                    and (job.error or {}).get("error_code") == "bridge_wait"
+                    and (job.error or {}).get("retryable") is True), None)
+    if pending is None:
+        return run
+    frozen = render_bridge_primary.load_frozen(pending.job_id)
+    if frozen is None or frozen.get("queue_task_id") is not None:
+        return run
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _DIRECT_BRIDGE_RESUME_BUDGET_SECONDS
+    job = pending
+    while loop.time() < deadline:
+        await asyncio.sleep(min(_DIRECT_BRIDGE_RESUME_POLL_SECONDS, max(0.0, deadline - loop.time())))
+        job = await create_image_job(
+            render_bridge_primary.frozen_request(frozen),
+            job_id=frozen["job_id"],
+            created_at=datetime.fromisoformat(frozen["created_at"]),
+            _qr_preservation_enabled=frozen["qr"] is True,
+        )
+        if job.status in {"completed", "cancelled"}:
+            return await _save_direct_bridge_run_projection(run, job)
+        error = job.error or {}
+        if job.status == "failed" and not (
+            error.get("provider") == "render_bridge"
+            and error.get("error_code") == "bridge_wait"
+            and error.get("retryable") is True
+        ):
+            return await _save_direct_bridge_run_projection(run, job)
+
+    error = dict(job.error or {})
+    detail = dict(error.get("detail") or {})
+    detail.update({"state": "bridge_wait_budget_exhausted", "queue_reconciliation_required": True})
+    error.update({
+        "provider": "render_bridge",
+        "message": "Render Bridge did not return a final image within 600 seconds. The original task is retained for manual recovery; API fallback was not started.",
+        "error_code": "bridge_wait",
+        "retryable": False,
+        "detail": detail,
+    })
+    timed_out = job.model_copy(update={
+        "status": "failed",
+        "error": error,
+        "updated_at": datetime.now(timezone.utc),
+    })
+    await _run_sqlite_api_call(repository.save_image_job, timed_out)
+    return await _save_direct_bridge_run_projection(run, timed_out)
 
 
 @app.post("/api/v2/creative/runs/async", status_code=202)
@@ -1087,8 +1174,14 @@ async def resume_bridge_image_job(job_id: str, request: Request, authorization: 
         except ValueError as exc:
             raise HTTPException(status_code=409, detail={"error_code": str(exc)}) from None
     try:
-        return await run_with_generation_capacity(lambda: create_image_job(
-            render_bridge_primary.frozen_request(record), job_id=job_id))
+        async def resume_direct_bridge_job():
+            job = await create_image_job(render_bridge_primary.frozen_request(record), job_id=job_id)
+            run = repository.get_creative_run(job.run_id) if job.run_id else None
+            if run is not None:
+                await _save_direct_bridge_run_projection(run, job)
+            return job
+
+        return await run_with_generation_capacity(resume_direct_bridge_job)
     except GenerationCapacityExceeded as exc:
         raise _generation_capacity_http_error() from exc
     except GenerationCapacityStorageBusy as exc:
