@@ -11,6 +11,33 @@ same V3 output, review, bounded-retry, winner, and Character Card slot path as
 Web Provider. Neither surface calls a Platform API, reads Codex auth/session/
 cache, or creates a private creative pipeline.
 
+## Codex CLI compatibility
+
+This plugin exposes its Alchemy tools over a local stdio MCP server. That does
+not make Codex built-in ImageGen available in every MCP client. As of
+2026-11-08, OpenAI's Sign in with ChatGPT preview limitations mark image
+generation unsupported for Codex CLI/app-server authentication with a
+ChatGPT plan. The Codex CLI flow therefore cannot use this plan's image
+generation quota through the materialized path.
+
+OpenAI's `openai` API CLI can generate images with an `OPENAI_API_KEY`, but
+that uses Platform API billing rather than Codex plan quota. Do not substitute
+it silently when the request is to use Codex plan quota.
+
+The materialized bridge also accepts only loopback URLs, and the V3 endpoints
+reject non-loopback callers. It cannot submit directly to the public
+production VPS URL. A deliberate local port-forward to the VPS loopback could
+preserve these guards, but no such tunnel is configured in this setup. Keep
+the endpoints loopback-only unless a remote handoff receives a separately
+reviewed authentication contract. The shared contract and replay-safe
+artifact handoff are documented in Doc183.
+
+Official references:
+
+- [Sign in with ChatGPT preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+- [OpenAI API CLI](https://developers.openai.com/api/docs/libraries/openai-cli)
+- [Image generation guide](https://developers.openai.com/api/docs/guides/image-generation)
+
 The legacy flow is intentionally conversation-only:
 
 ```text
