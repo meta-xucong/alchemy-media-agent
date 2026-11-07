@@ -1055,7 +1055,7 @@ def _bridge_inventory_fixture(tmp_path, state, native_status='completed', cancel
     repository = tmp_path / 'repository.sqlite3'
     db = sqlite3.connect(repository)
     db.execute('CREATE TABLE v2_records(namespace TEXT,payload TEXT)')
-    db.execute('INSERT INTO v2_records VALUES (?,?)', ('image_jobs', json.dumps({'job_id':'job1','status':native_status})))
+    db.execute('INSERT INTO v2_records VALUES (?,?)', ('image_jobs', json.dumps({'job_id':'job1','status':native_status,'outputs':[]})))
     db.commit(); db.close()
     return root, frozen, repository
 
@@ -1070,6 +1070,49 @@ def test_bridge_completed_inventory_is_idle(tmp_path, state):
 def test_bridge_pending_units_prevent_cutover(tmp_path, state):
     args = _bridge_inventory_fixture(tmp_path,state)
     assert _MODULE.inspect_bridge_work(*args)['bridge_unresolved_units'] == 1
+
+
+def test_explicitly_abandoned_failed_api_job_does_not_rewrite_unknown_ledger(tmp_path):
+    root, frozen, repository = _bridge_inventory_fixture(
+        tmp_path, 'api_execution_unknown', native_status='failed', route='api',
+    )
+
+    counts = _MODULE.inspect_bridge_work(
+        root, frozen, repository, abandoned_api_job_ids={'job1'},
+    )
+
+    assert counts['bridge_unresolved_units'] == 0
+    assert counts['bridge_explicitly_abandoned_api_units'] == 1
+    with sqlite3.connect(root / 'v2' / 'primary.sqlite3') as db:
+        state, raw = db.execute('SELECT state,data FROM units').fetchone()
+    assert state == 'api_execution_unknown'
+    assert json.loads(raw)['route'] == 'api'
+
+
+def test_explicit_abandonment_does_not_cover_other_or_nonfailed_api_work(tmp_path):
+    root, frozen, repository = _bridge_inventory_fixture(
+        tmp_path, 'api_execution_unknown', native_status='running', route='api',
+    )
+
+    with pytest.raises(_MODULE.CutoverBlocked, match='api_abandonment_not_eligible'):
+        _MODULE.inspect_bridge_work(
+            root, frozen, repository, abandoned_api_job_ids={'job1'},
+        )
+
+
+def test_explicit_abandonment_requires_empty_output_list(tmp_path):
+    root, frozen, repository = _bridge_inventory_fixture(
+        tmp_path, 'api_execution_unknown', native_status='failed', route='api',
+    )
+    with sqlite3.connect(repository) as db:
+        db.execute('UPDATE v2_records SET payload=?', (
+            json.dumps({'job_id':'job1','status':'failed','outputs':[{'output_id':'existing'}]}),
+        ))
+
+    with pytest.raises(_MODULE.CutoverBlocked, match='api_abandonment_not_eligible'):
+        _MODULE.inspect_bridge_work(
+            root, frozen, repository, abandoned_api_job_ids={'job1'},
+        )
 
 
 def test_direct_job_and_frozen_without_neutral_unit_blocks(tmp_path):
