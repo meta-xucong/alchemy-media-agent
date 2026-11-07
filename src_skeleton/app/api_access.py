@@ -52,7 +52,7 @@ _PRODUCT_PATHS = {
         rf"jobs/{_ID}", rf"uploads/{_ID}", rf"uploads/{_ID}/content",
         rf"outputs/{_ID}/(?:download|preview|thumbnail)"],
     "POST": ["projects", rf"projects/{_ID}/jobs", rf"projects/{_ID}/jobs/{_ID}/select",
-        "uploads", rf"uploads/{_ID}/complete"],
+        rf"projects/{_ID}/jobs/{_ID}/generate", "uploads", rf"uploads/{_ID}/complete"],
     "PUT": [rf"uploads/{_ID}/content"],
 }
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import os
@@ -45,15 +44,56 @@ def enabled() -> bool:
     return PrimarySettings.from_env(product="v2").enabled
 
 
+_LEGACY_FROZEN_PATHS: dict[str, Path] = {}
+
+
 def _path(key: str) -> Path:
-    return settings.data_dir / "render_bridge_primary" / "requests" / (hashlib.sha256(key.encode()).hexdigest() + ".json")
+    legacy = _LEGACY_FROZEN_PATHS.get(key)
+    if legacy is not None and legacy.is_file():
+        return legacy
+    name = base64.urlsafe_b64encode(key.encode("utf-8")).decode("ascii").rstrip("=")
+    return settings.data_dir / "render_bridge_primary" / "requests" / ("v2_" + name + ".json")
+
+
+def _legacy_frozen_record(key: str) -> dict | None:
+    kind, _, identity = key.partition(":")
+    field = {"job": "job_id", "task": "queue_task_id"}.get(kind)
+    if field is None or not identity:
+        return None
+    root = settings.data_dir / "render_bridge_primary" / "requests"
+    marker = (json.dumps(field) + ": " + json.dumps(identity)).encode("utf-8")
+    for candidate in (sorted(root.glob("*.json")) if root.exists() else ()):
+        stem = candidate.stem
+        if len(stem) != 64 or any(char not in "0123456789abcdef" for char in stem):
+            continue
+        matched = False
+        try:
+            with candidate.open("rb") as handle:
+                overlap = b""
+                while chunk := handle.read(65536):
+                    sample = overlap + chunk
+                    if marker in sample:
+                        matched = True
+                        break
+                    overlap = sample[-len(marker):]
+            if not matched:
+                continue
+            record = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(record, dict) and record.get(field) == identity:
+            _LEGACY_FROZEN_PATHS[key] = candidate
+            return record
+    return None
 
 
 def load_frozen(job_id: str | None = None) -> dict | None:
     claim = task_queue.current_claim()
     key = f"task:{claim.task_id}" if claim is not None and job_id is None else f"job:{job_id}"
     path = _path(key)
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return _legacy_frozen_record(key)
 
 
 def frozen_request(record: dict) -> CreateImageJobRequest:
@@ -253,7 +293,7 @@ def _cleanup_db():
 
 def request_cache_cleanup(job_id: str):
     """Durable intent, not permission to erase pending generation/settlement."""
-    if not _path(f'job:{job_id}').exists(): return
+    if load_frozen(job_id) is None: return
     with _cleanup_db() as db:
         db.execute('INSERT OR IGNORE INTO cleanup(job_id) VALUES(?)', (job_id,))
 

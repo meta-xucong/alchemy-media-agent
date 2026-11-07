@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import asyncio
 import hashlib
 import io
@@ -129,14 +130,18 @@ class PrimaryRequest:
 
     @property
     def key(self):
+        if self.product == 'v2':
+            value = _json([self.product, self.owner_id, self.unit_id]).encode('utf-8')
+            return 'v2_' + base64.urlsafe_b64encode(value).decode('ascii').rstrip('=')
         return _hash(_json([self.product, self.owner_id, self.unit_id]).encode())
 
     @property
     def digest(self):
-        return _hash(_json([self.product, self.owner_id, self.unit_id, self.prompt,
-                           self.parameters, self.hard_requirements, self.binding_id,
-                           [[r.reference_key or str(index), r.mime_type, len(r.content)]
-                            for index, r in enumerate(self.references)]]).encode())
+        value = _json([self.product, self.owner_id, self.unit_id, self.prompt,
+                       self.parameters, self.hard_requirements, self.binding_id,
+                       [[r.reference_key or str(index), r.mime_type, len(r.content)]
+                        for index, r in enumerate(self.references)]])
+        return value if self.product == 'v2' else _hash(value.encode())
 
 
 @dataclass(frozen=True)
@@ -174,6 +179,7 @@ class PrimaryTransport:
         self.settings = settings
         self.client = client or BridgeClient(settings.base_url, settings.token)
         self.path = Path(settings.state_dir) / 'primary.sqlite3'
+        self._resolved_keys = {}
 
     def _db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,34 +195,77 @@ class PrimaryTransport:
     async def __aenter__(self): return self
     async def __aexit__(self, *args): await self.close()
 
-    def _read(self, request):
+    @staticmethod
+    def _identity(request):
+        return request.product, request.owner_id, request.unit_id
+
+    def _key(self, request):
+        return self._resolved_keys.get(self._identity(request), request.key)
+
+    def _find_row(self, request):
         if not self.path.exists(): return None
         with self._db() as db:
             row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
-        if row and row['digest'] != request.digest:
-            raise PrimaryError('request_semantics_changed')
+            if row is None and request.product == 'v2':
+                row = db.execute(
+                    "SELECT * FROM units WHERE json_extract(data,'$.product')=? "
+                    "AND json_extract(data,'$.unit_id')=? LIMIT 1",
+                    (request.product, request.unit_id),
+                ).fetchone()
+        if row:
+            self._resolved_keys[self._identity(request)] = row['key']
+        return row
+
+    def _read(self, request):
+        row = self._find_row(request)
+        if row:
+            data = json.loads(row['data'])
+            if request.product == 'v2':
+                legacy_bound_task = (
+                    data.get('product') == 'v2'
+                    and data.get('unit_id') == request.unit_id
+                    and (data.get('payload') is not None or data.get('task_id') is not None)
+                )
+                current_identity = data.get('identity_version') == 'v2_plain_v1'
+                if current_identity and row['digest'] != request.digest:
+                    raise PrimaryError('request_semantics_changed')
+                if not current_identity and not legacy_bound_task:
+                    raise PrimaryError('legacy_request_identity_unavailable')
+            elif row['digest'] != request.digest:
+                raise PrimaryError('request_semantics_changed')
         return row
 
     def match_existing_request(self, candidates):
-        """Select an exact historical digest without modifying the journal.
+        """Select an existing request interpretation without changing its ledger row.
 
         Callers supply known versioned reconstructions, never arbitrary saved
-        payloads. A known key with no matching digest remains a hard failure.
+        payloads. V2 legacy rows use their saved wire request and job identity.
         """
         candidates = tuple(candidates)
         if not candidates or len({request.key for request in candidates}) != 1:
             raise PrimaryError('invalid_request_candidates')
-        if not self.path.exists(): return None
-        with sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True) as db:
-            row = db.execute('SELECT digest FROM units WHERE key=?', (candidates[0].key,)).fetchone()
+        row = self._find_row(candidates[0])
         if row is None: return None
+        data = json.loads(row['data'])
+        if candidates[0].product == 'v2' and data.get('identity_version') != 'v2_plain_v1':
+            saved = data.get('payload')
+            matches = []
+            if isinstance(saved, dict) and isinstance(saved.get('parameters'), dict):
+                for request in candidates:
+                    if request.prompt != saved.get('prompt'):
+                        continue
+                    if all(saved['parameters'].get(key) == value for key, value in request.parameters.items()):
+                        matches.append(request)
+            if len(matches) == 1:
+                return matches[0]
+            raise PrimaryError('legacy_request_semantics_unavailable')
         for request in candidates:
-            if request.digest == row[0]:
+            if request.digest == row['digest']:
                 return request
         raise PrimaryError('request_semantics_changed')
 
     def _save(self, request, data, *, state=None, image=None):
-        return self._save_key(request.key, data, state=state, image=image)
+        return self._save_key(self._key(request), data, state=state, image=image)
 
     def _save_key(self, key, data, *, state=None, image=None):
         state = state or data['state']
@@ -257,6 +306,8 @@ class PrimaryTransport:
         data = dict(product=request.product, owner_hash=_hash(request.owner_id.encode()), unit_id=request.unit_id, route='bridge', state='preflight', reason='bridge_primary', origin_key='rb_'+request.key,
                     execution_key='api_'+request.key, endpoint=self.settings.base_url,
                     workspace=self.settings.workspace, profile=self.settings.profile)
+        if request.product == 'v2':
+            data['identity_version'] = 'v2_plain_v1'
         with self._db() as db:
             db.execute('INSERT OR IGNORE INTO units(key,digest,state,data) VALUES(?,?,?,?)',
                        (request.key,request.digest,'preflight',_json(data)))
@@ -297,12 +348,7 @@ class PrimaryTransport:
 
     def cached_result(self, request):
         """Inspect an existing exact binding without HTTP or new admission."""
-        if not self.path.exists(): return None
-        with sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True) as db:
-            db.row_factory = sqlite3.Row
-            row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
-        if row and row['digest'] != request.digest:
-            raise PrimaryError('request_semantics_changed')
+        row = self._read(request)
         return self._result(row) if row is not None else None
 
     has_unit = has_binding
@@ -310,12 +356,13 @@ class PrimaryTransport:
     def _api(self, request, data, reason, *, first_create=False):
         data.update(route='api',state='api_ready',reason=reason)
         expected = 'bridge_submission_unknown' if first_create else 'preflight'
+        key = self._key(request)
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
-            previous=db.execute('SELECT state,data FROM units WHERE key=?',(request.key,)).fetchone()
+            previous=db.execute('SELECT state,data FROM units WHERE key=?',(key,)).fetchone()
             if previous and previous['state']==expected and not json.loads(previous['data']).get('cancel_requested'):
                 db.execute('UPDATE units SET state=?,data=? WHERE key=? AND state=?',
-                           ('api_ready',_json(data),request.key,expected))
+                           ('api_ready',_json(data),key,expected))
         return self._result(self._read(request))
 
     def claim_api(self, request):
@@ -329,7 +376,7 @@ class PrimaryTransport:
         if data['route']!='api': raise PrimaryError('bridge_owns_execution')
         data['state']='api_execution_unknown'
         with self._db() as db:
-            result=db.execute("UPDATE units SET state=?,data=? WHERE key=? AND state='api_ready'",('api_execution_unknown',_json(data),request.key))
+            result=db.execute("UPDATE units SET state=?,data=? WHERE key=? AND state='api_ready'",('api_execution_unknown',_json(data),self._key(request)))
             return result.rowcount==1
 
     def complete_api(self, request):
@@ -544,14 +591,14 @@ class PrimaryTransport:
                     provenance.update(state='failed',reason='bridge_store_busy')
                     return replace(pending,state='failed',reason='bridge_store_busy',provenance=provenance)
                 return self._api(request,data,'bridge_unavailable')
-            payload=dict(schema_version='1',origin_key=data['origin_key'],binding_id=request.binding_id or request.key,
+            payload=dict(schema_version='1',origin_key=data['origin_key'],binding_id=request.binding_id or self._key(request),
                          operation='image.generate',execution_profile_id=self.settings.profile,execution_profile_revision='1',
                          prompt=request.prompt,parameters=payload_request.parameters,references=references,output_slot={'slot_id':'primary','count':1},
                          deadline=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(),routing='bridge_only')
             data.update(payload=payload,state='bridge_submission_unknown')
             # CAS is the only create permit, across workers/processes. Store the exact wire payload first.
             with self._db() as db:
-                won=db.execute("UPDATE units SET state=?,data=? WHERE key=? AND state='preflight'",(data['state'],_json(data),request.key)).rowcount==1
+                won=db.execute("UPDATE units SET state=?,data=? WHERE key=? AND state='preflight'",(data['state'],_json(data),self._key(request))).rowcount==1
             if not won: return self._result(self._read(request))
             try: task=await self.client.create_task(payload)
             except BridgeError as error:
@@ -629,7 +676,7 @@ class PrimaryTransport:
         self._read(request)  # Validate the frozen request digest.
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
-            row=db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
+            row=db.execute('SELECT * FROM units WHERE key=?', (self._key(request),)).fetchone()
             if not row: raise PrimaryError('artifact_not_registered')
             data=json.loads(row['data'])
             if data.get('registration_ref') not in {None, registration_ref}:
@@ -639,14 +686,14 @@ class PrimaryTransport:
             if row['image'] is None: raise PrimaryError('artifact_not_registered')
             self._check_scope(data)
             data['registration_ref']=registration_ref
-            db.execute('UPDATE units SET data=? WHERE key=?', (_json(data), request.key))
-        await self._ack_saved(request.key, data)
+            db.execute('UPDATE units SET data=? WHERE key=?', (_json(data), self._key(request)))
+        await self._ack_saved(self._key(request), data)
 
     def retire_units(self, requests):
         """Drop duplicate bytes only after the owning product confirms publication.
 
-        All units must be ACKed/API-completed. Keep semantic digests and receipt
-        identities permanently; absent bytes never authorize a new execution.
+        All units must be ACKed/API-completed. Keep request identity and receipt
+        records permanently; absent bytes never authorize a new execution.
         This is an explicit product lifecycle hook, not an age-based sweep.
         """
         requests = tuple(requests)
@@ -655,18 +702,23 @@ class PrimaryTransport:
             db.execute('BEGIN IMMEDIATE')
             rows = []
             for request in requests:
-                row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
+                row = db.execute('SELECT * FROM units WHERE key=?', (self._key(request),)).fetchone()
                 if row is None: return False
-                if row['digest'] != request.digest:
-                    raise PrimaryError('request_semantics_changed')
                 data = json.loads(row['data'])
+                if request.product == 'v2':
+                    if data.get('product') != 'v2' or data.get('unit_id') != request.unit_id:
+                        raise PrimaryError('request_semantics_changed')
+                    if data.get('identity_version') == 'v2_plain_v1' and row['digest'] != request.digest:
+                        raise PrimaryError('request_semantics_changed')
+                elif row['digest'] != request.digest:
+                    raise PrimaryError('request_semantics_changed')
                 if row['state'] not in {'acked', 'api_completed'}: return False
                 if row['state'] == 'acked' and not data.get('registration_ref'): return False
-                rows.append((request.key, data))
+                rows.append((self._key(request), data))
             for key, data in rows:
                 data['cache_retired'] = True
-                # The digest remains authoritative; no replay needs raw prompt
-                # or reference bindings after the remote receipt is ACKed.
+                # No replay needs the raw prompt or reference bindings after the
+                # remote receipt is ACKed.
                 data.pop('payload', None)
                 db.execute('UPDATE units SET data=?, image=NULL WHERE key=?', (_json(data), key))
         return True
@@ -684,16 +736,21 @@ class PrimaryTransport:
             db.execute('BEGIN IMMEDIATE')
             rows = []
             for request in requests:
-                row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
+                row = db.execute('SELECT * FROM units WHERE key=?', (self._key(request),)).fetchone()
                 if row is None: return False
-                if row['digest'] != request.digest:
-                    raise PrimaryError('request_semantics_changed')
                 data = json.loads(row['data'])
+                if request.product == 'v2':
+                    if data.get('product') != 'v2' or data.get('unit_id') != request.unit_id:
+                        raise PrimaryError('request_semantics_changed')
+                    if data.get('identity_version') == 'v2_plain_v1' and row['digest'] != request.digest:
+                        raise PrimaryError('request_semantics_changed')
+                elif row['digest'] != request.digest:
+                    raise PrimaryError('request_semantics_changed')
                 if row['state'] not in {'artifacts_ready', 'acked', 'api_completed'}: return False
                 if data.get('cancel_requested'): return False
                 if row['state'] == 'artifacts_ready' and row['image'] is None: return False
                 if row['state'] == 'acked' and not data.get('registration_ref'): return False
-                rows.append((request.key, row['state'], data))
+                rows.append((self._key(request), row['state'], data))
             for key, state, data in rows:
                 data['cache_retirement_requested'] = True
                 if state in {'acked', 'api_completed'}:
@@ -760,12 +817,21 @@ class PrimaryTransport:
 
     async def cancel_binding(self, product, owner_id, unit_id):
         """Cancel only a pre-existing product-owned binding; never submit or import."""
-        key=_hash(_json([product,owner_id,unit_id]).encode())
+        identity_request = PrimaryRequest(product, owner_id, unit_id, '', {})
+        key = self._key(identity_request)
         if not self.path.exists(): raise PrimaryError('route_not_resolved')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT * FROM units WHERE key=?',(key,)).fetchone()
+            if row is None and product == 'v2':
+                row = db.execute(
+                    "SELECT * FROM units WHERE json_extract(data,'$.product')=? "
+                    "AND json_extract(data,'$.unit_id')=? LIMIT 1",
+                    (product, unit_id),
+                ).fetchone()
             if not row: raise PrimaryError('route_not_resolved')
+            key = row['key']
+            self._resolved_keys[self._identity(identity_request)] = key
             data=json.loads(row['data'])
             if data['state']=='acked' or data.get('registration_ref'): return self._result(row)
             data['cancel_requested']=True
