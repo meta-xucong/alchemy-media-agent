@@ -271,6 +271,9 @@ def test_candidate_image_is_locked_and_contains_expected_revision_label() -> Non
     assert "ALCHEMY_REVISION" in compose
     assert "candidate_image_revision_mismatch" in activate
     assert "estimate-space" in activate
+    assert 'image: "alchemy-media-agent:${ALCHEMY_IMAGE_TAG:-latest}"' in compose
+    assert 'ALCHEMY_IMAGE_TAG="candidate-${expected_sha}" ALCHEMY_REVISION="$expected_sha" compose_candidate build' in candidate
+    assert 'docker tag alchemy-media-agent:latest "alchemy-media-agent:candidate-${expected_sha}"' not in candidate
 
 
 def test_candidate_migrates_only_the_known_old_v3_brain_budget() -> None:

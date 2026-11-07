@@ -333,13 +333,12 @@ jobs:
 
           verify_release_source_tree "$candidate_release" || stop candidate_release_source_tree_changed_before_build
           build_log="$(mktemp)"
-          if ! ALCHEMY_REVISION="$expected_sha" compose_candidate build alchemy-media-agent >"$build_log" 2>&1; then
+          if ! ALCHEMY_IMAGE_TAG="candidate-${expected_sha}" ALCHEMY_REVISION="$expected_sha" compose_candidate build alchemy-media-agent >"$build_log" 2>&1; then
             tail -n 120 "$build_log" >&2 || true
             rm -f -- "$build_log"
             stop candidate_image_build_failed
           fi
           rm -f -- "$build_log"
-          docker tag alchemy-media-agent:latest "alchemy-media-agent:candidate-${expected_sha}"
           image_revision="$(docker image inspect "alchemy-media-agent:candidate-${expected_sha}" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
           [ "$image_revision" = "$expected_sha" ] || stop candidate_image_revision_mismatch
           docker run --rm \
