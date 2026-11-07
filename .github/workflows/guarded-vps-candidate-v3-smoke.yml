@@ -1,0 +1,299 @@
+name: Guarded VPS Candidate V3 Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact inactive candidate commit already prepared on the VPS"
+        required: true
+        type: string
+      user_input:
+        description: "One standard V3 still-life test prompt"
+        required: true
+        default: "A clean still-life photograph of a white ceramic cup beside a small green plant on a pale wooden table, soft natural window light, realistic camera finish, no text."
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guarded-vps-candidate-v3-smoke
+  cancel-in-progress: false
+
+jobs:
+  candidate-v3-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      EXPECTED_CANDIDATE_SHA: ${{ inputs.expected_sha }}
+      CANDIDATE_V3_USER_INPUT: ${{ inputs.user_input }}
+      CANDIDATE_V3_TIMEOUT_SECONDS: "3300"
+      CANDIDATE_V3_API_PORT: "18017"
+
+    steps:
+      - name: Checkout the guarded runner source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Check inputs and prepare SSH
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_USER: ${{ secrets.VPS_USER || 'root' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          V3_CANDIDATE_AUTH_TOKEN: ${{ secrets.V3_CANDIDATE_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] && (( VPS_PORT >= 1 && VPS_PORT <= 65535 ))
+          [[ "$VPS_USER" =~ ^[A-Za-z0-9_.-]{1,64}$ ]]
+          [[ "$VPS_HOST" =~ ^[A-Za-z0-9_.:-]{1,255}$ ]]
+          test -n "$VPS_HOST"
+          test -n "$V3_CANDIDATE_AUTH_TOKEN" || { echo "candidate_v3_auth_secret_missing" >&2; exit 2; }
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          python3 - <<'PY'
+          import os
+          import socket
+          value = os.environ.get("CANDIDATE_V3_USER_INPUT", "")
+          if not value.strip() or len(value) > 1000 or any(ord(ch) < 32 and ch not in "\n\t" for ch in value):
+              raise SystemExit("candidate_v3_user_input_invalid")
+          port = int(os.environ["CANDIDATE_V3_API_PORT"])
+          with socket.socket() as sock:
+              try:
+                  sock.bind(("127.0.0.1", port))
+              except OSError:
+                  raise SystemExit("candidate_v3_local_tunnel_port_busy") from None
+          token = os.environ["V3_CANDIDATE_AUTH_TOKEN"]
+          auth_kind = "api_key" if token.startswith(("alk_v3_", "alk_live_")) else "session"
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"CANDIDATE_V3_AUTH_KIND={auth_kind}\n")
+          print("GUARDED_CANDIDATE_V3_PREFLIGHT=pass")
+          PY
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Run one generation against the isolated candidate API
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_USER: ${{ secrets.VPS_USER || 'root' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          V3_CANDIDATE_AUTH_TOKEN: ${{ secrets.V3_CANDIDATE_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          remote="${VPS_USER}@${VPS_HOST}"
+          api_port="$CANDIDATE_V3_API_PORT"
+          container="alchemy-candidate-v3-${EXPECTED_CANDIDATE_SHA:0:8}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          lifecycle_log="$RUNNER_TEMP/candidate-v3-lifecycle.log"
+          lifecycle_pid=""
+          tunnel_pid=""
+          remote_stop() {
+            ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              "$remote" "docker rm -f '$container' >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+          }
+          cleanup() {
+            status=$?
+            trap - EXIT INT TERM
+            if test -n "$tunnel_pid"; then kill "$tunnel_pid" >/dev/null 2>&1 || true; wait "$tunnel_pid" 2>/dev/null || true; fi
+            if grep -q 'GUARDED_CANDIDATE_V3_CONTAINER_STARTED=1' "$lifecycle_log" 2>/dev/null; then remote_stop; fi
+            if test -n "$lifecycle_pid"; then wait "$lifecycle_pid" 2>/dev/null || true; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" bash -s -- "$EXPECTED_CANDIDATE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$api_port" "$CANDIDATE_V3_AUTH_KIND" \
+            >"$lifecycle_log" 2>&1 <<'REMOTE_SCRIPT' &
+          set -euo pipefail
+          expected_sha="$1"
+          run_id="$2"
+          run_attempt="$3"
+          api_port="$4"
+          auth_kind="$5"
+          [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$run_id" =~ ^[0-9]+$ && "$run_attempt" =~ ^[0-9]+$ ]]
+          [[ "$api_port" =~ ^[0-9]{5}$ && "$auth_kind" =~ ^(api_key|session)$ ]]
+          container="alchemy-candidate-v3-${expected_sha:0:8}-${run_id}-${run_attempt}"
+
+          install -d -m 755 /run/lock
+          exec 9>/run/lock/alchemy-media-agent-release.lock
+          flock -w 300 9 || { echo GUARDED_CANDIDATE_V3_STOP=shared_release_lock_unavailable >&2; exit 2; }
+          deploy_link="/opt/alchemy-media-agent"
+          releases_root="/opt/alchemy-media-agent-releases"
+          candidate_release="${releases_root}/doc276-277-${expected_sha:0:12}"
+          candidate_image="alchemy-media-agent:candidate-${expected_sha}"
+          active_container="alchemy-media-agent"
+          smoke_root="/var/lib/alchemy/candidate-smoke/v3/${expected_sha}/${run_id}-${run_attempt}"
+          marker="/var/lib/alchemy/candidate-smoke/v3/${expected_sha}/generation-started"
+          bridge_paths=""
+          container_started=0
+          stop_reason() { printf 'GUARDED_CANDIDATE_V3_STOP=%s\n' "$1" >&2; exit 2; }
+          cleanup_remote() {
+            status=$?
+            trap - EXIT INT TERM
+            if [ "$container_started" = 1 ]; then docker rm -f "$container" >/dev/null 2>&1 || true; fi
+            exit "$status"
+          }
+          trap cleanup_remote EXIT INT TERM
+
+          [ -L "$deploy_link" ] || stop_reason deployment_link_missing
+          active_release="$(realpath "$deploy_link")"
+          [ -d "$candidate_release" ] || stop_reason candidate_release_missing
+          [ "$(realpath "$candidate_release")" != "$active_release" ] || stop_reason candidate_is_active
+          [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop_reason candidate_head_mismatch
+          [ "$(docker image inspect "$candidate_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null)" = "$expected_sha" ] || stop_reason candidate_image_revision_mismatch
+          [ "$(docker inspect "$active_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop_reason active_v1_not_running
+          candidate_env="$candidate_release/src_skeleton/.env"
+          [ -f "$candidate_env" ] || stop_reason candidate_env_missing
+          media_root="$(docker inspect "$active_container" --format '{{range .Mounts}}{{if eq .Destination "/app/.media_storage"}}{{.Source}}{{end}}{{end}}')"
+          v2_storage="$(docker inspect "$active_container" --format '{{range .Mounts}}{{if eq .Destination "/var/lib/alchemy/v2/storage"}}{{.Source}}{{end}}{{end}}')"
+          [ -d "$media_root" ] && [ -d "$v2_storage" ] || stop_reason active_storage_mount_missing
+          [ -f /etc/alchemy/alchemy-v2.env ] || stop_reason v2_environment_missing
+          python3 - "$api_port" <<'PY'
+          import socket
+          import sys
+          sock = socket.socket()
+          try:
+              sock.bind(("127.0.0.1", int(sys.argv[1])))
+          except OSError:
+              raise SystemExit("candidate_api_port_busy") from None
+          finally:
+              sock.close()
+          PY
+          v2_data="$(awk -F= '$1 == "V2_DATA_DIR" {sub(/^[^=]*=/, ""); sub(/\r$/, ""); print; exit}' /etc/alchemy/alchemy-v2.env)"
+          [ -n "$v2_data" ] || v2_data="$v2_storage"
+          v2_queue_db="$(awk -F= '$1 == "V2_TASK_QUEUE_DB_PATH" {sub(/^[^=]*=/, ""); sub(/\r$/, ""); print; exit}' /etc/alchemy/alchemy-v2.env)"
+          [ -n "$v2_queue_db" ] || v2_queue_db="$v2_data/task_queue.sqlite3"
+          bridge_paths="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" verify-bridge-storage-configuration \
+            --v1-environment "$candidate_env" --v2-environment /etc/alchemy/alchemy-v2.env \
+            --release-root "$active_release" --release-root "$candidate_release")" || stop_reason bridge_storage_configuration_invalid
+          bridge_control="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["control_path"])' <<<"$bridge_paths")"
+          bridge_control_dir="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["control_dir"])' <<<"$bridge_paths")"
+          bridge_state="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' <<<"$bridge_paths")"
+          [ -d "$bridge_control_dir" ] && [ -d "$bridge_state" ] || stop_reason bridge_storage_path_missing
+          v1_started_at="$(docker inspect "$active_container" --format '{{.State.StartedAt}}')"
+          python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
+            --v1-database "$media_root/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
+            --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
+            --v2-repository "$v2_data/repository.sqlite3" --v3-projects-root "$media_root/v3_projects" \
+            --v3-container-started-at "$v1_started_at" >/dev/null || stop_reason active_or_unknown_work_detected
+          available_bytes="$(df -PB1 /var/lib/alchemy | awk 'NR == 2 {print $4}')"
+          [[ "$available_bytes" =~ ^[0-9]+$ ]] && [ "$available_bytes" -ge 536870912 ] || stop_reason candidate_smoke_disk_floor_not_met
+          [ ! -e "$marker" ] || stop_reason generation_already_attempted_for_sha
+          smoke_parent="$(dirname "$smoke_root")"
+          [ ! -e "$smoke_root" ] || stop_reason candidate_smoke_run_directory_exists
+          install -d -m 700 "$smoke_parent" "$smoke_root/media"
+          printf 'expected_sha=%s\nrun_id=%s\nrun_attempt=%s\n' "$expected_sha" "$run_id" "$run_attempt" > "$smoke_root/run.txt"
+          chmod 600 "$smoke_root/run.txt"
+          if [ "$auth_kind" = api_key ]; then
+            key_db_source="$media_root/api_access/keys.sqlite3"
+            key_db_target="$smoke_root/media/api_access/keys.sqlite3"
+            [ -f "$key_db_source" ] || stop_reason candidate_api_key_store_missing
+            install -d -m 700 "$(dirname "$key_db_target")"
+            python3 - "$key_db_source" "$key_db_target" <<'PY'
+          import sqlite3
+          import sys
+          from pathlib import Path
+          source = Path(sys.argv[1]).resolve().as_uri() + "?mode=ro"
+          destination = sys.argv[2]
+          with sqlite3.connect(source, uri=True, timeout=15) as src:
+              with sqlite3.connect(destination, timeout=15) as dst:
+                  src.backup(dst)
+          Path(destination).chmod(0o600)
+          PY
+          fi
+          docker inspect "$container" >/dev/null 2>&1 && stop_reason candidate_container_name_in_use
+          docker run --detach --rm --name "$container" --network host \
+            --label "alchemy.candidate.smoke=true" --label "alchemy.candidate.sha=$expected_sha" \
+            --env-file "$candidate_env" \
+            --env ALCHEMY_APP_ROOT=/app \
+            --env MEDIA_STORAGE_ROOT=/app/.media_storage \
+            --env ALCHEMY_V3_JOB_DIR=/app/.media_storage \
+            --env ALCHEMY_V3_PROJECT_DIR=/app/.media_storage/v3_projects \
+            --env ALCHEMY_V3_OUTPUT_DIR=/app/.media_storage/v3_outputs \
+            --env ALCHEMY_V3_UPLOAD_DIR=/app/.media_storage/v3_uploads \
+            --env V3_VISUAL_ASSET_CATALOG_ROOT=/app/.media_storage/v3_visual_assets \
+            --env V3_VISUAL_ASSET_LIBRARY_ROOT=/app/.media_storage/v3_visual_asset_library \
+            --env ALCHEMY_V3_MCP_MATERIALIZATION_ROOT=/app/.media_storage/v3_mcp_materializations \
+            --env ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG="$bridge_control" \
+            --env ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT="$bridge_state" \
+            --env ALCHEMY_RENDER_BRIDGE_CONTROL_DIR="$bridge_control_dir" \
+            --env V1_MEDIA_STORAGE_DIR=/app/.media_storage \
+            --env V2_STORAGE_DIR=/var/lib/alchemy/v2/storage \
+            --env V2_API_PROXY_BASE_URL=http://127.0.0.1:8020 \
+            --mount "type=bind,src=$candidate_env,dst=/app/.env,readonly" \
+            --mount "type=bind,src=$smoke_root/media,dst=/app/.media_storage" \
+            --mount "type=bind,src=$v2_storage,dst=/var/lib/alchemy/v2/storage,readonly" \
+            --mount "type=bind,src=$bridge_control_dir,dst=$bridge_control_dir" \
+            --mount "type=bind,src=$bridge_state,dst=$bridge_state" \
+            "$candidate_image" timeout --signal=TERM --kill-after=30s 65m \
+            python -m uvicorn app.main:app --host 127.0.0.1 --port "$api_port" >/dev/null || stop_reason candidate_container_start_failed
+          container_started=1
+          printf 'GUARDED_CANDIDATE_V3_CONTAINER_STARTED=1\n'
+          health_ok=0
+          for _ in $(seq 1 120); do
+            if [ "$(docker inspect "$container" --format '{{.State.Running}}' 2>/dev/null || true)" != true ]; then break; fi
+            listener_pids="$(ss -H -ltnp "sport = :$api_port" 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p')"
+            container_pids="$(docker top "$container" -eo pid 2>/dev/null | awk 'NR > 1 {print $1}')"
+            owns_listener=0
+            for listener_pid in $listener_pids; do
+              if printf '%s\n' "$container_pids" | grep -Fxq "$listener_pid"; then owns_listener=1; break; fi
+            done
+            if [ "$owns_listener" = 1 ] && curl --fail --silent --max-time 2 "http://127.0.0.1:${api_port}/healthz" >/dev/null; then health_ok=1; break; fi
+            sleep 2
+          done
+          [ "$health_ok" = 1 ] || stop_reason candidate_api_health_failed
+          active_now="$(realpath "$deploy_link")"
+          [ "$active_now" = "$active_release" ] || stop_reason active_release_changed_during_candidate_smoke
+          printf 'GUARDED_CANDIDATE_V3_SERVICE_READY=1\n'
+          docker wait "$container" >/dev/null
+          printf 'GUARDED_CANDIDATE_V3_SERVICE_STOPPED=1\n'
+          REMOTE_SCRIPT
+          lifecycle_pid=$!
+
+          ready=0
+          for _ in $(seq 1 150); do
+            if grep -q 'GUARDED_CANDIDATE_V3_SERVICE_READY=1' "$lifecycle_log"; then ready=1; break; fi
+            if ! kill -0 "$lifecycle_pid" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          if [ "$ready" != 1 ]; then
+            cat "$lifecycle_log" >&2
+            echo "candidate_v3_service_start_failed" >&2
+            exit 2
+          fi
+
+          ssh -i ~/.ssh/id_ed25519 -N -L "${api_port}:127.0.0.1:${api_port}" -p "$VPS_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$remote" \
+            >"$RUNNER_TEMP/candidate-v3-tunnel.log" 2>&1 &
+          tunnel_pid=$!
+          python3 - <<'PY'
+          import os
+          import socket
+          import time
+          port = int(os.environ["CANDIDATE_V3_API_PORT"])
+          deadline = time.monotonic() + 60
+          while time.monotonic() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1", port), timeout=1):
+                      break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("candidate_v3_ssh_tunnel_unavailable")
+          PY
+          python3 scripts/vps_candidate_v3_smoke.py
