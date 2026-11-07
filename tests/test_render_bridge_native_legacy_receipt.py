@@ -32,7 +32,7 @@ from alchemy_creative_agent_3_0.app.product_api.service import (
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 
 
-def test_registration_status_recovers_legacy_binding_and_original_output(tmp_path, monkeypatch):
+def test_registration_status_recovers_legacy_finalizing_binding_and_original_output(tmp_path, monkeypatch):
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
     planned = ScenarioRuntime().plan_job(
@@ -138,21 +138,33 @@ def test_registration_status_recovers_legacy_binding_and_original_output(tmp_pat
     service = V3ProductApiService.__new__(V3ProductApiService)
     service.job_store = job_store
     service.output_store = output_store
-    service._render_bridge_review_pending = Mock(return_value=False)
+
+    def resume_review(record, request, *, review_only, assert_current):
+        assert record.status == ProductJobStatusValue.FINALIZING
+        assert review_only is True
+        assert_current()
+
+    service._resume_finalizing_generation_review = resume_review
 
     gateway = NativeRenderBridgeGateway.__new__(NativeRenderBridgeGateway)
     gateway.enabled = True
-    gateway.facade = SimpleNamespace(_target=Mock(return_value=None))
+    target = SimpleNamespace(project_id=binding.project_id)
+    gateway.facade = SimpleNamespace(
+        _target=Mock(
+            return_value=(restored_job, SimpleNamespace(status="active"), binding.target_revision)
+        )
+    )
+    gateway._admit_references = Mock(return_value=None)
     gateway.service = service
     monkeypatch.setattr(gateway, "_journal_path", lambda actor, target: journal_path)
     monkeypatch.setattr(gateway, "_lock", lambda path: nullcontext())
     monkeypatch.setattr(gateway, "_options", lambda *args, **kwargs: None)
 
-    result = gateway.registration_status(7, SimpleNamespace(), import_key="legacy-import")
+    result = gateway.registration_status(7, target, import_key="legacy-import")
 
     assert result["status"] == "registered"
+    assert result["review_pending"] is True
     assert result["native_registration_ref"] == old_output_id
     assert output.output_id == old_output_id
     assert Path(output.file_path).read_bytes() == original_bytes
     assert service.get_job_record(job_id) is restored_job
-

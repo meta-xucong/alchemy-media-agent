@@ -460,7 +460,10 @@ class NativeRenderBridgeGateway:
                 record.generation_result.metadata.get("render_bridge_registration")
                 if record.generation_result is not None else None
             )
-            if native != binding.safe_metadata() or str(record.status) not in {"finalizing", "generated", "blocked"}:
+            if (
+                not self.service._matches_render_bridge_registration(native, binding)
+                or str(record.status) not in {"finalizing", "generated", "blocked"}
+            ):
                 raise BridgeNativeFacadeError("render_bridge_target_not_eligible")
 
     @staticmethod
