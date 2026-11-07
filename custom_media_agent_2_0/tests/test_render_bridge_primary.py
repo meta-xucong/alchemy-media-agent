@@ -221,16 +221,14 @@ def test_legacy_v2_artifacts_ready_task_resumes_by_job_identity_without_sha(tmp_
     client = ExistingArtifactClient()
     transport = PrimaryTransport(PrimarySettings(enabled=True, base_url="https://bridge.test",
         token="fixture", workspace="v2-workspace", state_dir=tmp_path / "ledger"), client=client)
+    current_row = transport._start(unit)
+    current_data = json.loads(current_row["data"])
+    current_data.pop("identity_version", None)
+    current_data.update(state="queued", task_id=bridge_task_id, attempt_id=attempt_id,
+        origin_key=origin_key, payload=wire_request)
     with transport._db() as db:
-        db.execute("INSERT INTO units(key,digest,state,data,image) VALUES(?,?,?,?,?)", (
-            "b" * 64, "legacy-digest-value", "queued",
-            json.dumps({"product": "v2", "owner_hash": "legacy-owner-value",
-                    "unit_id": unit.unit_id, "route": "bridge", "state": "queued",
-                "reason": "bridge_primary", "origin_key": origin_key,
-                "execution_key": "api_existing", "endpoint": "https://bridge.test",
-                "workspace": "v2-workspace", "profile": "codex-image",
-                "task_id": bridge_task_id, "attempt_id": attempt_id,
-                "payload": wire_request}), None))
+        db.execute("UPDATE units SET key=?,digest=?,state=?,data=?,image=NULL WHERE key=?", (
+            "b" * 64, "legacy-digest-value", "queued", json.dumps(current_data), current_row["key"]))
 
     result = run_immediate(transport.resolve(unit))
     assert result.route == "bridge" and result.state == "artifacts_ready"

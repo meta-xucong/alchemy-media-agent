@@ -202,7 +202,7 @@ class PrimaryTransport:
     def _key(self, request):
         return self._resolved_keys.get(self._identity(request), request.key)
 
-    def _read(self, request):
+    def _find_row(self, request):
         if not self.path.exists(): return None
         with self._db() as db:
             row = db.execute('SELECT * FROM units WHERE key=?', (request.key,)).fetchone()
@@ -214,6 +214,11 @@ class PrimaryTransport:
                 ).fetchone()
         if row:
             self._resolved_keys[self._identity(request)] = row['key']
+        return row
+
+    def _read(self, request):
+        row = self._find_row(request)
+        if row:
             data = json.loads(row['data'])
             if request.product == 'v2':
                 legacy_bound_task = (
@@ -239,10 +244,10 @@ class PrimaryTransport:
         candidates = tuple(candidates)
         if not candidates or len({request.key for request in candidates}) != 1:
             raise PrimaryError('invalid_request_candidates')
-        row = self._read(candidates[0])
+        row = self._find_row(candidates[0])
         if row is None: return None
-        if candidates[0].product == 'v2' and json.loads(row['data']).get('identity_version') != 'v2_plain_v1':
-            data = json.loads(row['data'])
+        data = json.loads(row['data'])
+        if candidates[0].product == 'v2' and data.get('identity_version') != 'v2_plain_v1':
             saved = data.get('payload')
             matches = []
             if isinstance(saved, dict) and isinstance(saved.get('parameters'), dict):
@@ -700,9 +705,12 @@ class PrimaryTransport:
                 row = db.execute('SELECT * FROM units WHERE key=?', (self._key(request),)).fetchone()
                 if row is None: return False
                 data = json.loads(row['data'])
-                if request.product != 'v2' and row['digest'] != request.digest:
-                    raise PrimaryError('request_semantics_changed')
-                if request.product == 'v2' and (data.get('product') != 'v2' or data.get('unit_id') != request.unit_id):
+                if request.product == 'v2':
+                    if data.get('product') != 'v2' or data.get('unit_id') != request.unit_id:
+                        raise PrimaryError('request_semantics_changed')
+                    if data.get('identity_version') == 'v2_plain_v1' and row['digest'] != request.digest:
+                        raise PrimaryError('request_semantics_changed')
+                elif row['digest'] != request.digest:
                     raise PrimaryError('request_semantics_changed')
                 if row['state'] not in {'acked', 'api_completed'}: return False
                 if row['state'] == 'acked' and not data.get('registration_ref'): return False
@@ -731,9 +739,12 @@ class PrimaryTransport:
                 row = db.execute('SELECT * FROM units WHERE key=?', (self._key(request),)).fetchone()
                 if row is None: return False
                 data = json.loads(row['data'])
-                if request.product != 'v2' and row['digest'] != request.digest:
-                    raise PrimaryError('request_semantics_changed')
-                if request.product == 'v2' and (data.get('product') != 'v2' or data.get('unit_id') != request.unit_id):
+                if request.product == 'v2':
+                    if data.get('product') != 'v2' or data.get('unit_id') != request.unit_id:
+                        raise PrimaryError('request_semantics_changed')
+                    if data.get('identity_version') == 'v2_plain_v1' and row['digest'] != request.digest:
+                        raise PrimaryError('request_semantics_changed')
+                elif row['digest'] != request.digest:
                     raise PrimaryError('request_semantics_changed')
                 if row['state'] not in {'artifacts_ready', 'acked', 'api_completed'}: return False
                 if data.get('cancel_requested'): return False
@@ -806,12 +817,21 @@ class PrimaryTransport:
 
     async def cancel_binding(self, product, owner_id, unit_id):
         """Cancel only a pre-existing product-owned binding; never submit or import."""
-        key=_hash(_json([product,owner_id,unit_id]).encode())
+        identity_request = PrimaryRequest(product, owner_id, unit_id, '', {})
+        key = self._key(identity_request)
         if not self.path.exists(): raise PrimaryError('route_not_resolved')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT * FROM units WHERE key=?',(key,)).fetchone()
+            if row is None and product == 'v2':
+                row = db.execute(
+                    "SELECT * FROM units WHERE json_extract(data,'$.product')=? "
+                    "AND json_extract(data,'$.unit_id')=? LIMIT 1",
+                    (product, unit_id),
+                ).fetchone()
             if not row: raise PrimaryError('route_not_resolved')
+            key = row['key']
+            self._resolved_keys[self._identity(identity_request)] = key
             data=json.loads(row['data'])
             if data['state']=='acked' or data.get('registration_ref'): return self._result(row)
             data['cancel_requested']=True
