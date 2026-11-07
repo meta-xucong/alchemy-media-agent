@@ -70,7 +70,9 @@ class VeyraSub2APIClient:
 
     async def exchange_login_ticket(self, ticket: str) -> dict[str, Any]:
         self.ensure_enabled()
-        payload = await self._post_json("/api/veyra/internal/login-ticket/exchange", {"ticket": ticket})
+        payload = await self._post_json(
+            "/api/veyra/internal/login-ticket/exchange", {"ticket": ticket, "intent": "alchemy"}
+        )
         return _data(payload)
 
     async def account(self, user_id: int) -> VeyraAccount:
@@ -178,6 +180,9 @@ def verify_session_token(token: str) -> int:
 async def login_with_ticket(ticket: str, client: VeyraSub2APIClient | None = None) -> dict[str, Any]:
     client = client or VeyraSub2APIClient()
     exchanged = await client.exchange_login_ticket(ticket)
+    intent = str(exchanged.get("intent") or "").strip().lower()
+    if intent != "alchemy":
+        raise VeyraAuthUnauthorized("Ticket is not valid for Alchemy.")
     user_id = int(exchanged.get("user_id") or 0)
     if user_id <= 0:
         raise VeyraAuthUnauthorized("Ticket exchange did not return a user.")
