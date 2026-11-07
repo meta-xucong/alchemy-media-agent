@@ -1,8 +1,9 @@
 """Offline V2 entry/queue tests; no V1 or real renderer imports."""
 import asyncio
 import base64
-import hashlib
 import io
+import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +30,15 @@ def image_bytes():
     stream = io.BytesIO()
     Image.new("RGB", (23, 19), "blue").save(stream, format="PNG")
     return stream.getvalue()
+
+
+def run_immediate(coroutine):
+    try:
+        coroutine.send(None)
+    except StopIteration as completed:
+        return completed.value
+    coroutine.close()
+    raise AssertionError("fake Bridge recovery unexpectedly waited for I/O")
 
 
 class Transport:
@@ -58,7 +68,7 @@ class Transport:
             execution_key=unit.key, task_id=identity["task_id"], receipt_id=identity["receipt_id"],
             provenance={"attempt_id": identity["attempt_id"], "deadline": "2099-01-01T00:00:00+00:00"},
             image=None if self.pending or self.api else SimpleNamespace(content=content, mime_type="image/png",
-                sha256=hashlib.sha256(content).hexdigest(), width=23, height=19))
+                width=23, height=19))
     def claim_api(self, unit):
         self.claims.append(unit.key)
         if unit.key in self.owned: return False
@@ -102,6 +112,7 @@ def test_bridge_entry_without_api_credentials_preserves_original_and_replay(isol
     assert result.status == "completed" and result.provider_id == "render_bridge"
     output = result.outputs[0]
     assert output_storage.read_output_content(output.output_id)[0] == image_bytes()
+    assert output.output_id == f"out_{running.job_id}_0"
     assert "original_sha256" not in output.metadata
     assert output.metadata["render_bridge_primary"]["parameter_adaptation"]["adapter"] == "codex_cli_imagegen_v1"
     assert output.metadata["render_bridge_primary"]["parameter_adaptation"]["defaults_applied"]["quality"] == "native_default"
@@ -123,6 +134,128 @@ def test_pending_resumes_frozen_request_without_mock_or_api(isolated, monkeypatc
     assert result.status == "completed"
     assert isolated.calls[0].digest == isolated.calls[1].digest
     assert isolated.calls[1].prompt == "A blue vase"
+
+
+def test_legacy_v2_artifacts_ready_task_resumes_by_job_identity_without_sha(tmp_path, monkeypatch):
+    from render_bridge_primary import PrimarySettings, PrimaryTransport
+
+    job_id = "job_legacy_resume"
+    bridge_task_id = "task_existing_artifact"
+    attempt_id = "attempt_existing_artifact"
+    receipt_id = "receipt_existing_artifact"
+    origin_key = "rb_existing_origin"
+    product_request = request()
+    record = {
+        "adapter_version": "codex_cli_imagegen_v1",
+        "request": product_request.model_dump(mode="json"),
+        "job_id": job_id,
+        "created_at": "2026-11-07T00:00:00+00:00",
+        "qr": False,
+        "references": [],
+        "requirements": {},
+        "queue_task_id": None,
+    }
+    monkeypatch.setattr(bridge, "settings", SimpleNamespace(data_dir=tmp_path / "data"))
+    legacy_file = tmp_path / "data" / "render_bridge_primary" / "requests" / ("a" * 64 + ".json")
+    legacy_file.parent.mkdir(parents=True)
+    legacy_file.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    assert bridge.load_frozen(job_id) == record
+    assert bridge._path(f"job:{job_id}") == legacy_file
+
+    unit = bridge._unit_request(record, 0)
+    wire_request = {
+        "schema_version": "1",
+        "origin_key": origin_key,
+        "binding_id": "legacy_binding",
+        "operation": "image.generate",
+        "execution_profile_id": "codex-image",
+        "execution_profile_revision": "1",
+        "prompt": unit.prompt,
+        "parameters": unit.parameters,
+        "references": [],
+        "output_slot": {"slot_id": "primary", "count": 1},
+        "deadline": "2099-01-01T00:00:00+00:00",
+        "routing": "bridge_only",
+    }
+
+    class ExistingArtifactClient:
+        def __init__(self):
+            self.by_origin_calls = []
+            self.created_tasks = 0
+            self.created_inputs = 0
+            self.uploads = 0
+
+        async def by_origin(self, key):
+            self.by_origin_calls.append(key)
+            return {"origin_key": origin_key, "request": wire_request,
+                    "remote_task_id": bridge_task_id, "attempt_id": attempt_id,
+                    "receipt_id": receipt_id, "state": "artifacts_ready"}
+
+        async def receipt(self, key):
+            assert key == receipt_id
+            return {"task_id": bridge_task_id, "receipt_id": receipt_id,
+                    "attempt_id": attempt_id, "execution_profile_id": "codex-image",
+                    "execution_profile_revision": "1", "slot_id": "primary",
+                    "artifact_id": "artifact_existing", "size": len(image_bytes()),
+                    "mime_type": "image/png", "dimensions": {"width": 23, "height": 19}}
+
+        async def artifact(self, artifact_id, maximum_bytes):
+            assert artifact_id == "artifact_existing" and maximum_bytes == 16777216
+            return image_bytes(), "image/png"
+
+        async def create_task(self, payload):
+            self.created_tasks += 1
+            raise AssertionError("recovery must reuse the existing task")
+
+        async def create_input(self, payload):
+            self.created_inputs += 1
+            raise AssertionError("recovery must reuse existing inputs")
+
+        async def upload_input(self, *args):
+            self.uploads += 1
+            raise AssertionError("recovery must not upload inputs again")
+
+        async def close(self):
+            return None
+
+    client = ExistingArtifactClient()
+    transport = PrimaryTransport(PrimarySettings(enabled=True, base_url="https://bridge.test",
+        token="fixture", workspace="v2-workspace", state_dir=tmp_path / "ledger"), client=client)
+    with transport._db() as db:
+        db.execute("INSERT INTO units(key,digest,state,data,image) VALUES(?,?,?,?,?)", (
+            "b" * 64, "legacy-digest-value", "queued",
+            json.dumps({"product": "v2", "owner_hash": "legacy-owner-value",
+                    "unit_id": unit.unit_id, "route": "bridge", "state": "queued",
+                "reason": "bridge_primary", "origin_key": origin_key,
+                "execution_key": "api_existing", "endpoint": "https://bridge.test",
+                "workspace": "v2-workspace", "profile": "codex-image",
+                "task_id": bridge_task_id, "attempt_id": attempt_id,
+                "payload": wire_request}), None))
+
+    result = run_immediate(transport.resolve(unit))
+    assert result.route == "bridge" and result.state == "artifacts_ready"
+    assert result.task_id == bridge_task_id and result.receipt_id == receipt_id
+    assert result.image.content == image_bytes()
+    assert client.by_origin_calls == [origin_key]
+    assert (client.created_tasks, client.created_inputs, client.uploads) == (0, 0, 0)
+    with transport._db() as db:
+        rows = db.execute("SELECT key,state FROM units").fetchall()
+    assert len(rows) == 1 and rows[0]["key"] == "b" * 64
+    assert rows[0]["state"] == "artifacts_ready"
+
+
+def test_bridge_output_id_uses_job_and_index_without_sha(monkeypatch):
+    product_request = request()
+    item = V2ImageProviderOutput(b64_json=base64.b64encode(image_bytes()).decode("ascii"),
+        mime_type="image/png", format="png", width=23, height=19,
+        metadata={"render_bridge_primary": {"route": "bridge"}})
+    result = V2ImageProviderResult(provider="render_bridge", model="codex-image", outputs=[item])
+    monkeypatch.setattr(generation, "save_provider_output", lambda **kwargs: kwargs["output"])
+
+    job = generation._job_from_result(product_request, result, job_id="job_stable_output",
+        created_at=datetime(2026, 11, 7, tzinfo=timezone.utc))
+
+    assert job.outputs[0].output_id == "out_job_stable_output_0"
 
 
 def test_v2_entry_fails_store_busy_without_api_and_retains_same_preflight_unit(

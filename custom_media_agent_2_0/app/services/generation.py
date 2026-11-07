@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
 
 from app.config import settings
 from app.providers.images import (
@@ -361,7 +360,7 @@ def _job_from_result(
     outputs: list[ImageOutput] = []
     for index, item in enumerate(result.outputs):
         output = ImageOutput(
-            output_id=("out_" + hashlib.sha256(f"{job_id}:{index}".encode()).hexdigest()[:32]) if item.metadata.get("render_bridge_primary") else new_id("out"),
+            output_id=f"out_{job_id}_{index}" if item.metadata.get("render_bridge_primary") else new_id("out"),
             job_id=job_id,
             url="",
             metadata={

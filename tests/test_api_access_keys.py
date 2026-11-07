@@ -10,6 +10,15 @@ from fastapi.testclient import TestClient
 from app.services.api_keys import ApiKeyStore, KeyAccessError
 
 
+def test_v3_api_key_allows_only_project_generation_route():
+    from app.api_access import key_allows
+
+    base = "/api/v3/creative-agent/projects/project-1/jobs/job-1"
+    assert key_allows("POST", f"{base}/generate", ["v3"])
+    assert not key_allows("POST", f"{base}/cancel", ["v3"])
+    assert not key_allows("PUT", f"{base}/generate", ["v3"])
+
+
 @pytest.fixture
 def native(tmp_path, monkeypatch):
     import app.main as main
