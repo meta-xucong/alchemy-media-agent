@@ -1,7 +1,6 @@
 """Synthetic published jobs only; no provider, billing, or external HTTP."""
 import asyncio
 import base64
-import hashlib
 import json
 from datetime import datetime, timezone
 from dataclasses import replace
@@ -51,7 +50,7 @@ def published(tmp_path, monkeypatch):
     row = transport._start(unit)
     data = json.loads(row['data'])
     data.update(state='artifacts_ready', receipt_id='receipt', task_id='task', attempt_id='attempt',
-        image={'sha256': hashlib.sha256(content).hexdigest(), 'mime_type': 'image/png', 'width': 2, 'height': 3})
+        image={'mime_type': 'image/png', 'width': 2, 'height': 3})
     transport._save(unit, data, image=content)
     monkeypatch.setattr(bridge, 'transport', lambda *a: transport)
     return record, unit, transport, client
