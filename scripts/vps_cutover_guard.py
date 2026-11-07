@@ -364,12 +364,19 @@ def verify_bridge_runtime(container: object, processes: list[dict[str, str]],
 
 
 def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
-                        v2_repository: Path | None = None) -> dict[str, int]:
+                        v2_repository: Path | None = None,
+                        abandoned_api_job_ids: set[str] | None = None) -> dict[str, int]:
     counts = {"bridge_unresolved_units": 0, "bridge_unresolved_frozen_jobs": 0,
-              "v2_direct_active_jobs": 0}
+              "v2_direct_active_jobs": 0, "bridge_explicitly_abandoned_api_units": 0}
+    abandoned_api_job_ids = abandoned_api_job_ids or set()
+    if any(not isinstance(job_id, str) or not job_id for job_id in abandoned_api_job_ids):
+        raise CutoverBlocked("api_abandonment_not_eligible")
+    if abandoned_api_job_ids and (v2_repository is None or not v2_repository.exists()):
+        raise CutoverBlocked("api_abandonment_not_eligible")
     if root.exists() and not root.is_dir():
         raise CutoverBlocked("bridge_state_root_invalid")
     native_terminal = set()
+    abandoned_api_jobs: set[str] = set()
     if v2_repository is not None and v2_repository.exists():
         db = _readonly(v2_repository)
         try:
@@ -377,14 +384,24 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                 job = json.loads(raw)
                 if not isinstance(job, dict) or not isinstance(job.get("job_id"), str):
                     raise ValueError()
+                if job["job_id"] in abandoned_api_job_ids:
+                    outputs = job.get("outputs")
+                    if job.get("status") != "failed" or not isinstance(outputs, list) or outputs:
+                        raise CutoverBlocked("api_abandonment_not_eligible")
+                    if job["job_id"] in abandoned_api_jobs:
+                        raise CutoverBlocked("api_abandonment_not_eligible")
+                    abandoned_api_jobs.add(job["job_id"])
                 if job.get("status") in {"completed", "failed", "cancelled"}:
                     native_terminal.add(job["job_id"])
                 else:
                     counts["v2_direct_active_jobs"] += 1
+            if abandoned_api_jobs != abandoned_api_job_ids:
+                raise CutoverBlocked("api_abandonment_not_eligible")
         except (sqlite3.Error, ValueError, TypeError):
             raise CutoverBlocked("v2_direct_job_state_unreadable") from None
         finally:
             db.close()
+    seen_abandoned_units: set[str] = set()
     for path in sorted(root.glob("*/primary.sqlite3")):
         db = _readonly(path)
         try:
@@ -392,6 +409,18 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                 data = json.loads(raw)
                 if not isinstance(data, dict):
                     raise ValueError()
+                unit_id = data.get("unit_id")
+                job_id = unit_id.partition(":")[0] if isinstance(unit_id, str) and ":" in unit_id else ""
+                if job_id in abandoned_api_job_ids:
+                    if (
+                        state != "api_execution_unknown"
+                        or data.get("route") != "api"
+                        or data.get("product") != "v2"
+                    ):
+                        raise CutoverBlocked("api_abandonment_not_eligible")
+                    seen_abandoned_units.add(job_id)
+                    counts["bridge_explicitly_abandoned_api_units"] += 1
+                    continue
                 # api_ready is NOT terminal: a direct request can still dispatch.
                 terminal = state in {"acked", "api_completed"}
                 # An artifact-ready Bridge task remains unresolved unless the
@@ -413,6 +442,8 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
             raise CutoverBlocked("bridge_ledger_unreadable") from None
         finally:
             db.close()
+    if seen_abandoned_units != abandoned_api_job_ids:
+        raise CutoverBlocked("api_abandonment_not_eligible")
     if frozen_root and frozen_root.exists():
         pending = set()
         for path in frozen_root.glob("*.json"):
@@ -443,6 +474,7 @@ def inspect_active_work(
     bridge_state_root: Path | None = None,
     bridge_frozen_root: Path | None = None,
     v2_repository: Path | None = None,
+    abandoned_api_job_ids: set[str] | None = None,
 ) -> dict:
     container_started = _parse_cutover_timestamp(v3_container_started_at)
     if v3_container_started_at is not None and container_started is None:
@@ -575,8 +607,11 @@ def inspect_active_work(
                     counts["v3_active_jobs"] += normalized_status in V3_ACTIVE
 
     if bridge_state_root is not None:
-        counts.update(inspect_bridge_work(bridge_state_root, bridge_frozen_root, v2_repository))
-    active = sum(value for key, value in counts.items() if key != "v3_preserved_planned_jobs")
+        counts.update(inspect_bridge_work(
+            bridge_state_root, bridge_frozen_root, v2_repository, abandoned_api_job_ids,
+        ))
+    active = sum(value for key, value in counts.items()
+                 if key not in {"v3_preserved_planned_jobs", "bridge_explicitly_abandoned_api_units"})
     return {"status": "idle" if active == 0 else "blocked", "scope": "durable_active_work_inventory",
             "counts": counts, "active_work_items": active}
 
@@ -1125,6 +1160,7 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--bridge-state-root", type=Path)
     inspect.add_argument("--bridge-frozen-root", type=Path)
     inspect.add_argument("--v2-repository", type=Path)
+    inspect.add_argument("--abandon-api-unknown-job-id", action="append", default=[])
     bridge_paths = subparsers.add_parser("verify-bridge-storage-configuration")
     bridge_paths.add_argument("--v1-environment", required=True, type=Path)
     bridge_paths.add_argument("--v2-environment", required=True, type=Path)
@@ -1184,6 +1220,7 @@ def main(argv: list[str] | None = None) -> int:
                 bridge_state_root=args.bridge_state_root,
                 bridge_frozen_root=args.bridge_frozen_root,
                 v2_repository=args.v2_repository,
+                abandoned_api_job_ids=set(args.abandon_api_unknown_job_id),
             )
         elif args.command == "verify-bridge-runtime":
             result = verify_bridge_runtime(json.load(sys.stdin), [read_process_environment(pid) for pid in args.pid],
