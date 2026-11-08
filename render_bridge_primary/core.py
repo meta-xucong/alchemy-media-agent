@@ -163,6 +163,8 @@ class PrimaryResult:
     receipt_id: str | None = None
     image: OriginalImage | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
+    # Per-call observation only; never replaces or persists authoritative task state.
+    poll_failed: bool = False
 
 
 def pending_count(settings_or_path):
@@ -629,7 +631,7 @@ class PrimaryTransport:
                 return self._result(self._read(request))
         else:
             try: task=await self.client.by_origin(data['origin_key'])
-            except BridgeError: return self._result(row)
+            except BridgeError: return replace(self._result(row), poll_failed=True)
         if task.get('origin_key')!=data['origin_key'] or task.get('request')!=data.get('payload'):
             raise PrimaryError('bridge_task_identity_mismatch')
         if not task.get('remote_task_id'): raise PrimaryError('invalid_bridge_task')

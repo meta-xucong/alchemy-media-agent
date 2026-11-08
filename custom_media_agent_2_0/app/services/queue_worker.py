@@ -26,6 +26,7 @@ _PROVIDER_RATE_LIMIT_WAIT_SECONDS = 180.0
 _GENERIC_RETRYABLE_WAIT_SECONDS = 120.0
 _MAX_WAIT_SECONDS = 900.0
 _BRIDGE_RECONCILIATION_WAIT_SECONDS = 120.0
+_BRIDGE_RESULT_POLL_SECONDS = 10.0
 _FINALIZATION_RETRIES = 3
 _FINALIZATION_RETRY_DELAY_SECONDS = 0.05
 logger = logging.getLogger(__name__)
@@ -361,10 +362,14 @@ def _job_retry_directive(error: dict) -> QueueRetryDirective | None:
     if provider == "render_bridge" and code == "bridge_wait":
         if not bool(error.get("retryable")):
             return None
+        # Healthy observations only: failed reads may carry a stale running state.
+        normal_progress = (detail.get("state") in {"queued", "running", "uploading"}
+                           and detail.get("poll_failed") is not True)
         return QueueRetryDirective(
             message=("Render Bridge has not confirmed a final result. The same task will be queried "
                      "until its persisted Bridge deadline; no API fallback or new image is allowed."),
-            retry_delay_seconds=_BRIDGE_RECONCILIATION_WAIT_SECONDS,
+            retry_delay_seconds=(_BRIDGE_RESULT_POLL_SECONDS if normal_progress
+                                 else _BRIDGE_RECONCILIATION_WAIT_SECONDS),
             consume_attempt=False,
         )
     if provider == "veyra_billing" and code == "veyra_insufficient_balance":

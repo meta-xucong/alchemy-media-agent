@@ -182,9 +182,10 @@ def provider_result(result, *, parameter_adaptation: dict | None = None) -> V2Im
 
 class BridgeWait(Exception):
     def __init__(self, state: str, *, terminal: bool = False, deadline: str | None = None,
-                 attention_code: str | None = None):
+                 attention_code: str | None = None, poll_failed: bool = False):
         self.state, self.terminal, self.deadline = state, terminal, deadline
         self.attention_code = attention_code
+        self.poll_failed = poll_failed
         super().__init__(state)
 
 
@@ -410,7 +411,8 @@ async def _generate(record: dict, select_provider, client):
                                 or attention_code in {"codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue"})
                     raise BridgeWait("bridge_store_busy" if store_busy else decision.state, terminal=terminal,
                                      deadline=provenance.get("deadline") if isinstance(provenance, dict) else None,
-                                     attention_code=provenance.get("attention_code") if isinstance(provenance, dict) else None)
+                                     attention_code=provenance.get("attention_code") if isinstance(provenance, dict) else None,
+                                     poll_failed=getattr(decision, "poll_failed", False) is True)
                 adaptation = None
                 if (unit.parameters.get("codex_adapter") == "codex_cli_imagegen_v1" or
                         unit.digest == _normalized_unit_request(record, index, versioned=False).digest):

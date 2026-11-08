@@ -416,6 +416,104 @@ def test_bridge_unknown_reconciliation_uses_finite_retry_budget():
     assert directive.retry_delay_seconds == 120
 
 
+@pytest.mark.parametrize('state', ['queued', 'running', 'uploading'])
+def test_normal_bridge_observation_uses_prompt_result_polling(state):
+    from app.services.queue_worker import _job_retry_directive
+    directive = _job_retry_directive({'provider': 'render_bridge', 'error_code': 'bridge_wait',
+        'retryable': True, 'detail': {'state': state}})
+    assert directive.retry_delay_seconds == 10
+    assert directive.consume_attempt is False
+
+
+@pytest.mark.parametrize('state', ['queued', 'running', 'uploading'])
+def test_failed_bridge_observation_preserves_reconciliation_delay(isolated, monkeypatch, state):
+    from app.services.queue_worker import _job_retry_directive
+    isolated.pending = True
+    resolve = isolated.resolve
+
+    async def failed_observation(unit):
+        result = await resolve(unit)
+        result.state = state
+        result.poll_failed = True
+        return result
+
+    monkeypatch.setattr(isolated, 'resolve', failed_observation)
+    job = asyncio.run(generation.create_image_job(request(), job_id='poll-failed-' + state))
+    assert job.error['detail']['state'] == state
+    assert job.error['detail']['poll_failed'] is True
+    directive = _job_retry_directive(job.error)
+    assert directive.retry_delay_seconds == 120
+    assert directive.consume_attempt is False
+    assert len(isolated.created_units) == 1 and not isolated.acks
+
+
+@pytest.mark.parametrize('state', ['execution_unknown', 'bridge_submission_unknown',
+                                  'awaiting_user', 'cancel_requested', 'artifacts_ready', ''])
+def test_non_normal_bridge_states_keep_conservative_delay(state):
+    from app.services.queue_worker import _job_retry_directive
+    error = {'provider': 'render_bridge', 'error_code': 'bridge_wait',
+             'retryable': True, 'detail': {'state': state}}
+    assert _job_retry_directive(error).retry_delay_seconds == 120
+    assert _job_retry_directive(dict(error, retryable=False)) is None
+
+
+def test_bridge_billing_finalization_keeps_conservative_delay():
+    from app.services.queue_worker import _job_retry_directive
+    directive = _job_retry_directive({'provider': 'veyra_billing',
+        'error_code': 'bridge_finalization_wait', 'detail': {'state': 'billing_finalization_pending'}})
+    assert directive.retry_delay_seconds == 120 and directive.consume_attempt is False
+
+
+@pytest.mark.parametrize('legacy_interval,discovered_at,queries', [(120, 120, 2), (None, 100, 11)])
+def test_result_poll_schedule_reuses_queue_and_frozen_generation(
+    isolated, monkeypatch, legacy_interval, discovered_at, queries,
+):
+    from datetime import timedelta
+    from app.schemas import CreativeRun
+    from app.services import queue_worker
+
+    started = generation.utc_now()
+    clock = [started]
+    monkeypatch.setattr(task_queue, 'utc_now', lambda: clock[0])
+    if legacy_interval is not None:
+        monkeypatch.setattr(queue_worker, '_BRIDGE_RESULT_POLL_SECONDS', legacy_interval)
+    req = request().model_copy(update={'run_id': 'poll-comparison-run'})
+    run = CreativeRun(run_id=req.run_id, status='generating', mode='smart_enhance',
+        intent_summary='offline', trace_id='poll-trace', created_at=started, updated_at=started)
+    repository.save_creative_run(run)
+    task_id = task_queue.enqueue_creative_task(kind='creative_run',
+        request_payload={'user_prompt': 'offline'}, queued_run=run)
+    for _ in range(15):
+        claim = task_queue.claim_next_task('poll-worker')
+        assert claim is not None and claim.task_id == task_id and claim.attempts == 1
+        isolated.pending = (clock[0] - started).total_seconds() < 94
+        with task_queue.claimed_task(claim):
+            job = asyncio.run(generation.create_image_job(req, job_id='poll-comparison-job'))
+        run = run.model_copy(update={'generation_jobs': [job]})
+        if job.status == 'completed':
+            assert task_queue.complete_task(claim, run.model_copy(update={'status': 'completed'}))
+            break
+        directive = queue_worker._job_retry_directive(job.error)
+        assert directive.consume_attempt is False
+        assert task_queue.retry_task(claim, directive.message, run,
+            retry_delay_seconds=directive.retry_delay_seconds, consume_attempt=directive.consume_attempt)
+        clock[0] += timedelta(seconds=directive.retry_delay_seconds - 0.01)
+        assert task_queue.claim_next_task('too-early') is None
+        clock[0] += timedelta(seconds=0.01)
+    else:
+        pytest.fail('same Bridge task was not delivered within the comparison window')
+
+    assert (clock[0] - started).total_seconds() == discovered_at
+    assert len(isolated.calls) == queries
+    assert len(isolated.created_units) == 1
+    assert len({unit.unit_id for unit in isolated.calls}) == 1
+    assert all(unit.prompt == 'A blue vase' for unit in isolated.calls)
+    assert len(isolated.acks) == 1 and not isolated.claims
+    assert len(job.outputs) == 1
+    assert output_storage.read_output_content(job.outputs[0].output_id)[0] == image_bytes()
+    assert task_queue.claim_next_task('after-complete') is None
+
+
 def test_bridge_reconciliation_deadline_is_authoritative_and_timezone_aware():
     from datetime import datetime, timezone
     expired = "2026-10-25T00:00:00+00:00"

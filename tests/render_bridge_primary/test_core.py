@@ -59,6 +59,40 @@ def test_loss_restart_404_never_fallback(tmp_path):
     assert c.calls == 1
 
 
+@pytest.mark.parametrize('product', ['v1', 'v2', 'v3'])
+def test_failed_status_poll_is_transient_and_preserves_task_authority(tmp_path, product):
+    class PollClient(Client):
+        state = 'running'
+        fail_poll = False
+
+        async def by_origin(self, origin):
+            if self.fail_poll:
+                raise BridgeError('bridge_unreachable', status=503)
+            return {'remote_task_id': 'task_1', 'origin_key': origin,
+                    'request': self.payload, 'state': self.state,
+                    'receipt_id': None, 'attempt_id': 'attempt_1'}
+
+    client = PollClient()
+    transport = PrimaryTransport(settings(tmp_path), client=client)
+    unit = replace(request(), product=product)
+    first = asyncio.run(transport.resolve(unit))
+    assert first.poll_failed is False
+    before = dict(transport._read(unit))
+    client.fail_poll = True
+    failed = asyncio.run(transport.resolve(unit))
+    assert failed.poll_failed is True
+    assert failed.state == first.state == 'running'
+    assert failed.route == first.route == 'bridge'
+    assert failed.task_id == first.task_id
+    assert failed.provenance == first.provenance
+    assert dict(transport._read(unit)) == before
+    client.fail_poll = False
+    recovered = asyncio.run(transport.resolve(unit))
+    assert recovered.poll_failed is False
+    assert recovered.task_id == first.task_id and recovered.image is None
+    assert client.calls == 1
+
+
 def test_timeout_attention_code_is_projected_without_executor_message(tmp_path):
     c = Client()
     c.state = 'execution_unknown'

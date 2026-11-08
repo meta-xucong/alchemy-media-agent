@@ -177,6 +177,8 @@ async def create_image_job(
             result = await bridge_primary.generate(frozen, get_v2_image_provider)
         except bridge_primary.BridgeWait as exc:
             detail = {"state": exc.state}
+            if exc.poll_failed:
+                detail["poll_failed"] = True
             BRIDGE_ATTENTION_MESSAGES = bridge_primary.ATTENTION_MESSAGES
             if exc.attention_code:
                 if exc.attention_code in BRIDGE_ATTENTION_MESSAGES:
