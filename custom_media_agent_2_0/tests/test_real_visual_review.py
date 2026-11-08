@@ -151,7 +151,8 @@ def test_only_complete_explicit_source_evidence_clears_text_guard(job, monkeypat
 def test_pending_projection_lock_free_review_and_checkpoint_recovery(job, monkeypatch, tmp_path, lose_claim):
     from app.repositories import repository
     from app.schemas import CreativeRun
-    from app.services import generation, task_queue
+    from app.services import generation, task_queue, image_history
+    monkeypatch.setattr(image_history, 'settings', replace(settings, image_history_path=tmp_path / 'history/image_history.jsonl'))
     monkeypatch.setattr(task_queue, 'settings', replace(settings, task_queue_db_path=tmp_path / 'queue.sqlite3'))
     task_queue.initialize_task_queue()
     repository.reset()
