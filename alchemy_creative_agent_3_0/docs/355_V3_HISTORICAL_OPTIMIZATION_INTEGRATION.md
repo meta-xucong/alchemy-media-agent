@@ -84,6 +84,41 @@ The inventory does not delete, reset or mark those worktrees disposable.
 - 27 desktop/mobile review identity and terminal-state checks passed for the
   Doc354 changes. No live generation was used during this integration.
 
-Deployment and read-only verification of the existing incident remain the next
-phase. These results do not claim all legacy integration fixtures or real
-visual-quality acceptance passed.
+These results do not claim all legacy integration fixtures or real
+visual-quality acceptance passed. This expanded audit supersedes Doc354's
+initial narrow scope for the four additional proven historical defects above.
+
+## Deployment outcome: blocked by VPS capacity
+
+The runtime integration was committed and pushed as
+`1ade93e5919f2001ec031640c3af0bbc67989fff`, including the earlier `103e758e`
+visibility/composition repair. Read-only diagnostic commits `ca977ef2` and
+`863c77e6` add cache inventory only; they do not change application behavior.
+
+- Candidate build run `42470058448` succeeded. The exact unused `cb89ec1a`
+  candidate image was retired through the existing protected-image helper;
+  source worktrees and all stored data were preserved.
+- Activation run `42470516243` stopped with
+  `backup_consumed_data_reserve`. Its rollback was verified at
+  2026-11-08 10:15:40 UTC. The newly created backup was preserved.
+- Production is still `3744ed76658da3daf7776db292b1c8db9355306e`.
+  The new candidate is not active. Existing service health is not evidence
+  that the new review or frontend fixes are live.
+- Read-only preflight run `42471724416` found 1,752,805,376 bytes free on
+  the shared root/data/backup filesystem. The cutover estimate requires
+  1,909,051,926 bytes for data-side headroom after backup creation, with an
+  additional estimated 346,876,527 bytes for the next backup. Capacity must
+  be checked again before any further activation.
+- The active, rollback and prepared application images are all protected.
+  Two old Bridge images have only about 80 MB of unique layers combined;
+  pip and apt download caches total 247,979,421 bytes. Even reclaiming all
+  of those would not satisfy the estimated cutover capacity. None was
+  deleted during this diagnosis. Docker's aggregate reclaimable number
+  includes protected images and is not authorization to prune them.
+
+The next required phase is sufficient verified VPS capacity, then guarded
+activation of the integrated release and read-only checks of the existing
+incident's canonical review images and served frontend. Do not lower the
+reserve, delete images/history/backups, or remove rollback environments to
+force a pass. No new generation or review replay has been performed, and
+production acceptance remains incomplete.
