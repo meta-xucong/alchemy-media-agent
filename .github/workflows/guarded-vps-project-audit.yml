@@ -78,7 +78,7 @@ jobs:
           from pathlib import Path
           from PIL import Image
 
-          CUTOFF = '2026-11-08T18:30:00'
+          CUTOFF = '2026-11-08T18:39:00'
           v1_root = Path(sys.argv[1]).resolve()
           env = {}
           for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
@@ -178,6 +178,25 @@ jobs:
                       'preview': file_check(v1_root / 'previews' / (identity + '.webp'), v1_root),
                       'thumbnail': file_check(v1_root / 'thumbnails' / (identity + '.jpg'), v1_root)})
               v1_jobs.append(result)
+          lab_sessions = []
+          for session in recent(v1, 'v1_records', 'lab_sessions'):
+              prompts = []
+              for prompt in session.get('prompts', [])[:12]:
+                  metadata = prompt.get('prompt_metadata') or {}
+                  prompts.append({**pick(prompt, 'id style_preset_id'),
+                                 'metadata_keys': sorted(metadata.keys()),
+                                 'quality': pick(metadata.get('quality_enhancement'), 'status mode source provider model elapsed_ms latency_ms'),
+                                 'quality_keys': sorted((metadata.get('quality_enhancement') or {}).keys())})
+              lab_sessions.append({**pick(session, 'id status primary_transport created_at updated_at'),
+                  'request': pick(session.get('request'), 'target_count images_per_style generation_interval_seconds quality_enhancement'),
+                  'style_count': len(session.get('style_presets', [])),
+                  'progress': pick(session.get('progress'), 'status total completed failed current updated_at next_generation_at'),
+                  'variants': [{**pick(variant, 'id status created_at completed_at style_preset_id index_within_style'),
+                                'asset': pick(variant.get('asset'), 'output_id job_id url preview_url thumbnail_url width height format'),
+                                'provider_metadata': pick(variant.get('provider_metadata'), 'job_id provider model attempt primary_transport'),
+                                'error': pick(variant.get('error'), 'code retryable')}
+                               for variant in session.get('variants', [])[:12]],
+                  'prompts': prompts, 'error_codes': [pick(error, 'code retryable') for error in session.get('errors', [])[:10]]})
           v1.close()
 
           v2 = db(Path(env['V2_DATA_DIR']) / 'repository.sqlite3')
@@ -228,11 +247,11 @@ jobs:
               completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25)
               groups = {}
               for line in completed.stdout.decode('utf-8', errors='replace').splitlines():
-                  match = re.search(r'"(GET|POST) ((?:/api/v2/|/v1/)[A-Za-z0-9_/-]+) HTTP/[0-9.]+" ([1-5][0-9]{2})', line)
+                  match = re.search(r'"(GET|POST) ((?:/api/v2/|/api/lab/|/v1/)[A-Za-z0-9_/-]+) HTTP/[0-9.]+" ([1-5][0-9]{2})', line)
                   if not match:
                       continue
                   method, route, status = match.groups()
-                  if not (method == 'POST' and route in {'/v1/image/jobs', '/api/v2/creative/runs', '/api/v2/creative/runs/async', '/api/v2/image/jobs'}
+                  if not (method == 'POST' and route in {'/api/lab/rare-style-explorer/sessions', '/v1/image/jobs', '/api/v2/creative/runs', '/api/v2/creative/runs/async', '/api/v2/image/jobs'}
                           or method == 'GET' and any(identity in route for identity in [output.get('output_id', output.get('id')) for job in v1_jobs + v2_jobs for output in job['outputs']])):
                       continue
                   key = (method, route, status)
@@ -242,18 +261,8 @@ jobs:
                   groups[key]['count'] += 1
                   groups[key]['last_at'] = at
               access[name] = {'exit_code': completed.returncode, 'requests': list(groups.values())[:24]}
-          bridge_polls = []
-          completed = subprocess.run(['docker', 'logs', '--timestamps', '--since', CUTOFF + 'Z',
-                                      'alchemy-render-bridge-api'], stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT, timeout=25)
-          origin = 'rb_v2_WyJ2MiIsIjEiLCJqb2JfMWFmMjhkY2JhNGJhOjAiXQ'
-          for line in completed.stdout.decode('utf-8', errors='replace').splitlines():
-              match = re.search(r'"GET /bridge/v1/tasks/by-origin/' + re.escape(origin) + r' HTTP/[0-9.]+" ([1-5][0-9]{2})', line)
-              if match:
-                  bridge_polls.append({'at': line.split(' ', 1)[0], 'status': int(match[1])})
-          print(json.dumps({'snapshot_at': datetime.now(timezone.utc).isoformat(), 'v1_jobs': v1_jobs,
-                            'queue': queue_rows, 'v2_jobs': v2_jobs, 'v2_runs': v2_runs, 'access': access,
-                            'bridge_status_polls': bridge_polls[-60:]}, separators=(',', ':')))
+          print(json.dumps({'snapshot_at': datetime.now(timezone.utc).isoformat(),
+              'v1_jobs': v1_jobs, 'lab_sessions': lab_sessions, 'access': access}, separators=(',', ':')))
           PY
           printf 'GUARDED_V12_AUDIT_RESULT=pass\n'
           printf 'GUARDED_V12_AUDIT_ACTIVE_SHA=%s\n' "$1"
