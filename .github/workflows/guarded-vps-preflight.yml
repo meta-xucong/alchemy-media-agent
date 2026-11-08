@@ -128,6 +128,7 @@ jobs:
           fi
           printf 'GUARDED_PREFLIGHT_DOCKER_USAGE_BEGIN=1\n'
           docker system df --format 'GUARDED_PREFLIGHT_DOCKER type={{.Type}} total={{.TotalCount}} size={{.Size}} reclaimable={{.Reclaimable}}'
+          docker system df -v
           docker image ls --filter 'reference=alchemy-media-agent:*' \
             --format 'GUARDED_PREFLIGHT_ALCHEMY_IMAGE tag={{.Tag}} size={{.Size}} created={{.CreatedAt}}'
           docker ps -a --format 'GUARDED_PREFLIGHT_CONTAINER name={{.Names}} image={{.Image}} status={{.Status}}'
