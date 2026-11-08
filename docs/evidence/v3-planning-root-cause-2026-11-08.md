@@ -47,3 +47,16 @@ historical failure, so its generic Brain error cannot establish the cause of
 the user's November incident. Next inspect only allowlisted recent POST
 route/time/status entries from the active container's access log to identify
 the actual submission. No raw logs or request content are emitted.
+
+## Actual incident located
+
+Access-log audit `42459501453` located the November submission at
+`2026-11-08T05:27:49Z`: project `project_c72a7decc9`. Audit `42459562880`
+found its sole Job `job_37f9dcbbf6`, blocked at `05:29:20Z`, operation
+`doc277_project_planning_5d3f2cc4ad`. The Job is durable in the configured
+mounted root. Its safe Brain outcome is `remote_contract_invalid`,
+`llm_used=true`, `fallback_used=false`, `remote_provider_available=true`.
+This proves an actual remote result was obtained and failed contract
+acceptance. It supersedes the old project's missing-Job/remote-required
+diagnosis. Read its existing sanitized validation paths/types before deciding
+whether the defect is in the remote schema contract or local validation.

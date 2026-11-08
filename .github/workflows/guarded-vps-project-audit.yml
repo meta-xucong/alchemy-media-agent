@@ -174,6 +174,22 @@ jobs:
               lifecycle_failure = metadata.get("generation_lifecycle_failure")
               lifecycle_failure = lifecycle_failure if isinstance(lifecycle_failure, dict) else {}
               brain_outcome = metadata.get("remote_creative_brain_outcome") or lifecycle_failure.get("remote_creative_brain_outcome")
+              safe_outcome = product_api_service.V3ProductApiService._public_remote_brain_lifecycle_outcome(
+                  brain_outcome if isinstance(brain_outcome, dict) else {}
+              )
+              contract_failure = {
+                  key: safe_outcome[key] for key in (
+                      "remote_contract_validation_audit", "remote_image_set_validation_audit",
+                      "remote_image_set_cardinality_audit",
+                  ) if key in safe_outcome
+              }
+              if safe_outcome.get("reason_code") in {
+                  "remote_creative_brain_image_set_plan_invalid",
+                  "remote_creative_brain_task_profile_invalid",
+                  "remote_creative_brain_prompt_signoff_invalid",
+                  "remote_creative_brain_request_contract_invalid",
+              }:
+                  contract_failure["reason_code"] = safe_outcome["reason_code"]
               generation_result = payload.get("generation_result")
               generation_result = generation_result if isinstance(generation_result, dict) else {}
               generation_metadata = generation_result.get("metadata")
@@ -207,6 +223,7 @@ jobs:
                   "job_id": str(payload.get("job_id") or job_id),
                   "storage_source": storage_source,
                   "planning_failure_diagnostics": _doc277_safe_planning_failure_diagnostics(brain_outcome),
+                  "planning_contract_failure": contract_failure,
                   "status": payload.get("status"),
                   "updated_at": payload.get("updated_at"),
                   "warning_count": len(payload.get("warnings") or []),
