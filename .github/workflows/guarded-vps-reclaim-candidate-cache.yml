@@ -1,0 +1,141 @@
+name: Guarded VPS Reclaim Candidate Image Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_active_sha:
+        description: "Full commit SHA that must remain active"
+        required: true
+        type: string
+      expected_candidate_sha:
+        description: "Full commit SHA of the candidate image that must be retained"
+        required: true
+        type: string
+      stale_candidate_shas:
+        description: "Comma-separated full candidate image commit SHAs to remove"
+        required: true
+        type: string
+      confirmation:
+        description: "Type RECLAIM-UNREFERENCED-IMAGE-CACHE"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  reclaim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Remove only explicitly listed, unreferenced candidate tags
+        env:
+          EXPECTED_ACTIVE_SHA: ${{ inputs.expected_active_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.expected_candidate_sha }}
+          STALE_CANDIDATE_SHAS: ${{ inputs.stale_candidate_shas }}
+          RECLAIM_CONFIRMATION: ${{ inputs.confirmation }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_ACTIVE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STALE_CANDIDATE_SHAS" =~ ^[0-9a-f]{40}(,[0-9a-f]{40})*$ ]]
+          [[ "$RECLAIM_CONFIRMATION" == "RECLAIM-UNREFERENCED-IMAGE-CACHE" ]]
+          [[ "$EXPECTED_ACTIVE_SHA" != "$EXPECTED_CANDIDATE_SHA" ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_ACTIVE_SHA' '$EXPECTED_CANDIDATE_SHA' '$STALE_CANDIDATE_SHAS'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          expected_active_sha="$1"
+          expected_candidate_sha="$2"
+          stale_candidate_shas="$3"
+          stop() { printf 'GUARDED_RECLAIM_STOP=%s\n' "$1" >&2; exit 1; }
+
+          install -d -m 755 /run/lock
+          exec 9>/run/lock/alchemy-media-agent-release.lock
+          flock -w 300 9 || stop shared_release_lock_unavailable
+
+          deploy_link=/opt/alchemy-media-agent
+          active_release="$(realpath "$deploy_link")" || stop active_release_unavailable
+          expected_release="/opt/alchemy-media-agent-releases/doc276-277-${expected_active_sha:0:12}"
+          [ "$active_release" = "$expected_release" ] || stop active_release_changed
+          [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_active_sha" ] || stop active_release_sha_mismatch
+          candidate_release="/opt/alchemy-media-agent-releases/doc276-277-${expected_candidate_sha:0:12}"
+          [ -d "$candidate_release" ] || stop retained_candidate_release_missing
+          [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_candidate_sha" ] || stop retained_candidate_release_sha_mismatch
+          [ "$(docker inspect alchemy-media-agent --format '{{.State.Running}}')" = true ] || stop active_v1_not_running
+          [ "$(docker inspect alchemy-media-agent --format '{{.Config.Image}}')" = alchemy-media-agent:latest ] || stop active_v1_image_reference_changed
+          docker image inspect alchemy-media-agent:latest >/dev/null 2>&1 || stop active_image_missing
+          docker image inspect alchemy-media-agent:rollback-pr29 >/dev/null 2>&1 || stop rollback_image_missing
+          docker image inspect "alchemy-media-agent:candidate-$expected_candidate_sha" >/dev/null 2>&1 || stop retained_candidate_missing
+          curl --noproxy '*' -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:8017/healthz >/dev/null || stop active_v1_health_failed
+          curl --noproxy '*' -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:8020/api/v2/health >/dev/null || stop active_v2_health_failed
+
+          mapfile -t stale_shas < <(printf '%s' "$stale_candidate_shas" | tr ',' '\n')
+          declare -A seen=()
+          mapfile -t container_images < <(docker ps -a --format '{{.Image}}')
+          for image in "${container_images[@]}"; do
+            [[ "$image" != sha256:* && "$image" != *'@sha256:'* ]] || stop opaque_container_image_reference
+          done
+
+          candidate_tags=()
+          for sha in "${stale_shas[@]}"; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || stop invalid_stale_candidate_sha
+            [ -z "${seen[$sha]+x}" ] || stop duplicate_stale_candidate_sha
+            seen[$sha]=1
+            [ "$sha" != "$expected_active_sha" ] || stop active_candidate_in_removal_list
+            [ "$sha" != "$expected_candidate_sha" ] || stop retained_candidate_in_removal_list
+            tag="alchemy-media-agent:candidate-$sha"
+            if docker image inspect "$tag" >/dev/null 2>&1; then
+              for image in "${container_images[@]}"; do
+                [ "$image" != "$tag" ] || stop candidate_tag_referenced_by_container
+              done
+              candidate_tags+=("$tag")
+            else
+              printf 'GUARDED_RECLAIM_ALREADY_ABSENT=%s\n' "$tag"
+            fi
+          done
+          [ "${#candidate_tags[@]}" -gt 0 ] || stop no_stale_candidate_tags_found
+
+          removed=0
+          for tag in "${candidate_tags[@]}"; do
+            docker image rm "$tag" >/dev/null 2>&1 || stop candidate_tag_removal_failed
+            docker image inspect "$tag" >/dev/null 2>&1 && stop candidate_tag_still_present
+            printf 'GUARDED_RECLAIM_REMOVED=%s\n' "$tag"
+            removed=$((removed + 1))
+          done
+
+          [ "$(realpath "$deploy_link")" = "$active_release" ] || stop active_release_changed_during_reclaim
+          [ "$(docker inspect alchemy-media-agent --format '{{.State.Running}}')" = true ] || stop active_v1_stopped_during_reclaim
+          docker image inspect alchemy-media-agent:latest >/dev/null 2>&1 || stop active_image_removed
+          docker image inspect alchemy-media-agent:rollback-pr29 >/dev/null 2>&1 || stop rollback_image_removed
+          docker image inspect "alchemy-media-agent:candidate-$expected_candidate_sha" >/dev/null 2>&1 || stop retained_candidate_removed
+          printf 'GUARDED_RECLAIM_RESULT=pass\n'
+          printf 'GUARDED_RECLAIM_ACTIVE_RELEASE=%s\n' "$active_release"
+          printf 'GUARDED_RECLAIM_REMOVED_COUNT=%s\n' "$removed"
+          docker system df --format 'GUARDED_RECLAIM_DOCKER type={{.Type}} total={{.TotalCount}} size={{.Size}} reclaimable={{.Reclaimable}}'
+          df -PB1 /var/lib/alchemy /var/lib/docker /var/backups/alchemy \
+            | awk 'NR > 1 {printf "GUARDED_RECLAIM_DISK size_bytes=%s used_bytes=%s available_bytes=%s mount=%s\n", $2, $3, $4, $6}'
+          REMOTE_SCRIPT
