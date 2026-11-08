@@ -11,6 +11,11 @@ on:
         description: "Server project identifier to inspect read-only"
         required: true
         type: string
+      planning_operation_id:
+        description: "Optional exact planning operation ID for safe failure diagnostics"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -48,6 +53,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PROJECT_ID: ${{ inputs.project_id }}
+          PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
@@ -55,15 +61,21 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PROJECT_ID" =~ ^project_[a-z0-9]+$ ]]
+          [[ -z "$PLANNING_OPERATION_ID" || "$PLANNING_OPERATION_ID" =~ ^doc277_project_planning_[a-z0-9]+$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=accept-new \
-            "$remote" "bash -s -- '$EXPECTED_SHA' '$PROJECT_ID'" <<'REMOTE_SCRIPT'
+            "$remote" "bash -s -- '$EXPECTED_SHA' '$PROJECT_ID' '$PLANNING_OPERATION_ID'" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
           expected_sha="$1"
           project_id="$2"
+          planning_operation_id="$3"
+          [[ -z "$planning_operation_id" || "$planning_operation_id" =~ ^doc277_project_planning_[a-z0-9]+$ ]] || {
+            printf 'GUARDED_PROJECT_AUDIT_STOP=planning_operation_id_invalid\n' >&2
+            exit 1
+          }
           deploy_link="/opt/alchemy-media-agent"
           v1_container="alchemy-media-agent"
 
@@ -86,13 +98,14 @@ jobs:
           [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_sha" ] || stop active_release_head_mismatch
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
           v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
-          docker exec -i "$v1_container" python - "$project_id" <<'PY'
+          docker exec -i "$v1_container" python - "$project_id" "$planning_operation_id" <<'PY'
           import json
           import sys
           from collections import Counter
           from pathlib import Path
 
           project_id = sys.argv[1]
+          requested_operation_id = sys.argv[2]
           root = Path("/app/.media_storage")
           project_path = root / "v3_projects" / project_id / "project.json"
           if not project_path.exists():
@@ -210,6 +223,67 @@ jobs:
           if not isinstance(current_operation, dict):
               current_operation = None
 
+          planning_failure_diagnostics = None
+          if requested_operation_id:
+              private_records_path = project_path.parent / "private_records.json"
+              diagnostics_state = "not_found"
+              safe_diagnostics = {}
+              if private_records_path.exists():
+                  try:
+                      private_records = json.loads(private_records_path.read_text(encoding="utf-8"))
+                  except (OSError, json.JSONDecodeError):
+                      private_records = None
+                      diagnostics_state = "unavailable"
+                  if isinstance(private_records, dict):
+                      records = private_records.get("doc277_project_planning_operations")
+                      if isinstance(records, list):
+                          failed = next(
+                              (
+                                  item
+                                  for item in reversed(records)
+                                  if isinstance(item, dict)
+                                  and item.get("record_kind") == "failed"
+                                  and item.get("project_id") == project_id
+                                  and item.get("operation_id") == requested_operation_id
+                              ),
+                              None,
+                          )
+                          if failed is not None:
+                              diagnostics_state = "recorded"
+                              raw = failed.get("failure_diagnostics")
+                              if isinstance(raw, dict) and raw.get("schema_version") == "v3_project_planning_failure_diagnostics_v1":
+                                  safe_diagnostics["schema_version"] = raw["schema_version"]
+                                  safe_string_fields = {
+                                      "outcome_class",
+                                      "remote_provider_availability_reason",
+                                      "remote_brain_request_acceptance",
+                                      "remote_error_class",
+                                      "remote_brain_stage",
+                                      "remote_provider_transport_kind",
+                                  }
+                                  safe_boolean_fields = {
+                                      "llm_used",
+                                      "fallback_used",
+                                      "remote_provider_available",
+                                      "remote_brain_request_started",
+                                  }
+                                  for key in safe_string_fields:
+                                      value = raw.get(key)
+                                      if isinstance(value, str) and len(value) <= 80:
+                                          safe_diagnostics[key] = value
+                                  for key in safe_boolean_fields:
+                                      value = raw.get(key)
+                                      if isinstance(value, bool):
+                                          safe_diagnostics[key] = value
+                                  status = raw.get("remote_http_status_code")
+                                  if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+                                      safe_diagnostics["remote_http_status_code"] = status
+              planning_failure_diagnostics = {
+                  "operation_id": requested_operation_id,
+                  "state": diagnostics_state,
+                  **({"failure_diagnostics": safe_diagnostics} if safe_diagnostics else {}),
+              }
+
           print(
               json.dumps(
                   {
@@ -225,10 +299,13 @@ jobs:
                               "state": current_operation.get("state"),
                               "terminal": current_operation.get("terminal"),
                               "pending": current_operation.get("pending"),
+                              "operation_id": current_operation.get("operation_id"),
+                              "failure_code": current_operation.get("failure_code"),
                           }
                           if current_operation
                           else None
                       ),
+                      "planning_failure_diagnostics": planning_failure_diagnostics,
                       "jobs": [job_summary(job_id) for job_id in job_ids[-20:]],
                       "outputs": outputs[-30:],
                   },
