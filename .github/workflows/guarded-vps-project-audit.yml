@@ -185,7 +185,7 @@ jobs:
                   metadata = prompt.get('prompt_metadata') or {}
                   prompts.append({**pick(prompt, 'id style_preset_id'),
                                  'metadata_keys': sorted(metadata.keys()),
-                                 'quality': pick(metadata.get('quality_enhancement'), 'status mode source provider model elapsed_ms latency_ms'),
+                                 'quality': pick(metadata.get('quality_enhancement'), 'status mode source applied strategy llm_provider llm_model llm_fallback_used elapsed_ms latency_ms'),
                                  'quality_keys': sorted((metadata.get('quality_enhancement') or {}).keys())})
               lab_sessions.append({**pick(session, 'id status primary_transport created_at updated_at'),
                   'request': pick(session.get('request'), 'target_count images_per_style generation_interval_seconds quality_enhancement'),
