@@ -49,687 +49,232 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Read project and delivery records without mutation
+      - name: Read V1 V2 records without mutation
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
-          PROJECT_ID: ${{ inputs.project_id }}
-          PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$PROJECT_ID" =~ ^project_[a-z0-9]+$ ]]
-          [[ -z "$PLANNING_OPERATION_ID" || "$PLANNING_OPERATION_ID" =~ ^doc277_project_planning_[a-z0-9]+$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=accept-new \
-            "$remote" "bash -s -- '$EXPECTED_SHA' '$PROJECT_ID' '$PLANNING_OPERATION_ID'" <<'REMOTE_SCRIPT'
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
           set -euo pipefail
-
-          expected_sha="$1"
-          project_id="$2"
-          planning_operation_id="$3"
-          [[ -z "$planning_operation_id" || "$planning_operation_id" =~ ^doc277_project_planning_[a-z0-9]+$ ]] || {
-            printf 'GUARDED_PROJECT_AUDIT_STOP=planning_operation_id_invalid\n' >&2
-            exit 1
-          }
-          deploy_link="/opt/alchemy-media-agent"
-          v1_container="alchemy-media-agent"
-
-          stop() {
-            printf 'GUARDED_PROJECT_AUDIT_STOP=%s\n' "$1" >&2
-            exit 1
-          }
-
-          read_mount() {
-            local destination="$1"
-            local raw value
-            raw="$(docker inspect "$v1_container" --format '{{range .Mounts}}{{if eq .Destination "'"$destination"'"}}{{printf "%s|" .Source}}{{end}}{{end}}' 2>/dev/null)" || return 1
-            value="${raw%|}"
-            [ -n "$value" ] && [ "$value" != *'|'* ] || return 1
-            printf '%s' "$value"
-          }
-
-          [ -L "$deploy_link" ] || stop deployment_link_missing
-          active_release="$(realpath "$deploy_link")"
-          [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_sha" ] || stop active_release_head_mismatch
-          [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
-          v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
-          audit_job_store_root="$(docker exec "$v1_container" python -c 'import app.config; from alchemy_creative_agent_3_0.app.product_api.service import _default_product_job_storage_root; print(_default_product_job_storage_root().resolve())')" || stop job_store_root_unavailable
-          job_store_mounts="$(docker inspect "$v1_container" --format '{{range .Mounts}}{{printf "%s|%s\n" .Destination .Source}}{{end}}')" || stop job_store_mounts_unavailable
-          job_store_root_mounted=false
-          while IFS='|' read -r destination source; do
-            [ -n "$destination" ] || continue
-            if [[ "$audit_job_store_root" == "$destination" || "$audit_job_store_root" == "$destination/"* ]]; then
-              job_store_root_mounted=true
-              break
-            fi
-          done <<< "$job_store_mounts"
-          container_created_at="$(docker inspect "$v1_container" --format '{{.Created}}')"
-          container_started_at="$(docker inspect "$v1_container" --format '{{.State.StartedAt}}')"
-          docker exec -i "$v1_container" python - "$project_id" "$planning_operation_id" "$job_store_root_mounted" "$container_created_at" "$container_started_at" <<'PY'
+          active_release="$(realpath /opt/alchemy-media-agent)"
+          [ "$(git -C "$active_release" rev-parse HEAD)" = "$1" ]
+          [ "$(docker inspect alchemy-media-agent --format '{{.State.Running}}')" = true ]
+          v1_media="$(docker inspect alchemy-media-agent --format '{{range .Mounts}}{{if eq .Destination "/app/.media_storage"}}{{printf "%s|" .Source}}{{end}}{{end}}')"
+          v1_media="${v1_media%|}"
+          [ -n "$v1_media" ] && [ "$v1_media" != *'|'* ]
+          "$active_release/custom_media_agent_2_0/.venv/bin/python" - "$v1_media" <<'PY'
           import json
-          import os
           import re
+          import sqlite3
+          import subprocess
           import sys
-          from collections import Counter
           from datetime import datetime, timezone
           from pathlib import Path
-          from types import SimpleNamespace
-          from urllib.request import urlopen
-          import app.config  # Load the same runtime env-file chain as the V3 service.
-          from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
-          from alchemy_creative_agent_3_0.app.product_api.service import _default_product_job_storage_root
-          from alchemy_creative_agent_3_0.app.product_api import service as product_api_service
-          from alchemy_creative_agent_3_0.app.project_mode.service import _doc277_safe_planning_failure_diagnostics
-          from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
-          from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputRecord
-          from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import _VISION_INSPECTION_CONCURRENCY_LIMIT
-          from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.quality_review import _bounded_review_observations
+          from PIL import Image
 
-          project_id = sys.argv[1]
-          requested_operation_id = sys.argv[2]
-          job_store_root_mounted = sys.argv[3] == "true"
-          container_created_at = sys.argv[4]
-          container_started_at = sys.argv[5]
-          brain_enabled = os.getenv("V3_LLM_BRAIN_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-          brain_availability = V3LLMBrainProvider().availability(force=True)
-          allowed_brain_availability_reasons = {
-              "remote_disabled",
-              "unsupported_model_route",
-              "missing_credentials",
-              "invalid_configuration",
-              "configured",
-          }
-          brain_diagnostics = {
-              "brain_enabled": brain_enabled,
-              "provider_available": brain_availability.get("available") is True,
-              "availability_reason": (
-                  brain_availability.get("reason_code")
-                  if brain_availability.get("reason_code") in allowed_brain_availability_reasons
-                  else "unknown"
-              ),
-              "health_checked": brain_availability.get("health_checked") is True,
-          }
-          root = Path("/app/.media_storage")
-          project_path = root / "v3_projects" / project_id / "project.json"
-          if not project_path.exists():
-              raise SystemExit("project_not_found")
-          project = json.loads(project_path.read_text(encoding="utf-8"))
-          references = project.get("reference_assets") if isinstance(project.get("reference_assets"), list) else []
-          jobs_root = _default_product_job_storage_root()
-          outputs_root = root / "v3_outputs"
-          records_by_job = {}
-          with urlopen("http://127.0.0.1:8017/static/app.js", timeout=15) as response:
-              desktop_source = response.read().decode("utf-8")
-          review_runtime = {
-              "provider_concurrency_limit": _VISION_INSPECTION_CONCURRENCY_LIMIT,
-              "desktop_serves_canonical_review_precedence": "&& (reviewOutputIds.has(identity) || (" in desktop_source,
-          }
+          CUTOFF = '2026-11-08T16:00:00'
+          v1_root = Path(sys.argv[1]).resolve()
+          env = {}
+          for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
+              key, sep, value = line.partition('=')
+              if sep and key in {'V2_DATA_DIR', 'V2_STORAGE_DIR', 'V2_TASK_QUEUE_DB_PATH'}:
+                  if key in env:
+                      raise SystemExit('ambiguous_v2_root')
+                  env[key] = value.strip().strip('\"\'')
+          v2_root = Path(env['V2_STORAGE_DIR']).resolve()
 
-          def safe_code(value):
-              return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) else None
+          def pick(item, keys):
+              if not isinstance(item, dict):
+                  return {}
+              return {key: value for key in keys.split() if key in item
+                      and ((value := item[key]) is None or type(value) in (bool, int, float)
+                           or isinstance(value, str) and len(value) <= 180
+                           and re.fullmatch(r'[A-Za-z0-9_./:+ =-]*', value))}
 
-          def safe_ids(value):
-              return [item for item in value[:100] if safe_code(item)] if isinstance(value, list) else []
+          def db(path):
+              connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=3)
+              connection.execute('PRAGMA query_only=ON')
+              return connection
 
-          def inspection_summary(item):
-              evidence = item.get("evidence") or {}
-              receipt = evidence.get("vision_route_receipt") or {}
-              return {
-                  "output_id": safe_code(item.get("output_id")),
-                  "status": safe_code(item.get("status")),
-                  "verification_state": safe_code(item.get("verification_state")),
-                  "confidence": item.get("confidence") if type(item.get("confidence")) in (int, float) else None,
-                  "issue_codes": [safe_code(issue.get("code")) for issue in item.get("detected_issues", []) if isinstance(issue, dict)],
-                  "issue_details": [
-                      {"code": safe_code(issue.get("code")), "severity": safe_code(issue.get("severity")),
-                       "retryable": issue.get("retryable") is True}
-                      for issue in item.get("detected_issues", [])[:20] if isinstance(issue, dict)
-                  ],
-                  "score_card": {
-                      safe_code(key): value for key, value in (item.get("score_card") or {}).items()
-                      if safe_code(key) and type(value) in (int, float)
-                  },
-                  "observations": _bounded_review_observations(
-                      item.get("user_visible_summary")
-                  ),
-                  "vision_attempts": [
-                      {"outcome": safe_code(attempt.get("outcome")),
-                       "failure_class": safe_code(attempt.get("failure_class")),
-                       "elapsed_ms": attempt.get("elapsed_ms") if type(attempt.get("elapsed_ms")) in (int, float) else None}
-                      for attempt in receipt.get("model_attempts", []) if isinstance(attempt, dict)
-                  ],
-              }
+          def recent(connection, table, namespace):
+              rows = connection.execute(
+                  f"SELECT payload FROM {table} WHERE namespace=? AND json_extract(payload,'$.created_at')>=? "
+                  "ORDER BY json_extract(payload,'$.created_at') DESC LIMIT 8", (namespace, CUTOFF))
+              return [json.loads(row[0]) for row in rows]
 
-          def review_summary(review):
-              public = product_api_service.V3ProductApiService._public_post_generation_review(review)
-              return {
-                  **{key: safe_ids(public.get(key)) for key in ("recommended_output_ids", "review_output_ids", "hidden_output_ids")},
-                  "inspections": [inspection_summary(item) for item in review.get("inspections", []) if isinstance(item, dict)],
-                  "attempts": [
-                      {"attempt_index": attempt.get("attempt_index") if type(attempt.get("attempt_index")) is int else None,
-                       "stage": safe_code(attempt.get("stage")),
-                       "output_ids": safe_ids(attempt.get("output_ids")),
-                       "inspections": [inspection_summary(item) for item in attempt.get("inspections", []) if isinstance(item, dict)]}
-                      for attempt in review.get("review_attempts", []) if isinstance(attempt, dict)
-                  ],
-              }
+          def record(connection, table, namespace, identity):
+              row = connection.execute(f'SELECT payload FROM {table} WHERE namespace=? AND record_key=?',
+                                       (namespace, identity)).fetchone()
+              return json.loads(row[0]) if row else None
 
-          def job_summary(job_id):
-              import re
-              if not re.fullmatch(r"job_[A-Za-z0-9_-]{1,128}", job_id):
-                  return {"status": "invalid_job_id"}
-              path = jobs_root / f"{job_id}.json"
-              storage_source = "configured"
-              if not path.exists():
-                  package_root = Path(product_api_service.__file__).resolve().parents[3] / ".media_storage" / "v3_jobs"
-                  path = package_root / f"{job_id}.json"
-                  storage_source = "package_default"
-                  if not path.exists():
-                      return {"job_id": job_id, "status": "missing"}
-              payload = json.loads(path.read_text(encoding="utf-8"))
-              request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
-              metadata = request.get("metadata") if isinstance(request.get("metadata"), dict) else {}
-              lifecycle_failure = metadata.get("generation_lifecycle_failure")
-              lifecycle_failure = lifecycle_failure if isinstance(lifecycle_failure, dict) else {}
-              brain_outcome = metadata.get("remote_creative_brain_outcome") or lifecycle_failure.get("remote_creative_brain_outcome")
-              safe_outcome = product_api_service.V3ProductApiService._public_remote_brain_lifecycle_outcome(
-                  brain_outcome if isinstance(brain_outcome, dict) else {}
-              )
-              contract_failure = {
-                  key: safe_outcome[key] for key in (
-                      "remote_contract_validation_audit", "remote_image_set_validation_audit",
-                      "remote_image_set_cardinality_audit",
-                  ) if key in safe_outcome
-              }
-              if safe_outcome.get("reason_code") in {
-                  "remote_creative_brain_image_set_plan_invalid",
-                  "remote_creative_brain_task_profile_invalid",
-                  "remote_creative_brain_prompt_signoff_invalid",
-                  "remote_creative_brain_request_contract_invalid",
-              }:
-                  contract_failure["reason_code"] = safe_outcome["reason_code"]
-              generation_result = payload.get("generation_result")
-              generation_result = generation_result if isinstance(generation_result, dict) else {}
-              generation_metadata = generation_result.get("metadata")
-              generation_metadata = generation_metadata if isinstance(generation_metadata, dict) else {}
-              asset_pack = generation_result.get("asset_pack")
-              asset_pack = asset_pack if isinstance(asset_pack, dict) else {}
-              asset_pack_metadata = asset_pack.get("metadata")
-              asset_pack_metadata = asset_pack_metadata if isinstance(asset_pack_metadata, dict) else {}
-              visual_cluster = generation_metadata.get("visual_cluster")
-              visual_cluster = visual_cluster if isinstance(visual_cluster, dict) else {}
-              review = (
-                  generation_metadata.get("post_generation_review_package")
-                  or visual_cluster.get("post_generation_review_package")
-                  or asset_pack_metadata.get("post_generation_review_package")
-                  or metadata.get("post_generation_review_package")
-                  or metadata.get("post_generation_review")
-              )
-              review = review if isinstance(review, dict) else {}
-              inspections = review.get("inspections") if isinstance(review.get("inspections"), list) else []
-              inspection_states = Counter(
-                  str(item.get("status") or "unknown")
-                  for item in inspections
-                  if isinstance(item, dict)
-              )
-              inspection_modes = Counter(
-                  str(item.get("mode") or "unknown")
-                  for item in inspections
-                  if isinstance(item, dict)
-              )
-              delivery = {}
-              review_media = []
-              if generation_result:
-                  projector = product_api_service.V3ProductApiService.__new__(product_api_service.V3ProductApiService)
-                  delivery, eligible, _ = projector._public_final_delivery_projection(SimpleNamespace(
-                      metadata=generation_metadata,
-                      asset_pack=SimpleNamespace(assets=asset_pack.get("assets") or []),
-                  ))
-                  project_projector = V3ProjectModeService.__new__(V3ProjectModeService)
-                  records = records_by_job.get(job_id, [])
-                  annotations = project_projector._delivery_annotations_for_records(
-                      records, final_output_ids=eligible if delivery.get("delivery_gate_applies") else None,
-                  )
-                  review_ids = set(review_summary(review)["review_output_ids"])
-                  for record in records:
-                      if record.output_id not in review_ids:
-                          continue
-                      review_media.append({
-                          "output_id": safe_code(record.output_id),
-                          "preview_available": Path(record.preview_path).is_file() and record.preview_url == f"/api/v3/creative-agent/outputs/{record.output_id}/preview",
-                          "download_available": Path(record.file_path).is_file() and record.download_url == f"/api/v3/creative-agent/outputs/{record.output_id}/download",
-                          "delivery_state": annotations.get(record.output_id, {}).get("delivery_state"),
-                          "attempt": annotations.get(record.output_id, {}).get("delivery_attempt_index"),
-                          "final_attempt": annotations.get(record.output_id, {}).get("delivery_final_attempt_index"),
-                      })
-              return {
-                  "job_id": str(payload.get("job_id") or job_id),
-                  "storage_source": storage_source,
-                  "planning_failure_diagnostics": _doc277_safe_planning_failure_diagnostics(brain_outcome),
-                  "planning_contract_failure": contract_failure,
-                  "status": payload.get("status"),
-                  "updated_at": payload.get("updated_at"),
-                  "warning_count": len(payload.get("warnings") or []),
-                  "has_generation_result": bool(generation_result),
-                  "provider_failure_code": (
-                      ((metadata.get("provider_failure_retry") or generation_metadata.get("provider_failure_retry") or {}).get("final_failure_code"))
-                      if isinstance(metadata.get("provider_failure_retry") or generation_metadata.get("provider_failure_retry"), dict)
-                      else None
-                  ),
-                  "review_package_present": bool(review),
-                  "review_package_status": review.get("status"),
-                  "review_states": dict(sorted(inspection_states.items())),
-                  "review_modes": dict(sorted(inspection_modes.items())),
-                  "review_detail": review_summary(review),
-                  "final_delivery_status": delivery.get("final_delivery_status"),
-                  "review_media": review_media,
-                  "face_attestation_states": dict(
-                      sorted(
-                          Counter(
-                              str(
-                                  (
-                                      (item.get("evidence") or {}).get("face_integrity_attestation") or {}
-                                  ).get("status")
-                                  or "not_recorded"
-                              )
-                              for item in inspections
-                              if isinstance(item, dict)
-                          ).items()
-                      )
-                  ),
-              }
-
-          job_ids = [str(item) for item in project.get("job_ids") or [] if str(item).strip()]
-          wanted_job_ids = set(job_ids)
-          outputs = []
-          for path in sorted(outputs_root.glob("*/output.json")) if outputs_root.exists() else []:
+          def file_check(path, root):
+              if not path:
+                  return {'exists': False}
+              path = Path(path).resolve()
+              if not path.is_relative_to(root):
+                  return {'exists': False, 'outside_root': True}
+              if not path.is_file():
+                  return {'exists': False}
+              result = {'exists': True, 'bytes': path.stat().st_size,
+                        'modified_at': datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()}
               try:
-                  payload = json.loads(path.read_text(encoding="utf-8"))
-              except (OSError, json.JSONDecodeError):
-                  continue
-              metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-              owner = str(payload.get("job_id") or metadata.get("job_id") or payload.get("created_from_job_id") or metadata.get("created_from_job_id") or "")
-              if owner not in wanted_job_ids:
-                  continue
-              records_by_job.setdefault(owner, []).append(V3GeneratedOutputRecord(**{
-                  key: value for key, value in payload.items() if key in V3GeneratedOutputRecord.__dataclass_fields__
-              }))
-              image_files = [
-                  item
-                  for item in path.parent.iterdir()
-                  if item.is_file() and item.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-              ]
-              outputs.append(
-                  {
-                      "output_id": str(payload.get("output_id") or path.parent.name),
-                      "job_id": owner,
-                      "candidate_id": payload.get("candidate_id"),
-                      "asset_id": payload.get("asset_id"),
-                      "provider": payload.get("provider"),
-                      "model": payload.get("model"),
-                      "dimensions": [payload.get("width"), payload.get("height")],
-                      "image_file_count": len(image_files),
-                      "delivery_metadata": {
-                          key: metadata[key] for key in (
-                              "visual_retry_attempt_index", "retry_attempt_index", "delivery_attempt_index",
-                              "delivery_final_attempt_index", "delivery_preference_attempt_index",
-                              "delivery_preferred_output", "retry_superseded", "review_only",
-                              "delivery_preference_hard_gate_passed",
-                          ) if type(metadata.get(key)) in (int, bool)
-                      },
-                      "delivery_state": safe_code(metadata.get("delivery_state")),
-                  }
-              )
+                  with Image.open(path) as image:
+                      result.update(width=image.width, height=image.height, format=image.format)
+                      image.verify()
+                  result['valid_image'] = True
+              except Exception as error:
+                  result.update(valid_image=False, error_type=type(error).__name__)
+              return result
 
-          active_references = [
-              item
-              for item in references
-              if isinstance(item, dict) and str(item.get("status") or "") == "active"
-          ]
-          source_counts = Counter(str(item.get("source_type") or "unknown") for item in references if isinstance(item, dict))
-          policy_counts = Counter(str(item.get("use_policy") or "unknown") for item in references if isinstance(item, dict))
-          metadata = project.get("metadata") if isinstance(project.get("metadata"), dict) else {}
-          current_operation = metadata.get("doc277_planning_current_operation")
-          if not isinstance(current_operation, dict):
-              current_operation = None
+          def trace(items):
+              keys = 'stage status outcome provider model invocation_status latency_ms elapsed_ms duration_ms attempts cache_hit started_at completed_at created_at updated_at at event step attempt failure_class reason code'
+              return [pick(item, keys) for item in items[:30] if isinstance(item, dict)] if isinstance(items, list) else []
 
-          planning_failure_diagnostics = None
-          planning_failure_job_id = None
-          planning_window = {"opened_at": None, "failed_at": None}
-          if requested_operation_id:
-              private_records_path = project_path.parent / "private_records.json"
-              diagnostics_state = "not_found"
-              safe_diagnostics = {}
-              if private_records_path.exists():
-                  try:
-                      private_records = json.loads(private_records_path.read_text(encoding="utf-8"))
-                  except (OSError, json.JSONDecodeError):
-                      private_records = None
-                      diagnostics_state = "unavailable"
-                  if isinstance(private_records, dict):
-                      records = private_records.get("doc277_project_planning_operations")
-                      if isinstance(records, list):
-                          matching_records = [
-                              item
-                              for item in records
-                              if isinstance(item, dict)
-                              and item.get("project_id") == project_id
-                              and item.get("operation_id") == requested_operation_id
-                          ]
-                          opened = next(
-                              (item for item in reversed(matching_records) if item.get("record_kind") == "opened"),
-                              None,
-                          )
-                          failed_record = next(
-                              (item for item in reversed(matching_records) if item.get("record_kind") == "failed"),
-                              None,
-                          )
-                          if isinstance(opened, dict):
-                              planning_window["opened_at"] = opened.get("created_at")
-                          if isinstance(failed_record, dict):
-                              planning_window["failed_at"] = failed_record.get("created_at")
-                              planning_failure_job_id = failed_record.get("job_id")
-                              raw = failed_record.get("failure_diagnostics")
-                              if not isinstance(raw, dict):
-                                  diagnostics_state = "record_found_without_diagnostics"
-                              elif raw.get("schema_version") != "v3_project_planning_failure_diagnostics_v1":
-                                  diagnostics_state = "schema_mismatch"
-                              else:
-                                  safe_diagnostics["schema_version"] = raw["schema_version"]
-                                  safe_string_fields = {
-                                      "outcome_class": {
-                                          "remote_provider_error",
-                                          "remote_provider_unavailable",
-                                          "remote_contract_invalid",
-                                          "remote_output_count_mismatch",
-                                          "remote_prompt_signoff_unavailable",
-                                          "remote_brain_skipped",
-                                          "remote_creative_brain_required",
-                                      },
-                                      "remote_provider_availability_reason": {
-                                          "remote_disabled",
-                                          "brain_disabled",
-                                          "missing_credentials",
-                                          "invalid_configuration",
-                                          "capability_scope_inactive",
-                                          "availability_check_failed",
-                                          "provider_unavailable",
-                                          "configured",
-                                      },
-                                      "remote_brain_request_acceptance": {"not_started", "dispatched", "unknown"},
-                                      "remote_error_class": {
-                                          "timeout",
-                                          "budget_exceeded",
-                                          "execution_budget_exhausted",
-                                          "provider_error",
-                                          "provider_api_error",
-                                          "unavailable",
-                                          "upstream_transport_error",
-                                          "upstream_http_error",
-                                          "invalid_response",
-                                          "request_contract_invalid",
-                                          "truncated_response",
-                                          "content_policy",
-                                          "canceled",
-                                          "serialization_failure",
-                                          "contract_validation",
-                                          "unknown",
-                                      },
-                                      "remote_brain_stage": {
-                                          "activation",
-                                          "generate",
-                                          "plan",
-                                          "provider_prompt_developmental_presence_verify",
-                                          "provider_prompt_finalize",
-                                          "provider_prompt_human_naturalness_resign",
-                                          "provider_prompt_professional_capture_resign",
-                                          "remote_intent",
-                                      },
-                                      "remote_provider_transport_kind": {
-                                          "connection_error",
-                                          "network_error",
-                                          "protocol_error",
-                                          "provider_api_error",
-                                          "read_error",
-                                          "timeout",
-                                          "transport_error",
-                                          "write_error",
-                                      },
-                                  }
-                                  safe_boolean_fields = {
-                                      "llm_used",
-                                      "fallback_used",
-                                      "remote_provider_available",
-                                      "remote_brain_request_started",
-                                  }
-                                  for key, allowed_values in safe_string_fields.items():
-                                      value = raw.get(key)
-                                      if isinstance(value, str) and value in allowed_values:
-                                          safe_diagnostics[key] = value
-                                  for key in safe_boolean_fields:
-                                      value = raw.get(key)
-                                      if isinstance(value, bool):
-                                          safe_diagnostics[key] = value
-                                  status = raw.get("remote_http_status_code")
-                                  if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
-                                      safe_diagnostics["remote_http_status_code"] = status
-                                  diagnostics_state = (
-                                      "present"
-                                      if len(safe_diagnostics) > 1
-                                      else "record_found_without_diagnostics"
-                                  )
-                      else:
-                          diagnostics_state = "unavailable"
-                  elif private_records is not None:
-                      diagnostics_state = "unavailable"
-              planning_failure_diagnostics = {
-                  "operation_id": requested_operation_id,
-                  "state": diagnostics_state,
-                  **({"failure_diagnostics": safe_diagnostics} if safe_diagnostics else {}),
-              }
+          def bridge(value):
+              return pick(value, 'product profile route state reason task_id receipt_id attempt_id actual_provider actual_model queue_count queue_limit queue_observed_at')
 
-          brain_stage_trace = {"state": "not_configured", "event_count": 0, "events": []}
-          trace_path_value = os.getenv("V3_BRAIN_STAGE_TRACE_FILE")
-          if trace_path_value and trace_path_value.strip():
-              trace_path = Path(trace_path_value).expanduser()
-              if not trace_path.is_absolute():
-                  trace_path = Path.cwd() / trace_path
-              if not trace_path.is_file():
-                  brain_stage_trace["state"] = "not_found"
-              else:
-                  try:
-                      with trace_path.open("rb") as trace_handle:
-                          trace_handle.seek(max(0, trace_path.stat().st_size - 2_000_000))
-                          trace_lines = trace_handle.read().decode("utf-8", errors="replace").splitlines()
-                      opened_at = datetime.fromisoformat(str(planning_window["opened_at"] or "").replace("Z", "+00:00"))
-                      failed_at = datetime.fromisoformat(str(planning_window["failed_at"] or "").replace("Z", "+00:00"))
-                      container_started = datetime.fromisoformat(container_started_at.replace("Z", "+00:00"))
-                      if opened_at.tzinfo is None:
-                          opened_at = opened_at.replace(tzinfo=timezone.utc)
-                      if failed_at.tzinfo is None:
-                          failed_at = failed_at.replace(tzinfo=timezone.utc)
-                      if container_started.tzinfo is None:
-                          container_started = container_started.replace(tzinfo=timezone.utc)
-                      window_start_ms = int((opened_at - container_started).total_seconds() * 1000) - 120_000
-                      window_end_ms = int((failed_at - container_started).total_seconds() * 1000) + 30_000
-                      allowed_trace_events = {
-                          "scenario_runtime": {
-                              "plan_job_entered", "request_coerced", "scenario_blocked",
-                              "capability_preparation_call", "capability_preparation_blocked",
-                              "capability_preparation_returned", "semantic_plan_returned",
-                              "slot_delta_recovery_call", "slot_delta_recovery_returned",
-                              "remote_brain_requirement_validation_call",
-                              "remote_brain_requirement_validation_returned",
-                              "professional_task_profile_bind_call", "professional_task_profile_bind_returned",
-                              "activation_plan_build_call", "activation_plan_build_returned",
-                              "template_deliverable_plan_build_call", "template_deliverable_plan_build_returned",
-                              "active_capabilities_call", "active_capabilities_returned",
-                              "frozen_capability_validation_call", "frozen_capability_validation_returned",
-                              "combine_capability_runs_call", "combine_capability_runs_returned",
-                              "resolved_constraint_ledger_build_call", "resolved_constraint_ledger_build_returned",
-                              "capability_execution_envelope_build_call",
-                              "capability_execution_envelope_build_returned",
-                              "canonical_finalizer_call", "canonical_finalizer_returned",
-                              "creative_planning_returned",
-                          },
-                          "brain_adapter": {
-                              "semantic_plan_provider_call", "semantic_plan_provider_returned",
-                              "semantic_plan_schema_validated", "semantic_recovery_provider_call",
-                              "semantic_recovery_provider_returned", "semantic_plan_blocked",
-                              "canonical_finalizer_schema_validation_failed",
-                              "canonical_finalizer_request_contract_failed",
-                              "canonical_finalizer_response_validation_error",
-                              "canonical_finalizer_request_contract_error", "canonical_finalizer_provider_call",
-                              "canonical_finalizer_provider_returned", "canonical_finalizer_provider_error",
-                              "canonical_finalizer_schema_validation_started",
-                              "canonical_finalizer_schema_validated",
-                          },
-                          "brain_provider": {
-                              "stream_request_prepared", "json_parse_started", "json_parse_completed",
-                              "stream_complete_response_observed", "stream_reasoning_content_observed",
-                              "stream_first_content_observed", "stream_client_constructing",
-                              "stream_client_constructed", "stream_request_call_entered",
-                              "stream_request_dispatched", "stream_response_started",
-                          },
-                      }
-                      allowed_trace_stages = {
-                          "activation", "generate", "plan", "provider_prompt_developmental_presence_verify",
-                          "provider_prompt_finalize", "provider_prompt_human_naturalness_resign",
-                          "provider_prompt_professional_capture_resign", "remote_intent", "semantic_plan",
-                          "unknown",
-                      }
-                      allowed_trace_reasons = {
-                          "unknown", "cannot_create_jobs", "capability_activation_error", "timeout",
-                          "unavailable", "provider_unavailable", "provider_error", "validation_error",
-                          "execution_budget_exhausted", "truncated_response", "invalid_response",
-                          "invalid_json_response", "content_policy", "canceled", "upstream_http_error",
-                          "upstream_transport_error", "brainprovidererror", "brainproviderunavailable",
-                          "braintransporttimeouterror", "brainpromptcontractinvalid", "runtimeerror", "valueerror",
-                      }
-                      allowed_transport_kinds = {
-                          "connection_error", "network_error", "protocol_error", "provider_api_error",
-                          "read_error", "timeout", "transport_error", "write_error",
-                      }
-                      trace_events = []
-                      for line in trace_lines:
-                          try:
-                              event = json.loads(line)
-                          except json.JSONDecodeError:
-                              continue
-                          if not isinstance(event, dict) or event.get("schema_version") != "v3_brain_stage_trace_v1":
-                              continue
-                          elapsed_ms = event.get("elapsed_ms")
-                          if not isinstance(elapsed_ms, int) or isinstance(elapsed_ms, bool):
-                              continue
-                          if not window_start_ms <= elapsed_ms <= window_end_ms:
-                              continue
-                          component = event.get("component")
-                          event_name = event.get("event")
-                          if (
-                              not isinstance(component, str)
-                              or not isinstance(event_name, str)
-                              or component not in allowed_trace_events
-                              or event_name not in allowed_trace_events[component]
-                          ):
-                              continue
-                          safe_event = {"elapsed_ms": elapsed_ms, "component": component, "event": event_name}
-                          stage = event.get("stage")
-                          if isinstance(stage, str) and stage in allowed_trace_stages:
-                              safe_event["stage"] = stage
-                          for key in ("terminal_reason", "error_class", "transport_error_class"):
-                              value = event.get(key)
-                              if isinstance(value, str) and value in allowed_trace_reasons:
-                                  safe_event[key] = value
-                          transport_kind = event.get("remote_provider_transport_kind")
-                          if isinstance(transport_kind, str) and transport_kind in allowed_transport_kinds:
-                              safe_event["remote_provider_transport_kind"] = transport_kind
-                          acceptance = event.get("request_acceptance")
-                          if isinstance(acceptance, str) and acceptance in {"not_started", "dispatched", "unknown"}:
-                              safe_event["request_acceptance"] = acceptance
-                          for key in ("remote_http_status_code", "timeout_seconds", "remote_brain_call_count", "finalizer_call_count"):
-                              value = event.get(key)
-                              if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100_000:
-                                  safe_event[key] = value
-                          for key in ("response_started", "first_content_observed", "complete_response_observed", "json_parse_completed"):
-                              value = event.get(key)
-                              if isinstance(value, bool):
-                                  safe_event[key] = value
-                          trace_events.append(safe_event)
-                      brain_stage_trace = {
-                          "state": "present" if trace_events else "no_events_in_window",
-                          "attribution": "time_window_only",
-                          "event_count": len(trace_events),
-                          "events": trace_events[-40:],
-                      }
-                  except (OSError, ValueError):
-                      brain_stage_trace = {"state": "unavailable", "event_count": 0, "events": []}
+          def elapsed(item):
+              try:
+                  return round((datetime.fromisoformat(item['updated_at']) - datetime.fromisoformat(item['created_at'])).total_seconds(), 3)
+              except (KeyError, ValueError):
+                  return None
 
-          print(
-              json.dumps(
-                  {
-                      "project_id": project_id,
-                      "project_updated_at": project.get("updated_at"),
-                      "job_count": len(job_ids),
-                      "job_store_root_mounted": job_store_root_mounted,
-                      "container_created_at": container_created_at,
-                      "container_started_at": container_started_at,
-                      "brain_diagnostics": brain_diagnostics,
-                      "review_runtime": review_runtime,
-                      "reference_count": len(references),
-                      "active_reference_count": len(active_references),
-                      "reference_source_counts": dict(sorted(source_counts.items())),
-                      "reference_policy_counts": dict(sorted(policy_counts.items())),
-                      "current_operation": (
-                          {
-                              "state": current_operation.get("state"),
-                              "terminal": current_operation.get("terminal"),
-                              "pending": current_operation.get("pending"),
-                              "operation_id": current_operation.get("operation_id"),
-                              "failure_code": current_operation.get("failure_code"),
-                          }
-                          if current_operation
-                          else None
-                      ),
-                      "planning_failure_diagnostics": planning_failure_diagnostics,
-                      "planning_window": planning_window,
-                      "planning_failure_job": (
-                          {"in_project_job_ids": planning_failure_job_id in wanted_job_ids,
-                           **job_summary(planning_failure_job_id)}
-                          if isinstance(planning_failure_job_id, str) and planning_failure_job_id
-                          else None
-                      ),
-                      "brain_stage_trace": brain_stage_trace,
-                      "jobs": [job_summary(job_id) for job_id in job_ids[-20:]],
-                      "outputs": outputs[-30:],
-                  },
-                  ensure_ascii=False,
-                  separators=(",", ":"),
-              )
-          )
+          v1 = db(v1_root / 'repository.sqlite3')
+          v1_jobs = []
+          for job in recent(v1, 'v1_records', 'jobs'):
+              result = pick(job, 'id status provider model created_at updated_at')
+              result['elapsed_seconds'] = elapsed(job)
+              summary = job.get('raw_response_summary') or {}
+              planning = summary.get('prompt_planning') or {}
+              result['planning'] = pick(planning, 'work_intensity llm_used llm_provider llm_model')
+              result['planning']['model_attempts'] = trace(planning.get('model_attempts'))
+              transport = summary.get('primary_image_transport') or {}
+              units = transport.get('units') or {}
+              result['bridge_units'] = [bridge(unit) for unit in (units.values() if isinstance(units, dict) else units)]
+              result['requested_count'] = (job.get('prompt_plan') or {}).get('count')
+              result['has_error'] = bool(job.get('error'))
+              result['outputs'] = []
+              for output in job.get('outputs', [])[:8]:
+                  identity = output.get('id')
+                  if not isinstance(identity, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', identity):
+                      continue
+                  canonical = record(v1, 'v1_records', 'outputs', identity)
+                  reservation = record(v1, 'v1_records', 'output_publications', identity)
+                  published = bool(canonical)
+                  if reservation:
+                      published = bool(canonical and canonical.get('id') == identity
+                          and canonical.get('job_id') == reservation.get('job_id')
+                          and (canonical.get('metadata') or {}).get('veyra_user_id') == reservation.get('owner_id'))
+                  paths = list((v1_root / 'generated_images' / str(job.get('id'))).glob(identity + '.*'))
+                  result['outputs'].append({**pick(output, 'id job_id url preview_url thumbnail_url'),
+                      'canonical_published': published,
+                      'original': file_check(paths[0] if len(paths) == 1 else None, v1_root),
+                      'preview': file_check(v1_root / 'previews' / (identity + '.webp'), v1_root),
+                      'thumbnail': file_check(v1_root / 'thumbnails' / (identity + '.jpg'), v1_root)})
+              v1_jobs.append(result)
+          lab_sessions = []
+          for session in recent(v1, 'v1_records', 'lab_sessions'):
+              prompts = []
+              for prompt in session.get('prompts', [])[:12]:
+                  metadata = prompt.get('prompt_metadata') or {}
+                  prompts.append({**pick(prompt, 'id style_preset_id'),
+                                 'metadata_keys': sorted(metadata.keys()),
+                                 'quality': pick(metadata.get('quality_enhancement'), 'status mode source applied strategy llm_provider llm_model llm_fallback_used elapsed_ms latency_ms'),
+                                 'quality_keys': sorted((metadata.get('quality_enhancement') or {}).keys())})
+              lab_sessions.append({**pick(session, 'id status primary_transport created_at updated_at'),
+                  'request': pick(session.get('request'), 'target_count images_per_style generation_interval_seconds quality_enhancement'),
+                  'style_count': len(session.get('style_presets', [])),
+                  'progress': pick(session.get('progress'), 'status total completed failed current updated_at next_generation_at'),
+                  'variants': [{**pick(variant, 'id status created_at completed_at style_preset_id index_within_style'),
+                                'asset': pick(variant.get('asset'), 'output_id job_id url preview_url thumbnail_url width height format'),
+                                'provider_metadata': pick(variant.get('provider_metadata'), 'job_id provider model attempt primary_transport'),
+                                'error': pick(variant.get('error'), 'code retryable')}
+                               for variant in session.get('variants', [])[:12]],
+                  'prompts': prompts, 'error_codes': [pick(error, 'code retryable') for error in session.get('errors', [])[:10]]})
+          v1.close()
+
+          v2 = db(Path(env['V2_DATA_DIR']) / 'repository.sqlite3')
+          v2_jobs = []
+          for job in recent(v2, 'v2_records', 'image_jobs'):
+              result = pick(job, 'job_id run_id status provider_id model created_at updated_at')
+              result['elapsed_seconds'] = elapsed(job)
+              result['has_error'] = bool(job.get('error'))
+              result['outputs'] = []
+              for output in job.get('outputs', [])[:8]:
+                  identity = output.get('output_id')
+                  canonical = record(v2, 'v2_records', 'outputs', identity)
+                  metadata = output.get('metadata') or {}
+                  result['outputs'].append({**pick(output, 'output_id job_id url created_at'),
+                      **pick(metadata, 'preview_url thumbnail_url native_v2_storage preserve_original_bytes'),
+                      'canonical_published': bool(canonical and canonical.get('job_id') == job.get('job_id')),
+                      'bridge': bridge(metadata.get('render_bridge_primary')),
+                      'review': pick(output.get('review'), 'status decision passed reviewer analysis_mode'),
+                      'original': file_check(metadata.get('storage_path'), v2_root),
+                      'preview': file_check(metadata.get('preview_path'), v2_root),
+                      'thumbnail': file_check(metadata.get('thumbnail_path'), v2_root)})
+              v2_jobs.append(result)
+          v2_runs = []
+          for run in recent(v2, 'v2_records', 'creative_runs'):
+              decision = run.get('orchestrator_decision') or {}
+              v2_runs.append({**pick(run, 'run_id status mode created_at updated_at'),
+                  'elapsed_seconds': elapsed(run),
+                  'job_ids': [job.get('job_id') for job in run.get('generation_jobs', [])[:8]],
+                  'orchestrator': {**pick(decision, 'decision_id provider invocation_status latency_ms attempts cache_hit workspace_id fallback_reason'),
+                                   'stages': trace(decision.get('claude_stage_trace'))},
+                  'events': trace(run.get('progress_events'))})
+          v2.close()
+          queue = db(Path(env.get('V2_TASK_QUEUE_DB_PATH') or str(Path(env['V2_DATA_DIR']) / 'task_queue.sqlite3')))
+          queue.row_factory = sqlite3.Row
+          queue_rows = [dict(row) for row in queue.execute(
+              "SELECT task_id,run_id,status,attempts,max_attempts,claim_generation,not_before,created_at,updated_at, "
+              "json_extract(error_json,'$.retry_after_seconds') AS retry_after_seconds, "
+              "json_extract(queued_run_json,'$.status') AS projected_status "
+              "FROM v2_tasks WHERE created_at>=? ORDER BY created_at DESC LIMIT 8", (CUTOFF,))]
+          queue.close()
+          access = {}
+          commands = {
+              'v1_api': ['docker', 'logs', '--timestamps', '--since', CUTOFF + 'Z', 'alchemy-media-agent'],
+              'v2_api': ['journalctl', '-u', 'alchemy-v2-api.service', '--since', CUTOFF.replace('T', ' ') + ' UTC', '--no-pager', '-o', 'short-iso-precise'],
+              'v2_worker': ['journalctl', '-u', 'alchemy-v2-worker.service', '--since', CUTOFF.replace('T', ' ') + ' UTC', '--no-pager', '-o', 'short-iso-precise'],
+          }
+          for name, command in commands.items():
+              completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25)
+              groups = {}
+              for line in completed.stdout.decode('utf-8', errors='replace').splitlines():
+                  match = re.search(r'"(GET|POST) ((?:/api/v2/|/api/lab/|/v1/)[A-Za-z0-9_/-]+) HTTP/[0-9.]+" ([1-5][0-9]{2})', line)
+                  if not match:
+                      continue
+                  method, route, status = match.groups()
+                  if not (method == 'POST' and route in {'/api/lab/rare-style-explorer/sessions', '/v1/image/jobs', '/api/v2/creative/runs', '/api/v2/creative/runs/async', '/api/v2/image/jobs'}
+                          or method == 'GET' and any(identity in route for identity in [output.get('output_id', output.get('id')) for job in v1_jobs + v2_jobs for output in job['outputs']])):
+                      continue
+                  key = (method, route, status)
+                  at = line.split(' ', 1)[0]
+                  if key not in groups:
+                      groups[key] = {'method': method, 'route': route, 'status': int(status), 'count': 0, 'first_at': at}
+                  groups[key]['count'] += 1
+                  groups[key]['last_at'] = at
+              access[name] = {'exit_code': completed.returncode, 'requests': list(groups.values())[:24]}
+          review_env = {}
+          for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
+              key, sep, value = line.partition('=')
+              if sep and key in {'V2_OUTPUT_REVIEW_AGENT_ENABLED', 'V2_OUTPUT_REVIEW_AGENT_MODEL', 'V2_AGENT_DEFAULT_MODEL'}:
+                  review_env[key] = value.strip().strip('"').strip("'")
+          runtime_path = Path(env['V2_DATA_DIR']) / 'runtime_model_settings.json'
+          runtime_settings = json.loads(runtime_path.read_text(encoding='utf-8')) if runtime_path.is_file() else {}
+          review_settings = {
+              'enabled': runtime_settings.get('output_review_agent_enabled', review_env.get('V2_OUTPUT_REVIEW_AGENT_ENABLED', 'false').lower() in {'true','1','yes'}),
+              'model': runtime_settings.get('output_review_agent_model') or runtime_settings.get('default_agent_model') or review_env.get('V2_OUTPUT_REVIEW_AGENT_MODEL') or review_env.get('V2_AGENT_DEFAULT_MODEL'),
+          }
+          print(json.dumps({'review_settings': review_settings, 'snapshot_at': datetime.now(timezone.utc).isoformat(),
+              'v1_jobs': v1_jobs, 'v2_jobs': v2_jobs, 'lab_sessions': lab_sessions, 'access': access}, separators=(',', ':')))
           PY
-
-          # Locate the actual recent submission without exposing raw logs,
-          # request bodies, query strings, clients, or authorization headers.
-          docker logs --timestamps --since "$container_started_at" "$v1_container" 2>&1 | python3 -c '
-          import json, re, sys
-          from collections import deque
-          rows = deque(maxlen=30)
-          count = 0
-          pattern = re.compile(r"^(\S+) .*\"POST (/api/v3/creative-agent/projects(?:/project_[a-z0-9]+/jobs(?:/job_[a-z0-9]+/generate)?)?) HTTP/[0-9.]+\" ([1-5][0-9]{2})")
-          for line in sys.stdin:
-              match = pattern.search(line)
-              if match:
-                  count += 1
-                  rows.append({"at": match[1], "route": match[2], "status": int(match[3])})
-          print(json.dumps({"recent_v3_submission_count": count, "recent_v3_submissions": list(rows)}))
-          '
-
-          printf 'GUARDED_PROJECT_AUDIT_RESULT=pass\n'
-          printf 'GUARDED_PROJECT_AUDIT_PROJECT_ID=%s\n' "$project_id"
-          printf 'GUARDED_PROJECT_AUDIT_ACTIVE_SHA=%s\n' "$expected_sha"
+          printf 'GUARDED_V12_AUDIT_RESULT=pass\n'
+          printf 'GUARDED_V12_AUDIT_ACTIVE_SHA=%s\n' "$1"
           REMOTE_SCRIPT
