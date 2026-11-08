@@ -363,6 +363,44 @@ def verify_bridge_runtime(container: object, processes: list[dict[str, str]],
     return {"status": "verified", "scope": "bridge_runtime_paths_and_mounts"}
 
 
+def list_v2_api_unknown_job_ids(root: Path) -> list[str]:
+    """List V2 API-unknown job IDs without changing either durable store.
+
+    The caller still has to pass each ID to ``inspect_active_work``. That
+    guard remains authoritative and accepts an ID only when its V2 job is
+    failed with an empty output list and every matching Bridge unit is the
+    expected V2/API ``api_execution_unknown`` record.
+    """
+    if root.exists() and not root.is_dir():
+        raise CutoverBlocked("bridge_state_root_invalid")
+    job_ids: set[str] = set()
+    if not root.exists():
+        return []
+    for path in sorted(root.glob("*/primary.sqlite3")):
+        db = _readonly(path)
+        try:
+            if "units" not in _tables(db):
+                raise CutoverBlocked("bridge_ledger_unreadable")
+            for state, raw in db.execute("SELECT state,data FROM units"):
+                if state != "api_execution_unknown":
+                    continue
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    raise CutoverBlocked("bridge_ledger_unreadable")
+                if data.get("product") != "v2" or data.get("route") != "api":
+                    continue
+                unit_id = data.get("unit_id")
+                job_id = unit_id.partition(":")[0] if isinstance(unit_id, str) and ":" in unit_id else ""
+                if not job_id:
+                    raise CutoverBlocked("api_abandonment_not_eligible")
+                job_ids.add(job_id)
+        except (sqlite3.Error, ValueError, TypeError):
+            raise CutoverBlocked("bridge_ledger_unreadable") from None
+        finally:
+            db.close()
+    return sorted(job_ids)
+
+
 def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                         v2_repository: Path | None = None,
                         abandoned_api_job_ids: set[str] | None = None) -> dict[str, int]:
@@ -1161,6 +1199,8 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--bridge-frozen-root", type=Path)
     inspect.add_argument("--v2-repository", type=Path)
     inspect.add_argument("--abandon-api-unknown-job-id", action="append", default=[])
+    list_api_unknown = subparsers.add_parser("list-v2-api-unknown-job-ids")
+    list_api_unknown.add_argument("--bridge-state-root", required=True, type=Path)
     bridge_paths = subparsers.add_parser("verify-bridge-storage-configuration")
     bridge_paths.add_argument("--v1-environment", required=True, type=Path)
     bridge_paths.add_argument("--v2-environment", required=True, type=Path)
@@ -1211,7 +1251,9 @@ def main(argv: list[str] | None = None) -> int:
     write_probe.add_argument("--append-file", action="append", default=[], type=Path)
     args = parser.parse_args(argv)
     try:
-        if args.command == "inspect-active-work":
+        if args.command == "list-v2-api-unknown-job-ids":
+            result = {"status": "listed", "job_ids": list_v2_api_unknown_job_ids(args.bridge_state_root)}
+        elif args.command == "inspect-active-work":
             result = inspect_active_work(
                 args.v1_database,
                 args.v2_queue_database,
@@ -1281,7 +1323,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = restore_backup(args.manifest, args.allowed_root)
         print(json.dumps(result, separators=(",", ":")))
-        return 0 if result.get("status") in {"idle", "backed_up", "restored", "estimated", "verified"} else 2
+        return 0 if result.get("status") in {"idle", "backed_up", "restored", "estimated", "verified", "listed"} else 2
     except (CutoverBlocked, OSError, sqlite3.Error, ValueError, KeyError, TypeError) as exc:
         # Keep output suitable for deployment logs and omit paths/payloads.
         reason = str(exc) if isinstance(exc, CutoverBlocked) else type(exc).__name__

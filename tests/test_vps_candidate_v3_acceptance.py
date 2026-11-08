@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from scripts import vps_candidate_v3_smoke as smoke
 from scripts import vps_candidate_v3_bridge_preflight as bridge_preflight
+
+
+def test_candidate_workflow_defaults_failed_empty_api_unknown_exemption_off():
+    workflow = yaml.safe_load(
+        Path(".github/workflows/guarded-vps-candidate-v3-smoke.yml").read_text(encoding="utf-8")
+    )
+    triggers = workflow.get("on", workflow.get(True))
+    inputs = triggers["workflow_dispatch"]["inputs"]
+
+    assert inputs["allow_failed_empty_v2_api_unknowns"]["default"] is False
+    assert "list-v2-api-unknown-job-ids" in Path(
+        ".github/workflows/guarded-vps-candidate-v3-smoke.yml"
+    ).read_text(encoding="utf-8")
 
 
 def _delivery_item(**changes):

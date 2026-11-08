@@ -1060,6 +1060,51 @@ def _bridge_inventory_fixture(tmp_path, state, native_status='completed', cancel
     return root, frozen, repository
 
 
+def test_v2_api_unknown_job_listing_matches_only_guard_scoped_units(tmp_path):
+    root, _, _ = _bridge_inventory_fixture(
+        tmp_path, 'api_execution_unknown', native_status='failed', route='api',
+    )
+    with sqlite3.connect(root / 'v2' / 'primary.sqlite3') as db:
+        db.execute(
+            'INSERT INTO units VALUES (?,?)',
+            ('api_execution_unknown', json.dumps({
+                'product': 'v3', 'unit_id': 'v3-job:0', 'route': 'api',
+            })),
+        )
+        db.execute(
+            'INSERT INTO units VALUES (?,?)',
+            ('api_completed', json.dumps({
+                'product': 'v2', 'unit_id': 'completed-job:0', 'route': 'api',
+            })),
+        )
+    nested = root / 'archive' / 'nested' / 'primary.sqlite3'
+    nested.parent.mkdir(parents=True)
+    with sqlite3.connect(nested) as db:
+        db.execute('CREATE TABLE units(state TEXT, data TEXT)')
+        db.execute(
+            'INSERT INTO units VALUES (?,?)',
+            ('api_execution_unknown', json.dumps({
+                'product': 'v2', 'unit_id': 'out-of-scope-job:0', 'route': 'api',
+            })),
+        )
+
+    assert _MODULE.list_v2_api_unknown_job_ids(root) == ['job1']
+
+
+def test_v2_api_unknown_job_listing_fails_closed_on_malformed_unit_identity(tmp_path):
+    root, _, _ = _bridge_inventory_fixture(
+        tmp_path, 'api_execution_unknown', native_status='failed', route='api',
+    )
+    with sqlite3.connect(root / 'v2' / 'primary.sqlite3') as db:
+        db.execute(
+            'UPDATE units SET data=?',
+            (json.dumps({'product': 'v2', 'route': 'api'}),),
+        )
+
+    with pytest.raises(_MODULE.CutoverBlocked, match='api_abandonment_not_eligible'):
+        _MODULE.list_v2_api_unknown_job_ids(root)
+
+
 @pytest.mark.parametrize('state', ['acked','api_completed','canceled','failed','expired'])
 def test_bridge_completed_inventory_is_idle(tmp_path, state):
     args = _bridge_inventory_fixture(tmp_path,state)

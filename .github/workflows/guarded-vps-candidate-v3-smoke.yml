@@ -17,6 +17,11 @@ on:
         required: true
         default: false
         type: boolean
+      allow_failed_empty_v2_api_unknowns:
+        description: "Allow the guard to exclude only V2 API-unknown jobs already failed with no outputs"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -35,6 +40,7 @@ jobs:
       CANDIDATE_V3_TIMEOUT_SECONDS: "3300"
       CANDIDATE_V3_API_PORT: "18017"
       CANDIDATE_V3_PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+      CANDIDATE_V3_ALLOW_FAILED_EMPTY_V2_API_UNKNOWNS: ${{ inputs.allow_failed_empty_v2_api_unknowns }}
 
     steps:
       - name: Checkout the guarded runner source
@@ -124,7 +130,7 @@ jobs:
           trap 'exit 143' TERM
 
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$remote" bash -s -- "$EXPECTED_CANDIDATE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$api_port" "$CANDIDATE_V3_AUTH_KIND" \
+            "$remote" bash -s -- "$EXPECTED_CANDIDATE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$api_port" "$CANDIDATE_V3_AUTH_KIND" "$CANDIDATE_V3_ALLOW_FAILED_EMPTY_V2_API_UNKNOWNS" \
             >"$lifecycle_log" 2>&1 <<'REMOTE_SCRIPT' &
           set -euo pipefail
           expected_sha="$1"
@@ -132,9 +138,11 @@ jobs:
           run_attempt="$3"
           api_port="$4"
           auth_kind="$5"
+          allow_failed_empty_v2_api_unknowns="$6"
           [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$run_id" =~ ^[0-9]+$ && "$run_attempt" =~ ^[0-9]+$ ]]
           [[ "$api_port" =~ ^[0-9]{5}$ && "$auth_kind" =~ ^(api_key|session)$ ]]
+          [[ "$allow_failed_empty_v2_api_unknowns" =~ ^(true|false)$ ]]
           container="alchemy-candidate-v3-${expected_sha:0:8}-${run_id}-${run_attempt}"
 
           install -d -m 755 /run/lock
@@ -194,11 +202,40 @@ jobs:
           bridge_state="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' <<<"$bridge_paths")"
           [ -d "$bridge_control_dir" ] && [ -d "$bridge_state" ] || stop_reason bridge_storage_path_missing
           v1_started_at="$(docker inspect "$active_container" --format '{{.State.StartedAt}}')"
+          abandon_api_args=()
+          if [ "$allow_failed_empty_v2_api_unknowns" = true ]; then
+            abandon_api_report="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" \
+              list-v2-api-unknown-job-ids --bridge-state-root "$bridge_state")" || stop_reason api_unknown_inventory_unavailable
+            abandon_api_ids="$(python3 - "$abandon_api_report" <<'PY'
+          import json
+          import re
+          import sys
+
+          try:
+              values = json.loads(sys.argv[1])["job_ids"]
+              if not isinstance(values, list) or any(
+                  not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", value)
+                  for value in values
+              ):
+                  raise ValueError()
+          except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+              raise SystemExit("api_unknown_inventory_invalid") from None
+          if values:
+              print("\n".join(values))
+          PY
+            )" || stop_reason api_unknown_inventory_invalid
+            if [ -n "$abandon_api_ids" ]; then
+              while IFS= read -r api_job_id; do
+                [[ "$api_job_id" =~ ^[A-Za-z0-9_.:-]{1,200}$ ]] || stop_reason api_unknown_job_identity_invalid
+                abandon_api_args+=(--abandon-api-unknown-job-id "$api_job_id")
+              done <<<"$abandon_api_ids"
+            fi
+          fi
           if ! active_work_report="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$media_root/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
             --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
             --v2-repository "$v2_data/repository.sqlite3" --v3-projects-root "$media_root/v3_projects" \
-            --v3-container-started-at "$v1_started_at")"; then
+            --v3-container-started-at "$v1_started_at" "${abandon_api_args[@]}")"; then
             if [[ -n "${active_work_report:-}" ]]; then
               printf '%s\n' "$active_work_report"
             else
