@@ -131,6 +131,7 @@ jobs:
         run: |
           HOME="$RUNNER_TEMP/render-bridge-home" python -m pytest -q \
             tests/test_v1_lab_primary_transport.py \
+            tests/test_v1_lab_planning_latency.py \
             tests/test_prompt_canvas_authority.py \
             tests/test_*_exact_canvas.py \
             alchemy_creative_agent_3_0/tests/test_v3_bridge_primary_transport.py \

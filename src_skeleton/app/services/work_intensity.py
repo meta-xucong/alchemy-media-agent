@@ -614,11 +614,18 @@ def _planner_user_payload(
     profile: dict[str, Any],
     asset_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    current_plan = plan.model_dump()
+    variables = current_plan["variables"]
+    # The top-level values remain complete. Keep differing context and the
+    # generated scaffold; only remove exact redundant copies from the wire.
+    for key, value in (("original_prompt", original_prompt), ("asset_context", asset_context or {})):
+        if key in variables and variables[key] == value:
+            variables.pop(key)
     return {
         "user_prompt": original_prompt,
         "work_intensity": intensity,
         "intensity_direction": profile["direction"],
-        "current_plan": plan.model_dump(),
+        "current_plan": current_plan,
         "asset_context": asset_context or {},
         "asset_context_rule": "Use structured asset context for concise prompt planning. If provider_input_plan includes real image/reference inputs, explicitly bind the final prompt to those uploaded images; otherwise treat material data as a weak brief only.",
         "intent_preservation_rule": "Planner output may refine quality, style, composition, and production details, but must not contradict the user prompt or silently remove visible content from uploaded references. Never add 'no text', 'no logo', 'no people', or similar exclusions unless the user explicitly requested that exclusion.",

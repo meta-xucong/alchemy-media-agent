@@ -345,7 +345,6 @@ def _planner_instruction(strategy: str) -> str:
 def _planner_payload(*, request: Any, style: Any, base_prompt: str, strategy: str, selected_styles: list[Any]) -> dict[str, Any]:
     return {
         "original_idea": getattr(request, "idea", ""),
-        "normalized_idea": getattr(request, "idea", ""),
         "style_preset_snapshot": _style_snapshot(style),
         "all_selected_style_names": [getattr(item, "display_name", "") for item in selected_styles[:8]],
         "base_rare_style_prompt": base_prompt,

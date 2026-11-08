@@ -51,6 +51,7 @@ MAX_IMAGES_PER_STYLE = 4
 MAX_TOTAL_IMAGES = 12
 MAX_CONCURRENT_GENERATIONS = 1
 MAX_CONCURRENT_LAB_SESSIONS = 2
+MAX_CONCURRENT_QUALITY_PLANS = 2
 LAB_SQLITE_CAPACITY_WAIT_SECONDS = 1.0
 MAX_RETRIES_PER_VARIANT = 1
 MAX_GENERATION_INTERVAL_SECONDS = 60
@@ -1149,32 +1150,34 @@ def _should_run_inline(request: ExplorationRequest) -> bool:
 async def _ensure_session_prompts_enhanced(session: ExplorationSession) -> None:
     if not session.prompts:
         return
-    enhanced: list[ComposedPrompt] = []
+    enhanced = list(session.prompts)
+    pending = []
     for index, prompt in enumerate(session.prompts):
         quality = (prompt.prompt_metadata or {}).get("quality_enhancement")
         if isinstance(quality, dict):
-            enhanced.append(prompt)
             continue
         style = next((item for item in session.style_presets if item.id == prompt.style_preset_id), None)
         if not style:
-            enhanced.append(prompt)
             continue
+        pending.append((index, prompt, style))
+    for offset in range(0, len(pending), MAX_CONCURRENT_QUALITY_PLANS):
+        batch = pending[offset:offset + MAX_CONCURRENT_QUALITY_PLANS]
         session.progress = {
             **(session.progress or {}),
-            "message": f"正在准备第 {index + 1}/{len(session.prompts)} 个风格的提示词增强。",
+            "message": f"正在准备第 {batch[0][0] + 1}–{batch[-1][0] + 1}/{len(session.prompts)} 个风格的提示词增强。",
             "updated_at": now_iso(),
         }
         session.updated_at = now_iso()
         await _save_runner_state(session)
-        enhanced.append(
-            await enhance_lab_prompt(
-                request=session.request,
-                style=style,
-                prompt=prompt,
-                selected_styles=session.style_presets,
-                composer_factory=local_quality_prompt,
-            )
-        )
+        # Styles are independent text plans. Join all work before publishing
+        # prompts; image generation and its cancellation order remain serial.
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(enhance_lab_prompt(
+                request=session.request, style=style, prompt=prompt,
+                selected_styles=session.style_presets, composer_factory=local_quality_prompt,
+            )) for _, prompt, style in batch]
+        for (index, _, _), task in zip(batch, tasks):
+            enhanced[index] = task.result()
     session.prompts = enhanced
     session.updated_at = now_iso()
     await _save_runner_state(session)

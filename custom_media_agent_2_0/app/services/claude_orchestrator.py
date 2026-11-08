@@ -1883,9 +1883,7 @@ def _build_checkpoint_stage_prompt(
             "When a selected template is present, preserve its visual grammar as a frame/slot/virtual-content/typography plan, not merely its palette; "
             "do not flatten a hero-plus-information template into an equal-card catalog unless that is the template's own structure. "
             "Do not leak internal ids, URLs, APIs, repo names, storage names, or source markers. "
-            f"Prompt transform mode: {prompt_transform_profile.get('transform_mode') or 'auto'} / "
-            f"{prompt_transform_profile.get('fidelity_mode') or 'auto'}; "
-            f"{prompt_transform_profile.get('claude_instruction') or ''}"
+            "Follow prompt_transform.claude_instruction."
         ),
         "output_contract": _checkpoint_output_contract(stage_name),
         "request": request_payload,
@@ -3313,9 +3311,7 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             f"If anchor needs a hero/key visual and uploads lack it, synthesize suitable virtual content. If template uses labels/cards, ban garbled text, not all text. final_prompt<={_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET}; "
             f"negative<={_CLAUDE_INLINE_NEGATIVE_PROMPT_CHAR_BUDGET}; rationale<={_CLAUDE_INLINE_RATIONALE_CHAR_BUDGET}; "
             f"total JSON<={_CLAUDE_INLINE_JSON_CHAR_BUDGET}; no ids/URLs/API/brand copying. "
-            f"Prompt transform: {prompt_transform_profile.get('transform_mode') or 'auto'} / "
-            f"{prompt_transform_profile.get('fidelity_mode') or 'auto'}; "
-            f"{prompt_transform_profile.get('claude_instruction') or ''}"
+            "Follow prompt_transform.claude_instruction."
         ),
         # No source pixels means preservation is impossible, not a semantic
         # classification shortcut. Keep the normal no-upload fast path lean.
