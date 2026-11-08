@@ -112,10 +112,12 @@ jobs:
           container_started_at="$(docker inspect "$v1_container" --format '{{.State.StartedAt}}')"
           docker exec -i "$v1_container" python - "$project_id" "$planning_operation_id" "$job_store_root_mounted" "$container_created_at" "$container_started_at" <<'PY'
           import json
+          import os
           import sys
           from collections import Counter
           from pathlib import Path
           import app.config  # Load the same runtime env-file chain as the V3 service.
+          from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
           from alchemy_creative_agent_3_0.app.product_api.service import _default_product_job_storage_root
 
           project_id = sys.argv[1]
@@ -123,6 +125,25 @@ jobs:
           job_store_root_mounted = sys.argv[3] == "true"
           container_created_at = sys.argv[4]
           container_started_at = sys.argv[5]
+          brain_enabled = os.getenv("V3_LLM_BRAIN_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+          brain_availability = V3LLMBrainProvider().availability(force=True)
+          allowed_brain_availability_reasons = {
+              "remote_disabled",
+              "unsupported_model_route",
+              "missing_credentials",
+              "invalid_configuration",
+              "configured",
+          }
+          brain_diagnostics = {
+              "brain_enabled": brain_enabled,
+              "provider_available": brain_availability.get("available") is True,
+              "availability_reason": (
+                  brain_availability.get("reason_code")
+                  if brain_availability.get("reason_code") in allowed_brain_availability_reasons
+                  else "unknown"
+              ),
+              "health_checked": brain_availability.get("health_checked") is True,
+          }
           root = Path("/app/.media_storage")
           project_path = root / "v3_projects" / project_id / "project.json"
           if not project_path.exists():
@@ -374,6 +395,7 @@ jobs:
                       "job_store_root_mounted": job_store_root_mounted,
                       "container_created_at": container_created_at,
                       "container_started_at": container_started_at,
+                      "brain_diagnostics": brain_diagnostics,
                       "reference_count": len(references),
                       "active_reference_count": len(active_references),
                       "reference_source_counts": dict(sorted(source_counts.items())),
