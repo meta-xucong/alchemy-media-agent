@@ -106,4 +106,29 @@ jobs:
           printf 'GUARDED_PREFLIGHT_V1_MEDIA=%s\n' "$v1_media"
           printf 'GUARDED_PREFLIGHT_V2_STORAGE=%s\n' "$v2_storage"
           printf 'GUARDED_PREFLIGHT_V2_UNITS=all_active\n'
+
+          # Read-only capacity evidence for guarded cutover planning. Never run
+          # prune/cleanup commands from this preflight.
+          printf 'GUARDED_PREFLIGHT_DISK_CAPACITY_BEGIN=1\n'
+          for path in / /var/lib/alchemy /var/lib/docker /opt /var/backups/alchemy "$v1_media" "$v2_storage"; do
+            [ -e "$path" ] || continue
+            df -PB1 "$path" | awk -v path="$path" 'NR == 2 {printf "GUARDED_PREFLIGHT_DISK path=%s size_bytes=%s used_bytes=%s available_bytes=%s mount=%s\n", path, $2, $3, $4, $6}'
+          done
+          printf 'GUARDED_PREFLIGHT_RELEASE_SIZES_BEGIN=1\n'
+          if [ -d /opt/alchemy-media-agent-releases ]; then
+            find /opt/alchemy-media-agent-releases -mindepth 1 -maxdepth 1 -type d -name 'doc276-277-*' -print0 \
+              | xargs -0 -r du -sb -- | sort -n | tail -n 30 \
+              | awk '{path=$2; sub("^/opt/alchemy-media-agent-releases/", "", path); printf "GUARDED_PREFLIGHT_RELEASE_BYTES name=%s bytes=%s\n", path, $1}'
+          fi
+          printf 'GUARDED_PREFLIGHT_BACKUP_SIZES_BEGIN=1\n'
+          if [ -d /var/backups/alchemy ]; then
+            find /var/backups/alchemy -mindepth 1 -maxdepth 1 -type d -name 'pr29-*' -print0 \
+              | xargs -0 -r du -sb -- | sort -n \
+              | awk '{printf "GUARDED_PREFLIGHT_BACKUP_BYTES name=%s bytes=%s\n", $2, $1}'
+          fi
+          printf 'GUARDED_PREFLIGHT_DOCKER_USAGE_BEGIN=1\n'
+          docker system df --format 'GUARDED_PREFLIGHT_DOCKER type={{.Type}} total={{.TotalCount}} size={{.Size}} reclaimable={{.Reclaimable}}'
+          docker image ls --filter 'reference=alchemy-media-agent:*' \
+            --format 'GUARDED_PREFLIGHT_ALCHEMY_IMAGE tag={{.Tag}} size={{.Size}} created={{.CreatedAt}}'
+          printf 'GUARDED_PREFLIGHT_DISK_CAPACITY_END=1\n'
           REMOTE_SCRIPT
