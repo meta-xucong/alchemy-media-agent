@@ -128,6 +128,7 @@ jobs:
           from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
           from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputRecord
           from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import _VISION_INSPECTION_CONCURRENCY_LIMIT
+          from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.quality_review import _bounded_review_observations
 
           project_id = sys.argv[1]
           requested_operation_id = sys.argv[2]
@@ -182,7 +183,20 @@ jobs:
                   "output_id": safe_code(item.get("output_id")),
                   "status": safe_code(item.get("status")),
                   "verification_state": safe_code(item.get("verification_state")),
+                  "confidence": item.get("confidence") if type(item.get("confidence")) in (int, float) else None,
                   "issue_codes": [safe_code(issue.get("code")) for issue in item.get("detected_issues", []) if isinstance(issue, dict)],
+                  "issue_details": [
+                      {"code": safe_code(issue.get("code")), "severity": safe_code(issue.get("severity")),
+                       "retryable": issue.get("retryable") is True}
+                      for issue in item.get("detected_issues", [])[:20] if isinstance(issue, dict)
+                  ],
+                  "score_card": {
+                      safe_code(key): value for key, value in (item.get("score_card") or {}).items()
+                      if safe_code(key) and type(value) in (int, float)
+                  },
+                  "observations": _bounded_review_observations(
+                      item.get("user_visible_summary")
+                  ),
                   "vision_attempts": [
                       {"outcome": safe_code(attempt.get("outcome")),
                        "failure_class": safe_code(attempt.get("failure_class")),
