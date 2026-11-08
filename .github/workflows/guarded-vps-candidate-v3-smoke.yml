@@ -217,7 +217,7 @@ jobs:
           ledger_count = 0
           products = {"v1", "v2", "v3", "lab"}
           routes = {"api", "bridge"}
-          for path in root.rglob("primary.sqlite3"):
+          for path in root.glob("*/primary.sqlite3"):
               try:
                   uri = path.resolve().as_uri() + "?mode=ro"
                   db = sqlite3.connect(uri, uri=True, timeout=10)
