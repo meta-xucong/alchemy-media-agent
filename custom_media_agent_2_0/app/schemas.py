@@ -302,13 +302,17 @@ class ImageReviewDecision(BaseModel):
     review_id: str
     output_id: str
     decision: Literal["pass", "needs_review", "retry_recommended", "failed"]
-    score: float = Field(default=0.5, ge=0.0, le=1.0)
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
     notes: list[str] = Field(default_factory=list)
     detected_risks: list[str] = Field(default_factory=list)
     revision_directives: list[str] = Field(default_factory=list)
     reviewer: str = "rule-reviewer"
     analysis_mode: str = "metadata_rules"
     agent_trace_id: str | None = None
+    model: str | None = None
+    elapsed_ms: int | None = None
+    failure_code: str | None = None
+    verified_source_fields: list[str] = Field(default_factory=list)
     created_at: datetime
 
 

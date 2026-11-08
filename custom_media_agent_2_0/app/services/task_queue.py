@@ -788,6 +788,13 @@ def get_run_snapshot(run_id: str) -> CreativeRun | None:
             payload = queued_payload
     else:
         payload = queued_payload
+    if row["status"] in {"queued", "running"} and payload.get("status") == "completed" and any(
+        (output.get("review") or {}).get("analysis_mode") == "vision_pending"
+        for job in payload.get("generation_jobs", []) for output in job.get("outputs", [])
+    ):
+        # Generation is durably complete; this read-only projection keeps the
+        # existing images visible while the browser awaits the review verdict.
+        payload = {**payload, "status": "reviewing"}
     if row["status"] == "failed" and not row["result_json"]:
         error = _json_loads(row["error_json"]) if row["error_json"] else {}
         payload = {

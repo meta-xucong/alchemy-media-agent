@@ -16780,7 +16780,7 @@ function renderV2Outputs(outputs, job) {
     id.textContent = output.output_id || `output-${index + 1}`;
     const detail = document.createElement("span");
     const review = output.review;
-    const reviewText = review ? `${v2ReviewLabel(review.decision)} ${Math.round((review.score || 0) * 100)}%` : `${Math.round(v2OutputScore(output.score) * 100)}%`;
+    const reviewText = v2ReviewText(review);
     detail.textContent = `${v2ProviderResultText(job, output)} · ${reviewText}`;
     const badge = document.createElement("span");
     badge.className = `v2-output-badge ${output.metadata?.live ? "live" : output.metadata?.mock ? "mock" : "unknown"}`;
@@ -17716,6 +17716,15 @@ function bindProgressiveGridImage(image, { thumbnailUrl = "", previewUrl = "", e
   }).catch(() => {
     if (image.dataset.progressiveGridToken === token) image.classList.remove("is-loading-full");
   });
+}
+
+function v2ReviewText(review) {
+  if (review?.analysis_mode === "vision_pending") return "图片已生成，视觉审核中";
+  if (review?.analysis_mode === "vision_unavailable") return "视觉审核暂不可用，待人工确认";
+  if (review?.analysis_mode === "vision_model") {
+    return review.decision === "pass" ? "视觉审核通过" : "视觉审核需确认，图片已保留";
+  }
+  return "待人工确认（未做视觉审核）";
 }
 
 function v2ReviewLabel(decision) {

@@ -110,6 +110,8 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                 return True
             if run is not None:
                 run = task_queue.restore_success_checkpoint(run)
+                from app.services.generation import finish_run_reviews
+                run = asyncio.run(finish_run_reviews(run))
                 from app.services import render_bridge_primary
                 frozen = render_bridge_primary.load_frozen()
                 if frozen is not None:
@@ -168,6 +170,8 @@ def process_next_task_once(runtime: CreativeManagerRuntime, worker_id: str | Non
                 return True
             if checkpoint is not None:
                 run = task_queue.restore_success_checkpoint(checkpoint)
+                from app.services.generation import finish_run_reviews
+                run = asyncio.run(finish_run_reviews(run))
             if not task_queue.task_claim_is_current(record):
                 logger.info("V2 task claim was superseded during provider work; stale result was not persisted")
                 return True

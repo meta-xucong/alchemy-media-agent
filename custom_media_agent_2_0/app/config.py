@@ -108,6 +108,7 @@ class Settings:
     generation_capacity_lease_ttl_seconds: float = 960.0
     output_review_agent_enabled: bool = False
     output_review_agent_model: str | None = None
+    output_review_timeout_seconds: float = 300.0
     case_intelligence_provider: str = "rules"
     case_intelligence_model: str | None = None
     provider_seed_path: Path = PROJECT_ROOT / "provider_data" / "evolinkai_seed_cases.json"
@@ -279,6 +280,7 @@ def load_settings() -> Settings:
         output_review_agent_enabled=os.getenv("V2_OUTPUT_REVIEW_AGENT_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
         output_review_agent_model=os.getenv("V2_OUTPUT_REVIEW_AGENT_MODEL") or None,
+        output_review_timeout_seconds=float(os.getenv("V2_OUTPUT_REVIEW_TIMEOUT_SECONDS", "300")),
         case_intelligence_provider=_normalize_case_intelligence_provider(
             os.getenv("V2_CASE_INTELLIGENCE_PROVIDER", "rules")
         ),

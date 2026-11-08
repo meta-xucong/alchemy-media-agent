@@ -105,7 +105,7 @@ async def create_image_job(
             return previous
         if previous and previous.status == "completed":
             await bridge_primary.acknowledge(frozen)
-            return previous
+            return await finish_image_review(previous)
     if frozen:
         preflight = {"status": "passed"}
     else:
@@ -321,10 +321,37 @@ async def create_image_job(
         )
         if frozen and saved.status == "completed":
             await bridge_primary.acknowledge(frozen)
-        return saved
+        return await finish_image_review(saved)
     except task_queue.StaleTaskClaim:
         _discard_uncommitted_running_job(job_id)
         raise
+
+
+async def finish_image_review(job: ImageJob) -> ImageJob:
+    """Review already published pixels outside the claim-fenced write lock."""
+    if job.status != "completed" or not any(output.review and output.review.analysis_mode == "vision_pending" for output in job.outputs):
+        return job
+    from app.services.visual_review_agent import review_generated_job
+
+    task_queue.ensure_current_claim()
+    reviewed = await review_generated_job(job)
+
+    def persist_review():
+        current = repository.get_image_job(job.job_id)
+        if current is None or current.status != "completed":
+            raise task_queue.StaleTaskClaim("The completed output is no longer available for review persistence.")
+        if [item.output_id for item in current.outputs] != [item.output_id for item in reviewed.outputs]:
+            raise task_queue.StaleTaskClaim("The reviewed output identities changed.")
+        return _save_job_unfenced(reviewed)
+
+    return task_queue.persist_claimed_operation(persist_review, on_persisted=task_queue.checkpoint_completed_generation)
+
+
+async def finish_run_reviews(run):
+    """Success-checkpoint recovery only continues unfinished review, never generation."""
+    jobs = [await finish_image_review(job) for job in run.generation_jobs]
+    updated = run.model_copy(update={"generation_jobs": jobs, "updated_at": utc_now()})
+    return task_queue.persist_claimed_operation(lambda: repository.save_creative_run(updated))
 
 
 def _bridge_reconciliation_deadline_valid(value: object) -> bool:

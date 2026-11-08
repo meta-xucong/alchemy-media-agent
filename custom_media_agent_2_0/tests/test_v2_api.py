@@ -3510,10 +3510,10 @@ def test_output_review_agent_boundary_can_be_enabled() -> None:
     assert response.status_code == 202
     run = response.json()
     review = run["generation_jobs"][0]["outputs"][0]["review"]
-    assert review["reviewer"] == "visual-critic-agent"
-    assert review["analysis_mode"] == "sdk_agent_metadata_fallback"
-    assert review["agent_trace_id"]
-    assert any("VisualCriticAgent" in note for note in review["notes"])
+    # A mock image does not become a real vision result merely by enabling review.
+    assert review["analysis_mode"] == "metadata_rules"
+    assert review["decision"] == "needs_review"
+    assert review["agent_trace_id"] is None
 
     status = client.get("/api/v2/review-agent/status")
     assert status.status_code == 200
