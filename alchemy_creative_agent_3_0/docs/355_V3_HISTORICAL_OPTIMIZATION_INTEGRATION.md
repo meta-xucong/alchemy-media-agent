@@ -122,3 +122,29 @@ incident's canonical review images and served frontend. Do not lower the
 reserve, delete images/history/backups, or remove rollback environments to
 force a pass. No new generation or review replay has been performed, and
 production acceptance remains incomplete.
+
+## Resumed deployment: correction model for capacity
+
+The user renewed the instruction to audit, test, synchronize and deploy. The
+capacity layer owns the remaining mismatch: the protected cutover needs a new
+backup plus data headroom, while fourteen release directories retain separate
+generated V2 dependency environments of about 385 MB each. Lowering the reserve
+or removing user history is not a correction. Read-only run `42474397439`
+confirmed those environments and their release-bound runtime manifests.
+
+Use a bounded, recoverable archive operation for explicitly selected inactive
+historical dependency environments only. Keep source checkouts, configuration,
+runtime manifests, media, databases and every existing backup. Protect all
+releases with a retained application image, including active/rollback/candidate,
+and reject container, systemd or live-process references. Hold the existing
+release lock. Default to read-only inspection. Before removing an uncompressed
+environment, preserve it as a sibling archive and verify its complete member
+inventory, metadata, link targets and file bytes directly without hashes.
+Stop once deployment headroom is available. A matching archive restores the
+environment at its original path; old releases require restoration before use.
+
+Regression tests must cover protected/referenced selections, source/manifest
+identity, linked paths, complete archive verification and recovery. Then inspect
+the exact production selection read-only before applying. This replaces the
+previous phase's decision not to touch old runtimes with a scoped reversible
+operation supported by new evidence and the renewed deployment instruction.

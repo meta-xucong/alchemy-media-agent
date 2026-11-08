@@ -1,0 +1,77 @@
+name: Guarded VPS Inactive Runtime Archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact main revision containing the audited archive helper"
+        required: true
+        type: string
+      expected_active_sha:
+        description: "Exact running release to protect"
+        required: true
+        type: string
+      inactive_revisions:
+        description: "One to five exact historical revisions, comma separated"
+        required: true
+        type: string
+      mode:
+        description: "Inspect first; archive only the verified inactive selection"
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - archive
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+      - name: Inspect or archive exact inactive dependency environments
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_ACTIVE_SHA: ${{ inputs.expected_active_sha }}
+          INACTIVE_REVISIONS: ${{ inputs.inactive_revisions }}
+          MODE: ${{ inputs.mode }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_ACTIVE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$INACTIVE_REVISIONS" =~ ^[0-9a-f]{40}(,[0-9a-f]{40}){0,4}$ ]]
+          [[ "$MODE" == inspect || "$MODE" == archive ]]
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]
+          apply_arg=""
+          if [ "$MODE" = archive ]; then apply_arg="--apply"; fi
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh_args=(-i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
+          ssh "${ssh_args[@]}" "$remote" \
+            "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - --expected-active-sha '$EXPECTED_ACTIVE_SHA' --revisions '$INACTIVE_REVISIONS' $apply_arg" \
+            < scripts/vps_archive_inactive_runtime.py
+          ssh "${ssh_args[@]}" "$remote" \
+            "curl --noproxy '*' -fsS --max-time 10 http://127.0.0.1:8017/healthz >/dev/null && curl --noproxy '*' -fsS --max-time 10 http://127.0.0.1:8020/api/v2/health >/dev/null && echo GUARDED_RUNTIME_ARCHIVE_HEALTH=pass"
