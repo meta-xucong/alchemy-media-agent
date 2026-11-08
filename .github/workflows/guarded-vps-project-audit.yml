@@ -713,6 +713,35 @@ jobs:
           )
           PY
 
+          # Read the configured durable primary ledgers without changing them.
+          docker exec -i "$v1_container" python - <<'PY'
+          import json
+          import sqlite3
+          import app.config
+          from render_bridge_primary.core import state_root
+          rows = []
+          for path in sorted(state_root().glob("*/primary.sqlite3")):
+              db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+              try:
+                  for state, raw in db.execute("SELECT state,data FROM units"):
+                      data = json.loads(raw)
+                      terminal = state in {"acked", "api_completed"}
+                      terminal |= state == "artifacts_ready" and data.get("cancel_requested") is True and data.get("cancel_reconciled") is True
+                      terminal |= state in {"canceled", "failed", "expired"} and (not data.get("cancel_requested") or bool(data.get("cancel_reconciled")))
+                      if terminal:
+                          continue
+                      safe = {key: data.get(key) for key in (
+                          "unit_id", "product", "owner_id", "task_id", "receipt_id", "attempt_id",
+                          "route", "cancel_requested", "cancel_reconciled", "registration_ref",
+                          "created_at", "updated_at", "error_code",
+                      )}
+                      safe.update({"ledger_product": path.parent.name, "state": state})
+                      rows.append(safe)
+              finally:
+                  db.close()
+          print(json.dumps({"unresolved_primary_units": rows}, separators=(",", ":")))
+          PY
+
           # Locate the actual recent submission without exposing raw logs,
           # request bodies, query strings, clients, or authorization headers.
           docker logs --timestamps --since "$container_started_at" "$v1_container" 2>&1 | python3 -c '
