@@ -23,7 +23,7 @@ class ArchiveBlocked(RuntimeError):
 def command(*args: str) -> str:
     result = subprocess.run(args, capture_output=True, text=True, check=False)
     if result.returncode:
-        raise ArchiveBlocked('reference_inventory_command_failed')
+        raise ArchiveBlocked('reference_inventory_command_failed:' + ':'.join(args[:2]) + ':' + str(result.returncode))
     return result.stdout
 
 
