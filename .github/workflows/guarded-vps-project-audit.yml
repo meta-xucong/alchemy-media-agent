@@ -125,7 +125,19 @@ jobs:
                   V2_OUTPUT_REVIEW_TIMEOUT_SECONDS='300', OPENAI_AGENTS_DISABLE_TRACING='1', ORT_DISABLE_TELEMETRY='1',
                   ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=str(scratch / 'absent-control.json'),
                   ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT=str(scratch / 'ledgers'))
+              isolated_paths = {
+                  'V2_IMAGE_HISTORY_PATH': 'data/image_history.jsonl', 'VEYRA_USAGE_PATH': 'data/usage.jsonl',
+                  'V2_CASE_INDEX_PATH': 'data/case_index.json', 'V2_REMOTE_SNAPSHOT_DIR': 'data/snapshots',
+                  'V2_CASE_THUMBNAIL_DIR': 'data/case_thumbnails', 'V2_HISTORY_THUMBNAIL_DIR': 'data/history_thumbnails',
+                  'V2_CLAUDE_ORCHESTRATOR_WORKSPACE_DIR': 'data/claude', 'V2_CLAUDE_ORCHESTRATOR_CACHE_PATH': 'data/claude_cache.json',
+              }
+              os.environ.update({key: str(scratch / path) for key, path in isolated_paths.items()})
               sys.path[:0] = [str(release / 'custom_media_agent_2_0'), str(release)]
+              from app.config import settings
+              for field in ('data_dir', 'storage_dir', 'image_history_path', 'veyra_usage_path', 'case_index_path',
+                            'remote_snapshot_dir', 'case_thumbnail_dir', 'history_thumbnail_dir', 'task_queue_db_path',
+                            'claude_orchestrator_workspace_dir', 'claude_orchestrator_cache_path'):
+                  assert getattr(settings, field).resolve().is_relative_to(scratch.resolve()), 'isolation_violation_' + field
               from app.repositories import repository
               from app.schemas import ImageJob
               from app.services.output_review import review_image_job
