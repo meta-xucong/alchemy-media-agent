@@ -148,3 +148,19 @@ identity, linked paths, complete archive verification and recovery. Then inspect
 the exact production selection read-only before applying. This replaces the
 previous phase's decision not to touch old runtimes with a scoped reversible
 operation supported by new evidence and the renewed deployment instruction.
+
+The archive helper's 13 focused checks passed, including complete file recovery,
+same-size content corruption, links, process/container/systemd references and
+retained release protection. The 24 existing cutover checks passed. The resumed
+V3 check set also passed: nine review ownership/mixed-winner checks, thirteen
+composition policy cases and sixteen desktop/mobile review projection checks.
+Read-only preview `42475218535` verified the exact five selected runtimes and
+healthy running services. No provider generation or review replay was used.
+
+For recovery of an archived old release, extract `.venv.inactive.tar.gz` in that
+release's `custom_media_agent_2_0` directory only after confirming `.venv` is
+absent. Preserve the archive outside the source checkout after successful
+restoration: the existing source-clean gate correctly rejects the untracked
+archive in a release being activated. Run the normal V2 runtime guard and
+candidate/activation checks; extraction alone does not authorize old release
+activation. The current active and rollback environments are never archived.
