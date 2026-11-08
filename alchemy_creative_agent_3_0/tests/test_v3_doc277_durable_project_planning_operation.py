@@ -428,6 +428,7 @@ def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection
         service=V3ProductApiService(),
         project_store=InMemoryProjectStore(),
     )
+    monkeypatch.setattr(handlers.service.output_store, "list_by_job", lambda _job_id: [])
     monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
     queued: list[tuple[object, tuple[object, ...]]] = []
     monkeypatch.setattr(
@@ -452,25 +453,25 @@ def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection
                     "failure_code": "remote_brain_unavailable",
                     "reason_code": "remote_brain_unavailable",
                     "provider_request_started": False,
-                },
-                "remote_creative_brain_outcome": {
-                    "schema_version": "v3_remote_creative_brain_outcome_v1",
-                    "state": "blocked",
-                    "reason_code": "remote_brain_unavailable",
-                    "outcome_class": "remote_provider_error",
-                    "llm_used": False,
-                    "fallback_used": True,
-                    "remote_provider_available": True,
-                    "remote_provider_availability_reason": "configured",
-                    "remote_brain_request_started": True,
-                    "remote_brain_request_acceptance": "dispatched",
-                    "remote_error_class": "timeout",
-                    "remote_brain_stage": "plan",
-                    "remote_http_status_code": 503,
-                    "remote_provider_transport_kind": "timeout",
-                    "provider_api_key": "must-not-be-persisted",
-                    "raw_provider_body": "must-not-be-persisted",
-                    "user_prompt": "must-not-be-persisted",
+                    "remote_creative_brain_outcome": {
+                        "schema_version": "v3_remote_creative_brain_outcome_v1",
+                        "state": "blocked",
+                        "reason_code": "remote_brain_unavailable",
+                        "outcome_class": "remote_provider_error",
+                        "llm_used": False,
+                        "fallback_used": True,
+                        "remote_provider_available": True,
+                        "remote_provider_availability_reason": "configured",
+                        "remote_brain_request_started": True,
+                        "remote_brain_request_acceptance": "dispatched",
+                        "remote_error_class": "timeout",
+                        "remote_brain_stage": "plan",
+                        "remote_http_status_code": 503,
+                        "remote_provider_transport_kind": "timeout",
+                        "provider_api_key": "must-not-be-persisted",
+                        "raw_provider_body": "must-not-be-persisted",
+                        "user_prompt": "must-not-be-persisted",
+                    },
                 },
             },
         }

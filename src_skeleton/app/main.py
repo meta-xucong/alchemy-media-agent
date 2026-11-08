@@ -961,6 +961,15 @@ def _v3_blocked_planning_failure_diagnostics(response: object) -> dict | None:
     if not isinstance(metadata, dict):
         return None
     outcome = metadata.get("remote_creative_brain_outcome")
+    if not isinstance(outcome, dict):
+        lifecycle = metadata.get("generation_lifecycle_failure")
+        if (
+            isinstance(lifecycle, dict)
+            and lifecycle.get("schema_version") == "v3_generation_lifecycle_failure_v1"
+            and lifecycle.get("status") == "blocked"
+            and lifecycle.get("failure_family") == "remote_creative_brain"
+        ):
+            outcome = lifecycle.get("remote_creative_brain_outcome")
     return dict(outcome) if isinstance(outcome, dict) else None
 
 
