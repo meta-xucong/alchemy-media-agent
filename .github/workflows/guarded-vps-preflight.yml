@@ -187,4 +187,10 @@ jobs:
             printf 'GUARDED_PREFLIGHT_CUTOVER_ESTIMATE_STATUS=%s\n' "$estimate_status"
           fi
           printf 'GUARDED_PREFLIGHT_DISK_CAPACITY_END=1\n'
+          for cache_path in /root/.cache/pip /var/cache/apt/archives /root/.npm/_cacache; do
+            if [ -d "$cache_path" ] && [ ! -L "$cache_path" ]; then
+              cache_bytes="$(du -sb -- "$cache_path" | cut -f1)"
+              printf 'GUARDED_PREFLIGHT_DOWNLOAD_CACHE path=%s bytes=%s\n' "$cache_path" "$cache_bytes"
+            fi
+          done
           REMOTE_SCRIPT
