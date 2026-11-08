@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from typing import Any
 
@@ -12,9 +13,10 @@ from render_bridge_primary.http import BridgeClient
 
 
 class CandidateBridgePreflightError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, diagnostic: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.diagnostic = diagnostic
 
 
 def validate_candidate_v3_bridge_state(settings: Any, capabilities: object) -> None:
@@ -55,7 +57,13 @@ def validate_candidate_v3_bridge_state(settings: Any, capabilities: object) -> N
         "codex-image",
     )
     if rejection is not None:
-        raise CandidateBridgePreflightError("candidate_bridge_request_unsupported")
+        code = rejection.get("code")
+        field = rejection.get("field")
+        safe_code = code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) else "unknown"
+        safe_fields = {"quality", "output_format", "transparent_background", "references", "exact_dimensions"}
+        safe_field = field if isinstance(field, str) and field in safe_fields else None
+        diagnostic = f"code={safe_code}" + (f" field={safe_field}" if safe_field else "")
+        raise CandidateBridgePreflightError("candidate_bridge_request_unsupported", diagnostic)
 
 
 async def _read_capabilities(settings: PrimarySettings) -> dict[str, Any]:
@@ -79,6 +87,8 @@ def main() -> int:
         validate_candidate_v3_bridge_state(settings, capabilities)
     except CandidateBridgePreflightError as exc:
         print(exc.code, file=sys.stderr)
+        if exc.diagnostic:
+            print(f"candidate_bridge_request_rejection {exc.diagnostic}", file=sys.stderr)
         return 2
     except Exception:
         # Transport errors can contain URLs or low-level details. Keep the

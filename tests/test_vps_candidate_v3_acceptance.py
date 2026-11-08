@@ -197,3 +197,4 @@ def test_candidate_preflight_requires_codex_capability_for_frozen_png_defaults()
         bridge_preflight.validate_candidate_v3_bridge_state(settings, unsupported)
 
     assert caught.value.code == "candidate_bridge_request_unsupported"
+    assert caught.value.diagnostic == "code=adapter_not_advertised"
