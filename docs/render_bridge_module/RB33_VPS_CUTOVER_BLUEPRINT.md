@@ -9,10 +9,13 @@ RenderBridge API-pull service on the VPS, point Alchemy's Bridge clients at
 that VPS service, and keep the Windows Codex node outbound-only. Complete the
 cutover only after V1, V2, V3 and Lab have passed their product-level checks.
 
-**Current phase:** guarded Alchemy activation is complete on the VPS and
-V1/V2 health checks passed with Bridge admission closed. Next, perform the
-V1 native `fake-image` receipt flow while keeping V2 and real Codex execution
-disabled; then close fake admission before preparing real-route acceptance.
+**Current phase:** the original Phase 8/9 status below predates later real
+`codex-image` task receipts and is corrected in the 2026-11-08 addendum. The
+next acceptance step is to build and activate the latest synchronized Alchemy
+main revision through the guarded workflow, then run integrated V1/V2/V3/Lab
+real-image acceptance. Earlier successful real tasks establish that the local
+Codex CLI executor has worked; they do not replace fresh acceptance of the
+current main revision.
 
 ## 2026-11-06 image-transfer contract correction
 
@@ -24,10 +27,11 @@ Keep the existing size, MIME, image-format, dimension, and pixel-limit checks.
 Prompt, task, account, and other non-image identity digests remain unchanged.
 Do not use image SHA as the input or publication idempotency key.
 
-This is a code/call-path correction discovered before Phase 8; no new image task
-was created. Existing tasks, ledgers, artifacts, release images, and VPS data
-remain preserved. Phase 8 must use the revised contract on both services before
-Phase 9 real product acceptance can start.
+This is a code/call-path correction discovered before the documented synthetic
+Phase 8; no new image task was created for the correction. Later production
+`codex-image` tasks exercised the real Bridge transfer/registration/ACK path.
+See the 2026-11-08 addendum for corrected acceptance state. Existing tasks,
+ledgers, artifacts, release images, and VPS data remain preserved.
 
 ## Fixed architecture and authorities
 
@@ -87,12 +91,12 @@ maintenance window and requires its target commit and disk-reserve inputs.
 | 1. VPS inventory | Read-only inspect the production host: active Alchemy release and services, current V1/V2 data roots, free space, TLS/Nginx, existing firewall/listeners, current unresolved Bridge work and available backup/restore evidence. Record identifiers and paths, not secret values. | Inventory matches the VPS and identifies the actual Bridge hostname, service layout and maintenance constraints. If access is unavailable, stop here and ask for the missing host/access route. | Mostly complete: SSH to `114.134.186.94:11506` works with pinned host key. Host `ser467022953094`; Nginx 1.22.1; Alchemy listener ports 8017/8020; firewall 80/443; active release pointer and V1/V2 persistent roots inspected. Disk has 6.7 GB free; V1 media is 3.3 GB and V2 storage 1.6 GB. No existing VPS Bridge process/listener or VPS Bridge tasks were found. Backups through Oct 24 contain release runtime contracts and SQLite stores, but current mutable-media coverage and restore evidence are unconfirmed. Keep Alchemy candidate/activation blocked pending disk-reserve and backup/restore determination; Bridge itself can start on a fresh empty store after its local runtime workflow is validated. |
 | 2. Bridge deployment preparation | From upstream `69ecec7`, prepare a clean isolated release/config for `node_pull`; select a durable fresh Bridge data directory and loopback listener; add or document the minimum service manager lifecycle needed by this VPS. Keep `accepting_new_tasks` false and `enabled_profiles` fake-only during initial service check. | Service starts/restarts from the pinned release; BridgeStore and artifacts persist across restart; no local DB is copied; source and node auth are distinct. | Complete. VPS image `alchemy-render-bridge:rb33-20261102` built from the isolated API-pull feature branch and runs in enabled systemd service `alchemy-render-bridge-api.service`, bound to `127.0.0.1:8787`. Authenticated loopback and public HTTPS capability checks returned 200; service restart retained its SQLite state. Admission remains closed and only `fake-image` is enabled. |
 | 3. HTTPS ingress | Configure the chosen Bridge hostname, DNS/TLS and Nginx routes for `/bridge/v1/` and `/bridge/node/v1/` to the loopback service. Keep other Bridge interfaces private. Check upload limits, Authorization forwarding, binary transfer, status propagation and no proxy request replay. | Trusted certificate; external route checks pass; root/admin/dispatcher/engine/database/CLI routes are not exposed. | Runtime ingress verified: normal TLS validation to `https://bridge.aiself.vip` passed; authenticated `/bridge/v1/capabilities` returned 200 from Windows and VPS. HTTPS root remains non-public. The earlier Nginx and certificate checks remain valid. Full artifact transfer/proxy semantics remain for Phase 8 synthetic E2E. |
-| 4. Windows Node Agent | Configure a `pull-worker` entrypoint for the VPS HTTPS origin with persistent local state and the matching Node identity/profile. Keep exactly one Agent process. Connect while admission remains closed and verify heartbeat/profile/status only. | Fresh heartbeat and matching profile visible at the VPS; reconnect works after process restart; no task is created by status checks. | Complete for closed-admission heartbeat. Dedicated `scripts/start_vps_node_agent.bat` / `.ps1` use the existing CurrentUser DPAPI NodeToken.v1 record and persistent `%LOCALAPPDATA%` state. Windows PowerShell 5.1 launcher completed HTTPS and Node-auth checks; VPS reported Node online with `fake-image`; Bridge reports `accepting_new_tasks=false`, `mode=draining`. Agent is currently running. Restart/reconnect and task execution remain unverified; no task was created. Independent scope review: NO_VIOLATION_FOUND. |
-| 5. Alchemy client staging | Stage V1/V3/Lab shared settings and V2 settings for the same Bridge origin/workspace, Source token and persistent client paths. Keep both modes disabled and fake-only while staging; do not put secrets in Git or the blueprint. | Read-only checks show token is present in both approved environment files, origin/workspace/profile values match Bridge, and V1/V2 point to `/var/lib/alchemy/render-bridge-primary`; current runtime remains unchanged. Runtime capability reporting moves to the planned activation phase. | Complete for file staging. V1 active `.env` and V2 environment/control files contain the shared Bridge origin/workspace, protected Source token and persistent paths. Both modes remain disabled and `fake-image` only; V1 native entry remains disabled. Read-only consistency check passed without printing credentials. No Alchemy service was restarted. The active release predates `verify-bridge-storage-configuration`; the candidate's guard will provide the repository-level path check. |
+| 4. Windows Node Agent | Configure a `pull-worker` entrypoint for the VPS HTTPS origin with persistent local state and the matching Node identity/profile. Keep exactly one Agent process. Connect while admission is closed and verify heartbeat/profile/status before opening tasks. | Fresh heartbeat and matching profile visible at the VPS; reconnect works after process restart; no task is created by status checks. | Closed-admission heartbeat passed at the initial staging snapshot. Later real `codex-image` task receipts prove that the local Agent executed and returned real outputs. Revalidate current process/profile readiness before final acceptance; the older fake-only heartbeat is not current-state evidence. Independent scope review at staging: NO_VIOLATION_FOUND. |
+| 5. Alchemy client staging | Stage V1/V3/Lab shared settings and V2 settings for the same Bridge origin/workspace, Source token and persistent client paths. Keep modes disabled during initial staging; do not put secrets in Git or the blueprint. | Read-only checks show token is present in both approved environment files, origin/workspace/profile values match Bridge, and V1/V2 point to `/var/lib/alchemy/render-bridge-primary`; current runtime remains unchanged. Runtime capability reporting moves to the planned activation phase. | Initial file staging passed. V1/V3/Lab and V2 settings later enabled real Bridge tasks; the saved control and active release must be rechecked through the current guarded workflow before final acceptance. The V1 native test entry remained separately disabled. |
 | 6. Alchemy candidate | Use the repository's guarded candidate workflow for current `origin/main`. Prepare an inactive candidate and review its receipt, V1/V2 runtime checks and staged Bridge client paths; do not activate yet. | Candidate build passes; the current guard accepts the staged shared URL/workspace and persistent paths; V1 container identity and V2 units remain available. Historical V1 data state is not digest-compared. | Run `41363241309` built commit `9a42dd87e3bd` as `/opt/alchemy-media-agent-releases/doc276-277-9a42dd87e3bd`; the Bridge path guard and candidate V2 runtime checks passed. Active release remained `/opt/alchemy-media-agent-releases/doc276-277-1eaba5539678`; V1 container and V2 units stayed available. Historical V1 data was not compared. **Rebuild required before activation:** this continuation removes file-content SHA generation/comparison from the cutover backup/restore guard, so the candidate must be rebuilt from the resulting current `origin/main`. |
 | 7. Alchemy activation and runtime readiness | Schedule the guarded activation's planned V1/V2 downtime. Activate the selected Alchemy release and staged client configuration with Bridge admission still closed and Codex profile not enabled. Verify V1/V3/Lab and V2 health plus the expected Bridge origin/workspace/profile status. | All Alchemy services pass health checks; both product families read the staged Bridge configuration; no task is admitted during this phase. | Complete. Guarded activation run `41365205042` switched `/opt/alchemy-media-agent` to `/opt/alchemy-media-agent-releases/doc276-277-63368f685f8f`; run reported V1/V2 local/public health 200, desktop/H5 static markers verified, and V3 project protection 401. Rollback was not needed. Bridge admission stayed closed, and Codex profile remained disabled. The 1 GiB free-space floor passed against the measured 5.18 GB available; the current active-work inventory was idle before the maintenance window. |
-| 8. Synthetic end-to-end check | After runtime readiness, temporarily enable the existing V1 RenderBridge native test entry (`/render-bridge-native-test`, API `/api/integrations/render-bridge/v1/native/tasks`) with explicit `fake-image`, and open only the Bridge fake-image admission. Exercise Alchemy plan/create -> Agent pull/claim/start -> artifact transfer -> native registration -> same-receipt ACK. The ordinary V1/V3 primary route selects `codex-image`, and V2 enables only `codex-image`; do not route fake-image through those primary paths. Keep V2 disabled during this fake-only check. Include only the failure/restart cases already required by RB30/RB32, then close fake admission again. | One task, one attempt, one receipt identity; final ACK accepted; no real provider call or charge; fake admission closed after the test. | Not started. The supported native fake-image entry is confirmed in code, but V1 native mode and Bridge task admission remain disabled; no task has been created. |
-| 9. Real product acceptance | Prepare and enable the local Codex executor/profile, enable the Alchemy Codex client routes, and add the matching Bridge `codex-image` profile/admission. Then run a controlled real image task through the frontend, first on one product, then verify the remaining routes. Confirm route, Bridge task, Agent execution, uploaded original, Alchemy registration, ACK and user-visible result. | Product-level evidence for V1, V2, V3 and Lab; no duplicate API generation after Bridge acceptance. | Not started. The current Windows Node Agent is fake-image-only; Codex executor readiness and every real product route remain unverified. |
+| 8. Synthetic end-to-end check | Optional auxiliary check for the separate V1 native test entry (`/render-bridge-native-test`, API `/api/integrations/render-bridge/v1/native/tasks`). It is not a prerequisite for the user-facing Codex CLI return path after a real `codex-image` task has exercised planning, Agent execution, artifact transfer, registration, ACK and delivery. Do not open fake admission or create a synthetic task solely to satisfy this superseded gate. | If separately needed for native-adapter development, one fake task, one attempt, one receipt identity, final ACK accepted, and fake admission closed. | Superseded as a product acceptance gate by later real Codex E2E task evidence. No fake task was created. |
+| 9. Real product acceptance | Build and activate the current main revision through the guarded VPS workflow. Revalidate the local Codex CLI Agent, then run one serial real image task through each product's user-facing route. Confirm route, same Bridge task/attempt/receipt, Agent execution, Alchemy registration/ACK and user-visible preview/download; ensure no API fallback or duplicate generation. | Fresh product-level evidence for V1, V2, V3 and Lab on the exact active revision. | Historical real Codex tasks establish executor capability and partial product coverage, including successful V1, V3 and Lab deliveries and a recovered V2 Bridge output. Fresh integrated acceptance remains open for the latest synchronized source revision and repaired V2/V3 paths. |
 
 ## Configuration map (names and paths only)
 
@@ -101,12 +105,15 @@ maintenance window and requires its target commit and disk-reserve inputs.
 - Runtime config based on `config/bridge.remote-pull.example.json`.
 - `dispatch_mode=node_pull`, listener `127.0.0.1:8787`, fresh durable
   `data_dir`, stable source/workspace/node/executor IDs.
-- Start with `accepting_new_tasks=false` and `enabled_profiles=["fake-image"]`.
+- The initial deployment used `accepting_new_tasks=false` and
+  `enabled_profiles=["fake-image"]`; later real `codex-image` tasks completed.
+  Read the active runtime configuration before final acceptance.
 - `BRIDGE_SOURCE_TOKEN` is configured in Bridge and supplied to Alchemy.
 - `BRIDGE_NODE_TOKEN` is configured in Bridge and supplied only to the local
   Node Agent. Keep both out of the repository and logs.
-- After synthetic acceptance, add `codex-image` only when the local Agent's
-  configured executor and runtime capability are confirmed.
+- Real `codex-image` tasks already confirmed that the configured local Agent
+  can execute and return images; the synthetic native route is not a gate for
+  the user-facing product routes.
 
 ### Alchemy VPS
 
@@ -140,23 +147,25 @@ belong in the approved secret/configuration store, never in this document.
 
 ## Current blockers and next action
 
-1. The RenderBridge local checkout is not a safe release source because it is
-   divergent and dirty; the VPS Bridge was built from the isolated fetched
-   upstream feature branch, and that checkout remains untouched.
-2. VPS inventory found 6.7 GB free and mapped the active V1/V2 persistent
-   roots. Existing Alchemy backups through Oct 24 contain SQLite stores and
-   runtime contracts; current mutable-media coverage and tested restore remain
-   unconfirmed. Keep the Alchemy release candidate/activation behind the
-   repository's disk-reserve and backup requirements.
-3. Bridge service and the local fake-image Node heartbeat are live. The Node
-   Agent has not yet pulled or executed a task. Keep admission closed and
-   fake-only until the Alchemy client configuration and synthetic E2E receipt
-   flow pass.
-4. Final acceptance remains open until all four product routes and the real
-   frontend image-delivery path pass on the VPS.
-5. V1/V3/Lab and V2 clients still have no VPS Bridge configuration. Source
-   token provisioning and client readiness checks are the next phase; do not
-   change the existing fallback policy.
+1. Current synchronized `origin/main` is `24392294`; the active VPS release is
+   the earlier `63368f685` revision. Read-only preflight run `42435115801`
+   passed for current main, but it did not activate or validate that revision.
+   Build a fresh inactive candidate from the exact current SHA, then use the
+   guarded activation workflow.
+2. Historical evidence disproves the earlier claim that the Windows Agent is
+   fake-only: it was configured for `codex-image`, the local Codex CLI login was
+   verified, and real Bridge tasks completed. Revalidate current Agent
+   readiness before the new run; do not infer inability from the older Phase 4
+   heartbeat snapshot or the diagnostics-only `real_generation_verified=false`
+   field.
+3. Do not run the synthetic native fake-image task as a prerequisite. It is a
+   separate auxiliary route and was superseded for this product objective by
+   real `codex-image` tasks exercising Bridge transfer, registration and ACK.
+4. Final acceptance remains open until fresh V1, V2, V3 and Lab runs pass on the
+   exact active revision, with visible/downloadable outputs and no API fallback
+   or duplicate generation. Preserve the two historical V2
+   `api_execution_unknown` records unless the guarded workflow's exact
+   abandonment predicates prove them eligible for this cutover.
 
 Read-only public checks show that `alchemy.aiself.vip` responds over HTTPS (a
 HEAD request returns 405, proving reachability only, not application health).
@@ -166,15 +175,13 @@ trust validation. The Alchemy VPS SSH helper connects to port `11506` with
 the existing known-host key. An earlier probe of the default SSH port 22
 timed out; that is not the configured SSH port.
 
-Alchemy client values are staged with both clients disabled; no service was
-restarted. Next, build the inactive candidate from current `origin/main` and
-run its Bridge storage guard against the staged files. After the candidate
-passes, use the planned V1/V2 maintenance window to activate Alchemy and check
-runtime readiness while Bridge admission stays closed. Then run the explicit
-V1 native fake-image receipt flow with V2 disabled, close fake admission, and
-only later enable the Codex executor for real product acceptance. Preserve the
-existing API fallback behavior and do not report total completion at a phase
-boundary.
+The current Alchemy source has already passed the read-only V3 preflight. Build
+the inactive candidate from the exact current `origin/main`, run the Bridge
+storage guard, and activate only through the guarded V1/V2 maintenance workflow.
+Before generating, revalidate current Agent readiness and the product routes.
+Then run the serial real Codex acceptance for V1, V2, V3 and Lab, preserving
+existing fallback policy and stopping a product if any request leaves Bridge
+after acceptance. Do not report total completion at a phase boundary.
 
 The guarded candidate, preflight and activation workflows no longer compute or
 compare SHA-256 digests of V1 historical state, and cutover backup manifests
@@ -306,3 +313,37 @@ v2 binding without reading image bytes; their Doc271 source binding omits image
 digests. The existing v1 digest path remains for ordinary API plans. A focused
 regression test rejects any image-byte read while deriving the v2 physical
 binding.
+
+## 2026-11-08 correction: Codex CLI executor and prior real-task evidence
+
+The Phase 4/8/9 status above was carried forward from the earlier fake-only
+heartbeat stage and was not reconciled with later live acceptance. That was a
+documentation and evidence-selection error, not a Codex CLI capability failure.
+
+The linked acceptance conversation records that the local Codex CLI login was
+valid and the Windows pull Agent configuration included the Codex executor.
+V1 task `job_b2825c0641ba` used `codex-image` with automatic API fallback
+disabled; it reached `ready`, was ACKed by Bridge, and its preview/download
+returned 200. Lab also completed a real Bridge task and its preview/download
+returned 200. V3 task `job_a306456164` later produced two Bridge ACKs with no
+API fallback; its two candidate outputs returned 200 from preview/download.
+An earlier four-product run also produced Bridge outputs for V1, V2, V3 and
+Lab, but that run exposed a V2 projection/recovery issue and one V3 API
+fallback, so it was partial acceptance rather than a clean final pass. The
+existing V2 task `job_8639d8669f30` was subsequently recovered from its
+original Bridge receipt without creating a new image task.
+
+`src_skeleton/app/integrations/render_bridge/diagnostics.py` intentionally
+types and emits `real_generation_verified` as false for its diagnostic
+response. That field is not a history of completed Codex tasks. The authoritative
+evidence is the persisted product task, Bridge task/attempt/receipt and ACK,
+plus the product output and preview/download. The native `fake-image` endpoint
+is a separate auxiliary path and is not a required gate for the user-facing
+Codex CLI workflow after real tasks have exercised the shared transfer path.
+
+These historical results prove the Codex CLI return design has worked and
+supersede the stale “Codex executor unverified/fake-only” conclusion. They do
+not certify the latest `24392294` source because that revision has not yet been
+activated. Run final integrated acceptance only after the guarded workflow has
+activated the fresh candidate, and record current task IDs and delivery results
+there. No image content SHA/hash/checksum is part of this acceptance.
