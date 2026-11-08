@@ -418,6 +418,14 @@ def test_doc277_background_planning_failure_closes_without_creating_a_job(monkey
     assert project["project"]["job_ids"] == []
 
 
+def test_doc277_profile_contract_failure_keeps_its_runtime_reason_code():
+    response = {"metadata": {"generation_lifecycle_failure": {
+        "failure_code": "remote_creative_brain_task_profile_invalid",
+        "reason_code": "remote_creative_brain_task_profile_invalid",
+    }}}
+    assert app_main._v3_blocked_planning_failure_code(response, job_id="job_profile_failure") == "remote_creative_brain_task_profile_invalid"
+
+
 def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection(monkeypatch) -> None:
     # This lifecycle test exercises diagnostic projection only. Replace the
     # existing identity digest machinery so this focused test does not perform

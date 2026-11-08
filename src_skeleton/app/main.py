@@ -924,6 +924,7 @@ _V3_JOB_BOUND_PLANNING_FAILURE_CODES = frozenset(
         "remote_creative_brain_prompt_signoff_unavailable",
         "remote_creative_brain_prompt_signoff_missing",
         "remote_creative_brain_image_set_plan_invalid",
+        "remote_creative_brain_task_profile_invalid",
         "remote_creative_brain_image_set_missing",
         "remote_creative_brain_required_for_template",
     }

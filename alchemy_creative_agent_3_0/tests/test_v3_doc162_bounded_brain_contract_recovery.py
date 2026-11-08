@@ -187,6 +187,86 @@ def _strict_request(adapter: V3LLMBrainAdapter, *, count: int = 1):  # noqa: ANN
     )
 
 
+@pytest.mark.parametrize("collection,field", [
+    ("subject_entities", "source_asset_ids"),
+    ("subject_entities", "visible_in_target"),
+    ("subject_entities", "attributes"),
+    ("evidence", "source"),
+    ("evidence", "value"),
+    ("evidence", "metadata"),
+])
+def test_profile_recovery_identifies_missing_nested_field(collection, field):
+    from alchemy_creative_agent_3_0.app.llm_brain.adapter import (
+        _has_complete_remote_visual_task_profile,
+        _visual_task_profile_shape_validation_audit,
+    )
+    profile = _complete_profile()
+    item = ({"entity_id": "subject", "entity_type": "object", "role": "subject",
+             "source_asset_ids": [], "visible_in_target": True, "preservation_level": "none",
+             "confidence": 0.9, "attributes": {}}
+            if collection == "subject_entities" else
+            {"evidence_id": "intent", "evidence_type": "user_intent", "source": "user_request",
+             "value": True, "confidence": 0.9, "metadata": {}})
+    item.pop(field)
+    profile[collection] = [item]
+    assert not _has_complete_remote_visual_task_profile(profile)
+    audit = _visual_task_profile_shape_validation_audit(profile)
+    assert audit["validation_error_paths"] == [f"visual_task_profile.{collection}.item.{field}"]
+    assert audit["validation_error_types"] == ["missing"]
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test_profile_reanswer_receives_field_diagnostic_without_local_semantic_fallback(monkeypatch, repair):
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+
+    class DiagnosticProvider(EcommerceRemoteBrainTestProvider):
+        def run(self, request):
+            payload = super().run(request)
+            profile = _complete_profile()
+            evidence = {"evidence_id": "intent", "evidence_type": "user_intent",
+                        "source": "user_request", "value": True, "confidence": 0.9}
+            recovery = json.loads(build_remote_payload(request)).get("semantic_contract_recovery", {})
+            diagnostics = recovery.get("validation_diagnostics", {}).get("sections", {}).get("visual_task_profile", {})
+            if repair and diagnostics.get("validation_error_paths") == ["visual_task_profile.evidence.item.metadata"]:
+                evidence["metadata"] = {}
+            profile["evidence"] = [evidence]
+            payload["visual_task_profile"] = profile
+            payload["capability_activation_intent"] = _complete_activation()
+            return payload
+
+    provider = DiagnosticProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    result = adapter.run(_strict_request(adapter))
+    assert len(provider.requests) == 2
+    assert result.audit["remote_semantic_contract_recovery_succeeded"] is repair
+    recovery = provider.requests[1]["metadata"]["remote_semantic_contract_recovery"]
+    assert recovery["validation_diagnostics"]["sections"]["visual_task_profile"]["validation_error_types"] == ["missing"]
+    assert provider.requests[0]["user_input"] == provider.requests[1]["user_input"]
+    if not repair:
+        assert result.audit["remote_contract_rejected_sections"] == ["visual_task_profile"]
+
+
+def test_profile_recovery_sends_only_schema_paths_and_closed_error_types():
+    from alchemy_creative_agent_3_0.app.llm_brain.adapter import _safe_semantic_contract_recovery_diagnostics
+
+    audit = {"schema_version": "v3_remote_contract_validation_audit_v1", "sections": {
+        "visual_task_profile": {
+            "validation_error_count": 999,
+            "validation_error_paths": ["visual_task_profile.evidence.item.metadata", "visual_task_profile.evidence.item.metadata.secret_value"],
+            "validation_error_types": ["missing", "raw_provider_error_secret"],
+            "raw_response": "provider_body_secret",
+        },
+    }}
+    safe = _safe_semantic_contract_recovery_diagnostics(audit)
+    assert safe["sections"]["visual_task_profile"] == {
+        "validation_error_count": 1,
+        "validation_error_paths": ["visual_task_profile.evidence.item.metadata"],
+        "validation_error_types": ["missing"],
+    }
+    assert "secret" not in json.dumps(safe)
+
+
 def test_doc162_one_remote_schema_reanswer_recovers_same_frozen_request(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
@@ -211,6 +291,14 @@ def test_doc162_one_remote_schema_reanswer_recovers_same_frozen_request(monkeypa
         "attempt": 1,
         "rejected_sections": ["visual_task_profile"],
         "same_frozen_request": True,
+        "validation_diagnostics": {
+            "schema_version": "v3_remote_contract_validation_audit_v1",
+            "sections": {"visual_task_profile": {
+                "validation_error_count": 1,
+                "validation_error_paths": ["visual_task_profile.developmental_age_intent"],
+                "validation_error_types": ["missing"],
+            }},
+        },
     }
 
 

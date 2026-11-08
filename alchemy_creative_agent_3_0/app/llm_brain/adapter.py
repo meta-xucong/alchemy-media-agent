@@ -46,6 +46,7 @@ from .prompt_policy import (
     validate_unified_prompt_record,
 )
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
+from .prompts import _compact_required_remote_creative_schema
 from .finalizer_lifecycle import (
     REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
     REMOTE_BRAIN_FINALIZER_STAGE,
@@ -3012,16 +3013,47 @@ def _safe_semantic_contract_recovery_diagnostics(audit: dict[str, Any] | None) -
     sections = audit.get("sections")
     if not isinstance(sections, dict):
         return {}
+    safe_sections: dict[str, dict[str, Any]] = {}
     image_set_audit = sections.get("image_set_plan")
-    if not isinstance(image_set_audit, dict):
-        return {}
-    error_types = image_set_audit.get("validation_error_types")
-    if not isinstance(error_types, list):
-        return {}
-    safe_audit = ecommerce_product_truth_validation_audit(error_types)
-    if not safe_audit:
-        return {}
-    return _remote_contract_validation_audit_payload({"image_set_plan": safe_audit})
+    if isinstance(image_set_audit, dict):
+        error_types = image_set_audit.get("validation_error_types")
+        safe_audit = ecommerce_product_truth_validation_audit(error_types) if isinstance(error_types, list) else {}
+        if safe_audit:
+            safe_sections["image_set_plan"] = safe_audit
+
+    profile_audit = sections.get("visual_task_profile")
+    if isinstance(profile_audit, dict):
+        # Only schema field names and closed error types reach the reanswer.
+        # Reuse the schema sent to Brain; never forward provider values/messages
+        # or arbitrary keys beneath attributes/metadata dictionaries.
+        allowed_paths: set[str] = set()
+
+        def collect_paths(value: Any, path: str) -> None:
+            allowed_paths.add(path)
+            if isinstance(value, dict):
+                for field, child in value.items():
+                    collect_paths(child, f"{path}.{field}")
+            elif isinstance(value, list) and value:
+                collect_paths(value[0], f"{path}.item")
+
+        collect_paths(_compact_required_remote_creative_schema()["visual_task_profile"], "visual_task_profile")
+        allowed_types = {
+            "missing", "dict_type", "list_type", "string_type", "bool_type",
+            "float_type", "float_parsing", "literal_error", "value_error",
+            "greater_than_equal", "less_than_equal",
+        }
+        paths = profile_audit.get("validation_error_paths")
+        types = profile_audit.get("validation_error_types")
+        if isinstance(paths, list) and isinstance(types, list):
+            safe_paths = [path for path in paths if isinstance(path, str) and path in allowed_paths][:8]
+            safe_types = [kind for kind in types if isinstance(kind, str) and kind in allowed_types][:8]
+            if safe_paths and safe_types:
+                safe_sections["visual_task_profile"] = {
+                    "validation_error_count": len(safe_paths),
+                    "validation_error_paths": safe_paths,
+                    "validation_error_types": safe_types,
+                }
+    return _remote_contract_validation_audit_payload(safe_sections) if safe_sections else {}
 
 
 def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_count: int) -> bool:
@@ -4556,6 +4588,8 @@ def _visual_task_profile_shape_validation_audit(
                 f"visual_task_profile.reference_channel_ownership_intent.{field}",
                 "list_type",
             )
+    if not all(isinstance(item, str) and item.strip() for item in reference_ownership["evidence_ids"]):
+        return _section_validation_audit("visual_task_profile", "visual_task_profile.reference_channel_ownership_intent.evidence_ids.item", "string_type")
     channels = [
         *reference_ownership.get("reference_owned_channels", []),
         *reference_ownership.get("current_request_owned_channels", []),
@@ -4591,19 +4625,29 @@ def _visual_task_profile_shape_validation_audit(
             "visual_task_profile.reference_channel_ownership_intent.confidence",
             "float_type",
         )
-    for entity in candidate.get("subject_entities", []):
-        if not isinstance(entity, dict):
-            return _section_validation_audit(
-                "visual_task_profile",
-                "visual_task_profile.subject_entities.item",
-                "dict_type",
-            )
-        if not isinstance(entity.get("confidence"), (int, float)) or isinstance(entity.get("confidence"), bool):
-            return _section_validation_audit(
-                "visual_task_profile",
-                "visual_task_profile.subject_entities.item.confidence",
-                "float_type",
-            )
+    # Match every nested rejection in the completeness gate so its single
+    # remote repair receives the specific field rather than a root value_error.
+    for collection, required_fields, typed_fields in (
+        ("subject_entities",
+         ("entity_id", "entity_type", "role", "source_asset_ids", "visible_in_target", "preservation_level", "confidence", "attributes"),
+         {"source_asset_ids": (list, "list_type"), "visible_in_target": (bool, "bool_type"), "attributes": (dict, "dict_type")}),
+        ("evidence",
+         ("evidence_id", "evidence_type", "source", "value", "confidence", "metadata"),
+         {"metadata": (dict, "dict_type")}),
+    ):
+        for item in candidate[collection]:
+            prefix = f"visual_task_profile.{collection}.item"
+            if not isinstance(item, dict):
+                return _section_validation_audit("visual_task_profile", prefix, "dict_type")
+            for field in required_fields:
+                if field not in item:
+                    return _section_validation_audit("visual_task_profile", f"{prefix}.{field}", "missing")
+            for field, (expected_type, error_type) in typed_fields.items():
+                if not isinstance(item[field], expected_type):
+                    return _section_validation_audit("visual_task_profile", f"{prefix}.{field}", error_type)
+            confidence = item["confidence"]
+            if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0.0 <= confidence <= 1.0:
+                return _section_validation_audit("visual_task_profile", f"{prefix}.confidence", "float_type")
     for item in [*candidate.get("visual_intent_tags", []), *candidate.get("unknown_requirements", [])]:
         if not isinstance(item, str) or not item.strip():
             return _section_validation_audit("visual_task_profile", "visual_task_profile.visual_intent_tags.item", "string_type")
