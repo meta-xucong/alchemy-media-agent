@@ -98,7 +98,19 @@ jobs:
           [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_sha" ] || stop active_release_head_mismatch
           [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
           v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
-          docker exec -i "$v1_container" python - "$project_id" "$planning_operation_id" <<'PY'
+          audit_job_store_root="$(docker exec "$v1_container" python -c 'import app.config; from alchemy_creative_agent_3_0.app.product_api.service import _default_product_job_storage_root; print(_default_product_job_storage_root().resolve())')" || stop job_store_root_unavailable
+          job_store_mounts="$(docker inspect "$v1_container" --format '{{range .Mounts}}{{printf "%s|%s\n" .Destination .Source}}{{end}}')" || stop job_store_mounts_unavailable
+          job_store_root_mounted=false
+          while IFS='|' read -r destination source; do
+            [ -n "$destination" ] || continue
+            if [[ "$audit_job_store_root" == "$destination" || "$audit_job_store_root" == "$destination/"* ]]; then
+              job_store_root_mounted=true
+              break
+            fi
+          done <<< "$job_store_mounts"
+          container_created_at="$(docker inspect "$v1_container" --format '{{.Created}}')"
+          container_started_at="$(docker inspect "$v1_container" --format '{{.State.StartedAt}}')"
+          docker exec -i "$v1_container" python - "$project_id" "$planning_operation_id" "$job_store_root_mounted" "$container_created_at" "$container_started_at" <<'PY'
           import json
           import sys
           from collections import Counter
@@ -108,6 +120,9 @@ jobs:
 
           project_id = sys.argv[1]
           requested_operation_id = sys.argv[2]
+          job_store_root_mounted = sys.argv[3] == "true"
+          container_created_at = sys.argv[4]
+          container_started_at = sys.argv[5]
           root = Path("/app/.media_storage")
           project_path = root / "v3_projects" / project_id / "project.json"
           if not project_path.exists():
@@ -356,6 +371,9 @@ jobs:
                       "project_id": project_id,
                       "project_updated_at": project.get("updated_at"),
                       "job_count": len(job_ids),
+                      "job_store_root_mounted": job_store_root_mounted,
+                      "container_created_at": container_created_at,
+                      "container_started_at": container_started_at,
                       "reference_count": len(references),
                       "active_reference_count": len(active_references),
                       "reference_source_counts": dict(sorted(source_counts.items())),
