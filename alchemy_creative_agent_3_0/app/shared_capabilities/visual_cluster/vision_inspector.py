@@ -200,7 +200,6 @@ RETRYABLE_ISSUE_CODES = {
     "hair_or_outfit_drift",
     "camera_distance_drift",
     "lighting_mismatch",
-    "composition_mismatch",
     "unrelated_object",
     "unrelated_product",
     "product_identity_drift",
@@ -2422,6 +2421,12 @@ def _status_from_issues(issue_codes: list[str], provider_status: str) -> str:
         return "fail_final"
     if any(code in RETRYABLE_ISSUE_CODES for code in issue_codes):
         return "fail_retryable"
+    if normalized == "manual_review":
+        return normalized
+    # Generic composition advice cannot demand another full generation.
+    # Specific frozen role/capability violations retain their own issue gates.
+    if issue_codes and set(issue_codes) == {"composition_mismatch"}:
+        return "warning"
     if normalized in {"pass", "warning", "fail_final", "manual_review"}:
         return normalized
     if issue_codes:

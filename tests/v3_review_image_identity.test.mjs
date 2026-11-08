@@ -57,6 +57,28 @@ function mergeUsing(source, functionName, ...sources) {
   return context[functionName](...sources);
 }
 
+test("mobile keeps earlier canonical review images visible during a delivery hold", () => {
+  const items = ["original-a", "original-b"].map((output_id) => ({
+    output_id, job_id: "current-job", review_only: true, delivery_state: "superseded",
+    preview_url: `/media/${output_id}/preview`,
+    metadata: { delivery_attempt_index: 0, delivery_final_attempt_index: 1, retry_superseded: true },
+  }));
+  const job = { job_id: "current-job", metadata: { post_generation_review: { review_output_ids: items.map((item) => item.output_id) } } };
+  const context = {
+    mobileV3State: {},
+    mobileV3FailureArtifactExpired: () => false,
+    mobileV3JobDeliveryWithheld: () => true,
+    mobileV3ReviewOutputsForProject: () => items,
+    mergeMobileV3ReviewImageSources: (...sources) => sources.flat(),
+    mobileV3OutputId: (item) => item.output_id,
+    mobileV3ThumbUrl: () => "",
+    mobileV3PreviewUrl: (item) => item.preview_url,
+    mobileV3FullUrl: () => "",
+  };
+  vm.runInNewContext(extractFunction(mobile, "mobileV3ReviewOnlyJobImageItems"), context);
+  assert.deepEqual(Array.from(context.mobileV3ReviewOnlyJobImageItems(job), (item) => item.output_id), ["original-a", "original-b"]);
+});
+
 for (const [surface, source, functionName] of [
   ["desktop", desktopFunctions, "mergeV3ReviewImageSources"],
   ["mobile", mobileFunctions, "mergeMobileV3ReviewImageSources"],

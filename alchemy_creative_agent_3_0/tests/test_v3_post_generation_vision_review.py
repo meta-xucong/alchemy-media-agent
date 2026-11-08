@@ -8,6 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import (
+    _issue_payload, _status_from_issues,
+)
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.quality_review import OutputQualityReviewMerger
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_scope import classify_review_outcome
+
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
@@ -115,6 +121,41 @@ def _ready_resolution(tmp_path: Path) -> GeneratedOutputResolution:
         status="ready",
         metadata={"content_sha256": hashlib.sha256(content).hexdigest()},
     )
+
+
+@pytest.mark.parametrize("provider_status", ["pass", "warning", "fail_retryable", "fail_final"])
+@pytest.mark.parametrize("scene", ["portrait", "product", "landscape"])
+def test_composition_only_is_advisory_across_scenes(tmp_path, provider_status, scene) -> None:
+    report = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider(
+            {"status": provider_status, "confidence": 0.95, "issue_codes": ["composition_mismatch"]}
+        )
+    ).inspect(
+        _ready_resolution(tmp_path),
+        metadata={"vision_inspection_mode": "vision_model", "user_prompt": f"A {scene} image"},
+    )
+    assert report.status == "warning"
+    assert report.verification_state == "verified"
+    assert report.retryable is False
+    assert report.detected_issues[0]["retryable"] is False
+    assert classify_review_outcome(report)["quality_failure"] is False
+    merger = OutputQualityReviewMerger()
+    signal = merger._real_review_signal_package(
+        job_id="job_doc354", project_id="project_doc354", inspections=[report],
+    )
+    assert signal.candidate_signals[0].recommended_action == "keep_with_warning"
+    service = V3ProductApiService.__new__(V3ProductApiService)
+    assert service._visual_retry_signal_from_real_review(signal.model_dump(mode="json")) == ([], {})
+    decisions = merger._auto_retry_decisions("job_doc354", "project_doc354", [report], max_attempts=1)
+    assert decisions and all(not decision.should_retry for decision in decisions)
+
+
+def test_composition_advice_preserves_specific_failure_and_manual_gates() -> None:
+    assert _status_from_issues(["composition_mismatch"], "manual_review") == "manual_review"
+    for code in ("delivery_set_role_mismatch", "identity_drift", "visible_text_artifact"):
+        assert _status_from_issues(["composition_mismatch", code], "warning") == "fail_retryable"
+        assert _issue_payload(code, 0.95)["retryable"] is True
+    assert _status_from_issues(["composition_mismatch", "policy_or_safety_block"], "warning") == "fail_final"
 
 
 def test_vision_provider_is_enabled_by_default_and_can_be_explicitly_disabled(monkeypatch) -> None:

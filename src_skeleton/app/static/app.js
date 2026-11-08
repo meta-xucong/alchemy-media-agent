@@ -5666,10 +5666,14 @@ function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
         : reviewOutputIds.has(identity);
       return (
         reviewOnly
-        && deliveryState !== "superseded"
-        && metadata.retry_superseded !== true
-        && item?.retry_superseded !== true
-        && attemptBoundToFinal
+        // A review hold may select an earlier attempt while the formal
+        // delivery set is empty. Its explicit review IDs own this surface.
+        && (reviewOutputIds.has(identity) || (
+          deliveryState !== "superseded"
+          && metadata.retry_superseded !== true
+          && item?.retry_superseded !== true
+          && attemptBoundToFinal
+        ))
         && v3OutputImageCandidates(item).length > 0
         && selectionState !== "rejected"
       );

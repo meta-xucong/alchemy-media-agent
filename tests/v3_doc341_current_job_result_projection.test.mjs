@@ -106,3 +106,22 @@ test("result board adds only requested-count review cards without delivery actio
   assert.match(cardSource, /仅供复核/);
   assert.doesNotMatch(cardSource, /data-v3-result-action/);
 });
+
+test("canonical review images survive a hold that marks earlier preferred outputs superseded", () => {
+  const job = { job_id: "current-job", status: "generated", metadata: {} };
+  const item = (output_id, job_id = job.job_id) => ({
+    output_id, job_id, review_only: true, delivery_state: "superseded",
+    preview_url: `/media/${output_id}/preview`,
+    metadata: { delivery_attempt_index: 0, delivery_final_attempt_index: 1, retry_superseded: true },
+  });
+  const items = [
+    item("preferred-original-a"), item("preferred-original-b"),
+    item("unused-retry"), item("other-job", "other-job"),
+    { ...item("user-rejected"), selection_state: "rejected" },
+    { ...item("missing-pixels"), preview_url: "" },
+  ];
+  const canonical = ["preferred-original-a", "preferred-original-b", "other-job", "user-rejected", "missing-pixels"];
+  const projected = projectReviewItems(job, items, canonical);
+  assert.deepEqual(projected.map((item) => item.output_id), canonical.slice(0, 2));
+  assert.ok(projected.every((item) => item.review_only === true));
+});
