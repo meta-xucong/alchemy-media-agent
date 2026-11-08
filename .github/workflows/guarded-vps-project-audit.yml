@@ -49,7 +49,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Read exact stopped build container metadata
+      - name: Retire exact verified failed build container
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -57,21 +57,57 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [ "$EXPECTED_SHA" = b1b229737ad2dee32f94d353254d2c22740c2c18 ]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$remote" "python3 - '$EXPECTED_SHA'" <<'PY'
-          import json, subprocess, sys
+            "$remote" "python3 -" <<'PY'
+          import fcntl
+          import json
+          import shutil
+          import subprocess
           from pathlib import Path
+          from urllib.request import urlopen
+
+          ACTIVE = 'b1b229737ad2dee32f94d353254d2c22740c2c18'
+          CANDIDATE = 'ec7023b6119dcb80b3c794c6f46d1e58efdb6c59'
+          CONTAINER = 'c31898d7929d0b061f1b3d523bf25d92ed3971601429cb7a0a078006108226bf'
+          EXPECTED_COMMAND = ['/bin/sh', '-c', 'python -m pip install --index-url "$PIP_INDEX_URL" --upgrade pip &&     python -m pip install --index-url "$PIP_INDEX_URL" -r requirements.txt']
+
+
           def cmd(*args):
               return subprocess.check_output(args, text=True)
-          active = Path('/opt/alchemy-media-agent').resolve()
-          assert cmd('git', '-C', str(active), 'rev-parse', 'HEAD').strip() == sys.argv[1]
-          row = json.loads(cmd('docker', 'container', 'inspect', '--size', 'goofy_cannon'))[0]
-          config = row.get('Config', {})
-          print(json.dumps({'container': row['Id'], 'name': row['Name'], 'created': row['Created'],
-              'state': {k: row['State'][k] for k in ['Status','Running','ExitCode','StartedAt','FinishedAt']},
-              'size_rw': row.get('SizeRw'), 'mounts': row.get('Mounts'), 'cmd': config.get('Cmd'),
-              'working_dir': config.get('WorkingDir'), 'image_ref': config.get('Image'),
-              'restart_policy': row.get('HostConfig',{}).get('RestartPolicy')}))
+
+
+          def protected_state():
+              release = Path('/opt/alchemy-media-agent').resolve()
+              assert release == Path('/opt/alchemy-media-agent-releases/doc276-277-' + ACTIVE[:12])
+              assert cmd('git', '-C', str(release), 'rev-parse', 'HEAD').strip() == ACTIVE
+              running = json.loads(cmd('docker', 'container', 'inspect', 'alchemy-media-agent'))[0]
+              assert running['State']['Running'] and running['Config']['Image'] == 'alchemy-media-agent:latest'
+              tags = ['alchemy-media-agent:latest', 'alchemy-media-agent:rollback-pr29', 'alchemy-media-agent:candidate-' + CANDIDATE]
+              images = json.loads(cmd('docker', 'image', 'inspect', *tags))
+              for port, route in [(8017, '/healthz'), (8020, '/api/v2/health')]:
+                  with urlopen('http://127.0.0.1:' + str(port) + route, timeout=10) as response:
+                      assert response.status == 200
+              return [image['Id'] for image in images]
+
+
+          with open('/run/lock/alchemy-media-agent-release.lock', 'a') as lock:
+              fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              before = protected_state()
+              row = json.loads(cmd('docker', 'container', 'inspect', '--size', CONTAINER))[0]
+              assert row['Id'] == CONTAINER and row['Name'] == '/goofy_cannon'
+              assert row['Created'] == '2026-11-08T20:03:02.624973393Z'
+              assert row['State']['Status'] == 'exited' and row['State']['Running'] is False
+              assert row['State']['ExitCode'] == 0
+              assert row['State']['FinishedAt'] == '2026-11-08T20:05:06.581490216Z'
+              assert row.get('Mounts') == [] and row['Config']['WorkingDir'] == '/app'
+              assert row['Config']['Cmd'] == EXPECTED_COMMAND
+              assert row['HostConfig']['RestartPolicy']['Name'] in {'', 'no'}
+              assert row['SizeRw'] == 363282400
+              print(json.dumps({'status': 'validated', 'container': CONTAINER, 'size_rw': row['SizeRw'], 'mounts': []}), flush=True)
+              cmd('docker', 'container', 'rm', CONTAINER)
+              assert CONTAINER not in cmd('docker', 'container', 'ls', '-aq', '--no-trunc').splitlines()
+              assert protected_state() == before
+              print(json.dumps({'status': 'retired_failed_build_container', 'free_bytes': shutil.disk_usage('/').free}), flush=True)
           PY
