@@ -147,11 +147,10 @@ belong in the approved secret/configuration store, never in this document.
 
 ## Current blockers and next action
 
-1. Current synchronized `origin/main` is `24392294`; the active VPS release is
+1. Current synchronized `origin/main` is `0dec6de5`; the active VPS release is
    the earlier `63368f685` revision. Read-only preflight run `42435115801`
-   passed for current main, but it did not activate or validate that revision.
-   Build a fresh inactive candidate from the exact current SHA, then use the
-   guarded activation workflow.
+   passed for its parent `24392294`; this documentation-only commit still needs
+   a fresh candidate build for the exact current SHA before guarded activation.
 2. Historical evidence disproves the earlier claim that the Windows Agent is
    fake-only: it was configured for `codex-image`, the local Codex CLI login was
    verified, and real Bridge tasks completed. Revalidate current Agent
@@ -343,7 +342,7 @@ Codex CLI workflow after real tasks have exercised the shared transfer path.
 
 These historical results prove the Codex CLI return design has worked and
 supersede the stale “Codex executor unverified/fake-only” conclusion. They do
-not certify the latest `24392294` source because that revision has not yet been
+not certify the latest `0dec6de5` source because that revision has not yet been
 activated. Run final integrated acceptance only after the guarded workflow has
 activated the fresh candidate, and record current task IDs and delivery results
 there. No image content SHA/hash/checksum is part of this acceptance.
