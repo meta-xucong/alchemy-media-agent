@@ -115,6 +115,7 @@ jobs:
           import os
           import sys
           from collections import Counter
+          from datetime import datetime, timezone
           from pathlib import Path
           import app.config  # Load the same runtime env-file chain as the V3 service.
           from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
@@ -262,6 +263,7 @@ jobs:
               current_operation = None
 
           planning_failure_diagnostics = None
+          planning_window = {"opened_at": None, "failed_at": None}
           if requested_operation_id:
               private_records_path = project_path.parent / "private_records.json"
               diagnostics_state = "not_found"
@@ -275,19 +277,26 @@ jobs:
                   if isinstance(private_records, dict):
                       records = private_records.get("doc277_project_planning_operations")
                       if isinstance(records, list):
-                          failed = next(
-                              (
-                                  item
-                                  for item in reversed(records)
-                                  if isinstance(item, dict)
-                                  and item.get("record_kind") == "failed"
-                                  and item.get("project_id") == project_id
-                                  and item.get("operation_id") == requested_operation_id
-                              ),
+                          matching_records = [
+                              item
+                              for item in records
+                              if isinstance(item, dict)
+                              and item.get("project_id") == project_id
+                              and item.get("operation_id") == requested_operation_id
+                          ]
+                          opened = next(
+                              (item for item in reversed(matching_records) if item.get("record_kind") == "opened"),
                               None,
                           )
-                          if failed is not None:
-                              raw = failed.get("failure_diagnostics")
+                          failed_record = next(
+                              (item for item in reversed(matching_records) if item.get("record_kind") == "failed"),
+                              None,
+                          )
+                          if isinstance(opened, dict):
+                              planning_window["opened_at"] = opened.get("created_at")
+                          if isinstance(failed_record, dict):
+                              planning_window["failed_at"] = failed_record.get("created_at")
+                              raw = failed_record.get("failure_diagnostics")
                               if not isinstance(raw, dict):
                                   diagnostics_state = "record_found_without_diagnostics"
                               elif raw.get("schema_version") != "v3_project_planning_failure_diagnostics_v1":
@@ -386,6 +395,142 @@ jobs:
                   **({"failure_diagnostics": safe_diagnostics} if safe_diagnostics else {}),
               }
 
+          brain_stage_trace = {"state": "not_configured", "event_count": 0, "events": []}
+          trace_path_value = os.getenv("V3_BRAIN_STAGE_TRACE_FILE")
+          if trace_path_value and trace_path_value.strip():
+              trace_path = Path(trace_path_value).expanduser()
+              if not trace_path.is_absolute():
+                  trace_path = Path.cwd() / trace_path
+              if not trace_path.is_file():
+                  brain_stage_trace["state"] = "not_found"
+              else:
+                  try:
+                      with trace_path.open("rb") as trace_handle:
+                          trace_handle.seek(max(0, trace_path.stat().st_size - 2_000_000))
+                          trace_lines = trace_handle.read().decode("utf-8", errors="replace").splitlines()
+                      opened_at = datetime.fromisoformat(str(planning_window["opened_at"] or "").replace("Z", "+00:00"))
+                      failed_at = datetime.fromisoformat(str(planning_window["failed_at"] or "").replace("Z", "+00:00"))
+                      container_started = datetime.fromisoformat(container_started_at.replace("Z", "+00:00"))
+                      if opened_at.tzinfo is None:
+                          opened_at = opened_at.replace(tzinfo=timezone.utc)
+                      if failed_at.tzinfo is None:
+                          failed_at = failed_at.replace(tzinfo=timezone.utc)
+                      if container_started.tzinfo is None:
+                          container_started = container_started.replace(tzinfo=timezone.utc)
+                      window_start_ms = int((opened_at - container_started).total_seconds() * 1000) - 120_000
+                      window_end_ms = int((failed_at - container_started).total_seconds() * 1000) + 30_000
+                      allowed_trace_events = {
+                          "scenario_runtime": {
+                              "plan_job_entered", "request_coerced", "scenario_blocked",
+                              "capability_preparation_call", "capability_preparation_blocked",
+                              "capability_preparation_returned", "semantic_plan_returned",
+                              "slot_delta_recovery_call", "slot_delta_recovery_returned",
+                              "remote_brain_requirement_validation_call",
+                              "remote_brain_requirement_validation_returned",
+                              "professional_task_profile_bind_call", "professional_task_profile_bind_returned",
+                              "activation_plan_build_call", "activation_plan_build_returned",
+                              "template_deliverable_plan_build_call", "template_deliverable_plan_build_returned",
+                              "active_capabilities_call", "active_capabilities_returned",
+                              "frozen_capability_validation_call", "frozen_capability_validation_returned",
+                              "combine_capability_runs_call", "combine_capability_runs_returned",
+                              "resolved_constraint_ledger_build_call", "resolved_constraint_ledger_build_returned",
+                              "capability_execution_envelope_build_call",
+                              "capability_execution_envelope_build_returned",
+                              "canonical_finalizer_call", "canonical_finalizer_returned",
+                              "creative_planning_returned",
+                          },
+                          "brain_adapter": {
+                              "semantic_plan_provider_call", "semantic_plan_provider_returned",
+                              "semantic_plan_schema_validated", "semantic_recovery_provider_call",
+                              "semantic_recovery_provider_returned", "semantic_plan_blocked",
+                              "canonical_finalizer_schema_validation_failed",
+                              "canonical_finalizer_request_contract_failed",
+                              "canonical_finalizer_response_validation_error",
+                              "canonical_finalizer_request_contract_error", "canonical_finalizer_provider_call",
+                              "canonical_finalizer_provider_returned", "canonical_finalizer_provider_error",
+                              "canonical_finalizer_schema_validation_started",
+                              "canonical_finalizer_schema_validated",
+                          },
+                          "brain_provider": {
+                              "stream_request_prepared", "json_parse_started", "json_parse_completed",
+                              "stream_complete_response_observed", "stream_reasoning_content_observed",
+                              "stream_first_content_observed", "stream_client_constructing",
+                              "stream_client_constructed", "stream_request_call_entered",
+                              "stream_request_dispatched", "stream_response_started",
+                          },
+                      }
+                      allowed_trace_stages = {
+                          "activation", "generate", "plan", "provider_prompt_developmental_presence_verify",
+                          "provider_prompt_finalize", "provider_prompt_human_naturalness_resign",
+                          "provider_prompt_professional_capture_resign", "remote_intent", "semantic_plan",
+                          "unknown",
+                      }
+                      allowed_trace_reasons = {
+                          "unknown", "cannot_create_jobs", "capability_activation_error", "timeout",
+                          "unavailable", "provider_unavailable", "provider_error", "validation_error",
+                          "execution_budget_exhausted", "truncated_response", "invalid_response",
+                          "invalid_json_response", "content_policy", "canceled", "upstream_http_error",
+                          "upstream_transport_error", "brainprovidererror", "brainproviderunavailable",
+                          "braintransporttimeouterror", "brainpromptcontractinvalid", "runtimeerror", "valueerror",
+                      }
+                      allowed_transport_kinds = {
+                          "connection_error", "network_error", "protocol_error", "provider_api_error",
+                          "read_error", "timeout", "transport_error", "write_error",
+                      }
+                      trace_events = []
+                      for line in trace_lines:
+                          try:
+                              event = json.loads(line)
+                          except json.JSONDecodeError:
+                              continue
+                          if not isinstance(event, dict) or event.get("schema_version") != "v3_brain_stage_trace_v1":
+                              continue
+                          elapsed_ms = event.get("elapsed_ms")
+                          if not isinstance(elapsed_ms, int) or isinstance(elapsed_ms, bool):
+                              continue
+                          if not window_start_ms <= elapsed_ms <= window_end_ms:
+                              continue
+                          component = event.get("component")
+                          event_name = event.get("event")
+                          if (
+                              not isinstance(component, str)
+                              or not isinstance(event_name, str)
+                              or component not in allowed_trace_events
+                              or event_name not in allowed_trace_events[component]
+                          ):
+                              continue
+                          safe_event = {"elapsed_ms": elapsed_ms, "component": component, "event": event_name}
+                          stage = event.get("stage")
+                          if isinstance(stage, str) and stage in allowed_trace_stages:
+                              safe_event["stage"] = stage
+                          for key in ("terminal_reason", "error_class", "transport_error_class"):
+                              value = event.get(key)
+                              if isinstance(value, str) and value in allowed_trace_reasons:
+                                  safe_event[key] = value
+                          transport_kind = event.get("remote_provider_transport_kind")
+                          if isinstance(transport_kind, str) and transport_kind in allowed_transport_kinds:
+                              safe_event["remote_provider_transport_kind"] = transport_kind
+                          acceptance = event.get("request_acceptance")
+                          if isinstance(acceptance, str) and acceptance in {"not_started", "dispatched", "unknown"}:
+                              safe_event["request_acceptance"] = acceptance
+                          for key in ("remote_http_status_code", "timeout_seconds", "remote_brain_call_count", "finalizer_call_count"):
+                              value = event.get(key)
+                              if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100_000:
+                                  safe_event[key] = value
+                          for key in ("response_started", "first_content_observed", "complete_response_observed", "json_parse_completed"):
+                              value = event.get(key)
+                              if isinstance(value, bool):
+                                  safe_event[key] = value
+                          trace_events.append(safe_event)
+                      brain_stage_trace = {
+                          "state": "present" if trace_events else "no_events_in_window",
+                          "attribution": "time_window_only",
+                          "event_count": len(trace_events),
+                          "events": trace_events[-40:],
+                      }
+                  except (OSError, ValueError):
+                      brain_stage_trace = {"state": "unavailable", "event_count": 0, "events": []}
+
           print(
               json.dumps(
                   {
@@ -412,6 +557,7 @@ jobs:
                           else None
                       ),
                       "planning_failure_diagnostics": planning_failure_diagnostics,
+                      "brain_stage_trace": brain_stage_trace,
                       "jobs": [job_summary(job_id) for job_id in job_ids[-20:]],
                       "outputs": outputs[-30:],
                   },
