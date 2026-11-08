@@ -10,6 +10,7 @@ from __future__ import annotations
 from ..reference_input_plan import ReferenceInputPlan, PLAN_KEY, plan_from_metadata
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import base64
@@ -1399,6 +1400,27 @@ def _default_product_job_storage_root() -> Path:
 
 class V3ProductApiService:
     """V3-owned product API facade over the Creative Core."""
+
+    @staticmethod
+    def _inspect_outputs_in_order(
+        vision_inspector: Any,
+        inspection_inputs: list[tuple[Any, dict[str, Any], dict[str, Any] | None]],
+        *,
+        base_metadata: dict[str, Any],
+    ) -> list[Any]:
+        def inspect_output(item):
+            resolution, evidence_metadata, frozen_contract = item
+            return vision_inspector.inspect(resolution, metadata={
+                **base_metadata, **evidence_metadata,
+                "frozen_output_review_contract": frozen_contract,
+            })
+
+        try:
+            limit = max(1, min(2, int(getattr(vision_inspector, "max_concurrent_inspections", 2))))
+        except (TypeError, ValueError):
+            limit = 1
+        with ThreadPoolExecutor(max_workers=min(limit, max(1, len(inspection_inputs)))) as executor:
+            return list(executor.map(inspect_output, inspection_inputs))
 
     @staticmethod
     def _configured_provider_reference_capacity() -> int:
@@ -7250,21 +7272,15 @@ class V3ProductApiService:
             for metadata in evidence_metadata_by_resolution
         ):
             review_metadata["enable_real_vision_inspection"] = True
-        inspections = [
-            self.vision_inspector.inspect(
-                resolution,
-                metadata={
-                    **review_metadata,
-                    **evidence_metadata,
-                    "frozen_output_review_contract": frozen_contract,
-                },
-            )
-            for resolution, evidence_metadata, frozen_contract in zip(
+        inspections = self._inspect_outputs_in_order(
+            self.vision_inspector,
+            list(zip(
                 resolutions,
                 evidence_metadata_by_resolution,
                 frozen_contract_by_resolution,
-            )
-        ]
+            )),
+            base_metadata=review_metadata,
+        )
         plans_by_output: dict[str, ReviewEvidencePlan] = {}
         digests_by_output: dict[str, str] = {}
         receipt_errors: list[str] = []

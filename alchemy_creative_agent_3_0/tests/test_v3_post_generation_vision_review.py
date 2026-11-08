@@ -744,7 +744,7 @@ class _SettledTimeoutThenPassVisionProvider:
         return {"status": "pass", "confidence": 0.95, "issue_codes": []}
 
 
-def test_vision_provider_outer_timeout_returns_fail_closed_manual_report(tmp_path) -> None:
+def test_slow_vision_provider_returns_actual_result_without_outer_timeout(tmp_path) -> None:
     provider = _HangingVisionProvider()
     report = VisionOutputInspector(vision_provider=provider).inspect(
         _ready_resolution(tmp_path),
@@ -754,9 +754,8 @@ def test_vision_provider_outer_timeout_returns_fail_closed_manual_report(tmp_pat
         },
     )
 
-    assert report.status == "manual_review"
-    assert any(issue.get("code") == "provider_timeout" for issue in report.detected_issues)
-    assert report.evidence["provider_timeout_seconds"] == 0.05
+    assert report.status == "pass"
+    assert not any(issue.get("code") == "provider_timeout" for issue in report.detected_issues)
     assert provider.calls == 1
 
 
@@ -781,7 +780,7 @@ def test_settled_vision_timeout_fails_closed_without_second_request(tmp_path) ->
     assert report.evidence["provider_timeout_recovery_succeeded"] is False
 
 
-def test_unsettled_vision_timeout_does_not_overlap_a_second_review_call(tmp_path) -> None:
+def test_hard_semantic_review_waits_for_one_actual_provider_result(tmp_path) -> None:
     provider = _HangingVisionProvider()
     report = VisionOutputInspector(vision_provider=provider).inspect(
         _ready_resolution(tmp_path),
@@ -794,8 +793,8 @@ def test_unsettled_vision_timeout_does_not_overlap_a_second_review_call(tmp_path
         },
     )
 
-    assert report.status == "manual_review"
-    assert any(issue.get("code") == "provider_timeout" for issue in report.detected_issues)
+    assert report.status == "pass"
+    assert not any(issue.get("code") == "provider_timeout" for issue in report.detected_issues)
     assert provider.calls == 1
 
 

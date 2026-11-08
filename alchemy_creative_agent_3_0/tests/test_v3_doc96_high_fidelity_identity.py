@@ -162,12 +162,12 @@ class _DummyIdentityImage:
     shape = (512, 512, 3)
 
 
-class _HangingDetector:
+class _DelayedDetector:
     def setInputSize(self, _size) -> None:
         return None
 
     def detect(self, _image):
-        time.sleep(2)
+        time.sleep(0.08)
         return 1, None
 
 
@@ -201,37 +201,37 @@ def _resolution(path: Path) -> GeneratedOutputResolution:
     )
 
 
-def test_doc190_identity_reference_profile_detector_timeout_is_bounded(monkeypatch, tmp_path) -> None:
+def test_identity_reference_profile_waits_for_actual_detector_result(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_IDENTITY_METRIC_OPERATION_TIMEOUT_SECONDS", "0.05")
     provider = SFaceIdentityMetricProvider(model_dir=tmp_path)
-    provider._detector = _HangingDetector()  # noqa: SLF001
+    provider._detector = _DelayedDetector()  # noqa: SLF001
     monkeypatch.setattr(provider, "available", lambda: True)
     monkeypatch.setattr(provider, "_read_image", lambda _path: _DummyIdentityImage())
 
     started = time.monotonic()
     profile = provider.profile_reference(tmp_path / "reference.png")
 
-    assert time.monotonic() - started < 0.6
-    assert profile["status"] == "timeout"
+    assert time.monotonic() - started >= 0.06
+    assert profile["status"] == "face_not_detected"
     assert profile["view_hint"] == "unknown"
     assert profile["framing_hint"] == "unknown"
-    assert "identity_metric_timeout" in profile["reason_codes"]
+    assert "reason_codes" not in profile
     assert profile["embedding_persisted"] is False
 
 
-def test_doc190_identity_metric_evaluate_detector_timeout_is_fail_closed(monkeypatch, tmp_path) -> None:
+def test_identity_metric_evaluate_waits_for_actual_detector_result(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_IDENTITY_METRIC_OPERATION_TIMEOUT_SECONDS", "0.05")
     provider = SFaceIdentityMetricProvider(model_dir=tmp_path)
-    provider._detector = _HangingDetector()  # noqa: SLF001
+    provider._detector = _DelayedDetector()  # noqa: SLF001
     monkeypatch.setattr(provider, "available", lambda: True)
     monkeypatch.setattr(provider, "_read_image", lambda _path: _DummyIdentityImage())
 
     started = time.monotonic()
     result = provider.evaluate(tmp_path / "output.png", [tmp_path / "reference.png"])
 
-    assert time.monotonic() - started < 0.6
+    assert time.monotonic() - started >= 0.15
     assert result.status == "unavailable"
-    assert result.reason_codes == ["identity_metric_timeout"]
+    assert result.reason_codes == ["output_face_not_detected"]
     assert result.metadata["embedding_persisted"] is False
 
 

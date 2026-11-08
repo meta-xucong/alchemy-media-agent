@@ -9,14 +9,14 @@ import time
 from typing import Any
 
 # Bound global provider concurrency; retry safety also requires worker exit.
-# One active multimodal request is the safe default for the small VPS. Keep a
-# hard ceiling of two so a local operator cannot accidentally turn review into
+# Keep two active multimodal requests at most, with an explicit one-slot
+# setting for low-memory deployments, so review cannot become
 # an unbounded image-memory fan-out; higher throughput belongs in a larger
 # deployment rather than in this process-wide guard.
 
 
 def _vision_inspection_concurrency_limit() -> int:
-    raw_value = os.getenv("V3_VISION_INSPECTION_CONCURRENCY", "1")
+    raw_value = os.getenv("V3_VISION_INSPECTION_CONCURRENCY", "2")
     try:
         value = int(raw_value.strip() or "1")
     except (TypeError, ValueError):
@@ -340,7 +340,7 @@ def _inspect_with_timeout(
     timeout_seconds: float,
     provider_request_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
-    result: dict[str, Any] = {}
+    """Wait for actual completion; only the provider transport owns its timeout."""
     timeout_seconds = max(0.05, float(timeout_seconds))
     request_timeout_seconds = max(
         0.05,
@@ -352,60 +352,21 @@ def _inspect_with_timeout(
         ),
     )
 
-    def runner() -> None:
-        try:
-            # Use the same bounded window for the SDK request and this worker
-            # join. The request must never inherit a shorter hidden SDK limit.
-            inner_timeout = request_timeout_seconds
-            result["payload"] = provider.inspect(
-                resolution,
-                metadata={**metadata, "_inner_timeout_seconds": inner_timeout},
-            )
-        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
-            result["error"] = exc
-        finally:
-            # Keep the slot occupied until the provider call has actually
-            # returned, even if the caller's bounded wait expires.
-            _vision_inspection_semaphore.release()
-
-    # Acquire semaphore to limit concurrent vision inspections
-    # Waiting for the single-review concurrency slot is outside the upstream
-    # request itself, but must not fail after an unrelated five-second cap.
-    queue_timeout = min(300.0, max(0.05, request_timeout_seconds))
-    acquired = _vision_inspection_semaphore.acquire(blocking=True, timeout=queue_timeout)
-    if not acquired:
-        raise VisionInspectionTimeoutError(
-            "Vision inspection queue is full. Concurrent request limit reached.",
-            worker_stopped=False,
-        )
-
-    thread = threading.Thread(target=runner, name="v3-vision-inspection", daemon=True)
+    _vision_inspection_semaphore.acquire()
     try:
-        thread.start()
-    except BaseException:
-        # runner never got a chance to execute its release path.
-        _vision_inspection_semaphore.release()
-        raise
-
-    thread.join(timeout=timeout_seconds)
-    if thread.is_alive():
-        # Keep the per-request wall-clock wait within the configured budget.
-        # The worker retains its semaphore until its SDK call actually exits.
-        raise VisionInspectionTimeoutError(
-            f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
-            worker_stopped=not thread.is_alive(),
+        payload = provider.inspect(
+            resolution, metadata={**metadata, "_inner_timeout_seconds": request_timeout_seconds},
         )
-    if "error" in result:
-        error = result["error"]
-        if isinstance(error, TimeoutError):
-            raise VisionInspectionTimeoutError(
-                str(error) or f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
-                worker_stopped=True,
-                route_receipt=getattr(error, "vision_route_receipt", None),
-            ) from error
-        raise error
-    payload = result.get("payload")
-    return payload if isinstance(payload, dict) else {}
+        return payload if isinstance(payload, dict) else {}
+    except TimeoutError as error:
+        raise VisionInspectionTimeoutError(
+            str(error) or f"Vision provider timed out after {request_timeout_seconds:.2f} seconds.",
+            worker_stopped=True,
+            route_receipt=getattr(error, "vision_route_receipt", None),
+        ) from error
+    finally:
+        # Never leave a daemon working after the caller claims completion.
+        _vision_inspection_semaphore.release()
 
 
 def _vision_route_evidence(error: Exception) -> dict[str, Any]:
@@ -415,6 +376,8 @@ def _vision_route_evidence(error: Exception) -> dict[str, Any]:
 
 class VisionOutputInspector:
     """Inspect resolved generated outputs without owning provider execution."""
+
+    max_concurrent_inspections = _VISION_INSPECTION_CONCURRENCY_LIMIT
 
     def __init__(
         self,

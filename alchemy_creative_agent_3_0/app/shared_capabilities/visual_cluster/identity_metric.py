@@ -14,7 +14,6 @@ from .contracts import IdentityMetricResult
 YUNET_FILENAME = "face_detection_yunet_2023mar.onnx"
 SFACE_FILENAME = "face_recognition_sface_2021dec.onnx"
 CALIBRATION_VERSION = "doc96_sface_cosine_v1"
-DEFAULT_OPERATION_TIMEOUT_SECONDS = 8.0
 
 
 class SFaceIdentityMetricProvider:
@@ -211,15 +210,16 @@ class SFaceIdentityMetricProvider:
         )
 
     def _load(self) -> None:
-        if self._detector is not None and self._recognizer is not None:
-            return
-        import cv2 as cv
+        with self._native_lock:
+            if self._detector is not None and self._recognizer is not None:
+                return
+            import cv2 as cv
 
-        self._cv = cv
-        self._detector = cv.FaceDetectorYN.create(
-            str(self._model_path(YUNET_FILENAME)), "", (320, 320), 0.5, 0.3, 5000
-        )
-        self._recognizer = cv.FaceRecognizerSF.create(str(self._model_path(SFACE_FILENAME)), "")
+            self._cv = cv
+            self._detector = cv.FaceDetectorYN.create(
+                str(self._model_path(YUNET_FILENAME)), "", (320, 320), 0.5, 0.3, 5000
+            )
+            self._recognizer = cv.FaceRecognizerSF.create(str(self._model_path(SFACE_FILENAME)), "")
 
     def _read_image(self, path: Path):
         if not path.is_file():
@@ -236,7 +236,7 @@ class SFaceIdentityMetricProvider:
             _status, faces = self._detector.detect(image)
             return [] if faces is None else [face for face in faces]
 
-        return self._call_native_with_timeout("face_detection", run)
+        return self._call_native(run)
 
     def _select_face(self, faces: list[Any]):
         return self._select_face_with_index(faces)[1]
@@ -248,34 +248,16 @@ class SFaceIdentityMetricProvider:
         )
 
     def _feature(self, image, face):
-        return self._call_native_with_timeout(
-            "face_feature",
+        return self._call_native(
             lambda: self._recognizer.feature(self._recognizer.alignCrop(image, face)),
         )
 
     def _model_path(self, filename: str) -> Path:
         return self.model_dir / filename
 
-    def _call_native_with_timeout(self, operation: str, callable_obj):
-        timeout_seconds = _identity_metric_operation_timeout_seconds()
-        result: dict[str, Any] = {}
-        error: dict[str, BaseException] = {}
-
-        def worker() -> None:
-            try:
-                with self._native_lock:
-                    result["value"] = callable_obj()
-            except BaseException as exc:  # pragma: no cover - re-raised in caller thread
-                error["exception"] = exc
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-        thread.join(timeout_seconds)
-        if thread.is_alive():
-            raise TimeoutError(f"{operation}_timeout_after_{timeout_seconds:.2f}s")
-        if "exception" in error:
-            raise error["exception"]
-        return result.get("value")
+    def _call_native(self, callable_obj):
+        with self._native_lock:
+            return callable_obj()
 
 
 def create_default_identity_metric_provider() -> SFaceIdentityMetricProvider:
@@ -427,24 +409,3 @@ def _metric_enabled() -> bool:
         return bool(settings.v3_identity_metric_enabled)
     except Exception:
         return os.getenv("V3_IDENTITY_METRIC_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-
-
-def _identity_metric_operation_timeout_seconds() -> float:
-    configured: Any = None
-    for key in ("V3_CHARACTER_CARD_IDENTITY_METRIC_TIMEOUT_SECONDS", "V3_IDENTITY_METRIC_OPERATION_TIMEOUT_SECONDS"):
-        value = os.getenv(key)
-        if value not in {None, ""}:
-            configured = value
-            break
-    if configured is None:
-        try:
-            from app.config import settings
-
-            configured = getattr(settings, "v3_identity_metric_operation_timeout_seconds", None)
-        except Exception:
-            configured = None
-    try:
-        timeout = float(configured) if configured is not None else DEFAULT_OPERATION_TIMEOUT_SECONDS
-    except (TypeError, ValueError):
-        timeout = DEFAULT_OPERATION_TIMEOUT_SECONDS
-    return max(0.05, min(60.0, timeout))

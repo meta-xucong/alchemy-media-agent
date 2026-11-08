@@ -52,41 +52,21 @@ def test_inspector_passes_full_300_second_per_request_budget():
     assert observed["_inner_timeout_seconds"] == 300
 
 
-def test_300_second_review_budget_has_no_short_queue_or_settle_cap(monkeypatch):
-    observed = {"queue_timeout": None, "join_timeouts": []}
-
-    class _Semaphore:
-        def acquire(self, *, blocking, timeout):
-            assert blocking is True
-            observed["queue_timeout"] = timeout
-            return True
-
-        def release(self):
-            pass
-
-    class _StillRunningThread:
-        def __init__(self, *, target, name, daemon):
-            self.target = target
-
-        def start(self):
-            pass
-
-        def join(self, timeout):
-            observed["join_timeouts"].append(timeout)
-
-        def is_alive(self):
-            return True
-
-    monkeypatch.setattr(vision_inspector, "_vision_inspection_semaphore", _Semaphore())
-    monkeypatch.setattr(vision_inspector.threading, "Thread", _StillRunningThread)
-
-    with pytest.raises(vision_inspector.VisionInspectionTimeoutError):
-        vision_inspector._inspect_with_timeout(
-            SimpleNamespace(), SimpleNamespace(), metadata={}, timeout_seconds=300,
-        )
-
-    assert observed["queue_timeout"] == 300
-    assert observed["join_timeouts"] == [300]
+def test_review_queue_waits_for_real_slot_without_inventing_provider_timeout(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(vision_inspector, "_vision_inspection_semaphore", slots)
+    provider = SimpleNamespace(inspect=lambda resolution, metadata: {"status": "pass"})
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        pending = worker.submit(vision_inspector._inspect_with_timeout,
+            provider, SimpleNamespace(), metadata={}, timeout_seconds=0.05)
+        try:
+            time.sleep(0.08)
+            assert not pending.done()
+        finally:
+            slots.release()
+        assert pending.result(timeout=1) == {"status": "pass"}
 
 
 def test_provider_preserves_sdk_timeout_as_timeout_error(tmp_path, monkeypatch):
@@ -116,43 +96,6 @@ def test_provider_preserves_sdk_timeout_as_timeout_error(tmp_path, monkeypatch):
         )
 
 
-def test_live_worker_blocks_retry_even_with_a_free_global_slot(monkeypatch):
-    release = threading.Event()
-    slots = threading.BoundedSemaphore(2)
-    calls = []
-
-    class BlockingProvider:
-        def available(self, *, force=False):
-            return True
-
-        def inspect(self, resolution, *, metadata):
-            calls.append(resolution)
-            release.wait(timeout=5)
-            return {"status": "pass"}
-
-    monkeypatch.setattr(vision_inspector, "_vision_inspection_semaphore", slots)
-    monkeypatch.setattr(vision_inspector.time, "sleep", lambda _seconds: None)
-    inspector = vision_inspector.VisionOutputInspector(vision_provider=BlockingProvider())
-    monkeypatch.setattr(inspector, "_manual_report", lambda *args, **kw: kw["evidence_extra"])
-    try:
-        evidence = inspector._vision_model_report(
-            SimpleNamespace(), mode="vision_model", metadata={
-                "vision_inspection_timeout_seconds": 0.05,
-                "vision_inspection_max_attempts": 2,
-            },
-        )
-        assert len(calls) == 1
-        assert evidence["provider_worker_stopped"] is False
-        assert evidence["provider_review_attempts"] == 1
-        assert evidence["provider_timeout_recovery_attempted"] is False
-        assert evidence["provider_timeout_recovery_succeeded"] is False
-    finally:
-        release.set()
-        # Wait for actual worker cleanup, not just the timed-out caller.
-        for _ in range(2):
-            assert slots.acquire(timeout=2)
-        for _ in range(2):
-            slots.release()
 
 
 def test_timeout_issues_only_one_provider_request(monkeypatch):
@@ -176,17 +119,14 @@ def test_timeout_issues_only_one_provider_request(monkeypatch):
     assert evidence["provider_timeout_recovery_succeeded"] is False
 
 
-def test_thread_start_failure_returns_semaphore_slot(monkeypatch):
+def test_provider_exception_returns_semaphore_slot(monkeypatch):
     slots = threading.BoundedSemaphore(2)
     monkeypatch.setattr(vision_inspector, "_vision_inspection_semaphore", slots)
-
-    def fail_start(self):
-        raise RuntimeError("cannot start thread")
-
-    monkeypatch.setattr(threading.Thread, "start", fail_start)
-    with pytest.raises(RuntimeError, match="cannot start thread"):
+    def fail(resolution, *, metadata):
+        raise RuntimeError("provider failed")
+    with pytest.raises(RuntimeError, match="provider failed"):
         vision_inspector._inspect_with_timeout(
-            SimpleNamespace(), SimpleNamespace(), metadata={}, timeout_seconds=0.05,
+            SimpleNamespace(inspect=fail), SimpleNamespace(), metadata={}, timeout_seconds=0.05,
         )
     assert slots.acquire(blocking=False)
     assert slots.acquire(blocking=False)
@@ -194,7 +134,7 @@ def test_thread_start_failure_returns_semaphore_slot(monkeypatch):
 
 
 def test_concurrency_limit_and_failure_states_are_contract_values():
-    assert vision_inspector._VISION_INSPECTION_CONCURRENCY_LIMIT == 1
+    assert vision_inspector._VISION_INSPECTION_CONCURRENCY_LIMIT == 2
     for state in ("verification_failed", "verification_skipped"):
         report = VisualInspectionReport(
             inspection_id=f"state-{state}",
@@ -215,46 +155,6 @@ def test_timeout_manual_review_is_not_auto_retry_eligible():
     assert OutputQualityReviewMerger()._retry_eligible(inspection) is False
 
 
-def test_timeout_worker_keeps_semaphore_until_provider_returns():
-    started = threading.Event()
-    release = threading.Event()
-    errors: list[BaseException] = []
-
-    class BlockingProvider:
-        def inspect(self, resolution, *, metadata):
-            started.set()
-            release.wait(timeout=2)
-            return {"status": "pass"}
-
-    provider = BlockingProvider()
-    resolution = SimpleNamespace()
-
-    def first_call():
-        try:
-            vision_inspector._inspect_with_timeout(
-                provider, resolution, metadata={}, timeout_seconds=0.05
-            )
-        except BaseException as exc:
-            errors.append(exc)
-
-    workers = [threading.Thread(target=first_call) for _ in range(2)]
-    for worker in workers:
-        worker.start()
-    assert started.wait(timeout=1)
-    time.sleep(0.15)
-
-    with pytest.raises(vision_inspector.VisionInspectionTimeoutError) as caught:
-        vision_inspector._inspect_with_timeout(
-            provider, resolution, metadata={}, timeout_seconds=0.05
-        )
-    assert "queue is full" in str(caught.value)
-    assert len(errors) == 2
-    assert all(isinstance(error, vision_inspector.VisionInspectionTimeoutError) for error in errors)
-
-    release.set()
-    for worker in workers:
-        worker.join(timeout=2)
-        assert not worker.is_alive()
 
 
 def test_timeout_does_not_retry_same_image(monkeypatch):

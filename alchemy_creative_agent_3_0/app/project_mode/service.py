@@ -12191,11 +12191,12 @@ class V3ProjectModeService:
                 identity = self._output_record_identity(record)
                 if not identity:
                     continue
-                delivery_state = "final_delivery" if identity in final_ids else "process_only"
-                if preference_active and identity not in final_ids:
+                if identity in final_ids:
+                    delivery_state = "final_delivery"
+                elif preference_active or (attempt < final_attempt and final_ids):
                     delivery_state = "superseded"
-                elif attempt < final_attempt and final_ids:
-                    delivery_state = "superseded"
+                else:
+                    delivery_state = "process_only"
                 annotations[identity] = {
                     "delivery_state": delivery_state,
                     "delivery_attempt_index": attempt,

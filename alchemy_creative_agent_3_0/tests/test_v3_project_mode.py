@@ -2440,6 +2440,104 @@ def test_project_outputs_use_job_review_final_ids_over_stale_record_preference(t
     assert set(original_ids).issubset(review_ids)
 
 
+def test_project_outputs_keep_canonical_mixed_attempt_winners_and_selected_anchor(tmp_path, monkeypatch) -> None:
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider()))
+    product_service = V3ProductApiService(
+        scenario_runtime=runtime,
+        brand_profile_service=BrandProfileService(BrandProfileStore(tmp_path / "brand_memory")),
+        output_store=V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs"),
+    )
+    product_service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
+    handlers = V3ProductRouteHandlers(
+        service=product_service,
+        project_store=PersistentProjectStore(tmp_path / "v3_projects"),
+    )
+    project = handlers.post_projects({"user_goal": "Create a four-image portrait set"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create four matching portraits"})
+    original_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=0,
+        count=4,
+        prefix="original_mixed_winners",
+    )
+    retry_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=1,
+        count=4,
+        prefix="retry_mixed_winners",
+    )
+    # The shared review can retain the successful hero and alternate-angle
+    # images from attempt 0 while choosing detail/context images from retry 1.
+    final_ids = [original_ids[0], original_ids[2], retry_ids[1], retry_ids[3]]
+    original_get_job = handlers.service.get_job
+    base_status = original_get_job(job["job_id"])
+    reviewed_status = base_status.model_copy(
+        update={
+            "status": ProductJobStatusValue.GENERATED,
+            "metadata": {
+                **dict(base_status.metadata or {}),
+                "post_generation_review": {
+                    "recommended_output_ids": final_ids,
+                    "inspections": [
+                        {
+                            "output_id": output_id,
+                            "mode": "hybrid",
+                            "status": "pass",
+                            "verification_state": "verified",
+                        }
+                        for output_id in final_ids
+                    ],
+                },
+                "final_delivery": {
+                    "final_delivery_status": "ready",
+                    "automatic_delivery_available": True,
+                    "manual_confirmation_required": False,
+                    "delivery_gate_applies": True,
+                    "final_delivery_output_count": 4,
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(
+        handlers.service,
+        "get_job",
+        lambda target_job_id: reviewed_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
+    )
+    _override_job_read_snapshot_status(handlers, job["job_id"], reviewed_status, monkeypatch)
+    # The original hero is also the project continuity anchor. It must stay on
+    # the final result board even though anchors are omitted from review-only
+    # history to avoid presenting the same image twice.
+    monkeypatch.setattr(
+        handlers.project_service,
+        "_continuity_state",
+        lambda _project: {
+            "project_id": project["project_id"],
+            "version": "mixed-attempt-delivery-test",
+            "state": "active",
+            "auto_enabled": True,
+            "active_continuity_anchor": {
+                "binding_id": "mixed-attempt-anchor",
+                "output_id": original_ids[0],
+                "source_job_id": job["job_id"],
+                "source_candidate_id": "original_mixed_winners_candidate_0",
+                "source_asset_id": "original_mixed_winners_asset_0",
+                "binding_mode": "selected_output",
+            },
+        },
+    )
+
+    payload = handlers.get_project_outputs(project_id=project["project_id"], limit=20, compact=True)
+    visible_ids = {item["output_id"] for item in payload["items"]}
+    review_ids = {item["output_id"] for item in payload["review_items"]}
+
+    assert visible_ids == set(final_ids)
+    assert original_ids[0] in visible_ids
+    assert all(item["delivery_state"] == "final_delivery" for item in payload["items"])
+    assert review_ids == (set(original_ids + retry_ids) - set(final_ids) - {original_ids[0]})
+
+
 def test_project_outputs_keep_complete_original_when_retry_is_incomplete(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects({"user_goal": "Create four complete images", "title": "Incomplete Retry"})[

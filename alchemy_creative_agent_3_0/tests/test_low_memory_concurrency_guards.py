@@ -27,8 +27,11 @@ def test_worker_count_parser_has_safe_bounds(monkeypatch) -> None:
     assert main._positive_worker_count("TEST_WORKERS", default=1) == 1
 
 
-def test_vision_review_defaults_to_one_and_never_exceeds_two(monkeypatch) -> None:
+def test_vision_review_defaults_to_two_and_honors_one_slot(monkeypatch) -> None:
     monkeypatch.delenv("V3_VISION_INSPECTION_CONCURRENCY", raising=False)
+    assert vision_inspector._vision_inspection_concurrency_limit() == 2
+
+    monkeypatch.setenv("V3_VISION_INSPECTION_CONCURRENCY", "1")
     assert vision_inspector._vision_inspection_concurrency_limit() == 1
 
     monkeypatch.setenv("V3_VISION_INSPECTION_CONCURRENCY", "2")

@@ -118,11 +118,16 @@ jobs:
           from collections import Counter
           from datetime import datetime, timezone
           from pathlib import Path
+          from types import SimpleNamespace
+          from urllib.request import urlopen
           import app.config  # Load the same runtime env-file chain as the V3 service.
           from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
           from alchemy_creative_agent_3_0.app.product_api.service import _default_product_job_storage_root
           from alchemy_creative_agent_3_0.app.product_api import service as product_api_service
           from alchemy_creative_agent_3_0.app.project_mode.service import _doc277_safe_planning_failure_diagnostics
+          from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
+          from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputRecord
+          from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import _VISION_INSPECTION_CONCURRENCY_LIMIT
 
           project_id = sys.argv[1]
           requested_operation_id = sys.argv[2]
@@ -156,6 +161,13 @@ jobs:
           references = project.get("reference_assets") if isinstance(project.get("reference_assets"), list) else []
           jobs_root = _default_product_job_storage_root()
           outputs_root = root / "v3_outputs"
+          records_by_job = {}
+          with urlopen("http://127.0.0.1:8017/static/app.js", timeout=15) as response:
+              desktop_source = response.read().decode("utf-8")
+          review_runtime = {
+              "provider_concurrency_limit": _VISION_INSPECTION_CONCURRENCY_LIMIT,
+              "desktop_serves_canonical_review_precedence": "&& (reviewOutputIds.has(identity) || (" in desktop_source,
+          }
 
           def safe_code(value):
               return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) else None
@@ -256,6 +268,31 @@ jobs:
                   for item in inspections
                   if isinstance(item, dict)
               )
+              delivery = {}
+              review_media = []
+              if generation_result:
+                  projector = product_api_service.V3ProductApiService.__new__(product_api_service.V3ProductApiService)
+                  delivery, eligible, _ = projector._public_final_delivery_projection(SimpleNamespace(
+                      metadata=generation_metadata,
+                      asset_pack=SimpleNamespace(assets=asset_pack.get("assets") or []),
+                  ))
+                  project_projector = V3ProjectModeService.__new__(V3ProjectModeService)
+                  records = records_by_job.get(job_id, [])
+                  annotations = project_projector._delivery_annotations_for_records(
+                      records, final_output_ids=eligible if delivery.get("delivery_gate_applies") else None,
+                  )
+                  review_ids = set(review_summary(review)["review_output_ids"])
+                  for record in records:
+                      if record.output_id not in review_ids:
+                          continue
+                      review_media.append({
+                          "output_id": safe_code(record.output_id),
+                          "preview_available": Path(record.preview_path).is_file() and record.preview_url == f"/api/v3/creative-agent/outputs/{record.output_id}/preview",
+                          "download_available": Path(record.file_path).is_file() and record.download_url == f"/api/v3/creative-agent/outputs/{record.output_id}/download",
+                          "delivery_state": annotations.get(record.output_id, {}).get("delivery_state"),
+                          "attempt": annotations.get(record.output_id, {}).get("delivery_attempt_index"),
+                          "final_attempt": annotations.get(record.output_id, {}).get("delivery_final_attempt_index"),
+                      })
               return {
                   "job_id": str(payload.get("job_id") or job_id),
                   "storage_source": storage_source,
@@ -275,6 +312,8 @@ jobs:
                   "review_states": dict(sorted(inspection_states.items())),
                   "review_modes": dict(sorted(inspection_modes.items())),
                   "review_detail": review_summary(review),
+                  "final_delivery_status": delivery.get("final_delivery_status"),
+                  "review_media": review_media,
                   "face_attestation_states": dict(
                       sorted(
                           Counter(
@@ -303,6 +342,9 @@ jobs:
               owner = str(payload.get("job_id") or metadata.get("job_id") or payload.get("created_from_job_id") or metadata.get("created_from_job_id") or "")
               if owner not in wanted_job_ids:
                   continue
+              records_by_job.setdefault(owner, []).append(V3GeneratedOutputRecord(**{
+                  key: value for key, value in payload.items() if key in V3GeneratedOutputRecord.__dataclass_fields__
+              }))
               image_files = [
                   item
                   for item in path.parent.iterdir()
@@ -623,6 +665,7 @@ jobs:
                       "container_created_at": container_created_at,
                       "container_started_at": container_started_at,
                       "brain_diagnostics": brain_diagnostics,
+                      "review_runtime": review_runtime,
                       "reference_count": len(references),
                       "active_reference_count": len(active_references),
                       "reference_source_counts": dict(sorted(source_counts.items())),
