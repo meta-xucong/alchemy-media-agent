@@ -214,7 +214,8 @@ jobs:
           queue.row_factory = sqlite3.Row
           queue_rows = [dict(row) for row in queue.execute(
               "SELECT task_id,run_id,status,attempts,max_attempts,claim_generation,not_before,created_at,updated_at, "
-              "json_extract(error_json,'$.retry_after_seconds') AS retry_after_seconds "
+              "json_extract(error_json,'$.retry_after_seconds') AS retry_after_seconds, "
+              "json_extract(queued_run_json,'$.status') AS projected_status "
               "FROM v2_tasks WHERE created_at>=? ORDER BY created_at DESC LIMIT 8", (CUTOFF,))]
           queue.close()
           access = {}
@@ -241,8 +242,18 @@ jobs:
                   groups[key]['count'] += 1
                   groups[key]['last_at'] = at
               access[name] = {'exit_code': completed.returncode, 'requests': list(groups.values())[:24]}
+          bridge_polls = []
+          completed = subprocess.run(['docker', 'logs', '--timestamps', '--since', CUTOFF + 'Z',
+                                      'alchemy-render-bridge-api'], stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, timeout=25)
+          origin = 'rb_v2_WyJ2MiIsIjEiLCJqb2JfMWFmMjhkY2JhNGJhOjAiXQ'
+          for line in completed.stdout.decode('utf-8', errors='replace').splitlines():
+              match = re.search(r'"GET /bridge/v1/tasks/by-origin/' + re.escape(origin) + r' HTTP/[0-9.]+" ([1-5][0-9]{2})', line)
+              if match:
+                  bridge_polls.append({'at': line.split(' ', 1)[0], 'status': int(match[1])})
           print(json.dumps({'snapshot_at': datetime.now(timezone.utc).isoformat(), 'v1_jobs': v1_jobs,
-                            'queue': queue_rows, 'v2_jobs': v2_jobs, 'v2_runs': v2_runs, 'access': access}, separators=(',', ':')))
+                            'queue': queue_rows, 'v2_jobs': v2_jobs, 'v2_runs': v2_runs, 'access': access,
+                            'bridge_status_polls': bridge_polls[-60:]}, separators=(',', ':')))
           PY
           printf 'GUARDED_V12_AUDIT_RESULT=pass\n'
           printf 'GUARDED_V12_AUDIT_ACTIVE_SHA=%s\n' "$1"
