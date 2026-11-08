@@ -109,6 +109,7 @@ def test_live_process_reference_blocks_archiving(tmp_path, monkeypatch):
     root, runtime = fixture_runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(guard, 'ROOT', root)
     monkeypatch.setattr(guard, 'ACTIVE', root / ('doc276-277-' + 'b' * 12))
+    monkeypatch.setattr(guard, 'systemd_references', lambda: [])
     process = tmp_path / '12345'
     process.mkdir()
     (process / 'cmdline').write_bytes(str(runtime / 'bin/python').encode())
@@ -136,6 +137,7 @@ def test_referenced_releases_are_protected(tmp_path, monkeypatch, kind):
     active = root / ('doc276-277-' + active_sha[:12])
     monkeypatch.setattr(guard, 'ROOT', root)
     monkeypatch.setattr(guard, 'ACTIVE', active)
+    monkeypatch.setattr(guard, 'systemd_references', lambda: [str(release)] if kind == 'systemd' else [])
     def run(*args):
         if args[:4] == ('docker', 'image', 'ls', '-q'):
             return 'image'
@@ -146,10 +148,6 @@ def test_referenced_releases_are_protected(tmp_path, monkeypatch, kind):
             return 'container'
         if args[:2] == ('docker', 'inspect'):
             return json.dumps([{'Mounts': [{'Source': str(release / '.env')}] if kind == 'container' else []}])
-        if args[:2] == ('systemctl', 'list-unit-files'):
-            return 'test.service enabled'
-        if args[:2] == ('systemctl', 'show'):
-            return str(release) if kind == 'systemd' else ''
         raise AssertionError(args)
     monkeypatch.setattr(guard, 'command', run)
         # Mock the Linux process inventory when exercising other reference owners.
@@ -159,3 +157,15 @@ def test_referenced_releases_are_protected(tmp_path, monkeypatch, kind):
     with pytest.raises(guard.ArchiveBlocked, match='retained_release|referenced'):
         guard.assert_unreferenced([release], active_sha)
     assert runtime.exists()
+
+
+def test_systemd_templates_and_dropins_are_read_without_instantiation(tmp_path, monkeypatch):
+    (tmp_path / 'example@.service').write_text('[Service]\nExecStart=/opt/old/.venv/bin/python\n', encoding='utf-8')
+    dropins = tmp_path / 'example@.service.d'
+    dropins.mkdir()
+    (dropins / 'custom.conf').write_text('[Service]\nWorkingDirectory=/opt/another\n', encoding='utf-8')
+    monkeypatch.setattr(guard, 'command', lambda *args: json.dumps(tmp_path.as_posix()))
+    references = guard.systemd_references()
+    assert len(references) == 2
+    assert any('/opt/old/' in item for item in references)
+    assert any('/opt/another' in item for item in references)

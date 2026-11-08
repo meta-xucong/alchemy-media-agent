@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -44,6 +45,38 @@ def validate_runtime(revision: str, root: Path = ROOT) -> Path:
     return runtime
 
 
+def systemd_references() -> list[str]:
+    # Read installed templates and drop-ins as definitions. systemctl show
+    # cannot instantiate bare @ templates returned by list-unit-files.
+    references = []
+    seen = set()
+    pending = [Path(path) for path in shlex.split(command('systemctl', 'show', '--property=UnitPath', '--value'))]
+    if not pending or any(not path.is_absolute() for path in pending):
+        raise ArchiveBlocked('systemd_search_paths_unavailable')
+    while pending:
+        directory = pending.pop()
+        if not directory.exists():
+            continue
+        resolved_directory = directory.resolve()
+        if resolved_directory in seen:
+            continue
+        seen.add(resolved_directory)
+        for path in directory.iterdir():
+            if path.is_dir():
+                pending.append(path)
+                continue
+            if path.suffix not in {'.service', '.conf'} or not path.is_file():
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            references.append(path.read_text(encoding='utf-8'))
+    if not references:
+        raise ArchiveBlocked('systemd_definitions_unavailable')
+    return references
+
+
 def assert_unreferenced(releases: list[Path], expected_active: str) -> None:
     if not REVISION.fullmatch(expected_active):
         raise ArchiveBlocked('invalid_active_revision')
@@ -65,8 +98,7 @@ def assert_unreferenced(releases: list[Path], expected_active: str) -> None:
     if containers:
         for container in json.loads(command('docker', 'inspect', *containers)):
             references.extend(mount['Source'] for mount in container.get('Mounts', []))
-    units = [line.split()[0] for line in command('systemctl', 'list-unit-files', '--type=service', '--no-legend', '--no-pager').splitlines() if line.strip()]
-    references.append(command('systemctl', 'show', '--property=ExecStart,WorkingDirectory,RootDirectory,EnvironmentFiles,FragmentPath,DropInPaths', *units))
+    references.extend(systemd_references())
     for process in Path('/proc').iterdir():
         if not process.name.isdecimal():
             continue
