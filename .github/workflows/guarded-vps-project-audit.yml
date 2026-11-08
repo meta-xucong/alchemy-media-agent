@@ -78,12 +78,12 @@ jobs:
           from pathlib import Path
           from PIL import Image
 
-          CUTOFF = '2026-11-08T17:20:00'
+          CUTOFF = '2026-11-08T18:30:00'
           v1_root = Path(sys.argv[1]).resolve()
           env = {}
           for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
               key, sep, value = line.partition('=')
-              if sep and key in {'V2_DATA_DIR', 'V2_STORAGE_DIR'}:
+              if sep and key in {'V2_DATA_DIR', 'V2_STORAGE_DIR', 'V2_TASK_QUEUE_DB_PATH'}:
                   if key in env:
                       raise SystemExit('ambiguous_v2_root')
                   env[key] = value.strip().strip('\"\'')
@@ -210,6 +210,13 @@ jobs:
                                    'stages': trace(decision.get('claude_stage_trace'))},
                   'events': trace(run.get('progress_events'))})
           v2.close()
+          queue = db(Path(env.get('V2_TASK_QUEUE_DB_PATH') or str(Path(env['V2_DATA_DIR']) / 'task_queue.sqlite3')))
+          queue.row_factory = sqlite3.Row
+          queue_rows = [dict(row) for row in queue.execute(
+              "SELECT task_id,run_id,status,attempts,max_attempts,claim_generation,not_before,created_at,updated_at, "
+              "json_extract(error_json,'$.retry_after_seconds') AS retry_after_seconds "
+              "FROM v2_tasks WHERE created_at>=? ORDER BY created_at DESC LIMIT 8", (CUTOFF,))]
+          queue.close()
           access = {}
           commands = {
               'v1_api': ['docker', 'logs', '--timestamps', '--since', CUTOFF + 'Z', 'alchemy-media-agent'],
@@ -225,7 +232,7 @@ jobs:
                       continue
                   method, route, status = match.groups()
                   if not (method == 'POST' and route in {'/v1/image/jobs', '/api/v2/creative/runs', '/api/v2/creative/runs/async', '/api/v2/image/jobs'}
-                          or method == 'GET' and any(identity in route for identity in ['out_14b7848fe6a16a0e5cfdb44376f9f0bf', 'out_job_5acd90a3231f_0'])):
+                          or method == 'GET' and any(identity in route for identity in [output.get('output_id', output.get('id')) for job in v1_jobs + v2_jobs for output in job['outputs']])):
                       continue
                   key = (method, route, status)
                   at = line.split(' ', 1)[0]
@@ -235,7 +242,7 @@ jobs:
                   groups[key]['last_at'] = at
               access[name] = {'exit_code': completed.returncode, 'requests': list(groups.values())[:24]}
           print(json.dumps({'snapshot_at': datetime.now(timezone.utc).isoformat(), 'v1_jobs': v1_jobs,
-                            'v2_jobs': v2_jobs, 'v2_runs': v2_runs, 'access': access}, separators=(',', ':')))
+                            'queue': queue_rows, 'v2_jobs': v2_jobs, 'v2_runs': v2_runs, 'access': access}, separators=(',', ':')))
           PY
           printf 'GUARDED_V12_AUDIT_RESULT=pass\n'
           printf 'GUARDED_V12_AUDIT_ACTIVE_SHA=%s\n' "$1"
