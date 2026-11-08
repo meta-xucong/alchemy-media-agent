@@ -194,11 +194,19 @@ jobs:
           bridge_state="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' <<<"$bridge_paths")"
           [ -d "$bridge_control_dir" ] && [ -d "$bridge_state" ] || stop_reason bridge_storage_path_missing
           v1_started_at="$(docker inspect "$active_container" --format '{{.State.StartedAt}}')"
-          python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
+          if ! active_work_report="$(python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
             --v1-database "$media_root/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
             --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
             --v2-repository "$v2_data/repository.sqlite3" --v3-projects-root "$media_root/v3_projects" \
-            --v3-container-started-at "$v1_started_at" >/dev/null || stop_reason active_or_unknown_work_detected
+            --v3-container-started-at "$v1_started_at")"; then
+            if [[ -n "${active_work_report:-}" ]]; then
+              printf '%s\n' "$active_work_report"
+            else
+              printf '%s\n' '{"status":"blocked","reason":"active_work_report_unavailable"}'
+            fi
+            stop_reason active_or_unknown_work_detected
+          fi
+          printf '%s\n' "$active_work_report"
           available_bytes="$(df -PB1 /var/lib/alchemy | awk 'NR == 2 {print $4}')"
           [[ "$available_bytes" =~ ^[0-9]+$ ]] && [ "$available_bytes" -ge 536870912 ] || stop_reason candidate_smoke_disk_floor_not_met
           [ ! -e "$marker" ] || stop_reason generation_already_attempted_for_sha
