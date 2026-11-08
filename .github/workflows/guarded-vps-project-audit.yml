@@ -49,7 +49,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Read V2 review configuration and durable evidence
+      - name: Read existing output and review isolated candidate copy
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -62,107 +62,105 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
             "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
           set -euo pipefail
-          active_release="$(realpath /opt/alchemy-media-agent)"
-          [ "$(git -C "$active_release" rev-parse HEAD)" = "$1" ]
-          "$active_release/custom_media_agent_2_0/.venv/bin/python" - <<'PY'
-          """Read-only V2 review audit. Never import the production application."""
-          import ast
+          expected="$1"
+          candidate="/opt/alchemy-media-agent-releases/doc276-277-${expected:0:12}"
+          [ "$(git -C "$candidate" rev-parse HEAD)" = "$expected" ]
+          [ "$(git -C /opt/alchemy-media-agent rev-parse HEAD)" = "b1b229737ad2dee32f94d353254d2c22740c2c18" ]
+          "$candidate/custom_media_agent_2_0/.venv/bin/python" - "$candidate" <<'PY'
+          """One real review of an existing output in isolated candidate storage."""
+          import asyncio
           import json
-          import re
+          import os
+          import shutil
           import sqlite3
-          import subprocess
-          from datetime import datetime, timezone
+          import sys
+          import tempfile
           from pathlib import Path
 
-          release = Path('/opt/alchemy-media-agent').resolve()
-          review_keys = {'V2_OUTPUT_REVIEW_AGENT_ENABLED', 'V2_OUTPUT_REVIEW_AGENT_MODEL', 'V2_AGENT_DEFAULT_MODEL'}
-          path_keys = {'V2_DATA_DIR', 'V2_ENV_FILE'}
-
-          def parse_env(path):
-              result = {}
+          release = Path(sys.argv[1]).resolve()
+          def env_file(path):
+              values = {}
               if path.is_file():
                   for line in path.read_text(encoding='utf-8-sig').splitlines():
-                      line = line.strip()
-                      if line.startswith('export '):
-                          line = line[7:].strip()
-                      key, sep, value = line.partition('=')
-                      if sep and key.strip() in review_keys | path_keys:
-                          result[key.strip()] = value.strip().strip('"').strip("'")
-              return result
+                      key, sep, value = line.strip().removeprefix('export ').partition('=')
+                      if sep and key and not key.startswith('#'):
+                          values[key] = value.strip().strip('"').strip("'")
+              return values
 
-          def safe_values(values):
-              return {key: value for key, value in values.items() if key in review_keys
-                      and len(value) < 120 and re.fullmatch(r'[A-Za-z0-9_./:+ -]*', value)}
+          configuration = env_file(Path('/etc/alchemy/alchemy-v2.env'))
+          source_root = Path(configuration['V2_DATA_DIR'])
+          configuration.update(env_file(source_root / 'llm_gateway.env'))
+          runtime_path = source_root / 'runtime_model_settings.json'
+          runtime = json.loads(runtime_path.read_text(encoding='utf-8')) if runtime_path.is_file() else {}
+          model = runtime.get('output_review_agent_model') or runtime.get('default_agent_model') or configuration.get('V2_OUTPUT_REVIEW_AGENT_MODEL') or configuration.get('V2_AGENT_DEFAULT_MODEL')
+          assert model
+          source_db = source_root / 'repository.sqlite3'
+          def source_record():
+              connection = sqlite3.connect(source_db.resolve().as_uri() + '?mode=ro', uri=True)
+              connection.execute('PRAGMA query_only=ON')
+              row = connection.execute("SELECT payload FROM v2_records WHERE namespace='image_jobs' AND record_key=?", ('job_1af28dcba4ba',)).fetchone()
+              connection.close()
+              assert row
+              return row[0]
 
-          env_file = parse_env(Path('/etc/alchemy/alchemy-v2.env'))
-          runtime = []
-          for service in ('alchemy-v2-api.service', 'alchemy-v2-worker.service'):
-              pid_text = subprocess.check_output(['systemctl', 'show', service, '--property=MainPID', '--value'], text=True).strip()
-              assert pid_text.isdecimal() and int(pid_text) > 0
-              entries = Path(f'/proc/{pid_text}/environ').read_bytes().split(b'\0')
-              env = {}
-              for raw in entries:
-                  key, sep, value = raw.partition(b'=')
-                  decoded_key = key.decode('utf-8', errors='replace')
-                  if sep and decoded_key in review_keys | path_keys:
-                      env[decoded_key] = value.decode('utf-8', errors='replace')
-              effective = dict(env)
-              if effective.get('V2_ENV_FILE'):
-                  for key, value in parse_env(Path(effective['V2_ENV_FILE'])).items():
-                      effective.setdefault(key, value)
-              for key, value in parse_env(release / 'custom_media_agent_2_0/.env').items():
-                  effective.setdefault(key, value)
-              data_root = Path(effective.get('V2_DATA_DIR', str(release / 'custom_media_agent_2_0/.v2_data')))
-              for key, value in parse_env(data_root / 'llm_gateway.env').items():
-                  effective.setdefault(key, value)
-              runtime.append({'service': service, 'process_environment': safe_values(env),
-                              'startup_effective_review_settings': safe_values(effective)})
+          original_record = source_record()
+          payload = json.loads(original_record)
+          assert payload['status'] == 'completed' and len(payload['outputs']) == 1
+          assert not payload['outputs'][0]['metadata'].get('input_images')
+          source_image = Path(payload['outputs'][0]['metadata']['storage_path'])
+          source_bytes = source_image.read_bytes()
 
-          source = (release / 'custom_media_agent_2_0/app/services/visual_review_agent.py').read_text(encoding='utf-8')
-          tree = ast.parse(source)
-          calls = sorted({ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)})
-          source_audit = {
-              'has_metadata_fallback_literal': 'sdk_agent_metadata_fallback' in source,
-              'has_live_vision_not_configured_note': 'live vision-model inspection is not configured yet' in source,
-              'has_runner_call': any('Runner' in name or name.startswith('Runner.') for name in calls),
-              'calls': calls,
-          }
-
-          database = Path(env_file['V2_DATA_DIR']) / 'repository.sqlite3'
-          connection = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=3)
-          connection.execute('PRAGMA query_only=ON')
-          rows = connection.execute("SELECT payload FROM v2_records WHERE namespace='image_jobs' ORDER BY json_extract(payload,'$.created_at') DESC LIMIT 4").fetchall()
-          connection.close()
-          jobs = []
-          for row in rows:
-              job = json.loads(row[0])
-              plan = job.get('prompt_plan') or {}
-              variables = plan.get('user_variables') or {}
-              inputs = variables.get('provider_input_plan') or {}
-              contract = variables.get('reference_delivery') or {}
-              outputs = []
-              for output in job.get('outputs', [])[:4]:
-                  review = output.get('review') or {}
-                  metadata = output.get('metadata') or {}
-                  notes = review.get('notes') or []
-                  outputs.append({
-                      'output_id': output.get('output_id'), 'live': bool(metadata.get('live')),
-                      'has_trace_id': bool(review.get('agent_trace_id')),
-                      'review': {key: review.get(key) for key in ('reviewer', 'analysis_mode', 'decision', 'score')},
-                      'risk_codes': [value for value in review.get('detected_risks', []) if isinstance(value, str) and re.fullmatch(r'[a-z0-9_]{1,100}', value)],
-                      'note_live_vision_unconfigured': any('live vision-model inspection is not configured yet' in note for note in notes),
-                      'note_ready_for_human_review': any('ready for human visual review' in note for note in notes),
-                  })
-              jobs.append({'job_id': job.get('job_id'), 'run_id': job.get('run_id'), 'status': job.get('status'),
-                           'created_at': job.get('created_at'), 'updated_at': job.get('updated_at'),
-                           'requires_image_reference': bool(inputs.get('requires_image_reference')),
-                           'reference_image_count': inputs.get('reference_image_count'),
-                           'has_reference_delivery_contract': bool(contract), 'outputs': outputs})
-
-          print(json.dumps({'snapshot_at': datetime.now(timezone.utc).isoformat(),
-                            'env_file_review_settings': safe_values(env_file), 'runtime': runtime,
-                            'production_review_source': source_audit, 'jobs': jobs}, separators=(',', ':')))
+          with tempfile.TemporaryDirectory(prefix='v2-candidate-vision-') as scratch:
+              scratch = Path(scratch)
+              storage = scratch / 'storage'
+              storage.mkdir()
+              copied_image = storage / source_image.name
+              shutil.copy2(source_image, copied_image)
+              for key in ('LLM_GATEWAY_API_KEY', 'LLM_GATEWAY_BASE_URL'):
+                  assert configuration.get(key), key + '_not_configured'
+                  os.environ[key] = configuration[key]
+              os.environ.update(V2_ENV_FILE=str(scratch / 'absent.env'), V2_DATA_DIR=str(scratch / 'data'),
+                  V2_STORAGE_DIR=str(storage), V2_TASK_QUEUE_DB_PATH=str(scratch / 'queue.sqlite3'),
+                  V2_OUTPUT_REVIEW_AGENT_ENABLED='true', V2_OUTPUT_REVIEW_AGENT_MODEL=model,
+                  V2_OUTPUT_REVIEW_TIMEOUT_SECONDS='300', OPENAI_AGENTS_DISABLE_TRACING='1', ORT_DISABLE_TELEMETRY='1',
+                  ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=str(scratch / 'absent-control.json'),
+                  ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT=str(scratch / 'ledgers'))
+              sys.path[:0] = [str(release / 'custom_media_agent_2_0'), str(release)]
+              from app.repositories import repository
+              from app.schemas import ImageJob
+              from app.services.output_review import review_image_job
+              from app.services.generation import finish_image_review
+              from app.services import visual_review_agent as vision
+              payload['outputs'][0]['metadata']['storage_path'] = str(copied_image)
+              job = review_image_job(ImageJob.model_validate(payload))
+              repository.save_image_job(job)
+              calls = []
+              invoke = vision._request_verdict
+              async def traced(content, selected_model):
+                  calls.append(selected_model)
+                  try:
+                      return await invoke(content, selected_model)
+                  except Exception as error:
+                      import httpx
+                      detail = {'type': type(error).__name__}
+                      if isinstance(error, httpx.HTTPStatusError):
+                          detail['http_status'] = error.response.status_code
+                      print('SAFE_REVIEW_FAILURE=' + json.dumps(detail), flush=True)
+                      raise
+              vision._request_verdict = traced
+              reviewed = asyncio.run(finish_image_review(job))
+              again = asyncio.run(finish_image_review(reviewed))
+              verdict = reviewed.outputs[0].review
+              assert source_record() == original_record and source_image.read_bytes() == source_bytes
+              assert copied_image.read_bytes() == source_bytes
+              assert len(calls) == 1 and again.outputs[0].review == verdict
+              print('CANDIDATE_VISION_RESULT=' + json.dumps({
+                  'analysis_mode': verdict.analysis_mode, 'decision': verdict.decision, 'model': verdict.model,
+                  'elapsed_ms': verdict.elapsed_ms, 'failure_code': verdict.failure_code,
+                  'note_count': len(verdict.notes), 'request_count': len(calls), 'original_bytes_unchanged': True,
+                  'production_record_unchanged': True, 'canonical_verdict_persisted': repository.get_output(reviewed.outputs[0].output_id).review == verdict,
+                  'output_id': reviewed.outputs[0].output_id, 'production_writes': False}), flush=True)
+              assert verdict.analysis_mode == 'vision_model', 'real_vision_not_verified'
           PY
-          printf 'GUARDED_V2_REVIEW_AUDIT_RESULT=pass\n'
-          printf 'GUARDED_V2_REVIEW_AUDIT_ACTIVE_SHA=%s\n' "$1"
+          printf 'GUARDED_CANDIDATE_VISION_RESULT=pass\n'
           REMOTE_SCRIPT
