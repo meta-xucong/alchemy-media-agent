@@ -214,3 +214,28 @@ def test_candidate_preflight_does_not_require_api_only_codex_defaults():
     ] = {"references": {"max_count": 5}}
 
     bridge_preflight.validate_candidate_v3_bridge_state(settings, capabilities)
+
+
+def test_candidate_preflight_safe_config_summary_contains_only_allowlisted_fields(tmp_path):
+    control = tmp_path / "control.json"
+    control.write_text(
+        '{"schema_version":"1","mode":"enabled","base_url":"https://private.example",'
+        '"workspace":"private-workspace","token":"private-token","profiles":["codex-image"],'
+        '"native_enabled":true,"native_profiles":["fake-image"]}',
+        encoding="utf-8",
+    )
+    config_summary = bridge_preflight.safe_alchemy_native_control_summary(control)
+    runtime_summary = bridge_preflight.safe_bridge_runtime_summary(_bridge_capabilities())
+
+    assert config_summary == {
+        "control": "readable",
+        "mode": "enabled",
+        "profiles": ["codex-image"],
+        "native_enabled": True,
+        "native_profiles": ["fake-image"],
+    }
+    assert runtime_summary["admission"] == {"accepting_new_tasks": True, "mode": "unknown"}
+    rendered = repr((config_summary, runtime_summary))
+    assert "private.example" not in rendered
+    assert "private-workspace" not in rendered
+    assert "private-token" not in rendered
