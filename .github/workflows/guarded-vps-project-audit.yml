@@ -120,6 +120,8 @@ jobs:
           import app.config  # Load the same runtime env-file chain as the V3 service.
           from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
           from alchemy_creative_agent_3_0.app.product_api.service import _default_product_job_storage_root
+          from alchemy_creative_agent_3_0.app.product_api import service as product_api_service
+          from alchemy_creative_agent_3_0.app.project_mode.service import _doc277_safe_planning_failure_diagnostics
 
           project_id = sys.argv[1]
           requested_operation_id = sys.argv[2]
@@ -155,11 +157,23 @@ jobs:
           outputs_root = root / "v3_outputs"
 
           def job_summary(job_id):
+              import re
+              if not re.fullmatch(r"job_[A-Za-z0-9_-]{1,128}", job_id):
+                  return {"status": "invalid_job_id"}
               path = jobs_root / f"{job_id}.json"
+              storage_source = "configured"
               if not path.exists():
-                  return {"job_id": job_id, "status": "missing"}
+                  package_root = Path(product_api_service.__file__).resolve().parents[3] / ".media_storage" / "v3_jobs"
+                  path = package_root / f"{job_id}.json"
+                  storage_source = "package_default"
+                  if not path.exists():
+                      return {"job_id": job_id, "status": "missing"}
               payload = json.loads(path.read_text(encoding="utf-8"))
-              metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+              request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+              metadata = request.get("metadata") if isinstance(request.get("metadata"), dict) else {}
+              lifecycle_failure = metadata.get("generation_lifecycle_failure")
+              lifecycle_failure = lifecycle_failure if isinstance(lifecycle_failure, dict) else {}
+              brain_outcome = metadata.get("remote_creative_brain_outcome") or lifecycle_failure.get("remote_creative_brain_outcome")
               generation_result = payload.get("generation_result")
               generation_result = generation_result if isinstance(generation_result, dict) else {}
               generation_metadata = generation_result.get("metadata")
@@ -191,6 +205,8 @@ jobs:
               )
               return {
                   "job_id": str(payload.get("job_id") or job_id),
+                  "storage_source": storage_source,
+                  "planning_failure_diagnostics": _doc277_safe_planning_failure_diagnostics(brain_outcome),
                   "status": payload.get("status"),
                   "updated_at": payload.get("updated_at"),
                   "warning_count": len(payload.get("warnings") or []),
