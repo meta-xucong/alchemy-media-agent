@@ -39,3 +39,11 @@ private record and look up that identity directly, including whether it is
 present in the project catalog. Its timestamps also distinguish this failure
 from the project's September history. Do not treat historical missing jobs as
 the current failure's evidence without this binding.
+
+Run `42459284885` confirms the bound Job is `job_0669df3c0c`, but the operation
+opened at `2026-09-23T03:04:42Z` and failed at `2026-09-23T03:09:58Z`. The
+November project update timestamp is not the operation timestamp. This is a
+historical failure, so its generic Brain error cannot establish the cause of
+the user's November incident. Next inspect only allowlisted recent POST
+route/time/status entries from the active container's access log to identify
+the actual submission. No raw logs or request content are emitted.
