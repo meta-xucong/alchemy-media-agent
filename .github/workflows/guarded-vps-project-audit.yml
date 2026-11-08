@@ -113,6 +113,7 @@ jobs:
           docker exec -i "$v1_container" python - "$project_id" "$planning_operation_id" "$job_store_root_mounted" "$container_created_at" "$container_started_at" <<'PY'
           import json
           import os
+          import re
           import sys
           from collections import Counter
           from datetime import datetime, timezone
@@ -155,6 +156,42 @@ jobs:
           references = project.get("reference_assets") if isinstance(project.get("reference_assets"), list) else []
           jobs_root = _default_product_job_storage_root()
           outputs_root = root / "v3_outputs"
+
+          def safe_code(value):
+              return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) else None
+
+          def safe_ids(value):
+              return [item for item in value[:100] if safe_code(item)] if isinstance(value, list) else []
+
+          def inspection_summary(item):
+              evidence = item.get("evidence") or {}
+              receipt = evidence.get("vision_route_receipt") or {}
+              return {
+                  "output_id": safe_code(item.get("output_id")),
+                  "status": safe_code(item.get("status")),
+                  "verification_state": safe_code(item.get("verification_state")),
+                  "issue_codes": [safe_code(issue.get("code")) for issue in item.get("detected_issues", []) if isinstance(issue, dict)],
+                  "vision_attempts": [
+                      {"outcome": safe_code(attempt.get("outcome")),
+                       "failure_class": safe_code(attempt.get("failure_class")),
+                       "elapsed_ms": attempt.get("elapsed_ms") if type(attempt.get("elapsed_ms")) in (int, float) else None}
+                      for attempt in receipt.get("model_attempts", []) if isinstance(attempt, dict)
+                  ],
+              }
+
+          def review_summary(review):
+              public = product_api_service.V3ProductApiService._public_post_generation_review(review)
+              return {
+                  **{key: safe_ids(public.get(key)) for key in ("recommended_output_ids", "review_output_ids", "hidden_output_ids")},
+                  "inspections": [inspection_summary(item) for item in review.get("inspections", []) if isinstance(item, dict)],
+                  "attempts": [
+                      {"attempt_index": attempt.get("attempt_index") if type(attempt.get("attempt_index")) is int else None,
+                       "stage": safe_code(attempt.get("stage")),
+                       "output_ids": safe_ids(attempt.get("output_ids")),
+                       "inspections": [inspection_summary(item) for item in attempt.get("inspections", []) if isinstance(item, dict)]}
+                      for attempt in review.get("review_attempts", []) if isinstance(attempt, dict)
+                  ],
+              }
 
           def job_summary(job_id):
               import re
@@ -237,6 +274,7 @@ jobs:
                   "review_package_status": review.get("status"),
                   "review_states": dict(sorted(inspection_states.items())),
                   "review_modes": dict(sorted(inspection_modes.items())),
+                  "review_detail": review_summary(review),
                   "face_attestation_states": dict(
                       sorted(
                           Counter(
@@ -280,6 +318,15 @@ jobs:
                       "model": payload.get("model"),
                       "dimensions": [payload.get("width"), payload.get("height")],
                       "image_file_count": len(image_files),
+                      "delivery_metadata": {
+                          key: metadata[key] for key in (
+                              "visual_retry_attempt_index", "retry_attempt_index", "delivery_attempt_index",
+                              "delivery_final_attempt_index", "delivery_preference_attempt_index",
+                              "delivery_preferred_output", "retry_superseded", "review_only",
+                              "delivery_preference_hard_gate_passed",
+                          ) if type(metadata.get(key)) in (int, bool)
+                      },
+                      "delivery_state": safe_code(metadata.get("delivery_state")),
                   }
               )
 
