@@ -279,6 +279,7 @@ jobs:
               current_operation = None
 
           planning_failure_diagnostics = None
+          planning_failure_job_id = None
           planning_window = {"opened_at": None, "failed_at": None}
           if requested_operation_id:
               private_records_path = project_path.parent / "private_records.json"
@@ -312,6 +313,7 @@ jobs:
                               planning_window["opened_at"] = opened.get("created_at")
                           if isinstance(failed_record, dict):
                               planning_window["failed_at"] = failed_record.get("created_at")
+                              planning_failure_job_id = failed_record.get("job_id")
                               raw = failed_record.get("failure_diagnostics")
                               if not isinstance(raw, dict):
                                   diagnostics_state = "record_found_without_diagnostics"
@@ -573,6 +575,13 @@ jobs:
                           else None
                       ),
                       "planning_failure_diagnostics": planning_failure_diagnostics,
+                      "planning_window": planning_window,
+                      "planning_failure_job": (
+                          {"in_project_job_ids": planning_failure_job_id in wanted_job_ids,
+                           **job_summary(planning_failure_job_id)}
+                          if isinstance(planning_failure_job_id, str) and planning_failure_job_id
+                          else None
+                      ),
                       "brain_stage_trace": brain_stage_trace,
                       "jobs": [job_summary(job_id) for job_id in job_ids[-20:]],
                       "outputs": outputs[-30:],

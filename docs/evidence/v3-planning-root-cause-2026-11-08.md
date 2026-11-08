@@ -28,3 +28,14 @@ change, replay or delete a Job, output, or provider request.
 This is auxiliary diagnostic work in the shared V3 foundation. The runtime
 Brain cause remains unproven pending this evidence. No template-specific
 behavior, creative fallback, threshold change, or provider retry is justified.
+
+## Evidence correction after read-only run 42459108798
+
+The alternate code-defined root did not contain the two missing IDs. The
+earlier claim that `job_0669df3c0c` is this operation's bound Job was an
+unverified inference from the last entry in `project.job_ids`. The audit
+omitted the operation's actual `job_id`. Read the exact failed operation's
+private record and look up that identity directly, including whether it is
+present in the project catalog. Its timestamps also distinguish this failure
+from the project's September history. Do not treat historical missing jobs as
+the current failure's evidence without this binding.
