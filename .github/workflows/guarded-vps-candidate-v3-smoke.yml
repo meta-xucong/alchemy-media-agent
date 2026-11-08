@@ -12,6 +12,11 @@ on:
         required: true
         default: "A clean still-life photograph of a white ceramic cup beside a small green plant on a pale wooden table, soft natural window light, realistic camera finish, no text."
         type: string
+      preflight_only:
+        description: "Check candidate Bridge profile/admission only; do not create an Alchemy project or job"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -29,6 +34,7 @@ jobs:
       CANDIDATE_V3_USER_INPUT: ${{ inputs.user_input }}
       CANDIDATE_V3_TIMEOUT_SECONDS: "3300"
       CANDIDATE_V3_API_PORT: "18017"
+      CANDIDATE_V3_PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
 
     steps:
       - name: Checkout the guarded runner source
@@ -53,7 +59,9 @@ jobs:
           [[ "$VPS_USER" =~ ^[A-Za-z0-9_.-]{1,64}$ ]]
           [[ "$VPS_HOST" =~ ^[A-Za-z0-9_.:-]{1,255}$ ]]
           test -n "$VPS_HOST"
-          test -n "$V3_CANDIDATE_AUTH_TOKEN" || { echo "candidate_v3_auth_secret_missing" >&2; exit 2; }
+          if [[ "$CANDIDATE_V3_PREFLIGHT_ONLY" != "true" ]]; then
+            test -n "$V3_CANDIDATE_AUTH_TOKEN" || { echo "candidate_v3_auth_secret_missing" >&2; exit 2; }
+          fi
           test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
           python3 - <<'PY'
           import os
@@ -291,6 +299,13 @@ jobs:
             exit 2
           }
           cat "$bridge_preflight_log"
+
+          if [[ "$CANDIDATE_V3_PREFLIGHT_ONLY" == "true" ]]; then
+            echo "GUARDED_CANDIDATE_V3_PREFLIGHT_ONLY=pass"
+            exit 0
+          fi
+
+          test -n "$V3_CANDIDATE_AUTH_TOKEN" || { echo "candidate_v3_auth_secret_missing" >&2; exit 2; }
 
           ssh -i ~/.ssh/id_ed25519 -N -L "${api_port}:127.0.0.1:${api_port}" -p "$VPS_PORT" \
             -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$remote" \
