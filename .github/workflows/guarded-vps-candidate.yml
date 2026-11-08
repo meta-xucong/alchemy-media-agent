@@ -7,6 +7,10 @@ on:
         description: "Exact origin/main commit to prepare without activating"
         required: true
         type: string
+      retired_candidate_shas:
+        description: "Optional comma-separated exact revisions of unused candidate Docker images to retire; preserves active/rollback images and all data"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -43,20 +47,23 @@ jobs:
       - name: Prepare a non-active candidate release
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RETIRED_CANDIDATE_SHAS: ${{ inputs.retired_candidate_shas }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ -z "$RETIRED_CANDIDATE_SHAS" || "$RETIRED_CANDIDATE_SHAS" =~ ^[0-9a-f]{40}(,[0-9a-f]{40})*$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=accept-new \
-            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
+            "$remote" "bash -s -- '$EXPECTED_SHA' '$RETIRED_CANDIDATE_SHAS'" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
           expected_sha="$1"
+          retired_candidate_shas="$2"
           install -d -m 755 /run/lock
           exec 9>/run/lock/alchemy-media-agent-release.lock
           flock -w 300 9 || { echo GUARDED_CANDIDATE_STOP=shared_release_lock_unavailable >&2; exit 1; }
@@ -310,6 +317,11 @@ jobs:
 
           [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop candidate_head_after_create_mismatch
           verify_release_source_tree "$candidate_release" || stop candidate_release_source_tree_changed_after_create
+          if [ -n "$retired_candidate_shas" ]; then
+            python3 "$candidate_release/scripts/vps_retire_candidate_images.py" \
+              --expected-sha "$expected_sha" --retired-candidate-shas "$retired_candidate_shas" \
+              || stop candidate_image_retirement_failed
+          fi
           if [ ! -e "$candidate_release/src_skeleton/.env" ]; then
             cp -p -- "$live_env" "$candidate_release/src_skeleton/.env"
           fi
