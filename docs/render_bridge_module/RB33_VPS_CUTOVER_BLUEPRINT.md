@@ -9,13 +9,15 @@ RenderBridge API-pull service on the VPS, point Alchemy's Bridge clients at
 that VPS service, and keep the Windows Codex node outbound-only. Complete the
 cutover only after V1, V2, V3 and Lab have passed their product-level checks.
 
-**Current phase:** the original Phase 8/9 status below predates later real
-`codex-image` task receipts and is corrected in the 2026-11-08 addendum. The
-next acceptance step is to build and activate the latest synchronized Alchemy
-main revision through the guarded workflow, then run integrated V1/V2/V3/Lab
-real-image acceptance. Earlier successful real tasks establish that the local
-Codex CLI executor has worked; they do not replace fresh acceptance of the
-current main revision.
+**Current phase:** final product API acceptance passed on active Alchemy
+revision `75e5827c8d2fa7c36ebf4ada46d2805485b2a007`, activated by guarded
+workflow run `42441201329` (`activate`: success). One real RenderBridge image
+was created through each V1, V2, V3 and Lab product route. Each product's
+history/run/project API exposes the matching output and preview/download URLs;
+the media endpoints returned HTTP 200. V3 also passed shared review and
+selected its accepted candidate. This acceptance used product APIs only, as
+requested; no computer-use/browser UI check was performed. See the final API
+acceptance record below.
 
 ## 2026-11-06 image-transfer contract correction
 
@@ -145,7 +147,11 @@ belong in the approved secret/configuration store, never in this document.
 - Keep the previous Alchemy candidate and Bridge data available until the
   relevant post-cutover checks have passed.
 
-## Current blockers and next action
+## Historical blockers before 2026-11-08 final acceptance
+
+The following records the pre-activation state. Its earlier `0dec6de5` active
+revision and open-acceptance statements are superseded by the final API
+acceptance record below; the historical evidence is retained.
 
 1. Current synchronized `origin/main` is `0dec6de5`; the active VPS release is
    the earlier `63368f685` revision. Read-only preflight run `42435115801`
@@ -341,8 +347,40 @@ is a separate auxiliary path and is not a required gate for the user-facing
 Codex CLI workflow after real tasks have exercised the shared transfer path.
 
 These historical results prove the Codex CLI return design has worked and
-supersede the stale “Codex executor unverified/fake-only” conclusion. They do
-not certify the latest `0dec6de5` source because that revision has not yet been
-activated. Run final integrated acceptance only after the guarded workflow has
-activated the fresh candidate, and record current task IDs and delivery results
-there. No image content SHA/hash/checksum is part of this acceptance.
+supersede the stale “Codex executor unverified/fake-only” conclusion. At the
+time this correction was written, `0dec6de5` had not yet been activated. The
+subsequent guarded activation and fresh product API results are recorded below.
+No image content SHA/hash/checksum is part of this acceptance.
+
+## 2026-11-08 final API acceptance — active revision 75e5827
+
+The user asked to prove RenderBridge image generation and frontend media
+projection through product APIs, without computer-use verification. The
+active revision above was confirmed at the unique main checkout and
+`origin/main`. Activation run `42441201329` has a completed `activate` job
+with conclusion `success`. One neutral still-life request was submitted
+through each of V1, V2 and Lab, with no provider override; Lab selected its
+own preset `P021`. The already completed V3 task on this active revision was
+re-read as the V3 member of the acceptance set. All four products persisted
+their own plan/run/history record and returned the matching output through
+the product media APIs.
+
+| Product | Product task and RenderBridge evidence | Output and projection | Media API result |
+|---|---|---|---|
+| V1 | Session `ses_6cb91dd5e088`; job `job_0444dbc105a6`, `ready`, `provider=render_bridge`; route `bridge`, profile `codex-image`, state `artifacts_ready`; Bridge task `task_f6fec58f54b0433b9b669191d4cb1086`, attempt `attempt_94a243dfe7d6434982332b565b7634e8`, receipt `receipt_1b7485fa04ac4dd69a0ffc248884ff1e`. | Output `out_8216fab88258709cadc4c8bd8c1f5160` matched the V1 history entry. | Preview 200, `image/webp`, 50,884 bytes; download 200, `image/png`, 1,796,609 bytes. |
+| V2 | Async run `run_7adf49f87783`, `completed`; job `job_6582271a53a3`, `completed`, `provider_id=render_bridge`, `model=render-bridge-primary`; route `bridge`, state `artifacts_ready`; Bridge task `task_b93937cb1b2d42588845eadfb0bc6a24`, attempt `attempt_01b995c8d39c4711aafde7b584c4de97`, receipt `receipt_a186fd8e36b64ea6981fa1a34ec2ebca`; no provider fallback recorded. | Output `out_job_6582271a53a3_0` appeared in the V2 run and history, with product preview/download URLs. | Preview 200, `image/webp`, 60,604 bytes on three consecutive reads; download 200, `image/png`, 1,858,852 bytes. One early preview request returned 404; the same output URL then returned 200 repeatedly without regeneration. The transient cause was not established. |
+| Lab | Session `lab_e7ddfa6a26a1`, `completed`; variant `variant_61c01ad1b071` succeeded; job `job_85c63c7ec755`, `ready`, `provider=render_bridge`; route `bridge`, profile `codex-image`, state `artifacts_ready`; Bridge task `task_3d7b8f8402ad425eae4c4c9480ee9af`, attempt `attempt_5f28dfcca37b42c4a5e4c4c9480ee9af`, receipt `receipt_c360b73326104193af6731cb28c378bb`. | Output `out_bb220370ffb1de18b727d9ee18c317c8` matched the Lab history entry. | Preview 200, `image/webp`, 71,132 bytes; download 200, `image/png`, 1,912,627 bytes. |
+| V3 | Frozen planning result `planning_result_9a03df3246`; job `job_21016feeee`, `generated`; provider `render_bridge`, model `codex-image`, route `bridge`, state `artifacts_ready`; Bridge task `task_19a720f6a75e4e00a3b9eef9f28cb72e`, receipt `receipt_8ace527678a1436883368bd4481aee1f`. | Candidate `candidate_1a09faba71`, output `v3_output_80e3134b6f8590308d56`, recommendation `accept`, `selected=true`. Project-output API reports `review_status=pass`, `quality_assessment=pass`, `quality_failure=false`, `verification_state=verified`, `evidence_state=certified`, `certification_state=certified`, and `public_delivery_state=ready`. | Preview 200, `image/png`, 1,561,214 bytes; download 200, `image/png`, 1,806,733 bytes. |
+
+These are product task, provider, receipt and media-response records; they are
+not inferred from the diagnostics-only `real_generation_verified=false`
+field. The local diagnostic contract deliberately emits that value as false,
+so it cannot be used as a summary of historical or current real tasks. The
+earlier incorrect conclusion came from carrying forward the stale fake-only
+heartbeat/blocker state, treating that diagnostic flag as authoritative, and
+conflating missing access to a candidate/local loopback endpoint with the
+capability of the already-active product API and Codex CLI Bridge executor.
+The persisted task/attempt/receipt, product history/project projection and
+successful preview/download responses are authoritative here. No API fallback
+or second image-generation attempt was used to satisfy these records. No
+image-content hash/checksum was computed or checked.
