@@ -204,6 +204,58 @@ jobs:
             else
               printf '%s\n' '{"status":"blocked","reason":"active_work_report_unavailable"}'
             fi
+            python3 - "$bridge_state" <<'PY'
+          import json
+          import re
+          import sqlite3
+          import sys
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          groups = Counter()
+          ledger_count = 0
+          products = {"v1", "v2", "v3", "lab"}
+          routes = {"api", "bridge"}
+          for path in root.rglob("primary.sqlite3"):
+              try:
+                  uri = path.resolve().as_uri() + "?mode=ro"
+                  db = sqlite3.connect(uri, uri=True, timeout=10)
+                  try:
+                      for raw_state, raw_data in db.execute("SELECT state, data FROM units"):
+                          data = json.loads(raw_data)
+                          if not isinstance(data, dict):
+                              raise ValueError()
+                          product = data.get("product")
+                          route = data.get("route")
+                          state = str(raw_state).lower()
+                          if not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", state):
+                              state = "other"
+                          key = (
+                              product if product in products else "other",
+                              route if route in routes else "other",
+                              state,
+                              data.get("cancel_requested") is True,
+                              data.get("cancel_reconciled") is True,
+                              bool(data.get("task_id")),
+                          )
+                          groups[key] += 1
+                  finally:
+                      db.close()
+                  ledger_count += 1
+              except Exception:
+                  raise SystemExit("bridge_ledger_diagnostic_unavailable") from None
+          summary = [
+              {
+                  "product": key[0], "route": key[1], "state": key[2],
+                  "cancel_requested": key[3], "cancel_reconciled": key[4],
+                  "has_task_id": key[5], "count": count,
+              }
+              for key, count in sorted(groups.items())
+          ]
+          print(json.dumps({"source": "bridge_primary_units", "ledger_count": ledger_count,
+                            "groups": summary}, separators=(",", ":")))
+          PY
             stop_reason active_or_unknown_work_detected
           fi
           printf '%s\n' "$active_work_report"
