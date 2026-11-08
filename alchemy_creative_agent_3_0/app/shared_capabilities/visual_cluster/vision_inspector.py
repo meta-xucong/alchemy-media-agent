@@ -2382,6 +2382,13 @@ def _status_from_issues(issue_codes: list[str], provider_status: str) -> str:
     normalized = provider_status.strip().lower()
     if any(code in FINAL_ISSUE_CODES for code in issue_codes):
         return "fail_final"
+    # A generic aesthetic suggestion does not contradict a usable pixel
+    # verdict. Explicit aesthetic rejection and specific hard defects still
+    # use the existing failure gates below (Doc356).
+    if normalized in {"pass", "warning"} and issue_codes and set(issue_codes) <= {
+        "composition_mismatch", "weak_aesthetic_finish",
+    }:
+        return "warning"
     if any(code in RETRYABLE_ISSUE_CODES for code in issue_codes):
         return "fail_retryable"
     if normalized == "manual_review":

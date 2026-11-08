@@ -644,6 +644,19 @@ def _compact_review_contract(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _output_direction_review_prompt(metadata: dict[str, Any]) -> str:
+    direction = metadata.get("reviewed_output_direction")
+    if not isinstance(direction, dict) or direction.get("source") != "persisted_output_record":
+        return ""
+    return (
+        "Exact output-specific generation direction: " + _compact_prompt_json(direction) + "\n"
+        "Assess this image's approved crop, camera, pose, visibility and rendering style against this direction, "
+        "rather than requiring every image to repeat the starting composition. Preserve global hard requirements: "
+        "identity/product truth, exclusions and explicit non-variable user constraints remain authoritative. "
+        "Output variation cannot excuse a violation of those requirements. Judge finish within the requested rendering style."
+    )
+
+
 def _inspection_prompt(metadata: dict[str, Any]) -> str:
     user_goal = str(metadata.get("user_input") or metadata.get("original_user_input") or "").strip()
     template_id = str(metadata.get("template_id") or metadata.get("scenario_id") or "general_creative")
@@ -704,6 +717,7 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             "Use beginner-safe wording in summaries. For general_creative, say subject/object/visual direction instead of product/ecommerce language.",
             f"Template: {template_id}",
             f"User goal: {user_goal}",
+            _output_direction_review_prompt(metadata),
             (
                 "Body Silhouette review must emit body_silhouette_blocking_issue_evaluation_complete "
                 "only after pixel evaluation, plus typed integrated_whole_person_review_evidence with "
@@ -847,6 +861,7 @@ def _enforced_inspection_prompt(
         "The universal visual-quality scope is mode-agnostic across selection_candidates, delivery_suite, creative_exploration, and format_layout_adaptation. Do not treat a variation authorized by the selected mode as a universal quality defect; role/format semantics are reviewed separately by ModeAwareRoleDirector.",
         f"Template: {template_id}",
         f"User goal: {user_goal}",
+        _output_direction_review_prompt(metadata),
         f"Resolved reference policy: {_compact_prompt_json(_compact_reference_policy(reference_policy, reference_count=reference_count))[:2200]}",
         f"Frozen review contract: {_compact_prompt_json(frozen_contract)}",
     ]

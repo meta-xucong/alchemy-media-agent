@@ -780,6 +780,7 @@ class ScenarioRuntime:
         apply_memory_update: bool = False,
         provider_strategy: ProviderStrategy = ProviderStrategy.MOCK_GENERATION,
         quality_mode: str = "standard",
+        generation_asset_ids: list[str] | None = None,
     ) -> ScenarioRuntimeResult:
         runtime_request = self._coerce_request(request)
         resolution = self.scenario_registry.resolve(runtime_request.scenario_selection)
@@ -853,6 +854,7 @@ class ScenarioRuntime:
             runtime_metadata=generation_metadata,
             generation_router=self.generation_router,
             body_refresh_analysis_context=runtime_request.body_refresh_analysis_context,
+            generation_asset_ids=generation_asset_ids,
         )
         generation_result = self._enrich_result(generation_result, runtime_request, resolution, capability_run)
         generation_result = self._enrich_activation_result(generation_result, preparation, runtime_request)

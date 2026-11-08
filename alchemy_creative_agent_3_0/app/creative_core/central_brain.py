@@ -373,6 +373,7 @@ class CentralCreativeBrain:
         provider_strategy: ProviderStrategy = ProviderStrategy.MOCK_GENERATION,
         runtime_metadata: dict | None = None,
         body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+        generation_asset_ids: list[str] | None = None,
     ) -> PlanningResult:
         context = self._create_base_context(
             user_input,
@@ -425,7 +426,15 @@ class CentralCreativeBrain:
                 f"expected={requested_image_count}; planned={planned_asset_count}"
             )
 
+        execution_ids = set(generation_asset_ids) if generation_asset_ids is not None else None
+        if execution_ids is not None and (
+            not execution_ids or not execution_ids <= {asset.asset_id for asset in context.series_plan.assets}
+        ):
+            raise GenerationOutputCountMismatch("retry asset scope does not match the frozen plan")
+        execution_count = len(execution_ids) if execution_ids is not None else requested_image_count
         for index, asset in enumerate(context.series_plan.assets):
+            if execution_ids is not None and asset.asset_id not in execution_ids:
+                continue
             asset = self._asset_with_mode_role(context, asset, index)
             layout_plan = self.layout_agent.create_layout_plan(
                 job,
@@ -724,11 +733,11 @@ class CentralCreativeBrain:
 
         if (
             not require_independent_role_terminal_states
-            and requested_image_count is not None
-            and len(context.selected_candidates) != requested_image_count
+            and execution_count is not None
+            and len(context.selected_candidates) != execution_count
         ):
             raise GenerationOutputCountMismatch(
-                f"expected={requested_image_count}; selected={len(context.selected_candidates)}"
+                f"expected={execution_count}; selected={len(context.selected_candidates)}"
             )
 
         accepted_candidates = [
@@ -778,7 +787,9 @@ class CentralCreativeBrain:
         asset_pack = self.asset_packager_agent.create_generated_asset_pack(
             job,
             brand_profile,
-            context.series_plan,
+            context.series_plan.model_copy(update={
+                "assets": [asset for asset in context.series_plan.assets if execution_ids is None or asset.asset_id in execution_ids],
+            }),
             context.layout_plans,
             context.prompt_compilations,
             context.selected_candidates,

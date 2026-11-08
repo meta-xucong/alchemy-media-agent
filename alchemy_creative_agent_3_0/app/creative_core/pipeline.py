@@ -44,6 +44,7 @@ def run_generation_loop(
     runtime_metadata: dict | None = None,
     generation_router: GenerationRouter | None = None,
     body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+    generation_asset_ids: list[str] | None = None,
 ) -> PlanningResult:
     optional_template_id, brand_profile_service = _coerce_legacy_brand_service_arg(
         optional_template_id,
@@ -62,6 +63,7 @@ def run_generation_loop(
         provider_strategy=provider_strategy,
         runtime_metadata=runtime_metadata,
         body_refresh_analysis_context=body_refresh_analysis_context,
+        generation_asset_ids=generation_asset_ids,
     )
 
 

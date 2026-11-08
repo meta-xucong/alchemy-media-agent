@@ -131,9 +131,12 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
     provider = RecordingImageProvider(tmp_path / "outputs")
     brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
 
-    result = brain.run_generation_loop(
+    user_input = (
         "Create a summer cool East Asian beauty portrait set for a social cover campaign. "
-        "The same young woman has subtle green-highlighted dark hair, white summer styling, and seaside daylight.",
+        "The same young woman has subtle green-highlighted dark hair, white summer styling, and seaside daylight."
+    )
+    result = brain.run_generation_loop(
+        user_input,
         provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
         runtime_metadata={
             "requested_image_count": 2,
@@ -185,6 +188,24 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
     assert second_metadata["doc73_auto_identity_anchor_receipt"] == source_binding
     assert "eye shape and spacing" in second_metadata["reference_assets"][0]["lock_targets"]
     assert result.metadata["candidate_loop"] is True
+
+    service = V3ProductApiService(output_store=provider.output_store)
+    retry_metadata = {**first_metadata, **service._doc73_retry_metadata(result),
+                      "visual_auto_retry_active": True, "retry_attempt": 1}
+    assert retry_metadata["doc73_auto_identity_anchor_receipt"] == source_binding
+    before_retry = len(provider.requests)
+    retried = brain.run_generation_loop(
+        user_input, provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata=retry_metadata,
+        generation_asset_ids=[result.series_plan.assets[1].asset_id],
+    )
+    assert len(provider.requests) == before_retry + 1
+    retry_request = provider.requests[-1]["metadata"]
+    assert retry_request["output_index"] == 1
+    assert retry_request["doc73_auto_identity_anchor_receipt"] == source_binding
+    assert retry_request["reference_assets"][0]["output_id"] == source_output_id
+    assert len(retried.series_plan.assets) == 2
+    assert len(retried.asset_pack.assets) == 1
 
 
 @pytest.mark.parametrize("count", [1, 3])

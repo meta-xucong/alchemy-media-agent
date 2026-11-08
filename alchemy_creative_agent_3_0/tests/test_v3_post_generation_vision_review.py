@@ -17,7 +17,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_sc
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
-from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
@@ -63,19 +63,10 @@ def _asset(output_id: str | None = None, candidate_id: str = "candidate_doc55") 
     )
 
 
-class _LocalBrainProvider:
+class _LocalBrainProvider(EcommerceRemoteBrainTestProvider):
     provider = "post_generation_vision_test_brain"
     model = "contract-fixture-v1"
 
-    def __init__(self) -> None:
-        self.requests: list[dict] = []
-
-    def available(self, *, force: bool = False) -> bool:
-        return True
-
-    def run(self, request) -> dict:  # noqa: ANN001
-        self.requests.append(request.model_dump(mode="json"))
-        return build_fallback_result(request).model_dump(mode="json")
 
 
 def _service(tmp_path: Path, **overrides) -> V3ProductApiService:
@@ -1797,7 +1788,7 @@ def test_doc95_worse_retry_does_not_replace_stronger_initial_attempt(tmp_path) -
     )
     service = _service(
         tmp_path,
-        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        output_resolver=_DistinctAttemptReadyResolver(_ready_resolution(tmp_path)),
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)

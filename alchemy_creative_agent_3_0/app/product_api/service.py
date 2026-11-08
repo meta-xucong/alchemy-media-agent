@@ -1410,9 +1410,23 @@ class V3ProductApiService:
     ) -> list[Any]:
         def inspect_output(item):
             resolution, evidence_metadata, frozen_contract = item
+            # Use the exact persisted output, including on retry/resume. The
+            # merged job's Brain metadata can still describe an older attempt.
+            output_record = resolution.metadata.get("output_record") or {}
+            direction = None
+            if all(output_record.get(key) == getattr(resolution, key) for key in ("output_id", "asset_id", "job_id")):
+                prompt = (output_record.get("metadata") or {}).get("final_provider_prompt")
+                if isinstance(prompt, str) and prompt.strip():
+                    direction = {
+                        "source": "persisted_output_record",
+                        "output_id": resolution.output_id,
+                        "asset_id": resolution.asset_id,
+                        "prompt": prompt,
+                    }
             return vision_inspector.inspect(resolution, metadata={
                 **base_metadata, **evidence_metadata,
                 "frozen_output_review_contract": frozen_contract,
+                "reviewed_output_direction": direction,
             })
 
         try:
@@ -7090,6 +7104,8 @@ class V3ProductApiService:
         record: ProductJobRecord,
         generation_result: PlanningResult,
         generate_request: GenerateJobRequest,
+        *,
+        defer_set_review: bool = False,
     ) -> PlanningResult:
         project_id = record.request.metadata.get("project_id")
         # Review evidence is server-owned and must never be accepted from public metadata.
@@ -7348,7 +7364,7 @@ class V3ProductApiService:
             generation_result=generation_result,
             project_id=project_id,
             visual_cluster=visual_cluster,
-        )
+        ) if not defer_set_review else {}
         if mode_review:
             visual_cluster["mode_differentiation_review"] = mode_review
             package_payload.setdefault("metadata", {})["mode_differentiation_review"] = mode_review
@@ -7979,6 +7995,7 @@ class V3ProductApiService:
                     apply_memory_update=False,
                     provider_strategy=provider_strategy,
                     quality_mode=generate_request.quality_mode,
+                    generation_asset_ids=plan.get("target_asset_ids"),
                 )
             except Exception as exc:
                 records.append(
@@ -8016,6 +8033,7 @@ class V3ProductApiService:
                 record,
                 retry_runtime_result.generation_result,
                 generate_request,
+                defer_set_review=plan.get("target_asset_ids") is not None,
             )
             reviewed_retry_result = self._apply_text_pixel_delivery(record, reviewed_retry_result)
             # A runtime result object is not itself evidence of a retry image.
@@ -8648,12 +8666,53 @@ class V3ProductApiService:
                 ),
             }
 
+        target_asset_ids = self._visual_retry_target_asset_ids(result, retryable_codes)
+        if target_asset_ids == []:
+            return {"should_retry": False, "record": self._visual_retry_execution_record(
+                record=record, status="blocked", attempt_index=attempt_index,
+                max_attempts=max_attempts, reason_codes=retryable_codes,
+                retry_patch=retry_patch, source=source,
+                blocked_reason="review_retry_target_unresolved",
+            )}
         return {
             "should_retry": True,
             "reason_codes": retryable_codes,
             "retry_patch": retry_patch,
             "source": source,
+            "target_asset_ids": target_asset_ids,
         }
+
+    def _visual_retry_target_asset_ids(self, result: PlanningResult, reason_codes: list[str]) -> list[str] | None:
+        """Keep canonical pixel-review scope separate from Brain prompt wording."""
+        package = result.metadata.get("post_generation_review_package") or {}
+        signals = (package.get("real_review_signal_package") or {}).get("candidate_signals") or []
+        targets = [signal for signal in signals if signal.get("recommended_action") == "retry"
+                   and set(signal.get("retryable_issue_codes") or []) & set(reason_codes)]
+        if not targets:
+            # Existing non-pixel, set-level/legacy retry behavior is unchanged.
+            return None
+        planned = {asset.asset_id for asset in result.series_plan.assets}
+        asset_ids = set()
+        for signal in targets:
+            inspections = [item for item in package.get("inspections", [])
+                           if item.get("output_id") == signal.get("output_id")
+                           and item.get("candidate_id") == signal.get("candidate_id")]
+            resolutions = [item for item in package.get("resolutions", [])
+                           if item.get("output_id") == signal.get("output_id")
+                           and item.get("candidate_id") == signal.get("candidate_id")]
+            if len(inspections) != 1 or len(resolutions) != 1:
+                return []
+            inspection, resolution = inspections[0], resolutions[0]
+            asset_id = resolution.get("asset_id")
+            if (not signal.get("output_id") or asset_id not in planned
+                    or inspection.get("asset_id") != asset_id
+                    or resolution.get("job_id") != result.creative_job.job_id
+                    or resolution.get("status") != "ready"
+                    or inspection.get("status") != "fail_retryable"
+                    or not self._is_verified_real_pixel_inspection(inspection)):
+                return []
+            asset_ids.add(asset_id)
+        return [asset.asset_id for asset in result.series_plan.assets if asset.asset_id in asset_ids]
 
     def _visual_retry_signal(
         self,
@@ -11796,6 +11855,29 @@ class V3ProductApiService:
         )
         winner_package["reviewed_delivery_preference"] = preference
         preferred = set(preference["preferred_output_ids"])
+        # Set semantics apply to the composed delivery, never a sparse retry
+        # or the append-only history. Retained pixels keep their own receipts.
+        winner_view = result.model_copy(update={"asset_pack": result.asset_pack.model_copy(update={
+            "assets": [asset for asset in result.asset_pack.assets
+                       if str((asset.metadata.get("candidate_metadata") or {}).get("output_id")
+                              or asset.metadata.get("output_id") or "") in preferred],
+        })})
+        visual_cluster = self._visual_cluster_metadata_from_result(result)
+        mode_review = self._mode_differentiation_review_for_result(
+            generation_result=winner_view,
+            project_id=package.get("project_id"),
+            visual_cluster=visual_cluster,
+        )
+        mode_updates = {}
+        if mode_review:
+            winner_package["metadata"] = {**dict(winner_package.get("metadata") or {}),
+                                          "mode_differentiation_review": mode_review}
+            visual_cluster["mode_differentiation_review"] = mode_review
+            mode_updates = {
+                "visual_cluster": visual_cluster,
+                "shared_capabilities": {**dict(result.metadata.get("shared_capabilities") or {}),
+                                        "visual_cluster": visual_cluster},
+            }
         for item in ranked_outputs:
             updater = getattr(self.output_store, "update_metadata", None)
             if callable(updater):
@@ -11833,6 +11915,7 @@ class V3ProductApiService:
                     **dict(result.metadata),
                     "post_generation_review_package": winner_package,
                     "reviewed_delivery_preference": preference,
+                    **mode_updates,
                 },
             }
         )

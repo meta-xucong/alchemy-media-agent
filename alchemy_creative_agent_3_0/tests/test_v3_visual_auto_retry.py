@@ -241,6 +241,70 @@ def test_visual_auto_retry_executes_for_product_label_issue_from_active_ledger(t
     assert "prompt_additions" not in str(retry_context)
 
 
+def test_selective_generation_keeps_full_brain_plan_and_materializes_only_the_target(tmp_path, monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.generation_router.router import GenerationRouter
+
+    service = _ecommerce_service(tmp_path)
+    service.scenario_runtime.generation_router = GenerationRouter()
+    created = service.create_job(
+        {
+            "user_input": "Create two coordinated summer lifestyle images with distinct compositions",
+            "scenario_selection": {
+                "scenario_id": "general_creative",
+                "parameters": {"requested_image_count": 2},
+            },
+            "metadata": {"requested_image_count": 2},
+        }
+    )
+    generated = service.generate_job(created.job_id, {"quality_mode": "standard"})
+    record = service.job_store.get(created.job_id)
+    assert generated.status == ProductJobStatusValue.GENERATED
+    assert record is not None and record.generation_result is not None
+    original_assets = list(record.generation_result.series_plan.assets)
+    assert len(original_assets) == 2
+    target_asset_id = original_assets[1].asset_id
+
+    generation_router = service.scenario_runtime.generation_router
+    original_generate = generation_router.generate
+    materialized_requests = []
+
+    def record_materialization(request):  # noqa: ANN001
+        materialized_requests.append(request)
+        return original_generate(request)
+
+    monkeypatch.setattr(generation_router, "generate", record_materialization)
+    runtime_request = service._runtime_request_payload(  # noqa: SLF001 - trusted retry entry point
+        record.request,
+        trusted_capability_plan_reuse=True,
+    )
+    runtime_request["metadata"].update(
+        {
+            "visual_auto_retry_active": True,
+            "visual_auto_retry_attempt": 1,
+            "visual_retry_reason_codes": ["weak_aesthetic_finish"],
+        }
+    )
+
+    retry_runtime_result = service.scenario_runtime.generate_job(
+        runtime_request,
+        mock_profile="balanced",
+        apply_memory_update=False,
+        provider_strategy=ProviderStrategy.MOCK_GENERATION,
+        quality_mode="standard",
+        generation_asset_ids=[target_asset_id],
+    )
+
+    assert retry_runtime_result.generation_result is not None
+    retry_result = retry_runtime_result.generation_result
+    assert len(retry_result.series_plan.assets) == 2
+    assert len(retry_result.asset_pack.assets) == 1
+    assert retry_result.asset_pack.assets[0].asset_id == target_asset_id
+    assert {request.asset_spec.asset_id for request in materialized_requests} == {target_asset_id}
+    assert len(retry_result.generation_plans) == 1
+    assert retry_result.generation_plans[0].metadata["output_index"] == 1
+    assert retry_result.generation_plans[0].metadata["requested_image_count"] == 2
+
+
 def _internal_generation_result(service: V3ProductApiService, job_id: str):
     record = service.job_store.get(job_id)
     assert record is not None
