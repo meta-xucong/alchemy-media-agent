@@ -119,6 +119,11 @@ jobs:
             find /opt/alchemy-media-agent-releases -mindepth 1 -maxdepth 1 -type d -name 'doc276-277-*' -print0 \
               | xargs -0 -r du -sb -- | sort -n | tail -n 30 \
               | awk '{path=$2; sub("^/opt/alchemy-media-agent-releases/", "", path); printf "GUARDED_PREFLIGHT_RELEASE_BYTES name=%s bytes=%s\n", path, $1}'
+            for release in /opt/alchemy-media-agent-releases/doc276-277-*; do
+              runtime="$release/custom_media_agent_2_0/.venv"
+              [ -d "$runtime" ] && [ ! -L "$runtime" ] || continue
+              printf 'GUARDED_PREFLIGHT_RUNTIME_BYTES release=%s bytes=%s manifest=%s\n' "${release##*/}" "$(du -sb -- "$runtime" | cut -f1)" "$([ -f "$release/custom_media_agent_2_0/.alchemy-v2-runtime.json" ] && echo present || echo missing)"
+            done
           fi
           printf 'GUARDED_PREFLIGHT_BACKUP_SIZES_BEGIN=1\n'
           if [ -d /var/backups/alchemy ]; then
