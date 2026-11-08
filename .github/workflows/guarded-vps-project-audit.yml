@@ -49,7 +49,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Read V1 V2 records without mutation
+      - name: Read exact stopped build container metadata
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -60,221 +60,18 @@ jobs:
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
-          set -euo pipefail
-          active_release="$(realpath /opt/alchemy-media-agent)"
-          [ "$(git -C "$active_release" rev-parse HEAD)" = "$1" ]
-          [ "$(docker inspect alchemy-media-agent --format '{{.State.Running}}')" = true ]
-          v1_media="$(docker inspect alchemy-media-agent --format '{{range .Mounts}}{{if eq .Destination "/app/.media_storage"}}{{printf "%s|" .Source}}{{end}}{{end}}')"
-          v1_media="${v1_media%|}"
-          [ -n "$v1_media" ] && [ "$v1_media" != *'|'* ]
-          "$active_release/custom_media_agent_2_0/.venv/bin/python" - "$v1_media" <<'PY'
-          import json
-          import re
-          import sqlite3
-          import subprocess
-          import sys
-          from datetime import datetime, timezone
+            "$remote" "python3 - '$EXPECTED_SHA'" <<'PY'
+          import json, subprocess, sys
           from pathlib import Path
-          from PIL import Image
-
-          CUTOFF = '2026-11-08T16:00:00'
-          v1_root = Path(sys.argv[1]).resolve()
-          env = {}
-          for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
-              key, sep, value = line.partition('=')
-              if sep and key in {'V2_DATA_DIR', 'V2_STORAGE_DIR', 'V2_TASK_QUEUE_DB_PATH'}:
-                  if key in env:
-                      raise SystemExit('ambiguous_v2_root')
-                  env[key] = value.strip().strip('\"\'')
-          v2_root = Path(env['V2_STORAGE_DIR']).resolve()
-
-          def pick(item, keys):
-              if not isinstance(item, dict):
-                  return {}
-              return {key: value for key in keys.split() if key in item
-                      and ((value := item[key]) is None or type(value) in (bool, int, float)
-                           or isinstance(value, str) and len(value) <= 180
-                           and re.fullmatch(r'[A-Za-z0-9_./:+ =-]*', value))}
-
-          def db(path):
-              connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=3)
-              connection.execute('PRAGMA query_only=ON')
-              return connection
-
-          def recent(connection, table, namespace):
-              rows = connection.execute(
-                  f"SELECT payload FROM {table} WHERE namespace=? AND json_extract(payload,'$.created_at')>=? "
-                  "ORDER BY json_extract(payload,'$.created_at') DESC LIMIT 8", (namespace, CUTOFF))
-              return [json.loads(row[0]) for row in rows]
-
-          def record(connection, table, namespace, identity):
-              row = connection.execute(f'SELECT payload FROM {table} WHERE namespace=? AND record_key=?',
-                                       (namespace, identity)).fetchone()
-              return json.loads(row[0]) if row else None
-
-          def file_check(path, root):
-              if not path:
-                  return {'exists': False}
-              path = Path(path).resolve()
-              if not path.is_relative_to(root):
-                  return {'exists': False, 'outside_root': True}
-              if not path.is_file():
-                  return {'exists': False}
-              result = {'exists': True, 'bytes': path.stat().st_size,
-                        'modified_at': datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()}
-              try:
-                  with Image.open(path) as image:
-                      result.update(width=image.width, height=image.height, format=image.format)
-                      image.verify()
-                  result['valid_image'] = True
-              except Exception as error:
-                  result.update(valid_image=False, error_type=type(error).__name__)
-              return result
-
-          def trace(items):
-              keys = 'stage status outcome provider model invocation_status latency_ms elapsed_ms duration_ms attempts cache_hit started_at completed_at created_at updated_at at event step attempt failure_class reason code'
-              return [pick(item, keys) for item in items[:30] if isinstance(item, dict)] if isinstance(items, list) else []
-
-          def bridge(value):
-              return pick(value, 'product profile route state reason task_id receipt_id attempt_id actual_provider actual_model queue_count queue_limit queue_observed_at')
-
-          def elapsed(item):
-              try:
-                  return round((datetime.fromisoformat(item['updated_at']) - datetime.fromisoformat(item['created_at'])).total_seconds(), 3)
-              except (KeyError, ValueError):
-                  return None
-
-          v1 = db(v1_root / 'repository.sqlite3')
-          v1_jobs = []
-          for job in recent(v1, 'v1_records', 'jobs'):
-              result = pick(job, 'id status provider model created_at updated_at')
-              result['elapsed_seconds'] = elapsed(job)
-              summary = job.get('raw_response_summary') or {}
-              planning = summary.get('prompt_planning') or {}
-              result['planning'] = pick(planning, 'work_intensity llm_used llm_provider llm_model')
-              result['planning']['model_attempts'] = trace(planning.get('model_attempts'))
-              transport = summary.get('primary_image_transport') or {}
-              units = transport.get('units') or {}
-              result['bridge_units'] = [bridge(unit) for unit in (units.values() if isinstance(units, dict) else units)]
-              result['requested_count'] = (job.get('prompt_plan') or {}).get('count')
-              result['has_error'] = bool(job.get('error'))
-              result['outputs'] = []
-              for output in job.get('outputs', [])[:8]:
-                  identity = output.get('id')
-                  if not isinstance(identity, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', identity):
-                      continue
-                  canonical = record(v1, 'v1_records', 'outputs', identity)
-                  reservation = record(v1, 'v1_records', 'output_publications', identity)
-                  published = bool(canonical)
-                  if reservation:
-                      published = bool(canonical and canonical.get('id') == identity
-                          and canonical.get('job_id') == reservation.get('job_id')
-                          and (canonical.get('metadata') or {}).get('veyra_user_id') == reservation.get('owner_id'))
-                  paths = list((v1_root / 'generated_images' / str(job.get('id'))).glob(identity + '.*'))
-                  result['outputs'].append({**pick(output, 'id job_id url preview_url thumbnail_url'),
-                      'canonical_published': published,
-                      'original': file_check(paths[0] if len(paths) == 1 else None, v1_root),
-                      'preview': file_check(v1_root / 'previews' / (identity + '.webp'), v1_root),
-                      'thumbnail': file_check(v1_root / 'thumbnails' / (identity + '.jpg'), v1_root)})
-              v1_jobs.append(result)
-          lab_sessions = []
-          for session in recent(v1, 'v1_records', 'lab_sessions'):
-              prompts = []
-              for prompt in session.get('prompts', [])[:12]:
-                  metadata = prompt.get('prompt_metadata') or {}
-                  prompts.append({**pick(prompt, 'id style_preset_id'),
-                                 'metadata_keys': sorted(metadata.keys()),
-                                 'quality': pick(metadata.get('quality_enhancement'), 'status mode source applied strategy llm_provider llm_model llm_fallback_used elapsed_ms latency_ms'),
-                                 'quality_keys': sorted((metadata.get('quality_enhancement') or {}).keys())})
-              lab_sessions.append({**pick(session, 'id status primary_transport created_at updated_at'),
-                  'request': pick(session.get('request'), 'target_count images_per_style generation_interval_seconds quality_enhancement'),
-                  'style_count': len(session.get('style_presets', [])),
-                  'progress': pick(session.get('progress'), 'status total completed failed current updated_at next_generation_at'),
-                  'variants': [{**pick(variant, 'id status created_at completed_at style_preset_id index_within_style'),
-                                'asset': pick(variant.get('asset'), 'output_id job_id url preview_url thumbnail_url width height format'),
-                                'provider_metadata': pick(variant.get('provider_metadata'), 'job_id provider model attempt primary_transport'),
-                                'error': pick(variant.get('error'), 'code retryable')}
-                               for variant in session.get('variants', [])[:12]],
-                  'prompts': prompts, 'error_codes': [pick(error, 'code retryable') for error in session.get('errors', [])[:10]]})
-          v1.close()
-
-          v2 = db(Path(env['V2_DATA_DIR']) / 'repository.sqlite3')
-          v2_jobs = []
-          for job in recent(v2, 'v2_records', 'image_jobs'):
-              result = pick(job, 'job_id run_id status provider_id model created_at updated_at')
-              result['elapsed_seconds'] = elapsed(job)
-              result['has_error'] = bool(job.get('error'))
-              result['outputs'] = []
-              for output in job.get('outputs', [])[:8]:
-                  identity = output.get('output_id')
-                  canonical = record(v2, 'v2_records', 'outputs', identity)
-                  metadata = output.get('metadata') or {}
-                  result['outputs'].append({**pick(output, 'output_id job_id url created_at'),
-                      **pick(metadata, 'preview_url thumbnail_url native_v2_storage preserve_original_bytes'),
-                      'canonical_published': bool(canonical and canonical.get('job_id') == job.get('job_id')),
-                      'bridge': bridge(metadata.get('render_bridge_primary')),
-                      'review': pick(output.get('review'), 'status decision passed reviewer analysis_mode'),
-                      'original': file_check(metadata.get('storage_path'), v2_root),
-                      'preview': file_check(metadata.get('preview_path'), v2_root),
-                      'thumbnail': file_check(metadata.get('thumbnail_path'), v2_root)})
-              v2_jobs.append(result)
-          v2_runs = []
-          for run in recent(v2, 'v2_records', 'creative_runs'):
-              decision = run.get('orchestrator_decision') or {}
-              v2_runs.append({**pick(run, 'run_id status mode created_at updated_at'),
-                  'elapsed_seconds': elapsed(run),
-                  'job_ids': [job.get('job_id') for job in run.get('generation_jobs', [])[:8]],
-                  'orchestrator': {**pick(decision, 'decision_id provider invocation_status latency_ms attempts cache_hit workspace_id fallback_reason'),
-                                   'stages': trace(decision.get('claude_stage_trace'))},
-                  'events': trace(run.get('progress_events'))})
-          v2.close()
-          queue = db(Path(env.get('V2_TASK_QUEUE_DB_PATH') or str(Path(env['V2_DATA_DIR']) / 'task_queue.sqlite3')))
-          queue.row_factory = sqlite3.Row
-          queue_rows = [dict(row) for row in queue.execute(
-              "SELECT task_id,run_id,status,attempts,max_attempts,claim_generation,not_before,created_at,updated_at, "
-              "json_extract(error_json,'$.retry_after_seconds') AS retry_after_seconds, "
-              "json_extract(queued_run_json,'$.status') AS projected_status "
-              "FROM v2_tasks WHERE created_at>=? ORDER BY created_at DESC LIMIT 8", (CUTOFF,))]
-          queue.close()
-          access = {}
-          commands = {
-              'v1_api': ['docker', 'logs', '--timestamps', '--since', CUTOFF + 'Z', 'alchemy-media-agent'],
-              'v2_api': ['journalctl', '-u', 'alchemy-v2-api.service', '--since', CUTOFF.replace('T', ' ') + ' UTC', '--no-pager', '-o', 'short-iso-precise'],
-              'v2_worker': ['journalctl', '-u', 'alchemy-v2-worker.service', '--since', CUTOFF.replace('T', ' ') + ' UTC', '--no-pager', '-o', 'short-iso-precise'],
-          }
-          for name, command in commands.items():
-              completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25)
-              groups = {}
-              for line in completed.stdout.decode('utf-8', errors='replace').splitlines():
-                  match = re.search(r'"(GET|POST) ((?:/api/v2/|/api/lab/|/v1/)[A-Za-z0-9_/-]+) HTTP/[0-9.]+" ([1-5][0-9]{2})', line)
-                  if not match:
-                      continue
-                  method, route, status = match.groups()
-                  if not (method == 'POST' and route in {'/api/lab/rare-style-explorer/sessions', '/v1/image/jobs', '/api/v2/creative/runs', '/api/v2/creative/runs/async', '/api/v2/image/jobs'}
-                          or method == 'GET' and any(identity in route for identity in [output.get('output_id', output.get('id')) for job in v1_jobs + v2_jobs for output in job['outputs']])):
-                      continue
-                  key = (method, route, status)
-                  at = line.split(' ', 1)[0]
-                  if key not in groups:
-                      groups[key] = {'method': method, 'route': route, 'status': int(status), 'count': 0, 'first_at': at}
-                  groups[key]['count'] += 1
-                  groups[key]['last_at'] = at
-              access[name] = {'exit_code': completed.returncode, 'requests': list(groups.values())[:24]}
-          review_env = {}
-          for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
-              key, sep, value = line.partition('=')
-              if sep and key in {'V2_OUTPUT_REVIEW_AGENT_ENABLED', 'V2_OUTPUT_REVIEW_AGENT_MODEL', 'V2_AGENT_DEFAULT_MODEL'}:
-                  review_env[key] = value.strip().strip('"').strip("'")
-          runtime_path = Path(env['V2_DATA_DIR']) / 'runtime_model_settings.json'
-          runtime_settings = json.loads(runtime_path.read_text(encoding='utf-8')) if runtime_path.is_file() else {}
-          review_settings = {
-              'enabled': runtime_settings.get('output_review_agent_enabled', review_env.get('V2_OUTPUT_REVIEW_AGENT_ENABLED', 'false').lower() in {'true','1','yes'}),
-              'model': runtime_settings.get('output_review_agent_model') or runtime_settings.get('default_agent_model') or review_env.get('V2_OUTPUT_REVIEW_AGENT_MODEL') or review_env.get('V2_AGENT_DEFAULT_MODEL'),
-          }
-          print(json.dumps({'review_settings': review_settings, 'snapshot_at': datetime.now(timezone.utc).isoformat(),
-              'v1_jobs': v1_jobs, 'v2_jobs': v2_jobs, 'lab_sessions': lab_sessions, 'access': access}, separators=(',', ':')))
+          def cmd(*args):
+              return subprocess.check_output(args, text=True)
+          active = Path('/opt/alchemy-media-agent').resolve()
+          assert cmd('git', '-C', str(active), 'rev-parse', 'HEAD').strip() == sys.argv[1]
+          row = json.loads(cmd('docker', 'container', 'inspect', '--size', 'goofy_cannon'))[0]
+          config = row.get('Config', {})
+          print(json.dumps({'container': row['Id'], 'name': row['Name'], 'created': row['Created'],
+              'state': {k: row['State'][k] for k in ['Status','Running','ExitCode','StartedAt','FinishedAt']},
+              'size_rw': row.get('SizeRw'), 'mounts': row.get('Mounts'), 'cmd': config.get('Cmd'),
+              'working_dir': config.get('WorkingDir'), 'image_ref': config.get('Image'),
+              'restart_policy': row.get('HostConfig',{}).get('RestartPolicy')}))
           PY
-          printf 'GUARDED_V12_AUDIT_RESULT=pass\n'
-          printf 'GUARDED_V12_AUDIT_ACTIVE_SHA=%s\n' "$1"
-          REMOTE_SCRIPT
