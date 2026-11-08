@@ -174,7 +174,7 @@ def test_candidate_preflight_requires_enabled_codex_profile_and_open_admission()
     assert closed.value.code == "candidate_bridge_admission_not_open"
 
 
-def test_candidate_preflight_requires_codex_capability_for_frozen_png_defaults():
+def test_candidate_preflight_requires_codex_adapter_advertisement():
     settings = SimpleNamespace(
         enabled=True,
         profile="codex-image",
@@ -198,3 +198,19 @@ def test_candidate_preflight_requires_codex_capability_for_frozen_png_defaults()
 
     assert caught.value.code == "candidate_bridge_request_unsupported"
     assert caught.value.diagnostic == "code=adapter_not_advertised"
+
+
+def test_candidate_preflight_does_not_require_api_only_codex_defaults():
+    settings = SimpleNamespace(
+        enabled=True,
+        profile="codex-image",
+        base_url="https://bridge.example.test",
+        token="hidden",
+        workspace="primary",
+    )
+    capabilities = _bridge_capabilities()
+    capabilities["profiles"][0]["parameter_contract"]["codex_adapter"][
+        "image_options_contract"
+    ] = {"references": {"max_count": 5}}
+
+    bridge_preflight.validate_candidate_v3_bridge_state(settings, capabilities)

@@ -35,21 +35,18 @@ def validate_candidate_v3_bridge_state(settings: Any, capabilities: object) -> N
     if not isinstance(admission, dict) or admission.get("accepting_new_tasks") is not True:
         raise CandidateBridgePreflightError("candidate_bridge_admission_not_open")
 
-    # Match the actual Codex V3 primary payload without creating a task. The
-    # real prompt is frozen later by V3; this probe uses a neutral placeholder
-    # and the same 1024 square, PNG, auto-quality contract.
+    # Match V3's normalized Codex adapter payload without creating a task.
+    # V3's request_for() maps size, quality, and output-format controls to
+    # Codex native defaults; a non-transparent request carries only the
+    # adapter marker here. Testing the API-facing defaults would reject a
+    # Bridge profile that correctly supports the actual Codex wire contract.
     request = PrimaryRequest(
         product="v3",
         owner_id="candidate-preflight",
         unit_id="candidate-preflight",
         prompt="A neutral still-life image.",
-        parameters={
-            "width": 1024,
-            "height": 1024,
-            "image_options": {"schema_version": "1", "quality": "auto", "output_format": "png"},
-            "codex_adapter": "codex_cli_imagegen_v1",
-        },
-        hard_requirements={"output_format": "png"},
+        parameters={"codex_adapter": "codex_cli_imagegen_v1"},
+        hard_requirements={},
     )
     rejection = PrimaryTransport._safe_support_rejection(  # noqa: SLF001 - exact route preflight
         request,
