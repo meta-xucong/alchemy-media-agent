@@ -103,6 +103,7 @@ jobs:
           import sys
           from collections import Counter
           from pathlib import Path
+          import app.config  # Load the same runtime env-file chain as the V3 service.
           from alchemy_creative_agent_3_0.app.product_api.service import _default_product_job_storage_root
 
           project_id = sys.argv[1]
