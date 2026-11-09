@@ -82,10 +82,13 @@ def test_claude_and_kimi_completion_reasons_are_safe_and_gpt_remains_last(job, m
         model = payload['model']
         calls.append(model)
         if request.url.path.endswith('/messages'):
+            assert payload['max_tokens'] == 2048
             return httpx.Response(200, json={'stop_reason': 'max_tokens',
-                'usage': {'input_tokens': 1200, 'output_tokens': 1024},
+                'usage': {'input_tokens': 1200, 'output_tokens': 1024,
+                    'output_tokens_details': {'thinking_tokens': 900}},
                 'content': [{'type': 'text', 'text': 'PRIVATE_RESPONSE_TEXT'}]})
         if model == 'kimi-test':
+            assert payload['max_tokens'] == 1024
             return httpx.Response(200, json={'usage': {'prompt_tokens': 1200, 'completion_tokens': 1024,
                 'completion_tokens_details': {'reasoning_tokens': 900}}, 'choices': [{'finish_reason': 'length',
                 'message': {'content': 'PRIVATE_RESPONSE_TEXT'}}]})
@@ -101,7 +104,9 @@ def test_claude_and_kimi_completion_reasons_are_safe_and_gpt_remains_last(job, m
         'review_incomplete', 'review_incomplete',
     ]
     assert [attempt['provider_reason'] for attempt in review.model_attempts[:2]] == ['max_tokens', 'length']
-    assert review.model_attempts[0]['provider_usage'] == {'input_tokens': 1200, 'output_tokens': 1024}
+    assert review.model_attempts[0]['provider_usage'] == {
+        'input_tokens': 1200, 'output_tokens': 1024, 'thinking_tokens': 900,
+    }
     assert review.model_attempts[1]['provider_usage'] == {
         'prompt_tokens': 1200, 'completion_tokens': 1024, 'reasoning_tokens': 900,
     }
@@ -395,7 +400,9 @@ def test_anthropic_route_sends_actual_images_once(job, monkeypatch):
     monkeypatch.setattr(vision, 'settings', replace(vision.settings, claude_orchestrator_multimodal_model='claude-test'))
     def handler(request):
         assert request.url.path == '/v1/messages'
-        content = json.loads(request.content)['messages'][0]['content']
+        payload = json.loads(request.content)
+        assert payload['max_tokens'] == 2048
+        content = payload['messages'][0]['content']
         assert content[1]['source']['media_type'] == 'image/png'
         return httpx.Response(200, json={'stop_reason':'end_turn','content':[{'type':'text','text':json.dumps({
             'decision':'pass','references_match':True,'notes':[],'issues':[]})}]})

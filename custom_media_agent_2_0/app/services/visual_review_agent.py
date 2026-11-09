@@ -189,7 +189,9 @@ async def _request_verdict(content: list[dict], model: str, *, timeout: float) -
             else:
                 prefix, encoded = part["image_url"]["url"].split(",", 1)
                 blocks.append({"type": "image", "source": {"type": "base64", "media_type": prefix[5:].split(";")[0], "data": encoded}})
-        payload = {"model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": blocks}]}
+        # The previous 1024-token cap was reached by Claude before it completed
+        # the compact verdict; Kimi's independently verified OpenAI route stays at 1024.
+        payload = {"model": model, "max_tokens": 2048, "messages": [{"role": "user", "content": blocks}]}
         headers.update({"x-api-key": settings.llm_gateway_api_key, "anthropic-version": "2023-06-01"})
         endpoint = base + "/messages"
     else:
@@ -219,6 +221,11 @@ async def _request_verdict(content: list[dict], model: str, *, timeout: float) -
             reasoning_tokens = completion_details.get("reasoning_tokens")
             if type(reasoning_tokens) is int and 0 <= reasoning_tokens <= 2_147_483_647:
                 provider_usage["reasoning_tokens"] = reasoning_tokens
+        output_details = usage.get("output_tokens_details")
+        if isinstance(output_details, dict):
+            thinking_tokens = output_details.get("thinking_tokens")
+            if type(thinking_tokens) is int and 0 <= thinking_tokens <= 2_147_483_647:
+                provider_usage["thinking_tokens"] = thinking_tokens
     if model.startswith("claude-"):
         provider_reason = body.get("stop_reason")
         if provider_reason == "refusal":
