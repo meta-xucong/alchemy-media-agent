@@ -202,8 +202,94 @@ jobs:
                                 'free_bytes': shutil.disk_usage('/').free}, sort_keys=True), flush=True)
           REMOTE_PY
 
+      - name: Inspect exact inactive backup sets without mutation
+        if: ${{ inputs.planning_operation_id == 'doc277_project_planning_backup_inspect_20261011' }}
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" == b6bcd4fb442b4ceaf1cd37f63b902588554676ee ]]
+          [[ "$PLANNING_OPERATION_ID" == doc277_project_planning_backup_inspect_20261011 ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - '$EXPECTED_SHA'" <<'REMOTE_PY'
+          import json
+          import os
+          import stat
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          root = Path('/var/backups/alchemy')
+          names = ('pr29-569dffea4381-20261011T200150Z', 'pr29-815906afaf99-20261015T090336Z')
+          expected_sha = sys.argv[1]
+          expected_rollback = 'ec7023b6119dcb80b3c794c6f46d1e58efdb6c59'
+          def cmd(*args):
+              return subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL).strip()
+          def guard():
+              active = Path('/opt/alchemy-media-agent').resolve(strict=True)
+              assert active == Path('/opt/alchemy-media-agent-releases/doc276-277-' + expected_sha[:12])
+              assert cmd('git', '-C', str(active), 'rev-parse', 'HEAD') == expected_sha
+              assert cmd('docker', 'inspect', 'alchemy-media-agent', '--format', '{{.State.Running}}') == 'true'
+              assert cmd('docker', 'image', 'inspect', 'alchemy-media-agent:latest', '--format', '{{index .Config.Labels "org.opencontainers.image.revision"}}') == expected_sha
+              assert cmd('docker', 'image', 'inspect', 'alchemy-media-agent:rollback-pr29', '--format', '{{index .Config.Labels "org.opencontainers.image.revision"}}') == expected_rollback
+              assert cmd('docker', 'image', 'inspect', 'alchemy-media-agent:candidate-899e09a480b81dbace326f1dc1294841ea7b399c', '--format', '{{index .Config.Labels "org.opencontainers.image.revision"}}') == '899e09a480b81dbace326f1dc1294841ea7b399c'
+              assert cmd('docker', 'inspect', 'alchemy-render-bridge-api', '--format', '{{.State.Running}}') == 'true'
+              for unit in ('alchemy-v2-api.service', 'alchemy-v2-worker.service', 'alchemy-v2-sync-worker.service'):
+                  assert cmd('systemctl', 'is-active', unit) == 'active'
+              for url in ('http://127.0.0.1:8017/healthz', 'http://127.0.0.1:8020/api/v2/health'):
+                  cmd('curl', '--noproxy', '*', '-fsS', '--max-time', '10', url)
+              references = ''
+              containers = cmd('docker', 'ps', '-aq').split()
+              if containers:
+                  references += cmd('docker', 'inspect', *containers)
+              references += cmd('systemctl', 'cat', 'alchemy-v2-api.service', 'alchemy-v2-worker.service', 'alchemy-v2-sync-worker.service')
+              for process in Path('/proc').iterdir():
+                  if not process.name.isdecimal():
+                      continue
+                  try:
+                      references += (process / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+                      for link in [process / 'cwd', process / 'exe', *(process / 'fd').iterdir()]:
+                          try:
+                              references += os.readlink(link)
+                          except (FileNotFoundError, ProcessLookupError):
+                              pass
+                  except (FileNotFoundError, ProcessLookupError):
+                      continue
+              assert all(str(root / name) not in references for name in names), 'backup_still_referenced'
+          def inventory(path):
+              assert path.parent == root and path.name in names and path.resolve() == path and path.is_dir()
+              pending, records = [path], {}
+              while pending:
+                  item = pending.pop()
+                  info = item.lstat()
+                  assert info.st_dev == root.stat().st_dev
+                  assert stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode), 'non_regular_backup_member'
+                  if item.is_file():
+                      assert info.st_nlink == 1, 'linked_backup_file'
+                  records[item.relative_to(root).as_posix()] = (info.st_size if item.is_file() else 0)
+                  if item.is_dir():
+                      pending.extend(item.iterdir())
+              return records
+          assert root.resolve() == root and root.is_dir()
+          guard()
+          plans = []
+          for name in names:
+              source = root / name
+              archive = root / (name + '.verified.tar.gz')
+              assert not archive.exists() and not archive.is_symlink()
+              rows = inventory(source)
+              plans.append({'name': name, 'members': len(rows), 'file_bytes': sum(rows.values()), 'archive_absent': True})
+          print(json.dumps({'status': 'read_only_plan', 'free_bytes': __import__('shutil').disk_usage(root).free,
+                            'items': plans}, sort_keys=True), flush=True)
+          REMOTE_PY
+
       - name: Read project and delivery records without mutation
-        if: ${{ !startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_') }}
+        if: ${{ !startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_') && !startsWith(inputs.planning_operation_id, 'doc277_project_planning_backup_inspect_') }}
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PROJECT_ID: ${{ inputs.project_id }}
