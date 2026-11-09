@@ -49,7 +49,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Read and recoverably compress exact inactive backups
+      - name: Read deployed review projection and existing image files
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -57,110 +57,93 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
           set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - --apply" <<'PY'
-          """One-off recoverable compression of two exact inactive October backups."""
+            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE'
+          set -euo pipefail
+          active="$(realpath /opt/alchemy-media-agent)"
+          [ "$(git -C "$active" rev-parse HEAD)" = "$1" ]
+          [ "$(docker inspect alchemy-media-agent --format '{{.State.Running}}')" = true ]
+          [ "$(docker inspect alchemy-media-agent --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$1" ]
+          "$active/custom_media_agent_2_0/.venv/bin/python" - "$active" <<'PY'
+          """Read-only deployed review projection and existing image verification."""
+          import base64
           import json
           import os
-          import shutil
-          import stat
-          import subprocess
+          import sqlite3
           import sys
-          import tarfile
+          import tempfile
           from pathlib import Path
+          from types import SimpleNamespace
+          from PIL import Image
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import padding
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-          ROOT = Path('/var/backups/alchemy')
-          NAMES = ('pr29-11e2eb2cef56-20261011T172217Z', 'pr29-89b6385b15cb-20261011T171100Z')
-          ACTIVE = 'ec7023b6119dcb80b3c794c6f46d1e58efdb6c59'
-          ROLLBACK = 'b1b229737ad2dee32f94d353254d2c22740c2c18'
-          APPLY = sys.argv[1:] == ['--apply']
-          assert sys.argv[1:] in ([], ['--apply'])
+          release = Path(sys.argv[1]).resolve()
+          configuration = {}
+          for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
+              name, sep, value = line.strip().removeprefix('export ').partition('=')
+              if sep and name and not name.startswith('#'):
+                  configuration[name] = value.strip().strip('"').strip("'")
+          data = Path(configuration['V2_DATA_DIR']).resolve()
+          storage = Path(configuration['V2_STORAGE_DIR']).resolve()
+          history_database = Path(configuration['V2_IMAGE_HISTORY_PATH']).with_name('image_history_index.sqlite3').resolve()
+          runtime = json.loads((data / 'runtime_model_settings.json').read_text(encoding='utf-8'))
 
-          def command(*args):
-              return subprocess.check_output(args, text=True).strip()
+          def readonly(path):
+              conn = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+              conn.execute('PRAGMA query_only=ON')
+              return conn
 
-          def guard():
-              assert ROOT.resolve() == ROOT and ROOT.is_dir()
-              assert command('git', '-C', '/opt/alchemy-media-agent', 'rev-parse', 'HEAD') == ACTIVE
-              assert command('docker', 'inspect', 'alchemy-media-agent', '--format', '{{.State.Running}}') == 'true'
-              assert command('docker', 'image', 'inspect', 'alchemy-media-agent:rollback-pr29', '--format', '{{index .Config.Labels "org.opencontainers.image.revision"}}') == ROLLBACK
-              references = command('docker', 'inspect', *command('docker', 'ps', '-aq').split())
-              references += command('systemctl', 'cat', 'alchemy-v2-api.service', 'alchemy-v2-worker.service')
-              for process in Path('/proc').iterdir():
-                  if not process.name.isdecimal():
-                      continue
-                  try:
-                      references += (process / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
-                      for link in [process / 'cwd', process / 'exe', *(process / 'fd').iterdir()]:
-                          try:
-                              references += os.readlink(link)
-                          except (FileNotFoundError, ProcessLookupError):
-                              pass
-                  except (FileNotFoundError, ProcessLookupError):
-                      continue
-              # Do not match this script's source: it is streamed on stdin, never argv.
-              assert all(str(ROOT / name) not in references for name in NAMES), 'backup_still_referenced'
+          connection = readonly(data / 'repository.sqlite3')
+          raw_output = connection.execute("SELECT payload FROM v2_records WHERE namespace='outputs' AND record_key=?", ('out_job_f0631661d94e_0',)).fetchone()[0]
+          output = json.loads(raw_output)
+          job = json.loads(connection.execute("SELECT payload FROM v2_records WHERE namespace='image_jobs' AND record_key=?", ('job_f0631661d94e',)).fetchone()[0])
+          assert job['status'] == 'completed' and len(job['outputs']) == 1
+          assert job['outputs'][0]['review'] == output['review']
+          connection.close()
+          history_connection = readonly(history_database)
+          raw_history = history_connection.execute('SELECT payload FROM v2_image_history WHERE output_id=?', (output['output_id'],)).fetchone()[0]
+          history_connection.close()
+          files = []
+          for key in ('storage_path', 'preview_path', 'thumbnail_path'):
+              path = Path(output['metadata'][key]).resolve()
+              assert path.is_relative_to(storage) and path.is_file()
+              with Image.open(path) as image:
+                  dimensions = [image.width, image.height]
+                  image.verify()
+              files.append({'role': key, 'valid': True, 'dimensions': dimensions, 'bytes': path.stat().st_size})
 
-          def inventory(path):
-              assert path.parent == ROOT and path.name in NAMES and path.resolve() == path and path.is_dir()
-              pending, records = [path], {}
-              while pending:
-                  item = pending.pop()
-                  info = item.lstat()
-                  assert info.st_dev == ROOT.stat().st_dev
-                  assert stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode), 'non_regular_backup_member'
-                  if item.is_file():
-                      assert info.st_nlink == 1, 'linked_backup_file'
-                  records[item.relative_to(ROOT).as_posix()] = (info.st_mode, info.st_size if item.is_file() else 0,
-                      info.st_mtime_ns, info.st_uid, info.st_gid)
-                  if item.is_dir():
-                      pending.extend(item.iterdir())
-              return records
-
-          def verify(archive, source, before):
-              seen = set()
-              with tarfile.open(archive, 'r:gz') as saved:
-                  for member in saved:
-                      assert member.name in before and member.name not in seen
-                      seen.add(member.name)
-                      mode, size, mtime_ns, uid, gid = before[member.name]
-                      assert member.mode == stat.S_IMODE(mode) and member.uid == uid and member.gid == gid
-                      assert abs(member.mtime - mtime_ns / 1e9) < 0.000001
-                      if stat.S_ISDIR(mode):
-                          assert member.isdir()
-                      else:
-                          assert member.isfile() and member.size == size
-                          with saved.extractfile(member) as packed, (ROOT / member.name).open('rb') as original:
-                              while True:
-                                  block = original.read(1024 * 1024)
-                                  assert packed.read(1024 * 1024) == block
-                                  if not block:
-                                      break
-              assert seen == set(before) and inventory(source) == before
-
-          guard()
-          plans = [(ROOT / name, inventory(ROOT / name)) for name in NAMES]
-          print('EXACT_BACKUP_PLAN=' + json.dumps({'apply': APPLY, 'free_bytes': shutil.disk_usage(ROOT).free,
-              'items': [{'path': str(path), 'members': len(records), 'file_bytes': sum(v[1] for v in records.values())} for path, records in plans]}), flush=True)
-          if APPLY:
-              for source, before in plans:
-                  guard()
-                  assert inventory(source) == before
-                  archive = ROOT / (source.name + '.verified.tar.gz')
-                  assert not archive.exists() and not archive.is_symlink()
-                  with archive.open('xb') as stream:
-                      os.chmod(archive, 0o600)
-                      subprocess.run(['tar', '--format=pax', '--acls', '--xattrs', '-czf', '-', '-C', str(ROOT), source.name],
-                          stdout=stream, check=True)
-                      stream.flush()
-                      os.fsync(stream.fileno())
-                  verify(archive, source, before)
-                  guard()
-                  assert source.resolve() == ROOT / source.name and inventory(source) == before
-                  # Only the exact verified source is removed; complete restorable tar retained.
-                  shutil.rmtree(source)
-                  print('EXACT_BACKUP_ARCHIVED=' + json.dumps({'archive': str(archive), 'archive_bytes': archive.stat().st_size,
-                      'members': len(before), 'content_comparison': 'direct_bytes', 'free_bytes': shutil.disk_usage(ROOT).free}), flush=True)
-          print('EXACT_BACKUP_RESULT=pass', flush=True)
+          with tempfile.TemporaryDirectory(prefix='v2-postdeploy-read-') as temporary:
+              scratch = Path(temporary)
+              os.environ['V2_ENV_FILE'] = str(scratch / 'absent.env')
+              for name in ('V2_DATA_DIR', 'V2_STORAGE_DIR', 'V2_IMAGE_HISTORY_PATH', 'VEYRA_USAGE_PATH', 'V2_TASK_QUEUE_DB_PATH',
+                           'V2_CASE_INDEX_PATH', 'V2_REMOTE_SNAPSHOT_DIR', 'V2_CASE_THUMBNAIL_DIR', 'V2_HISTORY_THUMBNAIL_DIR',
+                           'V2_CLAUDE_ORCHESTRATOR_WORKSPACE_DIR', 'V2_CLAUDE_ORCHESTRATOR_CACHE_PATH'):
+                  os.environ[name] = str(scratch / name.lower())
+              sys.path[:0] = [str(release / 'custom_media_agent_2_0'), str(release)]
+              from app.schemas import ImageHistoryItem, ImageReviewDecision
+              from app.services import image_history
+              from app.services.model_routing import visual_review_models
+              image_history.repository = SimpleNamespace(database_path=data / 'repository.sqlite3')
+              projected = image_history._with_current_reviews([ImageHistoryItem.model_validate_json(raw_history)])[0]
+              assert projected.review == ImageReviewDecision.model_validate(output['review'])
+              queue = visual_review_models(SimpleNamespace(**runtime))
+              assert queue == ['claude-sonnet-5-5', 'gpt-6.1-sol']
+              snapshot = {'raw_review': output['review'], 'projected_review': projected.review.model_dump(mode='json')}
+              public = serialization.load_pem_public_key('-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsJXjfMfxb9o14TlHzgHa\nb7yx4eE61GiARUZHpGvKlW2STr3Ht2vm5xqxpj6nx7V0n0n9HkiKVqMUGHcjyfb3\nu670qeQVWqcnTOeG76g1IL+PWUhTgYTqeJIqPc7jJafQaTp0yJnlEMMXAinp4STr\nnoLKPT2YOR2GWKoVa90LVdSs53GUOTr2Hh4t9f3uNOr+F4z6lQK9qvb0Ap0wRrad\n2fzGIXZyQuQR/TyGuy9FKAhBp5mTSPaPkapbgEKcQa0gPFmwduQ9CKdVh6j78Tm5\nWiHrIsK6K0i90EoRnsjDiWHFYIVm0qFuxQHiOKco9LbgwMc0P9JL2+58ChUffCvX\n9QIDAQAB\n-----END PUBLIC KEY-----\n'.encode())
+              session_key, nonce = os.urandom(32), os.urandom(12)
+              cipher = AESGCM(session_key).encrypt(nonce, json.dumps(snapshot, ensure_ascii=False).encode(), None)
+              wrapped = public.encrypt(session_key, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
+              print('PRIVATE_POST_REVIEW=' + json.dumps({key: base64.b64encode(value).decode() for key, value in {'key': wrapped, 'nonce': nonce, 'cipher': cipher}.items()}))
+              print('POST_REVIEW_RESULT=' + json.dumps({'status': 'pass', 'effective_review_queue': queue,
+                  'original_review_decision': projected.review.decision, 'original_review_model': projected.review.model,
+                  'issue_count': len(projected.review.revision_directives), 'history_projection_matches': True,
+                  'image_files': files, 'production_writes': False}), flush=True)
           PY
+          curl --noproxy '*' -fsS --max-time 10 http://127.0.0.1:8017/healthz >/dev/null
+          curl --noproxy '*' -fsS --max-time 10 http://127.0.0.1:8020/api/v2/health >/dev/null
+          printf 'DEPLOYED_REVIEW_ACTIVE_SHA=%s\n' "$1"
+          REMOTE
