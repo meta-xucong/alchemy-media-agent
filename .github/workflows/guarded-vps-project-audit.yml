@@ -203,7 +203,7 @@ jobs:
           REMOTE_PY
 
       - name: Inspect exact inactive backup sets without mutation
-        if: ${{ inputs.planning_operation_id == 'doc277_project_planning_backup_inspect_20261011' }}
+        if: ${{ inputs.planning_operation_id == 'doc277_project_planning_backup_inspect_20261015' }}
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
@@ -213,7 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" == b6bcd4fb442b4ceaf1cd37f63b902588554676ee ]]
-          [[ "$PLANNING_OPERATION_ID" == doc277_project_planning_backup_inspect_20261011 ]]
+          [[ "$PLANNING_OPERATION_ID" == doc277_project_planning_backup_inspect_20261015 ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
             "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - '$EXPECTED_SHA'" <<'REMOTE_PY'
@@ -225,7 +225,7 @@ jobs:
           from pathlib import Path
 
           root = Path('/var/backups/alchemy')
-          names = ('pr29-569dffea4381-20261011T200150Z', 'pr29-815906afaf99-20261015T090336Z')
+          names = ('pr29-51ba1e2d39e5-20261015T134558Z', 'pr29-df3e10fb4d4b-20261018T162621Z')
           expected_sha = sys.argv[1]
           expected_rollback = 'ec7023b6119dcb80b3c794c6f46d1e58efdb6c59'
           def cmd(*args):
@@ -289,7 +289,7 @@ jobs:
           REMOTE_PY
 
       - name: Archive exact inactive backup sets after byte verification
-        if: ${{ inputs.planning_operation_id == 'doc277_project_planning_backup_archive_20261011' }}
+        if: ${{ inputs.planning_operation_id == 'doc277_project_planning_backup_archive_20261015' }}
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
@@ -299,7 +299,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" == b6bcd4fb442b4ceaf1cd37f63b902588554676ee ]]
-          [[ "$PLANNING_OPERATION_ID" == doc277_project_planning_backup_archive_20261011 ]]
+          [[ "$PLANNING_OPERATION_ID" == doc277_project_planning_backup_archive_20261015 ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
             "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - '$EXPECTED_SHA' --apply" <<'REMOTE_PY'
@@ -313,7 +313,7 @@ jobs:
           from pathlib import Path
 
           root = Path('/var/backups/alchemy')
-          names = ('pr29-569dffea4381-20261011T200150Z', 'pr29-815906afaf99-20261015T090336Z')
+          names = ('pr29-51ba1e2d39e5-20261015T134558Z', 'pr29-df3e10fb4d4b-20261018T162621Z')
           expected_sha = sys.argv[1]
           expected_rollback = 'ec7023b6119dcb80b3c794c6f46d1e58efdb6c59'
           assert sys.argv[2:] == ['--apply']
