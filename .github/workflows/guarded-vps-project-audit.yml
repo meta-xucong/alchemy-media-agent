@@ -202,14 +202,21 @@ jobs:
           config_snapshot = {key: effective.get(key) for key in ('default_agent_model', 'output_review_agent_model',
               'claude_orchestrator_model', 'claude_orchestrator_multimodal_model', 'claude_orchestrator_fallback_models',
               'claude_orchestrator_fallback_model')}
-          secret_data = {'runs': runs[:6], 'jobs': jobs[:12], 'queue': queue_rows, 'runtime': config_snapshot}
+          latest_run = runs[0] if runs else {}
+          latest_run_id = latest_run.get('run_id')
+          latest_jobs = [job for job in jobs if job.get('run_id') == latest_run_id]
+          private_data = {'run_id': latest_run_id, 'reviews': [
+              {'job_id': job.get('job_id'), 'outputs': [{'output_id': output.get('output_id'), 'notes': (output.get('review') or {}).get('notes', []),
+                  'revision_directives': (output.get('review') or {}).get('revision_directives', [])}
+                  for output in job.get('outputs', [])]}
+              for job in latest_jobs]}
           public_key = serialization.load_pem_public_key('-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsJXjfMfxb9o14TlHzgHa\nb7yx4eE61GiARUZHpGvKlW2STr3Ht2vm5xqxpj6nx7V0n0n9HkiKVqMUGHcjyfb3\nu670qeQVWqcnTOeG76g1IL+PWUhTgYTqeJIqPc7jJafQaTp0yJnlEMMXAinp4STr\nnoLKPT2YOR2GWKoVa90LVdSs53GUOTr2Hh4t9f3uNOr+F4z6lQK9qvb0Ap0wRrad\n2fzGIXZyQuQR/TyGuy9FKAhBp5mTSPaPkapbgEKcQa0gPFmwduQ9CKdVh6j78Tm5\nWiHrIsK6K0i90EoRnsjDiWHFYIVm0qFuxQHiOKco9LbgwMc0P9JL2+58ChUffCvX\n9QIDAQAB\n-----END PUBLIC KEY-----\n'.encode())
           key, nonce = os.urandom(32), os.urandom(12)
-          sealed = AESGCM(key).encrypt(nonce, json.dumps(secret_data, ensure_ascii=False).encode(), None)
+          sealed = AESGCM(key).encrypt(nonce, json.dumps(private_data, ensure_ascii=False).encode(), None)
           wrapped = public_key.encrypt(key, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
           result = {'checked_at': datetime.now(timezone.utc).isoformat(), 'active_sha': subprocess.check_output(
               ['git', '-C', str(release), 'rev-parse', 'HEAD'], text=True).strip(),
-              'runs': summaries, 'queue': queue_rows, 'runtime_model_settings': config_snapshot, 'frontend_requests': logs}
+              'runs': summaries[:6], 'queue': queue_rows, 'runtime_model_settings': config_snapshot, 'frontend_requests': logs}
           print('PRIVATE_RUN_STATE=' + json.dumps({key: base64.b64encode(value).decode() for key, value in
               {'key': wrapped, 'nonce': nonce, 'cipher': sealed}.items()}))
           print('V2_RUN_MONITOR=' + json.dumps(result, ensure_ascii=False, separators=(',', ':')), flush=True)
