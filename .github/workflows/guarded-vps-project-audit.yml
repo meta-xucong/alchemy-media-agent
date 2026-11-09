@@ -159,16 +159,21 @@ jobs:
                           out['files'].append(check)
                       item['outputs'].append(out)
                   jobs_for_run.append(item)
+              run_error = run.get('error') if isinstance(run.get('error'), dict) else {}
               summaries.append({'run_id': runid, 'status': run.get('status'), 'mode': run.get('mode'),
                   'created_at': run.get('created_at'), 'updated_at': run.get('updated_at'), 'progress_summary':
                   {key: (run.get('progress_summary') or {}).get(key) for key in ('status', 'stage', 'completed', 'total', 'updated_at')},
-                  'events': events, 'jobs': jobs_for_run})
+                  'error': {key: run_error.get(key) for key in ('code', 'error_code', 'failure_code', 'retryable', 'stage') if key in run_error},
+                  'next_action_count': len(run.get('next_actions') or []), 'events': events, 'jobs': jobs_for_run})
 
           queue_path = Path(configured.get('V2_TASK_QUEUE_DB_PATH') or data_root / 'task_queue.sqlite3')
           queue = readonly(queue_path)
           queue_rows = [{'task_id': row[0], 'kind': row[1], 'run_id': row[2], 'status': row[3], 'attempts': row[4],
-                         'created_at': row[5], 'updated_at': row[6], 'claim_generation': row[7]}
-                        for row in queue.execute("SELECT task_id,kind,run_id,status,attempts,created_at,updated_at,claim_generation "
+                         'created_at': row[5], 'updated_at': row[6], 'claim_generation': row[7],
+                         'projected_status': row[8], 'error_code': row[9], 'error_retryable': row[10]}
+                        for row in queue.execute("SELECT task_id,kind,run_id,status,attempts,created_at,updated_at,claim_generation, "
+                                                 "json_extract(queued_run_json,'$.status'),json_extract(error_json,'$.error_code'), "
+                                                 "json_extract(error_json,'$.retryable') "
                                                  "FROM v2_tasks ORDER BY created_at DESC LIMIT 12")]
           queue.close()
 
@@ -187,7 +192,7 @@ jobs:
               except Exception as error:
                   logs.append({'unit': unit, 'read_error_type': type(error).__name__})
                   continue
-              requests = []
+              counts = {}
               for line in raw.splitlines():
                   match = pattern.search(line)
                   if not match:
@@ -195,8 +200,12 @@ jobs:
                   method, path, status = match.groups()
                   path_only = path.split('?', 1)[0]
                   if any(identity in path_only for identity in tracked_ids):
-                      requests.append({'at': line.split(' ', 1)[0], 'method': method, 'path': path_only, 'status': int(status)})
-              logs.append({'unit': unit, 'matched_requests': requests[-60:]})
+                      group = (method, path_only, int(status))
+                      entry = counts.setdefault(group, {'method': method, 'path': path_only, 'status': int(status),
+                          'count': 0, 'first_at': line.split(' ', 1)[0]})
+                      entry['count'] += 1
+                      entry['last_at'] = line.split(' ', 1)[0]
+              logs.append({'unit': unit, 'matched_requests': list(counts.values())[-60:]})
 
           effective = json.loads((data_root / 'runtime_model_settings.json').read_text(encoding='utf-8'))
           config_snapshot = {key: effective.get(key) for key in ('default_agent_model', 'output_review_agent_model',
