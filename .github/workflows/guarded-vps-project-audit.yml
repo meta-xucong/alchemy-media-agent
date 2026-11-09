@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - " <<'PY'
+            "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - --apply" <<'PY'
           """One-off recoverable compression of two exact inactive October backups."""
           import json
           import os
