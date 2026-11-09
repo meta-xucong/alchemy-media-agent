@@ -49,7 +49,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Read existing output and review isolated candidate copy
+      - name: Read and recoverably compress exact inactive backups
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -57,158 +57,110 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
-          set -euo pipefail
-          expected="$1"
-          candidate="/opt/alchemy-media-agent-releases/doc276-277-${expected:0:12}"
-          [ "$(git -C "$candidate" rev-parse HEAD)" = "$expected" ]
-          [ "$(git -C /opt/alchemy-media-agent rev-parse HEAD)" = "ec7023b6119dcb80b3c794c6f46d1e58efdb6c59" ]
-          "$candidate/custom_media_agent_2_0/.venv/bin/python" - "$candidate" <<'PY'
-          """One real review of an existing output in isolated candidate storage."""
-          import asyncio
+            "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - " <<'PY'
+          """One-off recoverable compression of two exact inactive October backups."""
           import json
           import os
           import shutil
-          import sqlite3
+          import stat
+          import subprocess
           import sys
-          import tempfile
+          import tarfile
           from pathlib import Path
 
-          release = Path(sys.argv[1]).resolve()
-          def env_file(path):
-              values = {}
-              if path.is_file():
-                  for line in path.read_text(encoding='utf-8-sig').splitlines():
-                      key, sep, value = line.strip().removeprefix('export ').partition('=')
-                      if sep and key and not key.startswith('#'):
-                          values[key] = value.strip().strip('"').strip("'")
-              return values
+          ROOT = Path('/var/backups/alchemy')
+          NAMES = ('pr29-11e2eb2cef56-20261011T172217Z', 'pr29-89b6385b15cb-20261011T171100Z')
+          ACTIVE = 'ec7023b6119dcb80b3c794c6f46d1e58efdb6c59'
+          ROLLBACK = 'b1b229737ad2dee32f94d353254d2c22740c2c18'
+          APPLY = sys.argv[1:] == ['--apply']
+          assert sys.argv[1:] in ([], ['--apply'])
 
-          configuration = env_file(Path('/etc/alchemy/alchemy-v2.env'))
-          source_root = Path(configuration['V2_DATA_DIR'])
-          configuration.update(env_file(source_root / 'llm_gateway.env'))
-          runtime_path = source_root / 'runtime_model_settings.json'
-          runtime = json.loads(runtime_path.read_text(encoding='utf-8')) if runtime_path.is_file() else {}
-          for field in ('claude_orchestrator_model', 'claude_orchestrator_multimodal_model',
-                        'claude_orchestrator_fallback_model', 'claude_orchestrator_fallback_models'):
-              if field in runtime:
-                  value = runtime[field]
-                  configuration['V2_' + field.upper()] = ','.join(value) if isinstance(value, list) else value or ''
-          source_db = source_root / 'repository.sqlite3'
-          def source_record():
-              connection = sqlite3.connect(source_db.resolve().as_uri() + '?mode=ro', uri=True)
-              connection.execute('PRAGMA query_only=ON')
-              row = connection.execute("SELECT payload FROM v2_records WHERE namespace='image_jobs' AND record_key=?", ('job_f0631661d94e',)).fetchone()
-              connection.close()
-              assert row
-              return row[0]
+          def command(*args):
+              return subprocess.check_output(args, text=True).strip()
 
-          original_record = source_record()
-          payload = json.loads(original_record)
-          assert payload['status'] == 'completed' and len(payload['outputs']) == 1
-          assert not payload['outputs'][0]['metadata'].get('input_images')
-          source_image = Path(payload['outputs'][0]['metadata']['storage_path'])
-          source_bytes = source_image.read_bytes()
-
-          with tempfile.TemporaryDirectory(prefix='v2-candidate-vision-') as scratch:
-              scratch = Path(scratch)
-              storage = scratch / 'storage'
-              storage.mkdir()
-              copied_image = storage / source_image.name
-              shutil.copy2(source_image, copied_image)
-              for key in ('LLM_GATEWAY_API_KEY', 'LLM_GATEWAY_BASE_URL'):
-                  assert configuration.get(key), key + '_not_configured'
-                  os.environ[key] = configuration[key]
-              os.environ.update(V2_ENV_FILE=str(scratch / 'absent.env'), V2_DATA_DIR=str(scratch / 'data'),
-                  V2_STORAGE_DIR=str(storage), V2_TASK_QUEUE_DB_PATH=str(scratch / 'queue.sqlite3'),
-                  V2_OUTPUT_REVIEW_AGENT_ENABLED='true',
-                  V2_OUTPUT_REVIEW_TIMEOUT_SECONDS='300', OPENAI_AGENTS_DISABLE_TRACING='1', ORT_DISABLE_TELEMETRY='1',
-                  ALCHEMY_RENDER_BRIDGE_PRIMARY_CONFIG=str(scratch / 'absent-control.json'),
-                  ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT=str(scratch / 'ledgers'))
-              isolated_paths = {
-                  'V2_IMAGE_HISTORY_PATH': 'data/image_history.jsonl', 'VEYRA_USAGE_PATH': 'data/usage.jsonl',
-                  'V2_CASE_INDEX_PATH': 'data/case_index.json', 'V2_REMOTE_SNAPSHOT_DIR': 'data/snapshots',
-                  'V2_CASE_THUMBNAIL_DIR': 'data/case_thumbnails', 'V2_HISTORY_THUMBNAIL_DIR': 'data/history_thumbnails',
-                  'V2_CLAUDE_ORCHESTRATOR_WORKSPACE_DIR': 'data/claude', 'V2_CLAUDE_ORCHESTRATOR_CACHE_PATH': 'data/claude_cache.json',
-              }
-              os.environ.update({key: str(scratch / path) for key, path in isolated_paths.items()})
-              os.environ.update({key: value for key, value in configuration.items() if key.startswith('V2_CLAUDE_ORCHESTRATOR_') and key.endswith(('_MODEL', '_MODELS'))})
-              sys.path[:0] = [str(release / 'custom_media_agent_2_0'), str(release)]
-              from app.config import settings
-              for field in ('data_dir', 'storage_dir', 'image_history_path', 'veyra_usage_path', 'case_index_path',
-                            'remote_snapshot_dir', 'case_thumbnail_dir', 'history_thumbnail_dir', 'task_queue_db_path',
-                            'claude_orchestrator_workspace_dir', 'claude_orchestrator_cache_path'):
-                  assert getattr(settings, field).resolve().is_relative_to(scratch.resolve()), 'isolation_violation_' + field
-              from app.repositories import repository
-              from app.schemas import ImageJob
-              from app.services.output_review import review_image_job
-              from app.services.generation import finish_image_review
-              from app.services import visual_review_agent as vision
-              from app.services.model_routing import visual_review_models
-              queue = visual_review_models(settings)
-              assert list(queue) == ['claude-sonnet-5-5', 'gpt-6.1-sol'], 'unexpected_effective_queue'
-              payload['outputs'][0]['metadata']['storage_path'] = str(copied_image)
-              payload['outputs'][0]['review'] = None
-              job = review_image_job(ImageJob.model_validate(payload))
-              repository.save_image_job(job)
-              calls = []
-              client_factory = vision._http_client
-              def observed_client(timeout):
-                  client = client_factory(timeout)
-                  async def observe_response(response):
-                      await response.aread()
-                      body = response.json()
-                      usage = body.get('usage') or {}
-                      print('SAFE_RESPONSE_BOUNDARY=' + json.dumps({
-                          'status': response.status_code, 'stop_reason': body.get('stop_reason'),
-                          'finish_reason': ((body.get('choices') or [{}])[0]).get('finish_reason'),
-                          'usage': {key: value for key, value in usage.items() if type(value) is int},
-                          'content_types': [item.get('type') for item in body.get('content', [])],
-                          'text_lengths': [len(item.get('text', '')) for item in body.get('content', [])],
-                      }), flush=True)
-                  client.event_hooks['response'].append(observe_response)
-                  return client
-              vision._http_client = observed_client
-              invoke = vision._request_verdict
-              async def traced(content, selected_model, **kwargs):
-                  calls.append(selected_model)
+          def guard():
+              assert ROOT.resolve() == ROOT and ROOT.is_dir()
+              assert command('git', '-C', '/opt/alchemy-media-agent', 'rev-parse', 'HEAD') == ACTIVE
+              assert command('docker', 'inspect', 'alchemy-media-agent', '--format', '{{.State.Running}}') == 'true'
+              assert command('docker', 'image', 'inspect', 'alchemy-media-agent:rollback-pr29', '--format', '{{index .Config.Labels "org.opencontainers.image.revision"}}') == ROLLBACK
+              references = command('docker', 'inspect', *command('docker', 'ps', '-aq').split())
+              references += command('systemctl', 'cat', 'alchemy-v2-api.service', 'alchemy-v2-worker.service')
+              for process in Path('/proc').iterdir():
+                  if not process.name.isdecimal():
+                      continue
                   try:
-                      return await invoke(content, selected_model, **kwargs)
-                  except Exception as error:
-                      import httpx
-                      detail = {'type': type(error).__name__}
-                      if str(error) in {'review_gateway_unavailable', 'review_refused', 'review_incomplete'}:
-                          detail['code'] = str(error)
-                      if isinstance(error, httpx.HTTPStatusError):
-                          detail['http_status'] = error.response.status_code
-                      print('SAFE_REVIEW_FAILURE=' + json.dumps(detail), flush=True)
-                      raise
-              vision._request_verdict = traced
-              reviewed = asyncio.run(finish_image_review(job))
-              again = asyncio.run(finish_image_review(reviewed))
-              verdict = reviewed.outputs[0].review
-              assert source_record() == original_record and source_image.read_bytes() == source_bytes
-              assert copied_image.read_bytes() == source_bytes
-              assert 1 <= len(calls) <= len(queue) and calls == list(queue[:len(calls)])
-              assert again.outputs[0].review == verdict
-              from app.services import image_history
-              image_history.persist_image_job_history(reviewed)
-              image_history.prepare_history_reads()
-              history_before = settings.image_history_path.read_bytes()
-              projected = image_history.list_image_history(limit=1, include_all=True).items[0]
-              assert projected.review == verdict and settings.image_history_path.read_bytes() == history_before
-              print('CANDIDATE_VISION_RESULT=' + json.dumps({
-                  'analysis_mode': verdict.analysis_mode, 'decision': verdict.decision, 'model': verdict.model,
-                  'elapsed_ms': verdict.elapsed_ms, 'failure_code': verdict.failure_code,
-                  'configured_queue': list(queue), 'actual_calls': calls, 'model_attempts': verdict.model_attempts,
-                  'note_count': len(verdict.notes), 'request_count': len(calls), 'original_bytes_unchanged': True,
-                  'production_record_unchanged': True, 'canonical_verdict_persisted': repository.get_output(reviewed.outputs[0].output_id).review == verdict,
-                  'history_projection_matches': projected.review == verdict,
-                  'output_id': reviewed.outputs[0].output_id, 'production_writes': False}), flush=True)
-              assert verdict.analysis_mode == 'vision_model', 'real_vision_not_verified'
+                      references += (process / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+                      for link in [process / 'cwd', process / 'exe', *(process / 'fd').iterdir()]:
+                          try:
+                              references += os.readlink(link)
+                          except (FileNotFoundError, ProcessLookupError):
+                              pass
+                  except (FileNotFoundError, ProcessLookupError):
+                      continue
+              # Do not match this script's source: it is streamed on stdin, never argv.
+              assert all(str(ROOT / name) not in references for name in NAMES), 'backup_still_referenced'
+
+          def inventory(path):
+              assert path.parent == ROOT and path.name in NAMES and path.resolve() == path and path.is_dir()
+              pending, records = [path], {}
+              while pending:
+                  item = pending.pop()
+                  info = item.lstat()
+                  assert info.st_dev == ROOT.stat().st_dev
+                  assert stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode), 'non_regular_backup_member'
+                  if item.is_file():
+                      assert info.st_nlink == 1, 'linked_backup_file'
+                  records[item.relative_to(ROOT).as_posix()] = (info.st_mode, info.st_size if item.is_file() else 0,
+                      info.st_mtime_ns, info.st_uid, info.st_gid)
+                  if item.is_dir():
+                      pending.extend(item.iterdir())
+              return records
+
+          def verify(archive, source, before):
+              seen = set()
+              with tarfile.open(archive, 'r:gz') as saved:
+                  for member in saved:
+                      assert member.name in before and member.name not in seen
+                      seen.add(member.name)
+                      mode, size, mtime_ns, uid, gid = before[member.name]
+                      assert member.mode == stat.S_IMODE(mode) and member.uid == uid and member.gid == gid
+                      assert abs(member.mtime - mtime_ns / 1e9) < 0.000001
+                      if stat.S_ISDIR(mode):
+                          assert member.isdir()
+                      else:
+                          assert member.isfile() and member.size == size
+                          with saved.extractfile(member) as packed, (ROOT / member.name).open('rb') as original:
+                              while True:
+                                  block = original.read(1024 * 1024)
+                                  assert packed.read(1024 * 1024) == block
+                                  if not block:
+                                      break
+              assert seen == set(before) and inventory(source) == before
+
+          guard()
+          plans = [(ROOT / name, inventory(ROOT / name)) for name in NAMES]
+          print('EXACT_BACKUP_PLAN=' + json.dumps({'apply': APPLY, 'free_bytes': shutil.disk_usage(ROOT).free,
+              'items': [{'path': str(path), 'members': len(records), 'file_bytes': sum(v[1] for v in records.values())} for path, records in plans]}), flush=True)
+          if APPLY:
+              for source, before in plans:
+                  guard()
+                  assert inventory(source) == before
+                  archive = ROOT / (source.name + '.verified.tar.gz')
+                  assert not archive.exists() and not archive.is_symlink()
+                  with archive.open('xb') as stream:
+                      os.chmod(archive, 0o600)
+                      subprocess.run(['tar', '--format=pax', '--acls', '--xattrs', '-czf', '-', '-C', str(ROOT), source.name],
+                          stdout=stream, check=True)
+                      stream.flush()
+                      os.fsync(stream.fileno())
+                  verify(archive, source, before)
+                  guard()
+                  assert source.resolve() == ROOT / source.name and inventory(source) == before
+                  # Only the exact verified source is removed; complete restorable tar retained.
+                  shutil.rmtree(source)
+                  print('EXACT_BACKUP_ARCHIVED=' + json.dumps({'archive': str(archive), 'archive_bytes': archive.stat().st_size,
+                      'members': len(before), 'content_comparison': 'direct_bytes', 'free_bytes': shutil.disk_usage(ROOT).free}), flush=True)
+          print('EXACT_BACKUP_RESULT=pass', flush=True)
           PY
-          printf 'GUARDED_CANDIDATE_VISION_RESULT=pass\n'
-          REMOTE_SCRIPT
