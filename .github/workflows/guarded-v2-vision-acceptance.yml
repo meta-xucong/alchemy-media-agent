@@ -1,0 +1,93 @@
+name: Guarded V2 Vision Acceptance and Queue Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact prepared candidate commit to test without activation"
+        required: true
+        type: string
+      job_id:
+        description: "Existing completed V2 job whose single output will be copied into isolated storage"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guarded-v2-vision-acceptance
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Review an existing V2 output copy and synchronize the shared model queue
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          JOB_ID: ${{ inputs.job_id }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$JOB_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_SHA' '$JOB_ID'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          expected_sha="$1"
+          job_id="$2"
+          candidate="/opt/alchemy-media-agent-releases/doc276-277-${expected_sha:0:12}"
+          python="$candidate/custom_media_agent_2_0/.venv/bin/python"
+          acceptance_script="$candidate/custom_media_agent_2_0/scripts/guarded_vision_model_acceptance.py"
+          queue_sync_script="$candidate/custom_media_agent_2_0/scripts/guarded_v2_sync_review_queue.py"
+          [ -d "$candidate" ]
+          [ "$(git -C "$candidate" rev-parse HEAD)" = "$expected_sha" ]
+          git -C "$candidate" diff --quiet HEAD --
+          [ -x "$python" ]
+          [ -f "$acceptance_script" ]
+          [ -f "$queue_sync_script" ]
+          claude_status=0
+          kimi_status=0
+          "$python" "$acceptance_script" --job-id "$job_id" --model claude-sonnet-5-5 || claude_status=$?
+          "$python" "$acceptance_script" --job-id "$job_id" --model kimi-k3 || kimi_status=$?
+          printf 'GUARDED_V2_VISION_CLAUDE_EXIT=%s\n' "$claude_status"
+          printf 'GUARDED_V2_VISION_KIMI_EXIT=%s\n' "$kimi_status"
+          if [ "$claude_status" -ne 0 ] || [ "$kimi_status" -ne 0 ]; then
+            exit 1
+          fi
+          "$python" "$queue_sync_script" --job-id "$job_id"
+          printf 'GUARDED_V2_VISION_ACCEPTANCE=pass\n'
+          printf 'GUARDED_V2_REVIEW_QUEUE_SYNC=pass\n'
+          printf 'GUARDED_V2_VISION_ACCEPTANCE_SHA=%s\n' "$expected_sha"
+          REMOTE_SCRIPT

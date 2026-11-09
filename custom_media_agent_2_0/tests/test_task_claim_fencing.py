@@ -1201,20 +1201,23 @@ def test_default_worker_instances_have_distinct_ids_and_claim_lock_errors_recove
     assert calls == 2
 
     worker_ids: list[str] = []
+    worker_events: list[str] = []
     monkeypatch.setattr(task_queue_worker, "ensure_runtime_dirs", lambda: None)
     monkeypatch.setattr(task_queue_worker, "bootstrap_v2_repository", lambda **_kwargs: None)
     monkeypatch.setattr(task_queue_worker, "initialize_task_queue", lambda: None)
-    monkeypatch.setattr(task_queue_worker, "CreativeManagerRuntime", lambda: runtime)
+    monkeypatch.setattr(task_queue_worker, "_refresh_runtime_settings", lambda: worker_events.append("settings"))
+    monkeypatch.setattr(task_queue_worker, "CreativeManagerRuntime", lambda: worker_events.append("runtime") or runtime)
     monkeypatch.setattr(
         task_queue_worker,
         "process_next_task_once",
-        lambda _runtime, worker_id: worker_ids.append(worker_id) or False,
+        lambda _runtime, worker_id: worker_events.append("task") or worker_ids.append(worker_id) or False,
     )
     monkeypatch.setattr(sys, "argv", ["task_queue_worker", "--once"])
     task_queue_worker.main()
     task_queue_worker.main()
     assert len(worker_ids) == 2 and worker_ids[0] != worker_ids[1]
     assert all(worker_id.startswith("v2-standalone-") for worker_id in worker_ids)
+    assert worker_events == ["settings", "runtime", "settings", "task"] * 2
 
 
 def test_worker_slot_ownership_allows_spare_direct_slot_but_waits_for_unleased_claim(tmp_path: Path, monkeypatch) -> None:

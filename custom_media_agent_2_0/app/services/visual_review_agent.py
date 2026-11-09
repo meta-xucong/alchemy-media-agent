@@ -5,13 +5,14 @@ import asyncio
 import base64
 import io
 import json
+import re
 import time
 from pathlib import Path
 from typing import Literal
 
 import httpx
 from PIL import Image, ImageOps
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import settings
 from app.schemas import ImageJob, ImageOutput, ImageReviewDecision
@@ -27,6 +28,60 @@ class VisionVerdict(BaseModel):
     notes: list[str] = Field(max_length=5)
     issues: list[str] = Field(max_length=5)
     verified_source_fields: list[str] = Field(default_factory=list, max_length=128)
+
+
+class ReviewModelError(ValueError):
+    """A safe, structured model response failure without retaining response text."""
+
+    def __init__(
+        self,
+        failure_code: str,
+        *,
+        provider_reason: str | None = None,
+        provider_usage: dict | None = None,
+    ):
+        super().__init__(failure_code)
+        self.failure_code = failure_code
+        self.provider_reason = _safe_provider_reason(provider_reason)
+        self.provider_usage = provider_usage or {}
+
+
+_SAFE_PROVIDER_REASON = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_KNOWN_FAILURE_CODES = {
+    "review_gateway_unavailable", "review_disabled", "review_model_unconfigured",
+    "review_image_unavailable", "review_reference_unavailable", "review_refused",
+    "review_incomplete", "review_invalid_response", "review_invalid_response_json",
+    "review_verdict_invalid_json", "review_verdict_schema_invalid", "review_timeout",
+}
+
+
+def _safe_provider_reason(value: object) -> str | None:
+    if isinstance(value, str) and _SAFE_PROVIDER_REASON.fullmatch(value):
+        return value
+    return None
+
+
+def _failure_diagnostics(error: BaseException) -> dict:
+    if isinstance(error, ReviewModelError):
+        result = {"failure_code": error.failure_code}
+        if error.provider_reason:
+            result["provider_reason"] = error.provider_reason
+        if error.provider_usage:
+            result["provider_usage"] = error.provider_usage
+        return result
+    if isinstance(error, httpx.HTTPStatusError):
+        return {"failure_code": "review_http_status", "http_status": error.response.status_code}
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        return {"failure_code": "review_timeout"}
+    if isinstance(error, json.JSONDecodeError):
+        return {"failure_code": "review_invalid_response_json"}
+    if isinstance(error, httpx.HTTPError):
+        return {"failure_code": "review_transport_error"}
+    if isinstance(error, ValueError) and str(error) in _KNOWN_FAILURE_CODES:
+        return {"failure_code": str(error)}
+    if isinstance(error, (KeyError, IndexError, TypeError, AttributeError)):
+        return {"failure_code": "review_invalid_response"}
+    return {"failure_code": "review_unavailable"}
 
 
 def apply_visual_review_agent(output: ImageOutput, job: ImageJob, baseline: ImageReviewDecision) -> ImageReviewDecision:
@@ -120,7 +175,7 @@ def _review_content(output: ImageOutput, job: ImageJob) -> list[dict]:
 async def _request_verdict(content: list[dict], model: str, *, timeout: float) -> VisionVerdict:
     base = str(settings.llm_gateway_base_url or "").rstrip("/")
     if not base or not settings.llm_gateway_api_key:
-        raise ValueError("review_gateway_unavailable")
+        raise ReviewModelError("review_gateway_unavailable")
     if base.endswith("/chat/completions"):
         base = base[:-len("/chat/completions")]
     if not base.endswith("/v1"):
@@ -146,21 +201,51 @@ async def _request_verdict(content: list[dict], model: str, *, timeout: float) -
         async with _http_client(timeout) as client:
             response = await client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
-            body = response.json()
+            try:
+                body = response.json()
+            except (json.JSONDecodeError, ValueError) as error:
+                raise ReviewModelError("review_invalid_response_json") from error
+    if not isinstance(body, dict):
+        raise ReviewModelError("review_invalid_response")
+    usage = body.get("usage")
+    provider_usage = {}
+    if isinstance(usage, dict):
+        for key in ("input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if type(value) is int and 0 <= value <= 2_147_483_647:
+                provider_usage[key] = value
+        completion_details = usage.get("completion_tokens_details")
+        if isinstance(completion_details, dict):
+            reasoning_tokens = completion_details.get("reasoning_tokens")
+            if type(reasoning_tokens) is int and 0 <= reasoning_tokens <= 2_147_483_647:
+                provider_usage["reasoning_tokens"] = reasoning_tokens
     if model.startswith("claude-"):
-        if body.get("stop_reason") == "refusal":
-            raise ValueError("review_refused")
-        if body.get("stop_reason") != "end_turn":
-            raise ValueError("review_incomplete")
+        provider_reason = body.get("stop_reason")
+        if provider_reason == "refusal":
+            raise ReviewModelError("review_refused", provider_reason=provider_reason, provider_usage=provider_usage)
+        if provider_reason != "end_turn":
+            raise ReviewModelError("review_incomplete", provider_reason=provider_reason or "missing", provider_usage=provider_usage)
         text = "".join(item.get("text", "") for item in body.get("content", []) if item.get("type") == "text")
     else:
-        choice = body["choices"][0]
+        try:
+            choice = body["choices"][0]
+        except (KeyError, IndexError, TypeError) as error:
+            raise ReviewModelError("review_invalid_response") from error
         if choice["message"].get("refusal"):
-            raise ValueError("review_refused")
-        if choice.get("finish_reason") != "stop":
-            raise ValueError("review_incomplete")
+            raise ReviewModelError("review_refused", provider_reason="refusal", provider_usage=provider_usage)
+        provider_reason = choice.get("finish_reason")
+        if provider_reason != "stop":
+            raise ReviewModelError("review_incomplete", provider_reason=provider_reason or "missing", provider_usage=provider_usage)
         text = choice["message"]["content"]
-    return VisionVerdict.model_validate_json(text)
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise ReviewModelError("review_verdict_invalid_json") from error
+    try:
+        return VisionVerdict.model_validate(payload)
+    except ValidationError as error:
+        # Do not persist Pydantic's validation message; it may contain raw model output.
+        raise ReviewModelError("review_verdict_schema_invalid") from error
 
 
 async def review_generated_job(job: ImageJob) -> ImageJob:
@@ -195,8 +280,15 @@ async def review_generated_job(job: ImageJob) -> ImageJob:
                         verdict = await _request_verdict(content, model, timeout=remaining)
                     except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
                         attempts.append({"model": model, "outcome": "failed", "failure_class": type(error).__name__,
+                                         **_failure_diagnostics(error),
                                          "elapsed_ms": round((time.perf_counter() - attempt_started) * 1000)})
-                        stopped = str(error) == "review_refused" or (isinstance(error, httpx.HTTPStatusError) and error.response.status_code in {401, 403})
+                        stopped = (
+                            isinstance(error, ReviewModelError)
+                            and error.failure_code == "review_refused"
+                        ) or (
+                            isinstance(error, httpx.HTTPStatusError)
+                            and error.response.status_code in {401, 403}
+                        )
                         if stopped or index == len(models) - 1:
                             raise
                     else:
@@ -227,9 +319,10 @@ async def review_generated_job(job: ImageJob) -> ImageJob:
                 "model": model, "model_attempts": attempts, "verified_source_fields": sorted(verified_ids),
                 "elapsed_ms": round((time.perf_counter() - started) * 1000), "failure_code": None})
         except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, TypeError, AttributeError, OSError) as error:
-            code = "review_timeout" if isinstance(error, (TimeoutError, httpx.TimeoutException)) else "review_unavailable"
+            code = _failure_diagnostics(error)["failure_code"]
             if code == "review_timeout" and attempt_started is not None and (not attempts or attempts[-1]["model"] != model):
                 attempts.append({"model": model, "outcome": "failed", "failure_class": "TimeoutError",
+                                 **_failure_diagnostics(error),
                                  "elapsed_ms": round((time.perf_counter() - attempt_started) * 1000)})
             updated = review.model_copy(update={"analysis_mode": "vision_unavailable", "reviewer": "v2-vision-reviewer",
                 "decision": review.decision if review.decision in {"failed", "retry_recommended"} else "needs_review", "score": None,

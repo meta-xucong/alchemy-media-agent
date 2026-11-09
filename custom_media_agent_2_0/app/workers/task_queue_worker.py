@@ -8,7 +8,17 @@ from app.agents import CreativeManagerRuntime
 from app.config import ensure_runtime_dirs, settings
 from app.services.bootstrap import bootstrap_v2_repository
 from app.services.queue_worker import process_next_task_once
+from app.services.runtime_model_settings import (
+    apply_persisted_runtime_model_settings,
+    refresh_runtime_gateway_credentials,
+)
 from app.services.task_queue import initialize_task_queue
+
+
+def _refresh_runtime_settings() -> None:
+    """Apply the shared durable configuration before constructing or starting a task."""
+    apply_persisted_runtime_model_settings()
+    refresh_runtime_gateway_credentials()
 
 
 def main() -> None:
@@ -19,12 +29,16 @@ def main() -> None:
     args = parser.parse_args()
 
     ensure_runtime_dirs()
+    _refresh_runtime_settings()
     bootstrap_v2_repository(seed_cases=True)
     initialize_task_queue()
     worker_id = f"{args.worker_id or 'v2-standalone'}-{uuid.uuid4().hex}"
     runtime = CreativeManagerRuntime()
 
     while True:
+        # Reload between tasks so API settings changes reach this independent process.
+        # A running task keeps the settings it started with.
+        _refresh_runtime_settings()
         processed = process_next_task_once(runtime, worker_id)
         if args.once or not processed:
             if args.once:

@@ -71,6 +71,63 @@ def test_review_follows_brain_queue_gpt_last_and_reuses_valid_needs_review(job, 
     assert len(calls) == 2
 
 
+def test_claude_and_kimi_completion_reasons_are_safe_and_gpt_remains_last(job, monkeypatch):
+    monkeypatch.setattr(vision, 'settings', replace(vision.settings,
+        claude_orchestrator_model='claude-test', claude_orchestrator_multimodal_model='claude-test',
+        claude_orchestrator_fallback_models=('kimi-test', 'gpt-last')))
+    calls = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        model = payload['model']
+        calls.append(model)
+        if request.url.path.endswith('/messages'):
+            return httpx.Response(200, json={'stop_reason': 'max_tokens',
+                'usage': {'input_tokens': 1200, 'output_tokens': 1024},
+                'content': [{'type': 'text', 'text': 'PRIVATE_RESPONSE_TEXT'}]})
+        if model == 'kimi-test':
+            return httpx.Response(200, json={'usage': {'prompt_tokens': 1200, 'completion_tokens': 1024,
+                'completion_tokens_details': {'reasoning_tokens': 900}}, 'choices': [{'finish_reason': 'length',
+                'message': {'content': 'PRIVATE_RESPONSE_TEXT'}}]})
+        return reply()
+
+    install_response(monkeypatch, handler)
+    result = asyncio.run(vision.review_generated_job(review_image_job(job)))
+    review = result.outputs[0].review
+    assert calls == ['claude-test', 'kimi-test', 'gpt-last']
+    assert review.analysis_mode == 'vision_model' and review.model == 'gpt-last'
+    assert review.model_attempts[:2] and all('failure_code' in attempt for attempt in review.model_attempts[:2])
+    assert [attempt['failure_code'] for attempt in review.model_attempts[:2]] == [
+        'review_incomplete', 'review_incomplete',
+    ]
+    assert [attempt['provider_reason'] for attempt in review.model_attempts[:2]] == ['max_tokens', 'length']
+    assert review.model_attempts[0]['provider_usage'] == {'input_tokens': 1200, 'output_tokens': 1024}
+    assert review.model_attempts[1]['provider_usage'] == {
+        'prompt_tokens': 1200, 'completion_tokens': 1024, 'reasoning_tokens': 900,
+    }
+    assert 'PRIVATE_RESPONSE_TEXT' not in json.dumps(review.model_attempts)
+
+
+def test_visual_review_uses_persisted_worker_queue_as_single_authority(tmp_path, monkeypatch):
+    from app.services import runtime_model_settings
+    from app.services.model_routing import visual_review_models
+
+    worker_settings = replace(runtime_model_settings.settings, data_dir=tmp_path,
+        claude_orchestrator_model='claude-sonnet-5-5',
+        claude_orchestrator_multimodal_model='claude-sonnet-5-5',
+        claude_orchestrator_fallback_models=('environment-only-model', 'gpt-6.1-sol'))
+    monkeypatch.setattr(runtime_model_settings, 'settings', worker_settings)
+    runtime_model_settings.runtime_model_settings_path().write_text(json.dumps({
+        'claude_orchestrator_fallback_models': ['kimi-k3', 'gpt-6.1-sol'],
+    }), encoding='utf-8')
+
+    runtime_model_settings.apply_persisted_runtime_model_settings()
+
+    assert visual_review_models(worker_settings) == [
+        'claude-sonnet-5-5', 'kimi-k3', 'gpt-6.1-sol',
+    ]
+
+
 @pytest.mark.parametrize('status', [401, 403])
 def test_review_authorization_failure_does_not_rotate_models(job, monkeypatch, status):
     monkeypatch.setattr(vision, 'settings', replace(vision.settings, claude_orchestrator_fallback_models=('gpt-last',)))
