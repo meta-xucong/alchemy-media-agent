@@ -155,6 +155,23 @@ jobs:
               job = review_image_job(ImageJob.model_validate(payload))
               repository.save_image_job(job)
               calls = []
+              client_factory = vision._http_client
+              def observed_client(timeout):
+                  client = client_factory(timeout)
+                  async def observe_response(response):
+                      await response.aread()
+                      body = response.json()
+                      usage = body.get('usage') or {}
+                      print('SAFE_RESPONSE_BOUNDARY=' + json.dumps({
+                          'status': response.status_code, 'stop_reason': body.get('stop_reason'),
+                          'finish_reason': ((body.get('choices') or [{}])[0]).get('finish_reason'),
+                          'usage': {key: value for key, value in usage.items() if type(value) is int},
+                          'content_types': [item.get('type') for item in body.get('content', [])],
+                          'text_lengths': [len(item.get('text', '')) for item in body.get('content', [])],
+                      }), flush=True)
+                  client.event_hooks['response'].append(observe_response)
+                  return client
+              vision._http_client = observed_client
               invoke = vision._request_verdict
               async def traced(content, selected_model, **kwargs):
                   calls.append(selected_model)
@@ -163,6 +180,8 @@ jobs:
                   except Exception as error:
                       import httpx
                       detail = {'type': type(error).__name__}
+                      if str(error) in {'review_gateway_unavailable', 'review_refused', 'review_incomplete'}:
+                          detail['code'] = str(error)
                       if isinstance(error, httpx.HTTPStatusError):
                           detail['http_status'] = error.response.status_code
                       print('SAFE_REVIEW_FAILURE=' + json.dumps(detail), flush=True)
