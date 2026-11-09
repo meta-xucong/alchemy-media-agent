@@ -49,7 +49,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
-      - name: Retire exact verified failed build container
+      - name: Read current V2 run, output, review and queue state
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -57,57 +57,113 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
           set -euo pipefail
-          [ "$EXPECTED_SHA" = b1b229737ad2dee32f94d353254d2c22740c2c18 ]
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$remote" "python3 -" <<'PY'
-          import fcntl
+            "$remote" "python3 - '$EXPECTED_SHA'" <<'PY'
           import json
-          import shutil
-          import subprocess
+          import re
+          import sqlite3
+          import sys
           from pathlib import Path
-          from urllib.request import urlopen
 
-          ACTIVE = 'b1b229737ad2dee32f94d353254d2c22740c2c18'
-          CANDIDATE = 'ec7023b6119dcb80b3c794c6f46d1e58efdb6c59'
-          CONTAINER = 'c31898d7929d0b061f1b3d523bf25d92ed3971601429cb7a0a078006108226bf'
-          EXPECTED_COMMAND = ['/bin/sh', '-c', 'python -m pip install --index-url "$PIP_INDEX_URL" --upgrade pip &&     python -m pip install --index-url "$PIP_INDEX_URL" -r requirements.txt']
+          RUN_ID = 'run_7a9119d52384'
+          JOB_ID = 'job_f0631661d94e'
+          OUTPUT_ID = 'out_job_f0631661d94e_0'
 
 
-          def cmd(*args):
-              return subprocess.check_output(args, text=True)
+          def readonly(path):
+              conn = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=4)
+              conn.row_factory = sqlite3.Row
+              conn.execute('PRAGMA query_only=ON')
+              return conn
 
 
-          def protected_state():
-              release = Path('/opt/alchemy-media-agent').resolve()
-              assert release == Path('/opt/alchemy-media-agent-releases/doc276-277-' + ACTIVE[:12])
-              assert cmd('git', '-C', str(release), 'rev-parse', 'HEAD').strip() == ACTIVE
-              running = json.loads(cmd('docker', 'container', 'inspect', 'alchemy-media-agent'))[0]
-              assert running['State']['Running'] and running['Config']['Image'] == 'alchemy-media-agent:latest'
-              tags = ['alchemy-media-agent:latest', 'alchemy-media-agent:rollback-pr29', 'alchemy-media-agent:candidate-' + CANDIDATE]
-              images = json.loads(cmd('docker', 'image', 'inspect', *tags))
-              for port, route in [(8017, '/healthz'), (8020, '/api/v2/health')]:
-                  with urlopen('http://127.0.0.1:' + str(port) + route, timeout=10) as response:
-                      assert response.status == 200
-              return [image['Id'] for image in images]
+          def payload(conn, namespace, key):
+              row = conn.execute('SELECT payload FROM v2_records WHERE namespace=? AND record_key=?',
+                                 (namespace, key)).fetchone()
+              return json.loads(row['payload']) if row else None
 
 
-          with open('/run/lock/alchemy-media-agent-release.lock', 'a') as lock:
-              fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-              before = protected_state()
-              row = json.loads(cmd('docker', 'container', 'inspect', '--size', CONTAINER))[0]
-              assert row['Id'] == CONTAINER and row['Name'] == '/goofy_cannon'
-              assert row['Created'] == '2026-11-08T20:03:02.624973393Z'
-              assert row['State']['Status'] == 'exited' and row['State']['Running'] is False
-              assert row['State']['ExitCode'] == 0
-              assert row['State']['FinishedAt'] == '2026-11-08T20:05:06.581490216Z'
-              assert row.get('Mounts') == [] and row['Config']['WorkingDir'] == '/app'
-              assert row['Config']['Cmd'] == EXPECTED_COMMAND
-              assert row['HostConfig']['RestartPolicy']['Name'] in {'', 'no'}
-              assert row['SizeRw'] == 363282400
-              print(json.dumps({'status': 'validated', 'container': CONTAINER, 'size_rw': row['SizeRw'], 'mounts': []}), flush=True)
-              cmd('docker', 'container', 'rm', CONTAINER)
-              assert CONTAINER not in cmd('docker', 'container', 'ls', '-aq', '--no-trunc').splitlines()
-              assert protected_state() == before
-              print(json.dumps({'status': 'retired_failed_build_container', 'free_bytes': shutil.disk_usage('/').free}), flush=True)
+          def error_projection(error):
+              if not isinstance(error, dict):
+                  return {'present': bool(error)}
+              detail = error.get('detail') if isinstance(error.get('detail'), dict) else {}
+              message = str(error.get('message') or '').lower()
+              kinds = ['bridge', 'timeout', 'rate_limit', 'auth', 'credit', 'vision', 'provider', 'network', 'validation']
+              return {'present': True, 'provider': error.get('provider'), 'error_code': error.get('error_code'),
+                      'retryable': error.get('retryable'), 'message_kind': next((item for item in kinds if item in message), 'other'),
+                      'detail': {key: detail[key] for key in ('state', 'task_id', 'queue_reconciliation_required', 'poll_failed') if key in detail}}
+
+
+          def review_projection(review):
+              if not isinstance(review, dict):
+                  return None
+              keys = ('decision', 'reviewer', 'analysis_mode', 'model', 'elapsed_ms', 'failure_code', 'created_at')
+              return {key: review[key] for key in keys if key in review}
+
+
+          def stage_projection(items):
+              keys = ('stage', 'status', 'outcome', 'provider', 'model', 'invocation_status', 'latency_ms',
+                      'elapsed_ms', 'duration_ms', 'attempts', 'cache_hit', 'started_at', 'completed_at',
+                      'created_at', 'updated_at', 'at', 'event', 'step', 'failure_class', 'reason', 'code')
+              return [{key: item[key] for key in keys if key in item} for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+          env = {}
+          for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines():
+              key, sep, value = line.partition('=')
+              if sep and key in {'V2_DATA_DIR', 'V2_TASK_QUEUE_DB_PATH'}:
+                  env[key] = value.strip().strip('"').strip("'")
+          assert len(env) == 2
+          release = Path('/opt/alchemy-media-agent').resolve()
+          import subprocess
+          active = subprocess.check_output(['git', '-C', str(release), 'rev-parse', 'HEAD'], text=True).strip()
+          assert active == sys.argv[1]
+          conn = readonly(Path(env['V2_DATA_DIR']) / 'repository.sqlite3')
+          job = payload(conn, 'image_jobs', JOB_ID)
+          run = payload(conn, 'creative_runs', RUN_ID)
+          output = payload(conn, 'outputs', OUTPUT_ID)
+          bridge = None
+          if output:
+              metadata = output.get('metadata') or {}
+              b = metadata.get('render_bridge_primary') or {}
+              bridge = {key: b[key] for key in ('route', 'state', 'reason', 'task_id', 'receipt_id', 'attempt_id', 'queue_count', 'queue_limit') if key in b}
+          result = {'active_sha': active,
+                    'job': ({'job_id': JOB_ID, 'run_id': job.get('run_id'), 'status': job.get('status'),
+                             'provider_id': job.get('provider_id'), 'model': job.get('model'),
+                             'created_at': job.get('created_at'), 'updated_at': job.get('updated_at'),
+                             'error': error_projection(job.get('error')),
+                             'outputs': [{'output_id': row.get('output_id'), 'created_at': row.get('created_at'),
+                                          'review': review_projection(row.get('review'))}
+                                         for row in job.get('outputs', [])]} if job else None),
+                    'output_record': ({'output_id': OUTPUT_ID, 'job_id': output.get('job_id'), 'created_at': output.get('created_at'),
+                                      'review': review_projection(output.get('review')), 'bridge': bridge,
+                                      'has_storage_path': bool((output.get('metadata') or {}).get('storage_path')),
+                                      'has_preview': bool((output.get('metadata') or {}).get('preview_path')),
+                                      'has_thumbnail': bool((output.get('metadata') or {}).get('thumbnail_path'))} if output else None),
+                    'run': ({'run_id': RUN_ID, 'status': run.get('status'), 'created_at': run.get('created_at'),
+                             'updated_at': run.get('updated_at'), 'job_ids': [item.get('job_id') for item in run.get('generation_jobs', [])],
+                             'jobs': [{'job_id': item.get('job_id'), 'status': item.get('status'),
+                                       'error': error_projection(item.get('error')),
+                                       'outputs': [{'output_id': row.get('output_id'), 'review': review_projection(row.get('review'))}
+                                                   for row in item.get('outputs', [])]} for item in run.get('generation_jobs', [])],
+                             'orchestrator': {key: (run.get('orchestrator_decision') or {}).get(key)
+                                              for key in ('provider', 'invocation_status', 'latency_ms', 'attempts', 'fallback_reason')
+                                              if key in (run.get('orchestrator_decision') or {})},
+                             'stages': stage_projection((run.get('orchestrator_decision') or {}).get('claude_stage_trace')),
+                             'events': stage_projection(run.get('progress_events'))} if run else None)}
+          conn.close()
+          queue = readonly(env['V2_TASK_QUEUE_DB_PATH'])
+          row = queue.execute('SELECT task_id,run_id,status,attempts,max_attempts,claim_generation,created_at,updated_at,not_before,error_json '
+                              'FROM v2_tasks WHERE run_id=?', (RUN_ID,)).fetchone()
+          if row:
+              error_json = json.loads(row['error_json']) if row['error_json'] else None
+              result['queue'] = {key: row[key] for key in ('task_id', 'run_id', 'status', 'attempts', 'max_attempts',
+                                                             'claim_generation', 'created_at', 'updated_at', 'not_before')}
+              result['queue']['error'] = error_projection(error_json)
+          else:
+              result['queue'] = None
+          queue.close()
+          print(json.dumps(result, ensure_ascii=False, separators=(',', ':')))
           PY
