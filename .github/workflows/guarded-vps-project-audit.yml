@@ -49,6 +49,152 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
+      - name: Inspect exact unresolved Bridge units without mutation
+        if: ${{ inputs.planning_operation_id == 'doc277_project_planning_bridge_inspect_20261109' }}
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" == b6bcd4fb442b4ceaf1cd37f63b902588554676ee ]]
+          [[ "$PLANNING_OPERATION_ID" == doc277_project_planning_bridge_inspect_20261109 ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" "flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - '$EXPECTED_SHA'" <<'REMOTE_PY'
+          import json
+          import re
+          import sqlite3
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          expected_sha = sys.argv[1]
+          active = Path('/opt/alchemy-media-agent').resolve(strict=True)
+          assert active == Path('/opt/alchemy-media-agent-releases/doc276-277-' + expected_sha[:12])
+
+          def run(*args):
+              result = subprocess.run(args, capture_output=True, text=True, check=False)
+              if result.returncode:
+                  raise RuntimeError('command_failed:' + args[0])
+              return result.stdout.strip()
+
+          assert run('git', '-C', str(active), 'rev-parse', 'HEAD') == expected_sha
+          assert run('docker', 'inspect', 'alchemy-media-agent', '--format', '{{.State.Running}}') == 'true'
+          for unit in ('alchemy-v2-api.service', 'alchemy-v2-worker.service', 'alchemy-v2-sync-worker.service'):
+              assert run('systemctl', 'is-active', unit) == 'active'
+          for url in ('http://127.0.0.1:8017/healthz', 'http://127.0.0.1:8020/api/v2/health'):
+              run('curl', '--noproxy', '*', '-fsS', '--max-time', '10', url)
+
+          guard = active / 'scripts/vps_cutover_guard.py'
+          paths_raw = run('python3', str(guard), 'verify-bridge-storage-configuration',
+                          '--v1-environment', str(active / 'src_skeleton/.env'),
+                          '--v2-environment', '/etc/alchemy/alchemy-v2.env',
+                          '--release-root', str(active), '--release-root', str(active))
+          state_root = Path(json.loads(paths_raw)['state_root']).resolve(strict=True)
+          docker_mounts = json.loads(run('docker', 'inspect', 'alchemy-media-agent',
+                                         '--format', '{{json .Mounts}}'))
+          v2_storage = [Path(item['Source']) for item in docker_mounts
+                        if item.get('Destination') == '/var/lib/alchemy/v2/storage']
+          assert len(v2_storage) == 1
+          v2_data = v2_storage[0]
+          v2_data_values = [line.split('=', 1)[1].removesuffix('\r')
+                            for line in Path('/etc/alchemy/alchemy-v2.env').read_text(encoding='utf-8').splitlines()
+                            if line.split('=', 1)[0] == 'V2_DATA_DIR']
+          assert len(v2_data_values) <= 1
+          if v2_data_values and v2_data_values[0]:
+              v2_data = Path(v2_data_values[0])
+          v2_repository = v2_data / 'repository.sqlite3'
+
+          safe_re = re.compile(r'[A-Za-z0-9_.:-]{1,200}')
+          def safe(value):
+              return value if isinstance(value, str) and safe_re.fullmatch(value) else None
+
+          def readonly(path):
+              if not path.is_file():
+                  raise RuntimeError('required_database_missing')
+              db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)
+              db.execute('PRAGMA query_only=ON')
+              return db
+
+          rows = []
+          ledger_count = 0
+          for ledger in sorted(state_root.glob('*/primary.sqlite3')):
+              db = readonly(ledger)
+              try:
+                  tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                  assert 'units' in tables
+                  for state, raw in db.execute('SELECT state,data FROM units'):
+                      data = json.loads(raw)
+                      assert isinstance(data, dict)
+                      route = data.get('route')
+                      cancel_requested_value = data.get('cancel_requested')
+                      cancel_reconciled_value = data.get('cancel_reconciled')
+                      cancel_requested = bool(cancel_requested_value)
+                      cancel_reconciled = bool(cancel_reconciled_value)
+                      terminal = state in {'acked', 'api_completed'}
+                      if (not terminal and state == 'artifacts_ready' and route == 'bridge'
+                              and cancel_requested_value is True and cancel_reconciled_value is True):
+                          terminal = True
+                      if state in {'canceled', 'failed', 'expired'}:
+                          terminal = not cancel_requested_value or bool(cancel_reconciled_value)
+                      if terminal:
+                          continue
+                      unit_id = data.get('unit_id')
+                      job_id = unit_id.partition(':')[0] if isinstance(unit_id, str) and ':' in unit_id else None
+                      rows.append({
+                          'unit_id': safe(unit_id),
+                          'job_id': safe(job_id),
+                          'product': data.get('product') if data.get('product') in {'v1', 'v2', 'v3', 'lab'} else 'other',
+                          'route': route if route in {'api', 'bridge'} else 'other',
+                          'state': safe(state) or 'other',
+                          'task_id': safe(data.get('task_id')),
+                          'cancel_requested': cancel_requested,
+                          'cancel_reconciled': cancel_reconciled,
+                          'failure_code': safe(data.get('bridge_error_code')) or safe(data.get('failure_code')),
+                      })
+              finally:
+                  db.close()
+              ledger_count += 1
+
+          api_job_ids = {item['job_id'] for item in rows
+                         if item['product'] == 'v2' and item['route'] == 'api' and item['job_id']}
+          if api_job_ids:
+              jobs = {}
+              db = readonly(v2_repository)
+              try:
+                  for (raw,) in db.execute("SELECT payload FROM v2_records WHERE namespace='image_jobs'"):
+                      record = json.loads(raw)
+                      if isinstance(record, dict) and record.get('job_id') in api_job_ids:
+                          error = record.get('error') if isinstance(record.get('error'), dict) else {}
+                          jobs[record['job_id']] = {
+                              'status': safe(record.get('status')),
+                              'output_count': len(record.get('outputs')) if isinstance(record.get('outputs'), list) else None,
+                              'failure_code': safe(error.get('code')) or safe(record.get('failure_code')),
+                          }
+              finally:
+                  db.close()
+              for item in rows:
+                  if item['job_id'] in jobs:
+                      item['v2_job'] = jobs[item['job_id']]
+
+          from collections import Counter
+          counts = Counter((item['product'], item['route'], item['state'],
+                            item['cancel_requested'], item['cancel_reconciled'], bool(item['task_id']))
+                           for item in rows)
+          groups = [{'product': key[0], 'route': key[1], 'state': key[2],
+                     'cancel_requested': key[3], 'cancel_reconciled': key[4],
+                     'has_task_id': key[5], 'count': count}
+                    for key, count in sorted(counts.items())]
+          print(json.dumps({'status': 'read_only_inspection', 'active_release': str(active),
+                            'bridge_state_root': str(state_root), 'ledger_count': ledger_count,
+                            'unresolved_unit_count': len(rows), 'groups': groups, 'units': rows},
+                           sort_keys=True), flush=True)
+          REMOTE_PY
+
       - name: Inspect exact stopped build container without mutation
         if: ${{ startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_inspect_') }}
         env:
@@ -451,7 +597,7 @@ jobs:
           REMOTE_PY
 
       - name: Read project and delivery records without mutation
-        if: ${{ !startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_') && !startsWith(inputs.planning_operation_id, 'doc277_project_planning_backup_') }}
+        if: ${{ !startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_') && !startsWith(inputs.planning_operation_id, 'doc277_project_planning_backup_') && !startsWith(inputs.planning_operation_id, 'doc277_project_planning_bridge_inspect_') }}
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PROJECT_ID: ${{ inputs.project_id }}
