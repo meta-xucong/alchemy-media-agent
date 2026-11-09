@@ -211,11 +211,18 @@ jobs:
           config_snapshot = {key: effective.get(key) for key in ('default_agent_model', 'output_review_agent_model',
               'claude_orchestrator_model', 'claude_orchestrator_multimodal_model', 'claude_orchestrator_fallback_models',
               'claude_orchestrator_fallback_model')}
+          worker_environment = {key: configured.get(key) for key in ('V2_CLAUDE_ORCHESTRATOR_MODEL',
+              'V2_CLAUDE_ORCHESTRATOR_MULTIMODAL_MODEL', 'V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODELS',
+              'V2_CLAUDE_ORCHESTRATOR_FALLBACK_MODEL') if configured.get(key)}
           latest_run = runs[0] if runs else {}
           latest_run_id = latest_run.get('run_id')
           latest_jobs = [job for job in jobs if job.get('run_id') == latest_run_id]
           private_data = {'run_id': latest_run_id, 'reviews': [
-              {'job_id': job.get('job_id'), 'outputs': [{'output_id': output.get('output_id'), 'notes': (output.get('review') or {}).get('notes', []),
+              {'job_id': job.get('job_id'),
+               'user_request': ((job.get('prompt_plan') or {}).get('user_variables') or {}).get('user_prompt'),
+               'generation_prompt': (job.get('prompt_plan') or {}).get('prompt'),
+               'negative_prompt': (job.get('prompt_plan') or {}).get('negative_prompt'),
+               'outputs': [{'output_id': output.get('output_id'), 'notes': (output.get('review') or {}).get('notes', []),
                   'revision_directives': (output.get('review') or {}).get('revision_directives', [])}
                   for output in job.get('outputs', [])]}
               for job in latest_jobs]}
@@ -225,7 +232,8 @@ jobs:
           wrapped = public_key.encrypt(key, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
           result = {'checked_at': datetime.now(timezone.utc).isoformat(), 'active_sha': subprocess.check_output(
               ['git', '-C', str(release), 'rev-parse', 'HEAD'], text=True).strip(),
-              'runs': summaries[:6], 'queue': queue_rows, 'runtime_model_settings': config_snapshot, 'frontend_requests': logs}
+              'runs': summaries[:6], 'queue': queue_rows, 'runtime_model_settings': config_snapshot,
+              'worker_environment_models': worker_environment, 'frontend_requests': logs}
           print('PRIVATE_RUN_STATE=' + json.dumps({key: base64.b64encode(value).decode() for key, value in
               {'key': wrapped, 'nonce': nonce, 'cipher': sealed}.items()}))
           print('V2_RUN_MONITOR=' + json.dumps(result, ensure_ascii=False, separators=(',', ':')), flush=True)
