@@ -382,7 +382,7 @@
               <div id="historyGallery" class="history-gallery empty-history" aria-live="polite"></div>
             </section>
 
-            <section class="panel flow-section provider-panel" data-mode-area="v1-professional">
+            <section class="panel flow-section provider-panel" data-mode-area="v1-professional" hidden>
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">06 / Model & API</p>
@@ -830,7 +830,7 @@
               <div id="v2HistoryGrid" class="v2-history-grid empty-v2-list" aria-live="polite"></div>
             </section>
 
-            <section class="panel flow-section v2-provider-area" data-mode-area="v2-professional">
+            <section class="panel flow-section v2-provider-area" data-mode-area="v2-professional" hidden>
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">06 / Model Status</p>
@@ -941,7 +941,7 @@
               </details>
             </section>
 
-            <section class="studio-panel flow-section" data-mode-area="v2-professional">
+            <section class="studio-panel flow-section v2-model-card-grid-panel" data-mode-area="v2-professional" hidden>
               <div class="panel-head section-title">
                 <div>
                   <p class="eyebrow">06 / Agent Models</p>
@@ -1012,11 +1012,6 @@
                   <p class="section-subcopy">先建项目，再持续生成；每次结果都会回到同一个项目里。</p>
                 </div>
                 <span id="mobileV3State" class="state-pill">待同步</span>
-              </div>
-
-              <div class="segmented v3-mobile-workspace-switch" role="radiogroup" aria-label="V3 工作模式">
-                <button class="segment active" data-mobile-v3-workspace="standard" role="radio" aria-checked="true" type="button">普通版</button>
-                <button class="segment" data-mobile-v3-workspace="professional" role="radio" aria-checked="false" type="button">专业版</button>
               </div>
 
               <section id="mobileV3ProfessionalAssetPanel" class="v3-mobile-professional-panel" hidden aria-label="专业版视觉资产">
@@ -1119,7 +1114,7 @@
                 <input id="mobileV3VisualAssetConsentInput" type="checkbox" />
                 <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
               </label>
-              <p id="mobileV3VisualAssetCreateFeedback" class="notice-bar" role="status" aria-live="polite">请补全资料后保存人物资产。</p>
+              <p id="mobileV3VisualAssetCreateFeedback" class="notice-bar" role="status" aria-live="polite" hidden></p>
               <button id="mobileV3VisualAssetCreateSubmitBtn" class="button primary full-width" type="button">保存源图并回到资产库</button>
             </section>
 

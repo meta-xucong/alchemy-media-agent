@@ -5387,19 +5387,11 @@ body {
   align-items: stretch;
 }
 
-.v3-workspace-menu {
-  position: relative;
-  display: inline-flex;
-  align-items: stretch;
-}
-
-.lab-nav-menu > .tab,
-.v3-workspace-menu > .tab {
+.lab-nav-menu > .tab {
   height: 100%;
 }
 
-.lab-nav-dropdown,
-.v3-workspace-menu-dropdown {
+.lab-nav-dropdown {
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
@@ -5418,21 +5410,18 @@ body {
   transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
 }
 
-.lab-nav-menu.is-open .lab-nav-dropdown,
-.v3-workspace-menu.is-open .v3-workspace-menu-dropdown {
+.lab-nav-menu.is-open .lab-nav-dropdown {
   display: grid;
   opacity: 1;
   visibility: visible;
   transform: translateX(-50%) translateY(0);
 }
 
-.lab-nav-dropdown[hidden],
-.v3-workspace-menu-dropdown[hidden] {
+.lab-nav-dropdown[hidden] {
   display: none;
 }
 
-.lab-nav-dropdown button,
-.v3-workspace-menu-dropdown button {
+.lab-nav-dropdown button {
   display: grid;
   gap: 3px;
   border: 0;
@@ -5445,21 +5434,17 @@ body {
 }
 
 .lab-nav-dropdown button:hover,
-.lab-nav-dropdown button:focus-visible,
-.v3-workspace-menu-dropdown button:hover,
-.v3-workspace-menu-dropdown button:focus-visible {
+.lab-nav-dropdown button:focus-visible {
   background: rgba(116, 130, 105, 0.1);
   outline: none;
 }
 
-.lab-nav-dropdown span,
-.v3-workspace-menu-dropdown span {
+.lab-nav-dropdown span {
   font-size: 13px;
   font-weight: 750;
 }
 
-.lab-nav-dropdown small,
-.v3-workspace-menu-dropdown small {
+.lab-nav-dropdown small {
   color: var(--muted);
   font-size: 12px;
 }
@@ -7086,8 +7071,7 @@ input[type="range"] {
 }
 
 .module-tabs .tab,
-.module-tabs .lab-nav-menu,
-.module-tabs .v3-workspace-menu {
+.module-tabs .lab-nav-menu {
   flex: 0 0 auto;
   scroll-snap-align: center;
 }
@@ -7125,12 +7109,6 @@ input[type="range"] {
   left: var(--lab-menu-left, 50vw);
 }
 
-.v3-workspace-menu-dropdown {
-  position: fixed;
-  top: var(--v3-workspace-menu-top, 66px);
-  left: var(--v3-workspace-menu-left, 50vw);
-}
-
 @media (max-width: 1180px) {
   .lux-header {
     grid-template-columns: minmax(0, 1fr);
@@ -7158,8 +7136,7 @@ input[type="range"] {
   }
 
   .module-tabs .tab,
-  .module-tabs .lab-nav-menu,
-  .module-tabs .v3-workspace-menu {
+  .module-tabs .lab-nav-menu {
     flex: 1 1 calc(50% - 10px);
     min-width: 0;
   }
@@ -11408,4 +11385,77 @@ body.v3-page-loading-active {
 @media (max-width: 640px) {
   .billing-admin-page { gap: 18px; }
   .billing-admin-page > .panel { padding: 18px; border-radius: 14px; }
+}
+
+/* Compact, evidence-based result metadata and honor hidden states in display cards. */
+.provider-panel[hidden],
+.v2-provider-area[hidden],
+.v2-model-card-grid-panel[hidden],
+.v3-visual-asset-status[hidden],
+.v3-visual-asset-create-feedback[hidden] {
+  display: none !important;
+}
+
+.v2-output-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.v2-output-meta > strong {
+  flex: 1 1 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.v2-output-meta .v2-route-badge,
+.v2-output-meta .v2-review-badge {
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #49574c;
+  background: rgba(47, 90, 69, 0.08);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.v2-output-meta .v2-route-badge.unknown,
+.v2-output-meta .v2-review-badge {
+  color: var(--muted);
+  background: rgba(23, 20, 17, 0.06);
+}
+
+.v2-output-meta .v2-review-details {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.v2-output-meta .v2-review-details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.v2-output-meta .v2-review-details p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.v3-source-badge {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #46564c !important;
+  background: rgba(47, 90, 69, 0.08) !important;
+  font-size: 11px !important;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }

@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
+MOBILE_JS = ROOT / "src_skeleton" / "app" / "mobile_static" / "mobile.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
 STYLES_CSS = ROOT / "src_skeleton" / "app" / "static" / "styles.css"
 DOC173 = ROOT / "alchemy_creative_agent_3_0" / "docs" / "173_V3_VISUAL_ASSET_LIBRARY_FIRST_PROFESSIONAL_WORKSPACE_RECONSTRUCTION_SPEC.md"
@@ -31,18 +32,17 @@ def test_doc174_replaces_only_doc173_frontend_navigation_authority() -> None:
     assert "Provider" in doc174
 
 
-def test_doc174_v3_title_menu_exposes_explicit_standard_and_professional_entries() -> None:
+def test_v3_title_entry_opens_basic_workspace_without_a_mode_menu() -> None:
     index = INDEX_HTML.read_text(encoding="utf-8")
     source = APP_JS.read_text(encoding="utf-8")
 
-    assert 'id="v3WorkspaceMenu"' in index
-    assert 'id="v3WorkspaceMenuBtn"' in index
-    assert 'data-v3-workspace-entry="standard"' in index
-    assert 'data-v3-workspace-entry="professional"' in index
+    assert 'data-tab="v3"' in index
+    assert "v3WorkspaceMenu" not in index
+    assert "data-v3-workspace-entry" not in index
+    assert "setV3WorkspaceMenuOpen" not in source
+    assert 'if (!v3State.currentProject) setV3WorkspaceMode("standard")' in source
+    assert 'setV3WorkspaceMode("standard", { updateRoute: false })' in source
     assert "function setV3WorkspaceMode(" in source
-    assert "function setV3WorkspaceMenuOpen(" in source
-    assert '"standard"' in source
-    assert '"professional"' in source
 
 
 def test_doc174_keeps_standard_surface_free_of_visual_asset_controls() -> None:
@@ -86,18 +86,39 @@ def test_doc174_project_lists_and_opened_projects_restore_workspace_truth() -> N
     render = _function(source, "renderV3Projects", "handleV3ProjectClick")
     open_project = _function(source, "openV3Project", "renderV3ProjectOpeningState")
 
-    assert "v3ProjectUsesProfessionalWorkspace" in render
+    assert "v3ProjectUsesProfessionalWorkspace" not in render
+    assert '.filter((item) => item?.status !== "archived")' in render
     assert "setV3WorkspaceMode" in open_project
+    assert "v3ProjectUsesProfessionalWorkspace(v3State.currentProject)" in open_project
     assert "workspaceMode" in source
 
 
-def test_doc174_workspace_route_links_preserve_the_selected_workspace() -> None:
+def test_doc174_workspace_route_links_return_to_the_basic_home() -> None:
     source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    restore = _function(source, "restoreInitialModuleRoute", "initV3Shell")
+    recent_project = _function(source, "openV3RecentProjectIfNeeded", "v3ProjectUsesProfessionalWorkspace")
 
-    assert 'const v3HomeHref = professional ? "/creative-agent-v3?workspace=professional"' in source
+    assert 'const v3HomeHref = "/creative-agent-v3?home=1"' in source
     assert 'document.querySelectorAll("[data-v3-route-link]")' in source
+    assert 'href="/creative-agent-v3?home=1" data-v3-route-link' in index
+    assert '|| !v3ProjectIdFromRoute()' in restore
+    assert '|| new URLSearchParams(window.location.search).get("home") === "1"' in recent_project
     assert 'v3VisualAssetLibraryPanel: document.querySelector("#v3VisualAssetLibraryPanel")' in source
     assert "els.v3VisualAssetLibraryPanel.hidden = !professional" in source
+
+
+def test_mobile_legacy_professional_project_returns_to_basic_home() -> None:
+    source = MOBILE_JS.read_text(encoding="utf-8")
+    open_surface = _function(source, "openMobileSurface", "closeMobileSurface")
+    close_surface = _function(source, "closeMobileSurface", "scheduleMobileSummaryUpdate")
+
+    assert 'preserveV3Workspace: id.startsWith("v3-")' in open_surface
+    assert 'activeId?.startsWith("v3-") && !preserveV3Workspace' in close_surface
+    assert 'setMobileV3WorkspaceMode("standard")' in close_surface
+    assert 'v3_workspace: mobileV3State.workspaceMode === "professional" ? "professional" : "standard"' in source
+    assert 'footerLabel: "返回 V3 首页"' in source
+    assert 'footerLabel: "返回基础版"' in source
 
 
 def test_doc174_visual_asset_dialog_close_never_leaves_page_scroll_locked() -> None:

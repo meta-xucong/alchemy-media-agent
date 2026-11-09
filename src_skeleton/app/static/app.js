@@ -457,9 +457,6 @@ const els = {
   labNavMenu: document.querySelector(".lab-nav-menu"),
   labNavTab: document.querySelector(".lab-nav-menu [data-tab='lab']"),
   labNavDropdown: document.querySelector(".lab-nav-dropdown"),
-  v3WorkspaceMenu: document.querySelector("#v3WorkspaceMenu"),
-  v3WorkspaceMenuBtn: document.querySelector("#v3WorkspaceMenuBtn"),
-  v3WorkspaceMenuDropdown: document.querySelector("#v3WorkspaceMenuDropdown"),
   heroLine: document.querySelector(".hero-line"),
   providerList: document.querySelector("#providerList"),
   v2HealthState: document.querySelector("#v2HealthState"),
@@ -1397,15 +1394,13 @@ function bindControls() {
       }
       if (tabName === "v3") {
         event.preventDefault();
-        const shouldOpenV3Menu = !els.v3WorkspaceMenu?.classList.contains("is-open");
         switchTab("v3");
-        setV3WorkspaceMenuOpen(shouldOpenV3Menu);
+        if (!v3State.currentProject) setV3WorkspaceMode("standard");
         setLabNavOpen(false);
         return;
       }
       switchTab(tabName);
       setLabNavOpen(false);
-      setV3WorkspaceMenuOpen(false);
     });
   });
 
@@ -1634,13 +1629,6 @@ function bindControls() {
   document.querySelectorAll("[data-lab-home-open]").forEach((button) => {
     button.addEventListener("click", openLabHome);
   });
-  document.querySelectorAll("[data-v3-workspace-entry]").forEach((button) => {
-    button.addEventListener("click", () => {
-      switchTab("v3");
-      setV3WorkspaceMode(button.dataset.v3WorkspaceEntry || "standard", { openHome: true });
-      setV3WorkspaceMenuOpen(false);
-    });
-  });
   document.querySelectorAll("[data-lab-aspect]").forEach((button) => {
     button.addEventListener("click", () => {
       setActive(button, "[data-lab-aspect]");
@@ -1851,7 +1839,6 @@ function bindControls() {
   });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") setLabNavOpen(false);
-    if (event.key === "Escape") setV3WorkspaceMenuOpen(false);
     if (event.key === "Escape" && !els.sampleGuideModal.hidden) closeSampleGuide();
     if (event.key === "Escape" && els.favoritePickerModal && !els.favoritePickerModal.hidden) closeFavoritePicker();
     if (event.key === "Escape" && els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) closeV2FavoriteReferencePicker();
@@ -1861,9 +1848,6 @@ function bindControls() {
   });
   document.addEventListener("click", (event) => {
     if (labState.navOpen && !els.labNavMenu?.contains(event.target)) setLabNavOpen(false);
-    if (els.v3WorkspaceMenu?.classList.contains("is-open") && !els.v3WorkspaceMenu.contains(event.target)) {
-      setV3WorkspaceMenuOpen(false);
-    }
   });
 }
 
@@ -2194,11 +2178,6 @@ function initialV3ScenarioFromPath() {
   return scenarioMap[scenarioToken] || "";
 }
 
-function initialV3WorkspaceFromRoute() {
-  const workspace = new URLSearchParams(window.location.search).get("workspace");
-  return workspace === "professional" ? "professional" : "standard";
-}
-
 function v3ProjectIdFromRoute() {
   const params = new URLSearchParams(window.location.search);
   return String(params.get("project_id") || params.get("project") || "").trim();
@@ -2214,20 +2193,6 @@ function openV3RecentProjectIfNeeded() {
   ) return;
   const projectId = v3ProjectIdFromRoute() || String(v3State.projects[0]?.project_id || "").trim();
   if (projectId) void openV3Project(projectId);
-}
-
-function setV3WorkspaceMenuOpen(open) {
-  const nextOpen = Boolean(open && els.v3WorkspaceMenu && els.v3WorkspaceMenuDropdown);
-  if (els.v3WorkspaceMenu) els.v3WorkspaceMenu.classList.toggle("is-open", nextOpen);
-  if (els.v3WorkspaceMenuBtn) els.v3WorkspaceMenuBtn.setAttribute("aria-expanded", String(nextOpen));
-  if (els.v3WorkspaceMenuDropdown) {
-    if (nextOpen && els.v3WorkspaceMenuBtn) {
-      const rect = els.v3WorkspaceMenuBtn.getBoundingClientRect();
-      els.v3WorkspaceMenuDropdown.style.setProperty("--v3-workspace-menu-left", `${rect.left + rect.width / 2}px`);
-      els.v3WorkspaceMenuDropdown.style.setProperty("--v3-workspace-menu-top", `${rect.bottom + 8}px`);
-    }
-    els.v3WorkspaceMenuDropdown.hidden = !nextOpen;
-  }
 }
 
 function v3ProjectUsesProfessionalWorkspace(project) {
@@ -2261,7 +2226,7 @@ function syncV3WorkspaceRoute() {
 
 function renderV3WorkspaceMode() {
   const professional = v3State.workspaceMode === "professional";
-  const v3HomeHref = professional ? "/creative-agent-v3?workspace=professional" : "/creative-agent-v3";
+  const v3HomeHref = "/creative-agent-v3?home=1";
   document.body.dataset.v3Workspace = professional ? "professional" : "standard";
   document.querySelectorAll("[data-v3-route-link]").forEach((link) => {
     link.setAttribute("href", v3HomeHref);
@@ -2324,16 +2289,18 @@ function restoreInitialModuleRoute() {
   }
   if (route === "v3") {
     switchTab("v3");
-    setV3WorkspaceMode(initialV3WorkspaceFromRoute(), { updateRoute: false });
+    setV3WorkspaceMode("standard", { updateRoute: false });
     const scenarioFromPath = initialV3ScenarioFromPath();
-    const explicitHome = new URLSearchParams(window.location.search).get("home") === "1" || Boolean(scenarioFromPath);
+    const explicitHome = new URLSearchParams(window.location.search).get("home") === "1"
+      || !v3ProjectIdFromRoute()
+      || Boolean(scenarioFromPath);
     if (scenarioFromPath) {
       openV3Home({ silent: true, explicit: true, updateRoute: false });
       if (scenarioFromPath !== "general_creative") {
         updateV3Notice("这个模板入口已经并入项目页，请先打开或新建一个 V3 项目。", "info");
       }
     } else {
-      openV3Home({ silent: true, explicit: explicitHome, updateRoute: false });
+      openV3Home({ silent: true, explicit: explicitHome, updateRoute: true });
     }
     return;
   }
@@ -2483,6 +2450,7 @@ function openV3Home({ silent = false, explicit = true, updateRoute = true } = {}
     setV3PageLoading(false);
     setV3Busy(false);
   }
+  v3State.workspaceMode = "standard";
   v3State.view = "home";
   closeV3ProjectSubpage({ silent: true });
   v3State.currentProject = null;
@@ -2519,13 +2487,6 @@ function openV3Home({ silent = false, explicit = true, updateRoute = true } = {}
         .finally(() => setV3PageLoading(false));
     }, 40);
   }
-}
-
-function openV3ProfessionalWorkspace() {
-  setV3WorkspaceMode("professional", { updateRoute: true });
-  openV3Home({ silent: true });
-  renderV3VisualAssetLibrary();
-  window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
 }
 
 function openV3ScenarioWorkspace(scenarioId = "general_creative", { fromRoute = false, fromHistory = false } = {}) {
@@ -4477,10 +4438,8 @@ async function bindV3CreateVisualAssetToProject(projectId, asset) {
 
 function renderV3Projects() {
   if (!els.v3ProjectList) return;
-  const professional = v3State.workspaceMode === "professional";
   const items = [...v3State.projects]
-    .filter((item) => item?.status !== "archived")
-    .filter((item) => v3ProjectUsesProfessionalWorkspace(item) === professional);
+    .filter((item) => item?.status !== "archived");
   if (els.v3ProjectCount) {
     const loadedCount = Array.isArray(v3State.projects) ? v3State.projects.length : 0;
     const serverTotal = Number(v3State.projectsTotal);
@@ -4495,11 +4454,11 @@ function renderV3Projects() {
   els.v3ProjectList.innerHTML = "";
   els.v3ProjectList.classList.toggle("empty-v3-list", items.length === 0 && !v3State.projectsHasMore);
   if (!items.length && !v3State.projectsHasMore) {
-    els.v3ProjectList.textContent = professional ? "还没有专业项目。先建立视觉资产，或选择模板创建第一个专业项目。" : "还没有 V3 项目";
+    els.v3ProjectList.textContent = "还没有 V3 项目";
     return;
   }
   if (!items.length) {
-    els.v3ProjectList.textContent = "当前页暂时没有这个工作区的项目，继续加载查看更多。";
+    els.v3ProjectList.textContent = "当前页暂时没有项目，继续加载查看更多。";
   }
   items.slice(0, v3State.projectRenderLimit).forEach((item) => {
     const card = document.createElement("article");
@@ -4588,6 +4547,7 @@ function renderV3History() {
         <div class="v3-history-meta">
           <span>${escapeHtml(v3TemplatePlainLabel(group.templateId || "general_template"))}</span>
           <span>${countLabel}</span>
+          <span class="v3-source-badge">生成方式：${escapeHtml(generatedImageSourceText(group.latestItem, group.project))}</span>
           <span>${escapeHtml(formatDate(group.latestAt))}</span>
         </div>
       </div>
@@ -4743,15 +4703,12 @@ function v3ProjectGroupFromProject(project, outputGroup = null) {
 
 function v3ProjectImageGroups(items = v3State.imageHistory) {
   const outputGroups = v3OutputProjectGroupMap(items);
-  const professional = v3State.workspaceMode === "professional";
   const projects = (Array.isArray(v3State.projects) ? v3State.projects : [])
     .filter((project) => project?.project_id && project.status !== "archived" && !v3ExpiredFailureOnlyProject(project))
-    .filter((project) => v3ProjectUsesProfessionalWorkspace(project) === professional)
     .sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
   if (!projects.length) {
     return Array.from(outputGroups.values())
       .filter((group) => group.project?.status !== "archived" && !v3ExpiredFailureOnlyProject(group.project))
-      .filter((group) => v3ProjectUsesProfessionalWorkspace(group.project) === professional)
       .sort((a, b) => v3OutputItemTime(b.latestItem) - v3OutputItemTime(a.latestItem));
   }
   return projects.map((project) => v3ProjectGroupFromProject(project, outputGroups.get(String(project.project_id))))
@@ -4970,6 +4927,7 @@ function renderV3ProjectHistoryGrid(group) {
       ${item?._v3ReviewOnly === true ? `<strong class="mini-pill">仅供复核 · 未进入正式交付</strong><span>${escapeHtml(v3ProjectReviewReason(item))}</span>` : ""}
       <div class="v3-project-history-image-meta">
         <strong>${escapeHtml(v3ShortText(imageTitle, 24))}</strong>
+        <span class="v3-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, group.project))}</span>
         <span>${escapeHtml(formatDate(item.created_at || item.updated_at))}</span>
       </div>
     `;
@@ -5696,6 +5654,7 @@ function appendV3ReviewOnlyResultCards(board, items, { job, startIndex = 0 } = {
       </div>
       <p>这张图已生成，但没有进入正式交付；可查看并人工确认。</p>
       <div class="v3-result-meta">
+        <span class="v3-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, job))}</span>
         ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载复核图</button>` : ""}
       </div>
     `;
@@ -6164,6 +6123,7 @@ function renderV3ProjectOutputBoard() {
         <p>${escapeHtml(reason)}</p>
       </div>
       <div class="v3-result-meta">
+        <span class="v3-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, project))}</span>
         <span>${isSelected ? "已用于延续方向" : "可设为主图"}</span>
         ${reviewNotice ? `<span>${escapeHtml(reviewNotice)}</span>` : ""}
         ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载</button>` : ""}
@@ -6211,6 +6171,7 @@ function renderV3ProjectOutputBoard() {
         <strong class="mini-pill">仅供复核 · 未进入正式交付</strong>
         <strong>${escapeHtml(title)}</strong>
         <span>${escapeHtml(v3ProjectReviewReason(item))}</span>
+        <span class="v3-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, project))}</span>
       `;
       const image = card.querySelector("img");
       if (image) bindV3ImageWithFallback(image, urls, { emptyAlt: "复核图暂时无法加载", detailBound: true });
@@ -9053,22 +9014,23 @@ function renderV3VisualAssetCreateReadiness() {
   const missing = v3VisualAssetCreateMissingRequirements();
   const attempted = Boolean(v3State.visualAssetCreateAttempted);
   const busy = Boolean(v3State.visualAssetBusy);
-  const workflowActive = Boolean(v3State.visualAssetWorkflowAssetId);
   const feedback = String(v3State.visualAssetCreateFeedback || "").trim();
   if (els.v3VisualAssetCreateFeedback) {
-    els.v3VisualAssetCreateFeedback.hidden = workflowActive && !feedback;
     if (busy) {
+      els.v3VisualAssetCreateFeedback.hidden = false;
       els.v3VisualAssetCreateFeedback.dataset.tone = "info";
       els.v3VisualAssetCreateFeedback.textContent = "正在保存源图并建立人物资产，请不要重复提交。";
     } else if (feedback) {
+      els.v3VisualAssetCreateFeedback.hidden = false;
       els.v3VisualAssetCreateFeedback.dataset.tone = attempted ? "warning" : "info";
       els.v3VisualAssetCreateFeedback.textContent = feedback;
-    } else if (missing.length) {
+    } else if (attempted && missing.length) {
+      els.v3VisualAssetCreateFeedback.hidden = false;
       els.v3VisualAssetCreateFeedback.dataset.tone = "muted";
       els.v3VisualAssetCreateFeedback.textContent = `还需完成：${missing.join("、")}。完成后即可保存人物资产。`;
     } else {
-      els.v3VisualAssetCreateFeedback.dataset.tone = "ready";
-      els.v3VisualAssetCreateFeedback.textContent = "资料已完整。保存后会进入标准建模与三视角检查，检查通过后仍需你确认启用。";
+      els.v3VisualAssetCreateFeedback.hidden = true;
+      els.v3VisualAssetCreateFeedback.textContent = "";
     }
   }
   if (els.v3VisualAssetCreateBtn) {
@@ -9218,6 +9180,7 @@ function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
     v3State.visualAssetLibraryExistingOpen = false;
     v3State.visualAssetWorkflowAssetId = "";
     v3State.visualAssetWorkflowStage = "idle";
+    clearV3VisualAssetCreateFeedback();
   }
   renderV3VisualAssetLibrary();
   if (!dialog.open) dialog.showModal();
@@ -9636,6 +9599,7 @@ function handleV3VisualAssetAction(event) {
     if (v3State.visualAssetLibraryCreateOpen) {
       v3State.visualAssetWorkflowAssetId = "";
       v3State.visualAssetWorkflowStage = "idle";
+      clearV3VisualAssetCreateFeedback();
     }
     renderV3VisualAssetLibrary();
     if (v3State.visualAssetLibraryCreateOpen) {
@@ -9677,6 +9641,7 @@ function renderV3VisualAssetLibrary() {
     }
   }
   if (els.v3VisualAssetLibraryStatus) {
+    els.v3VisualAssetLibraryStatus.hidden = false;
     if (v3State.visualAssetsLoading) {
       els.v3VisualAssetLibraryStatus.innerHTML = "<strong>正在读取视觉资产库</strong><span>请稍候，读取完成后可继续操作。</span>";
     } else if (v3State.visualAssetsError) {
@@ -12562,7 +12527,6 @@ function renderV3ResultBoard(job) {
         ? `${v3PhotographyRoleLabel(photographyRole)} ${index + 1}`
         : `创意图片 ${index + 1}`;
     const fallbackPurpose = scenarioId === "ecommerce" ? "用于电商展示" : scenarioId === "photography" ? "用于摄影交付" : "用于商业视觉展示";
-    const purpose = v3OutputDisplayPurpose(item, "商业视觉资产");
     const cardPurpose = v3OutputDisplayPurpose(item, fallbackPurpose);
     const itemStatus = String(item.status || "");
     const status = isSelected ? "selected" : (itemStatus === "selected" ? job.status : (itemStatus || job.status));
@@ -12580,9 +12544,8 @@ function renderV3ResultBoard(job) {
         <span class="mini-pill">${escapeHtml(v3StatusLabel(status))}</span>
       </div>
       <p>${escapeHtml(cardPurpose)}</p>
-      ${purpose && purpose !== cardPurpose ? `<p class="v3-result-scene">${escapeHtml(purpose)}</p>` : ""}
       <div class="v3-result-meta">
-        ${item.overall_score ? `<span>${Math.round(Number(item.overall_score) * 100)}%</span>` : ""}
+        <span class="v3-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, job))}</span>
         ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载</button>` : ""}
       </div>
       <div class="v3-output-actions">
@@ -14793,6 +14756,37 @@ function providerShortLabel(provider) {
   return labels[provider] || providerLabel(provider);
 }
 
+function generatedImageRoute(item, fallback = null) {
+  const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const routeEvidence = [
+    metadata.primary_provenance,
+    item?.primary_provenance,
+    metadata.render_bridge_primary,
+    item?.render_bridge_primary,
+  ].find((value) => value && typeof value === "object" && String(value.route || "").trim());
+  if (routeEvidence) {
+    const route = String(routeEvidence.route || "").trim().toLowerCase();
+    if (route === "bridge") return "bridge";
+    if (route === "api") return "api";
+    return "unknown";
+  }
+  const actualProvider = String(
+    metadata.actual_provider || item?.provider_id || item?.provider || fallback?.provider_id || fallback?.provider || "",
+  ).trim().toLowerCase();
+  if (metadata.mock === true || actualProvider === "mock_image") return "mock";
+  if (actualProvider.includes("render_bridge") || actualProvider === "renderbridge" || ["codex-image", "codex_cli"].includes(actualProvider)) return "bridge";
+  if (["openai_gpt_image", "doubao_image", "gemini_image"].includes(actualProvider)) return "api";
+  return "unknown";
+}
+
+function generatedImageSourceText(item, fallback = null) {
+  const route = generatedImageRoute(item, fallback);
+  if (route === "bridge") return "RenderBridge";
+  if (route === "api") return "API";
+  if (route === "mock") return "Mock";
+  return "来源未记录";
+}
+
 function providerResultText({ requestedProvider, actualProvider, actualModel, fallback }) {
   const actual = providerLabel(actualProvider || "image");
   const model = actualModel && actualModel !== "unknown" ? ` · ${actualModel}` : "";
@@ -14832,22 +14826,11 @@ function imageProviderResultText(job) {
 }
 
 function outputProviderResultText(output, job) {
-  const metadata = output?.metadata || {};
-  return providerResultText({
-    requestedProvider: metadata.requested_provider || job?.raw_response_summary?.requested_image_provider,
-    actualProvider: metadata.actual_provider || job?.provider,
-    actualModel: metadata.actual_model || job?.model,
-    fallback: metadata.provider_fallback || job?.raw_response_summary?.image_provider_fallback,
-  });
+  return generatedImageSourceText(output, job);
 }
 
 function historyProviderResultText(item) {
-  return providerResultText({
-    requestedProvider: item?.requested_provider,
-    actualProvider: item?.provider,
-    actualModel: item?.model,
-    fallback: item?.provider_fallback,
-  });
+  return generatedImageSourceText(item);
 }
 
 function isImageProviderUsable(provider) {
@@ -16786,15 +16769,13 @@ function renderV2Outputs(outputs, job) {
     });
     const meta = document.createElement("div");
     meta.className = "v2-output-meta";
-    const id = document.createElement("strong");
-    id.textContent = output.output_id || `output-${index + 1}`;
+    const title = document.createElement("strong");
+    title.textContent = `生成结果 ${index + 1}`;
     const detail = document.createElement("span");
+    detail.className = `v2-route-badge ${generatedImageRoute(output, job)}`;
+    detail.textContent = `生成方式：${v2ProviderResultText(job, output)}`;
     const review = output.review;
-    detail.textContent = v2ProviderResultText(job, output);
-    const badge = document.createElement("span");
-    badge.className = `v2-output-badge ${output.metadata?.live ? "live" : output.metadata?.mock ? "mock" : "unknown"}`;
-    badge.textContent = output.metadata?.live ? "Live" : output.metadata?.mock ? "Mock" : "Output";
-    meta.append(id, detail, badge);
+    meta.append(title, detail);
     appendV2ReviewDetails(meta, review);
     card.append(preview, meta);
     els.v2Outputs.appendChild(card);
@@ -16857,7 +16838,7 @@ function renderV2History(items) {
     footer.className = "output-meta v2-history-footer";
     const id = document.createElement("span");
     id.className = "output-id";
-    id.textContent = item.output_id || item.job_id || "-";
+    id.textContent = item.output_id ? shortOutputId(item.output_id) : "";
     const actions = document.createElement("div");
     actions.className = "history-card-actions";
     const link = document.createElement("a");
@@ -17154,23 +17135,11 @@ function v2CleanPromptText(value) {
 }
 
 function v2ProviderResultText(job, output) {
-  const metadata = output?.metadata || {};
-  return providerResultText({
-    requestedProvider: metadata.requested_provider || job?.prompt_plan?.provider_parameters?.provider_hint,
-    actualProvider: metadata.actual_provider || job?.provider_id,
-    actualModel: metadata.actual_model || job?.model,
-    fallback: metadata.provider_fallback,
-  });
+  return generatedImageSourceText(output, job);
 }
 
 function v2HistoryProviderResultText(item) {
-  const metadata = item?.metadata || {};
-  return providerResultText({
-    requestedProvider: metadata.requested_provider,
-    actualProvider: metadata.actual_provider || item?.provider_id,
-    actualModel: metadata.actual_model || item?.model,
-    fallback: metadata.provider_fallback,
-  });
+  return generatedImageSourceText(item);
 }
 
 function v2OutputFormat(output) {
@@ -17738,19 +17707,33 @@ function v2ReviewText(review) {
   return "待人工确认（未做视觉审核）";
 }
 
+function v2ReviewShortText(review) {
+  if (!review || typeof review !== "object") return "审核状态未记录";
+  if (review.analysis_mode === "vision_pending") return "审核中";
+  if (review.analysis_mode === "vision_unavailable") return "待人工确认";
+  if (review.analysis_mode === "vision_model") {
+    if (review.decision === "pass") return "视觉审核通过";
+    if (review.decision === "failed") return "审核失败";
+    return "需确认";
+  }
+  return "未做视觉审核";
+}
+
 function v2ReviewExplanation(review) {
   return [...new Set((review?.revision_directives || []).filter((line) => typeof line === "string" && line.trim()))].join("；");
 }
 
 function appendV2ReviewDetails(container, review) {
   const label = document.createElement("span");
-  label.textContent = v2ReviewText(review);
+  label.className = "v2-review-badge";
+  label.textContent = v2ReviewShortText(review);
   container.appendChild(label);
   const explanation = v2ReviewExplanation(review);
   if (explanation) {
     const details = document.createElement("details");
+    details.className = "v2-review-details";
     const summary = document.createElement("summary");
-    summary.textContent = "查看审核说明";
+    summary.textContent = "查看审核原因";
     const text = document.createElement("p");
     text.textContent = explanation;
     details.append(summary, text);

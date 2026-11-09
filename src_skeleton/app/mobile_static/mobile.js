@@ -2674,7 +2674,6 @@ function createMobileV1Architecture(stack) {
   const tuning = document.querySelector("#imageTab .tuning-section");
   const revision = document.querySelector("#imageTab .revision-section");
   const history = document.querySelector("#imageTab .history-section");
-  const provider = document.querySelector("#imageTab .provider-panel");
   const events = document.querySelector("#imageTab #eventList")?.closest(".panel");
   const gallery = document.querySelector("#imageTab .gallery-wrap");
   const paramsCard = document.querySelector("#imageTab .params-card");
@@ -2709,13 +2708,6 @@ function createMobileV1Architecture(stack) {
     targets: [history].filter(Boolean),
   });
   createMobileView({
-    id: "v1-settings",
-    title: "模型与 API",
-    eyebrow: "Settings",
-    footerLabel: "返回工作台",
-    targets: [provider].filter(Boolean),
-  });
-  createMobileView({
     id: "v1-events",
     title: "事件日志",
     eyebrow: "Events",
@@ -2733,7 +2725,6 @@ function createMobileV1Architecture(stack) {
       ${mobileEntryMarkup("v1-history", "历史图片", "查看全部历史", "mobileV1HistorySummary")}
       ${mobileEntryMarkup("v1-revision", "继续修改", "选择结果后可用", "mobileV1RevisionSummary")}
       ${mobileEntryMarkup("account", "我的账户", "登录后查看", "mobileAccountSummary")}
-      ${mobileEntryMarkup("v1-settings", "模型设置", "读取中", "mobileV1SettingsSummary")}
       ${mobileEntryMarkup("v1-events", "事件", "暂无事件", "mobileV1EventsSummary")}
     </div>
   `;
@@ -2756,8 +2747,6 @@ function createMobileV2Architecture(stack) {
   const outputArea = document.querySelector("#v2Tab .gallery-wrap");
   const orchestrationDetail = document.querySelector("#v2Tab .v2-orchestration-detail");
   const history = document.querySelector("#v2HistoryGrid")?.closest(".panel");
-  const provider = document.querySelector("#v2Tab .v2-provider-area");
-  const kernel = document.querySelector("#v2Tab .v2-model-card-grid")?.closest(".studio-panel");
 
   createMobileView({
     id: "v2-cases",
@@ -2794,13 +2783,6 @@ function createMobileV2Architecture(stack) {
     footerLabel: "返回工作台",
     targets: [history].filter(Boolean),
   });
-  createMobileView({
-    id: "v2-settings",
-    title: "V2 设置",
-    eyebrow: "Model Status",
-    footerLabel: "返回工作台",
-    targets: [provider, kernel].filter(Boolean),
-  });
 
   const actions = document.createElement("section");
   actions.className = "mobile-action-panel mobile-v2-main-actions";
@@ -2813,7 +2795,6 @@ function createMobileV2Architecture(stack) {
       ${mobileEntryMarkup("v2-run-detail", "中枢详情", "等待 Agent 输出", "mobileV2RunSummary")}
       ${mobileEntryMarkup("v2-history", "2.0 历史", "查看全部历史", "mobileV2HistorySummary")}
       ${mobileEntryMarkup("account", "我的账户", "登录后查看", "mobileAccountSummary")}
-      ${mobileEntryMarkup("v2-settings", "V2 设置", "读取中", "mobileV2SettingsSummary")}
     </div>
   `;
   bindMobileEntryButtons(actions);
@@ -3155,7 +3136,7 @@ function setupMobileV3Adapter() {
     id: "v3-compose",
     title: "继续项目",
     eyebrow: "V3 creative OS",
-    footerLabel: "返回项目主页",
+    footerLabel: "返回 V3 首页",
     targets: [document.querySelector("#mobileV3ComposePanel")],
   });
   createMobileSheet({
@@ -3169,21 +3150,21 @@ function setupMobileV3Adapter() {
     id: "v3-visual-assets",
     title: "建立和管理视觉资产",
     eyebrow: "Professional Mode",
-    footerLabel: "返回专业版",
+    footerLabel: "返回基础版",
     targets: [document.querySelector("#mobileV3VisualAssetLibraryPanel")],
   });
   createMobileSheet({
     id: "v3-visual-asset-create",
     title: "新建人物资产",
     eyebrow: "People Asset",
-    footerLabel: "稍后再填",
+    footerLabel: "返回基础版",
     targets: [document.querySelector("#mobileV3VisualAssetCreatePanel")],
   });
   createMobileSheet({
     id: "v3-visual-asset-detail",
     title: "资产内容",
     eyebrow: "Character Card",
-    footerLabel: "返回资产库",
+    footerLabel: "返回基础版",
     targets: [document.querySelector("#mobileV3VisualAssetDetailPanel")],
   });
   [tab, els.mobileViewLayer, els.mobileSheetLayer].filter(Boolean).forEach((root) => {
@@ -3322,11 +3303,6 @@ function mobileV3ProjectCountLabel(visibleCount) {
 function renderMobileV3WorkspaceMode() {
   const professional = mobileV3State.workspaceMode === "professional";
   document.body.dataset.mobileV3Workspace = professional ? "professional" : "standard";
-  document.querySelectorAll("[data-mobile-v3-workspace]").forEach((button) => {
-    const active = button.dataset.mobileV3Workspace === mobileV3State.workspaceMode;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-checked", String(active));
-  });
   const panel = document.querySelector("#mobileV3ProfessionalAssetPanel");
   if (panel) panel.hidden = !professional;
   setText(".v3-mobile-home-panel h3", professional ? "专业项目工作区" : "项目式生图");
@@ -3543,6 +3519,7 @@ function openMobileV3VisualAssetLibrary(opener = null) {
 
 function openMobileV3VisualAssetCreate(opener = null) {
   if (mobileV3State.workspaceMode !== "professional") return;
+  setMobileV3VisualAssetCreateFeedback("");
   renderMobileV3VisualAssetSourceFiles();
   openMobileSurface("v3-visual-asset-create", opener || document.querySelector("#mobileV3CreateVisualAssetShortcutBtn"));
 }
@@ -3675,16 +3652,23 @@ function isMobileV3VisualAssetImageFile(file) {
   return /^(image\/(png|jpeg|webp))$/.test(mediaType) || /\.(png|jpe?g|webp)$/.test(filename);
 }
 
+function setMobileV3VisualAssetCreateFeedback(message) {
+  const node = document.querySelector("#mobileV3VisualAssetCreateFeedback");
+  if (!node) return;
+  node.textContent = String(message || "").trim();
+  node.hidden = !node.textContent;
+}
+
 function handleMobileV3VisualAssetSourceFiles(event) {
   const selected = Array.from(event?.target?.files || []).filter(isMobileV3VisualAssetImageFile);
   if (event?.target) event.target.value = "";
   if (!selected.length) {
-    setText("#mobileV3VisualAssetCreateFeedback", "请选择 PNG、JPG 或 WebP 人物图片。");
+    setMobileV3VisualAssetCreateFeedback("请选择 PNG、JPG 或 WebP 人物图片。");
     return;
   }
   const combined = [...mobileV3State.visualAssetSourceFiles, ...selected];
   if (combined.length > 2) {
-    setText("#mobileV3VisualAssetCreateFeedback", "一个人物资产最多使用 2 张源图：主原型和一张补充参考。");
+    setMobileV3VisualAssetCreateFeedback("一个人物资产最多使用 2 张源图：主原型和一张补充参考。");
     return;
   }
   mobileV3State.visualAssetSourcePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
@@ -3743,11 +3727,11 @@ async function createMobileV3VisualAsset() {
   if (!preparationIntent) missing.push("建模说明");
   if (!consent) missing.push("使用授权确认");
   if (missing.length) {
-    setText("#mobileV3VisualAssetCreateFeedback", `还需完成：${missing.join("、")}。`);
+    setMobileV3VisualAssetCreateFeedback(`还需完成：${missing.join("、")}。`);
     return;
   }
   mobileV3State.visualAssetBusy = true;
-  setText("#mobileV3VisualAssetCreateFeedback", "正在保存源图，请不要重复点击。");
+  setMobileV3VisualAssetCreateFeedback("正在保存源图，请不要重复点击。");
   try {
     const readySources = [];
     for (const file of files) {
@@ -3775,10 +3759,10 @@ async function createMobileV3VisualAsset() {
     renderMobileV3VisualAssetSourceFiles();
     await loadMobileV3VisualAssets({ silent: true, force: true });
     updateMobileV3Status("人物资产已保存。下一步请在资产内容中继续角色卡流程并确认启用。");
-    closeMobileSurface({ silent: true, fromHistory: true });
+    closeMobileSurface({ silent: true, fromHistory: true, preserveV3Workspace: true });
     openMobileV3VisualAssetLibrary();
   } catch (error) {
-    setText("#mobileV3VisualAssetCreateFeedback", `保存失败：${friendlyError(error)}`);
+    setMobileV3VisualAssetCreateFeedback(`保存失败：${friendlyError(error)}`);
   } finally {
     mobileV3State.visualAssetBusy = false;
   }
@@ -4574,7 +4558,6 @@ function mobileV3RecentProjectGroups() {
       historyCount: group.items.filter((item) => mobileV3HistoryOnlyOutputVisible(item)).length,
     }))
     .filter((group) => group.project?.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(group.project))
-    .filter((group) => mobileV3ProjectUsesProfessionalWorkspace(group.project) === (mobileV3State.workspaceMode === "professional"))
     .sort((a, b) => mobileV3OutputTime(b.latestItem) - mobileV3OutputTime(a.latestItem));
 }
 
@@ -4720,10 +4703,8 @@ function mobileV3ProjectReviewOutputCountKnown(project) {
 
 function mobileV3ProjectGroupsFromProjects() {
   const outputGroups = mobileV3RecentProjectGroupMap();
-  const professional = mobileV3State.workspaceMode === "professional";
   const projects = (mobileV3State.projects || [])
-    .filter((project) => project?.project_id && project.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(project))
-    .filter((project) => mobileV3ProjectUsesProfessionalWorkspace(project) === professional);
+    .filter((project) => project?.project_id && project.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(project));
   if (!projects.length) return mobileV3RecentProjectGroups();
   return projects.map((project) => mobileV3GroupFromProject(project, outputGroups.get(String(project.project_id))));
 }
@@ -4790,7 +4771,7 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
       <button class="v3-mobile-project-copy v3-mobile-project-open" type="button" data-mobile-v3-open-project-detail="${escapeHtml(projectId)}" aria-label="打开项目主页：${escapeHtml(mobileV3ProjectTitle(project))}">
         <strong>${escapeHtml(mobileV3ProjectTitle(project))}</strong>
         <span>${escapeHtml(mobileV3ProjectGoal(project))}</span>
-        <small>${visualCountLabel} · ${formatDate(latest?.created_at || project.updated_at || project.created_at)}</small>
+        <small>${visualCountLabel} · 生成方式：${escapeHtml(generatedImageSourceText(latest, project))} · ${formatDate(latest?.created_at || project.updated_at || project.created_at)}</small>
       </button>
       <button class="button compact secondary" type="button" data-mobile-v3-open-project="${escapeHtml(projectId)}">查看图片</button>
     `;
@@ -4954,11 +4935,6 @@ function handleMobileV3Click(event) {
   }
   if (event.target.closest("[data-mobile-v3-gallery-preview]")) {
     handleMobileV3GalleryPreviewClick(event);
-    return;
-  }
-  const workspaceButton = event.target.closest("button[data-mobile-v3-workspace]");
-  if (workspaceButton) {
-    setMobileV3WorkspaceMode(workspaceButton.dataset.mobileV3Workspace || "standard");
     return;
   }
   if (event.target.closest("#mobileV3OpenVisualAssetLibraryBtn")) {
@@ -6281,7 +6257,7 @@ function renderMobileV3ProjectGallery(project) {
       button.className = `v3-mobile-gallery-image${reviewOnly ? " review-only" : mobileV3HistoryOnlyOutputVisible(item) ? " history-only" : ""}`;
       button.dataset.mobileV3GalleryPreview = mobileV3OutputId(item);
       const label = reviewOnly ? "复核图" : mobileV3HistoryOnlyOutputVisible(item) ? "历史图片" : "项目图片";
-      button.innerHTML = `${thumb ? `<img data-mobile-media-url="${escapeHtml(thumb)}" alt="${label} ${index + 1}" loading="lazy" decoding="async" />` : `<span>${label} ${index + 1}</span>`}${reviewOnly ? '<span class="v3-mobile-gallery-review-badge">复核图 · 非交付</span>' : ""}`;
+      button.innerHTML = `${thumb ? `<img data-mobile-media-url="${escapeHtml(thumb)}" alt="${label} ${index + 1}" loading="lazy" decoding="async" />` : `<span>${label} ${index + 1}</span>`}${reviewOnly ? '<span class="v3-mobile-gallery-review-badge">复核图 · 非交付</span>' : ""}<span class="v3-mobile-gallery-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, project))}</span>`;
       button.__mobileV3OutputItem = item;
       if (reviewOnly) button.dataset.mobileV3ReviewOnly = "true";
       const image = button.querySelector("img[data-mobile-media-url]");
@@ -6707,6 +6683,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       <div class="v3-mobile-output-copy">
         <strong>复核图 ${index + 1}</strong>
         <span>${escapeHtml(reason)}</span>
+        <small class="v3-mobile-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, mobileV3State.currentJob))}</small>
       </div>
     `;
     grid.appendChild(card);
@@ -6738,6 +6715,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       <div class="v3-mobile-output-copy">
         <strong>历史图片 ${index + 1}</strong>
         <span>仅供查看，不可设为后续参考。</span>
+        <small class="v3-mobile-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, project))}</small>
       </div>
     `;
     grid.appendChild(card);
@@ -6761,6 +6739,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       <div class="v3-mobile-output-copy">
         <strong>项目图片 ${index + 1}</strong>
         <span>${escapeHtml(mobileV3OutputSummary(item))}</span>
+        <small class="v3-mobile-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, project))}</small>
         <button class="v3-mobile-output-prompt" type="button" data-mobile-v3-output-prompt="${index}">提示词</button>
         <div class="v3-mobile-output-actions">
           <button type="button" data-mobile-v3-output-action="select_continuation" data-mobile-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>${isSelected ? "已设为主图" : "设为主图"}</button>
@@ -6797,14 +6776,21 @@ function renderMobileV3ProcessOutputs(project = mobileV3State.currentProject) {
   const processGrid = details.querySelector(".v3-mobile-process-grid");
   processItems.forEach((item, index) => {
     const thumb = mobileV3ThumbUrl(item);
+    const tile = document.createElement("div");
+    tile.className = "v3-mobile-process-item";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "v3-mobile-process-tile";
     button.dataset.mobileV3GalleryPreview = mobileV3OutputId(item);
+    button.setAttribute("aria-label", `过程图 ${index + 1}，生成方式：${generatedImageSourceText(item, project)}`);
     button.innerHTML = thumb ? `<img data-mobile-media-url="${escapeHtml(thumb)}" alt="过程图 ${index + 1}" loading="lazy" decoding="async" />` : `<span>过程图</span>`;
+    const source = document.createElement("small");
+    source.className = "v3-mobile-source-badge";
+    source.textContent = `生成方式：${generatedImageSourceText(item, project)}`;
     const processImage = button.querySelector("img[data-mobile-media-url]");
     if (processImage) bindImageWithFallback(processImage, [processImage.dataset.mobileMediaUrl], { emptyAlt: processImage.alt });
-    processGrid?.appendChild(button);
+    tile.append(button, source);
+    processGrid?.appendChild(tile);
   });
   grid.insertAdjacentElement("afterend", details);
 }
@@ -8492,7 +8478,11 @@ function openMobileSurface(id, opener = null) {
   if (!surface) return;
   if (els.imageLightbox && !els.imageLightbox.hidden) closeImageLightbox();
   if (els.sampleGuideModal && !els.sampleGuideModal.hidden) closeSampleGuide();
-  closeMobileSurface({ silent: true, fromHistory: true });
+  closeMobileSurface({
+    silent: true,
+    fromHistory: true,
+    preserveV3Workspace: id.startsWith("v3-"),
+  });
   updateMobileSummaries();
   if (view) {
     els.mobileViewLayer.hidden = false;
@@ -8530,7 +8520,11 @@ function closeMobileSurface(options = {}) {
   const closeOptions = options && typeof options === "object" && "type" in options && "target" in options ? {} : options;
   const silent = Boolean(closeOptions?.silent);
   const fromHistory = Boolean(closeOptions?.fromHistory);
+  const preserveV3Workspace = Boolean(closeOptions?.preserveV3Workspace);
   const activeId = document.body.dataset.mobileActiveSurface;
+  if (activeId?.startsWith("v3-") && !preserveV3Workspace) {
+    setMobileV3WorkspaceMode("standard");
+  }
   document.querySelectorAll(".mobile-view, .mobile-sheet").forEach((surface) => {
     surface.hidden = true;
   });
@@ -9870,6 +9864,37 @@ function providerShortLabel(provider) {
   return labels[provider] || providerLabel(provider);
 }
 
+function generatedImageRoute(item, fallback = null) {
+  const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const routeEvidence = [
+    metadata.primary_provenance,
+    item?.primary_provenance,
+    metadata.render_bridge_primary,
+    item?.render_bridge_primary,
+  ].find((value) => value && typeof value === "object" && String(value.route || "").trim());
+  if (routeEvidence) {
+    const route = String(routeEvidence.route || "").trim().toLowerCase();
+    if (route === "bridge") return "bridge";
+    if (route === "api") return "api";
+    return "unknown";
+  }
+  const actualProvider = String(
+    metadata.actual_provider || item?.provider_id || item?.provider || fallback?.provider_id || fallback?.provider || "",
+  ).trim().toLowerCase();
+  if (metadata.mock === true || actualProvider === "mock_image") return "mock";
+  if (actualProvider.includes("render_bridge") || actualProvider === "renderbridge" || ["codex-image", "codex_cli"].includes(actualProvider)) return "bridge";
+  if (["openai_gpt_image", "doubao_image", "gemini_image"].includes(actualProvider)) return "api";
+  return "unknown";
+}
+
+function generatedImageSourceText(item, fallback = null) {
+  const route = generatedImageRoute(item, fallback);
+  if (route === "bridge") return "RenderBridge";
+  if (route === "api") return "API";
+  if (route === "mock") return "Mock";
+  return "来源未记录";
+}
+
 function providerResultText({ requestedProvider, actualProvider, actualModel, fallback }) {
   const from = fallback?.from || requestedProvider;
   const to = fallback?.to || actualProvider;
@@ -9906,22 +9931,11 @@ function imageProviderResultText(job) {
 }
 
 function outputProviderResultText(output, job) {
-  const metadata = output?.metadata || {};
-  return providerResultText({
-    requestedProvider: metadata.requested_provider || job?.raw_response_summary?.requested_image_provider,
-    actualProvider: metadata.actual_provider || job?.provider,
-    actualModel: metadata.actual_model || job?.model,
-    fallback: metadata.provider_fallback || job?.raw_response_summary?.image_provider_fallback,
-  });
+  return generatedImageSourceText(output, job);
 }
 
 function historyProviderResultText(item) {
-  return providerResultText({
-    requestedProvider: item?.requested_provider,
-    actualProvider: item?.provider,
-    actualModel: item?.model,
-    fallback: item?.provider_fallback,
-  });
+  return generatedImageSourceText(item);
 }
 
 function isImageProviderUsable(provider) {
@@ -11885,15 +11899,13 @@ function renderV2Outputs(outputs, job) {
     }
     const meta = document.createElement("div");
     meta.className = "v2-output-meta";
-    const id = document.createElement("strong");
-    id.textContent = output.output_id || `output-${index + 1}`;
+    const title = document.createElement("strong");
+    title.textContent = `生成结果 ${index + 1}`;
     const detail = document.createElement("span");
+    detail.className = `v2-route-badge ${generatedImageRoute(output, job)}`;
+    detail.textContent = `生成方式：${v2ProviderResultText(job, output)}`;
     const review = output.review;
-    detail.textContent = v2ProviderResultText(job, output);
-    const badge = document.createElement("span");
-    badge.className = `v2-output-badge ${output.metadata?.live ? "live" : output.metadata?.mock ? "mock" : "unknown"}`;
-    badge.textContent = output.metadata?.live ? "Live" : output.metadata?.mock ? "Mock" : "Output";
-    meta.append(id, detail, badge);
+    meta.append(title, detail);
     appendV2ReviewDetails(meta, review);
     card.append(preview, meta);
     els.v2Outputs.appendChild(card);
@@ -11953,14 +11965,7 @@ function renderV2History(items) {
     meta.append(prompt, details);
     appendV2ReviewDetails(meta, item.review);
 
-    const footer = document.createElement("div");
-    footer.className = "output-meta v2-history-footer";
-    const id = document.createElement("span");
-    id.className = "output-id";
-    id.textContent = item.output_id || item.job_id || "-";
-    footer.append(id);
-
-    card.append(preview, favoriteButton, meta, footer);
+    card.append(preview, favoriteButton, meta);
     els.v2HistoryGrid.appendChild(card);
   });
   if (hiddenMockCount > 0) {
@@ -12085,23 +12090,11 @@ function v2CleanPromptText(value) {
 }
 
 function v2ProviderResultText(job, output) {
-  const metadata = output?.metadata || {};
-  return providerResultText({
-    requestedProvider: metadata.requested_provider || job?.prompt_plan?.provider_parameters?.provider_hint,
-    actualProvider: metadata.actual_provider || job?.provider_id,
-    actualModel: metadata.actual_model || job?.model,
-    fallback: metadata.provider_fallback,
-  });
+  return generatedImageSourceText(output, job);
 }
 
 function v2HistoryProviderResultText(item) {
-  const metadata = item?.metadata || {};
-  return providerResultText({
-    requestedProvider: metadata.requested_provider,
-    actualProvider: metadata.actual_provider || item?.provider_id,
-    actualModel: metadata.actual_model || item?.model,
-    fallback: metadata.provider_fallback,
-  });
+  return generatedImageSourceText(item);
 }
 
 function v2OutputFormat(output) {
@@ -12568,19 +12561,33 @@ function v2ReviewText(review) {
   return "待人工确认（未做视觉审核）";
 }
 
+function v2ReviewShortText(review) {
+  if (!review || typeof review !== "object") return "审核状态未记录";
+  if (review.analysis_mode === "vision_pending") return "审核中";
+  if (review.analysis_mode === "vision_unavailable") return "待人工确认";
+  if (review.analysis_mode === "vision_model") {
+    if (review.decision === "pass") return "视觉审核通过";
+    if (review.decision === "failed") return "审核失败";
+    return "需确认";
+  }
+  return "未做视觉审核";
+}
+
 function v2ReviewExplanation(review) {
   return [...new Set((review?.revision_directives || []).filter((line) => typeof line === "string" && line.trim()))].join("；");
 }
 
 function appendV2ReviewDetails(container, review) {
   const label = document.createElement("span");
-  label.textContent = v2ReviewText(review);
+  label.className = "v2-review-badge";
+  label.textContent = v2ReviewShortText(review);
   container.appendChild(label);
   const explanation = v2ReviewExplanation(review);
   if (explanation) {
     const details = document.createElement("details");
+    details.className = "v2-review-details";
     const summary = document.createElement("summary");
-    summary.textContent = "查看审核说明";
+    summary.textContent = "查看审核原因";
     const text = document.createElement("p");
     text.textContent = explanation;
     details.append(summary, text);
