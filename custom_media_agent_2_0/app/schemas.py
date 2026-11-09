@@ -312,6 +312,7 @@ class ImageReviewDecision(BaseModel):
     model: str | None = None
     elapsed_ms: int | None = None
     failure_code: str | None = None
+    model_attempts: list[dict[str, Any]] = Field(default_factory=list)
     verified_source_fields: list[str] = Field(default_factory=list)
     created_at: datetime
 
@@ -600,6 +601,7 @@ class ImageHistoryItem(BaseModel):
     thumbnail_url: str | None = None
     preview_url: str | None = None
     score: dict[str, Any] = Field(default_factory=dict)
+    review: ImageReviewDecision | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     veyra_legacy_public: bool = False
     record_label: str | None = None

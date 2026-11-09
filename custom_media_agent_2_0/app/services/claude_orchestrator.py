@@ -1237,22 +1237,8 @@ def _claude_code_model_fallback_configured() -> bool:
 
 
 def _claude_code_model_fallback_queue(*, exclude_model: str | None = None) -> list[str]:
-    # Keep the configured, user-selectable queue authoritative. The legacy
-    # single fallback remains readable, but trails the current ordered queue.
-    configured_models = getattr(settings, "claude_orchestrator_fallback_models", ())
-    # Defaults belong to config; explicit empty/custom queues must stay authoritative.
-    models = [_text_value(model) for model in (configured_models or ())]
-    legacy_model = _text_value(getattr(settings, "claude_orchestrator_fallback_model", None))
-    if legacy_model:
-        models.append(legacy_model)
-    primary = _text_value(exclude_model) or _text_value(settings.claude_orchestrator_model)
-    return _dedupe(
-        [
-            _text_value(model)
-            for model in models
-            if _text_value(model) and _text_value(model) != _text_value(primary)
-        ]
-    )
+    from app.services.model_routing import configured_fallback_models
+    return configured_fallback_models(settings, exclude_model=exclude_model)
 
 
 def _claude_code_fallback_env_overrides() -> dict[str, str]:

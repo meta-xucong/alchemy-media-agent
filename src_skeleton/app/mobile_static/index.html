@@ -933,7 +933,8 @@
                   </label>
                   <label class="field">
                     <span>复检 Agent 模型</span>
-                    <input id="v2ReviewModelInput" type="text" placeholder="默认沿用备用 Agent 模型" />
+                    <input id="v2ReviewModelInput" type="text" readonly aria-describedby="v2ReviewModelHint" />
+                    <small id="v2ReviewModelHint">跟随中枢模型队列，GPT 最后；图片审核使用配置的看图模型。</small>
                   </label>
                   <button id="v2ModelApplyBtn" class="button secondary" type="button">应用高级调度</button>
                 </div>

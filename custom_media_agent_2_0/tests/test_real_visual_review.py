@@ -20,7 +20,9 @@ from app.services.output_review import review_image_job
 def job(tmp_path, monkeypatch):
     monkeypatch.setattr(vision, 'settings', replace(settings, output_review_agent_enabled=True,
         llm_gateway_api_key='offline-key', llm_gateway_base_url='https://vision.invalid/v1',
-        output_review_agent_model='gpt-test-vision', storage_dir=tmp_path))
+        output_review_agent_model=None, claude_orchestrator_multimodal_model='gpt-test-vision',
+        claude_orchestrator_model='gpt-test-vision', claude_orchestrator_fallback_models=(),
+        claude_orchestrator_fallback_model=None, storage_dir=tmp_path))
     path = tmp_path / 'output.png'
     Image.new('RGB', (80, 120), 'blue').save(path)
     now = utc_now()
@@ -40,6 +42,123 @@ def install_response(monkeypatch, handler):
 def reply(verdict=None):
     return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(
         verdict or {'decision': 'pass', 'references_match': True, 'notes': ['Visible result meets the request.'], 'issues': []})}}]})
+
+
+def test_review_follows_brain_queue_gpt_last_and_reuses_valid_needs_review(job, monkeypatch):
+    from app.services.model_routing import visual_review_models
+    monkeypatch.setattr(vision, 'settings', replace(vision.settings,
+        default_agent_model='gpt-old-default', output_review_agent_model='gpt-old-override',
+        claude_orchestrator_model='claude-test', claude_orchestrator_multimodal_model='claude-test',
+        claude_orchestrator_fallback_models=('gpt-last', 'kimi-test', 'claude-test'),
+        claude_orchestrator_fallback_model='gpt-last'))
+    assert visual_review_models(vision.settings) == ['claude-test', 'kimi-test', 'gpt-last']
+    calls = []
+    def handler(request):
+        data = json.loads(request.content)
+        calls.append(data)
+        if data['model'] == 'claude-test':
+            return httpx.Response(503)
+        return reply({'decision': 'needs_review', 'references_match': True, 'notes': [], 'issues': ['Visible crop differs.']})
+    install_response(monkeypatch, handler)
+    result = asyncio.run(vision.review_generated_job(review_image_job(job)))
+    review = result.outputs[0].review
+    assert [item['model'] for item in calls] == ['claude-test', 'kimi-test']
+    assert calls[0]['messages'][0]['content'][1]['type'] == 'image'
+    assert calls[1]['messages'][0]['content'][1]['type'] == 'image_url'
+    assert review.decision == 'needs_review' and review.model == 'kimi-test'
+    assert [item['outcome'] for item in review.model_attempts] == ['failed', 'accepted']
+    assert asyncio.run(vision.review_generated_job(result)) == result
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_review_authorization_failure_does_not_rotate_models(job, monkeypatch, status):
+    monkeypatch.setattr(vision, 'settings', replace(vision.settings, claude_orchestrator_fallback_models=('gpt-last',)))
+    calls = []
+    install_response(monkeypatch, lambda request: calls.append(request) or httpx.Response(status))
+    result = asyncio.run(vision.review_generated_job(review_image_job(job)))
+    assert len(calls) == 1
+    assert result.outputs[0].review.analysis_mode == 'vision_unavailable'
+    assert result.outputs[0].url == job.outputs[0].url
+
+
+@pytest.mark.parametrize('spent', [100.0, 300.0])
+def test_review_candidates_share_one_budget(job, monkeypatch, spent):
+    monkeypatch.setattr(vision, 'settings', replace(vision.settings, claude_orchestrator_fallback_models=('gpt-last',)))
+    now = [100.0]
+    monkeypatch.setattr(vision.time, 'perf_counter', lambda: now[0])
+    calls = []
+    async def request(content, model, *, timeout):
+        calls.append((model, timeout))
+        if len(calls) == 1:
+            now[0] += spent
+            raise httpx.ConnectError('offline upstream')
+        return vision.VisionVerdict(decision='pass', references_match=True, notes=[], issues=[])
+    monkeypatch.setattr(vision, '_request_verdict', request)
+    result = asyncio.run(vision.review_generated_job(review_image_job(job)))
+    assert [timeout for _, timeout in calls] == ([300.0, 200.0] if spent == 100 else [300.0])
+    assert result.outputs[0].review.elapsed_ms == spent * 1000
+    assert len(result.outputs[0].review.model_attempts) == len(calls)
+
+
+def test_total_deadline_records_inflight_model_without_calling_next(job, monkeypatch):
+    monkeypatch.setattr(vision, 'settings', replace(vision.settings, claude_orchestrator_fallback_models=('gpt-last',)))
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(vision.asyncio, 'timeout', lambda seconds: original_timeout(0.01))
+    calls = []
+    async def request(content, model, *, timeout):
+        calls.append(model)
+        await asyncio.sleep(2)
+    monkeypatch.setattr(vision, '_request_verdict', request)
+    result = asyncio.run(vision.review_generated_job(review_image_job(job)))
+    assert calls == ['gpt-test-vision']
+    review = result.outputs[0].review
+    assert review.failure_code == 'review_timeout'
+    assert review.model_attempts[0]['model'] == 'gpt-test-vision'
+    assert review.model_attempts[0]['failure_class'] == 'TimeoutError'
+
+
+def test_user_acceptance_and_actual_reference_contract_are_explicit(job):
+    job.prompt_plan.user_variables.update(user_prompt='An adult portrait with only the left shoulder visible',
+        generation_prompt='Provider context containing an automatically retrieved illustrative case',
+        primary_case_id='automatically-retrieved-case', template_lock_enabled=False, template_lock_contract=None)
+    content = vision._review_content(job.outputs[0], job)
+    instruction, request = content[0]['text'].split('\n', 1)
+    data = json.loads(request)
+    assert data['user_request'] == job.prompt_plan.user_variables['user_prompt']
+    assert data['generation_context'] == job.prompt_plan.user_variables['generation_prompt']
+    assert data['explicit_template_lock'] is False and data['reference_image_count'] == 0
+    assert 'Do not flag an absent case image' in instruction
+    assert 'not exact measurements' in instruction
+    job.prompt_plan.user_variables.update(template_lock_enabled=True, template_lock_contract={'locked_case_id': 'selected-case'})
+    data = json.loads(vision._review_content(job.outputs[0], job)[0]['text'].split('\n', 1)[1])
+    assert data['explicit_template_lock'] is True
+
+
+def test_history_reads_current_canonical_review_without_rewriting_history(job, tmp_path, monkeypatch):
+    from app.repositories.memory import InMemoryV2Repository
+    from app.services import image_history as history
+    repo = InMemoryV2Repository(database_path=tmp_path / 'canonical.sqlite3')
+    monkeypatch.setattr(history, 'repository', repo)
+    monkeypatch.setattr(history, 'settings', replace(settings, image_history_path=tmp_path / 'history.jsonl',
+        persist_image_history=True, veyra_auth_enabled=False))
+    monkeypatch.setattr(history, 'list_favorite_ids', lambda **kwargs: set())
+    pending = review_image_job(job)
+    repo.save_image_job(pending)
+    history.persist_image_job_history(pending)
+    original_history = history.settings.image_history_path.read_bytes()
+    review = pending.outputs[0].review.model_copy(update={'analysis_mode': 'vision_model', 'decision': 'needs_review',
+        'model': 'claude-test', 'revision_directives': ['Visible shoulder differs from the request.']})
+    completed = pending.model_copy(update={'outputs': [pending.outputs[0].model_copy(update={'review': review})]})
+    repo.save_image_job(completed)
+    page = history.list_image_history(limit=1, include_all=True)
+    assert page.items[0].review == review
+    assert page.items[0].url == job.outputs[0].url
+    assert history.get_prepared_image_history_item(job.outputs[0].output_id).review == review
+    assert history.settings.image_history_path.read_bytes() == original_history
+    foreign = completed.outputs[0].model_copy(update={'metadata': {**completed.outputs[0].metadata, 'veyra_user_id': 9}})
+    repo.save_image_job(completed.model_copy(update={'outputs': [foreign]}))
+    assert history.list_image_history(limit=1, include_all=True).items[0].review is None
 
 
 def test_real_pixels_one_request_reused_and_bytes_unchanged(job, monkeypatch):
@@ -216,7 +335,7 @@ def test_batch_reviews_overlap_with_limit_two_and_preserve_order(job, monkeypatc
 
 
 def test_anthropic_route_sends_actual_images_once(job, monkeypatch):
-    monkeypatch.setattr(vision, 'settings', replace(vision.settings, output_review_agent_model='claude-test'))
+    monkeypatch.setattr(vision, 'settings', replace(vision.settings, claude_orchestrator_multimodal_model='claude-test'))
     def handler(request):
         assert request.url.path == '/v1/messages'
         content = json.loads(request.content)['messages'][0]['content']

@@ -14403,10 +14403,10 @@ async function runV2SimpleMode() {
       onRunUpdate: updateSimpleProgressFromV2Run,
     });
     renderV2SimpleCaseSummary(run ? "selected" : "idle", run?.selected_cases || []);
-    const caseCount = Array.isArray(run?.selected_cases) ? run.selected_cases.length : 0;
     if (run?.status === "completed") {
-      finishSimpleProgress("v2", "completed", caseCount ? `已参考 ${caseCount} 个案例完成生成。` : "V2 Agent 已完成生成。");
-      updateSimpleNotice("v2", caseCount ? `V2 Agent 已参考 ${caseCount} 个案例完成生成。` : "V2 Agent 已完成生成。", "info");
+      const notice = v2RunNotice(run);
+      finishSimpleProgress("v2", "completed", notice.message, notice.type);
+      updateSimpleNotice("v2", notice.message, notice.type);
     } else if (run) {
       finishSimpleProgress("v2", v2StatusStageMap[run.status] || "failed", `V2 Agent 链路已返回：${v2SimpleRunStatusLabel(run.status)}。`, run.status === "failed" ? "error" : "warning");
       updateSimpleNotice("v2", `V2 Agent 链路已返回：${v2SimpleRunStatusLabel(run.status)}。`, run.status === "failed" ? "error" : "warning");
@@ -15076,7 +15076,7 @@ function renderV2ModelSettings() {
   );
   setInputValue(els.v2CaseIntelligenceProviderInput, settings.case_intelligence_provider || "rules");
   setInputValue(els.v2CaseIntelligenceModelInput, settings.case_intelligence_model || "");
-  setInputValue(els.v2ReviewModelInput, settings.output_review_agent_model || "");
+  setInputValue(els.v2ReviewModelInput, settings.claude_orchestrator_multimodal_model || settings.claude_orchestrator_model || "");
 
   const imageModel = v2ImageModelName(selectedImageProvider, settings);
   const claudeModel = settings.claude_orchestrator_model || "Claude Code 默认模型";
@@ -15272,7 +15272,6 @@ async function applyV2ModelSettings() {
         gemini_image_model: els.geminiImageModelInput?.value.trim() || "gemini-2.5-flash-image",
         default_agent_model: els.v2AgentModelInput?.value.trim() || "gpt-4.1-mini",
         output_review_agent_enabled: true,
-        output_review_agent_model: els.v2ReviewModelInput?.value.trim(),
         claude_orchestrator_enabled: true,
         claude_orchestrator_model: els.v2ClaudeModelInput?.value.trim(),
         claude_orchestrator_fallback_model: els.v2ClaudeFallbackModelInput?.value.trim(),
@@ -16437,8 +16436,19 @@ function v2RunNotice(run) {
   }
   const liveCount = (job?.outputs || []).filter((output) => output.metadata?.live).length;
   if (liveCount) {
+    const reviews = (job?.outputs || []).filter((output) => output.metadata?.live).map((output) => output.review);
+    if (reviews.some((review) => review?.analysis_mode === "vision_pending")) {
+      return { message: `已生成 ${liveCount} 张，正在做质量复检，图片可查看。`, type: "info" };
+    }
+    const needsReview = reviews.filter((review) => review?.analysis_mode === "vision_model" && review.decision !== "pass");
+    if (needsReview.length) {
+      return { message: `已生成 ${liveCount} 张，${needsReview.length} 张视觉审核需确认，图片已保留；可在图片下查看审核说明。`, type: "warning" };
+    }
+    if (reviews.some((review) => review?.analysis_mode !== "vision_model")) {
+      return { message: `已生成 ${liveCount} 张，视觉审核未完成核实，待人工确认，图片已保留。`, type: "warning" };
+    }
     const brain = decision?.cache_hit ? "命中中枢缓存" : decision?.provider === "claude-code" ? "Claude 中枢已参与" : "中枢已完成";
-    return { message: `V2.0 Agent 已完成 live 出图：${liveCount} 张，${v2ProviderResultText(job, job.outputs?.[0])}，${brain}。`, type: "success" };
+    return { message: `V2.0 Agent 已生成 ${liveCount} 张，视觉审核通过，${v2ProviderResultText(job, job.outputs?.[0])}，${brain}。`, type: "success" };
   }
   if (decision?.fallback_reason) {
     return { message: `V2.0 ${v2FallbackReasonLabel(decision.fallback_reason)}`, type: "warning" };
@@ -16770,7 +16780,7 @@ function renderV2Outputs(outputs, job) {
         thumbnailUrl: v2OutputImageUrl(output),
         previewUrl: v2OutputPreviewCandidates(output)[0] || v2OutputImageUrl(output),
         format: v2OutputFormat(output),
-        meta: v2ProviderResultText(job, output),
+        meta: [v2ProviderResultText(job, output), v2ReviewText(output.review), v2ReviewExplanation(output.review)].filter(Boolean).join(" · "),
         promptText: v2PromptTextFromJob(job),
       });
     });
@@ -16780,12 +16790,12 @@ function renderV2Outputs(outputs, job) {
     id.textContent = output.output_id || `output-${index + 1}`;
     const detail = document.createElement("span");
     const review = output.review;
-    const reviewText = v2ReviewText(review);
-    detail.textContent = `${v2ProviderResultText(job, output)} · ${reviewText}`;
+    detail.textContent = v2ProviderResultText(job, output);
     const badge = document.createElement("span");
     badge.className = `v2-output-badge ${output.metadata?.live ? "live" : output.metadata?.mock ? "mock" : "unknown"}`;
     badge.textContent = output.metadata?.live ? "Live" : output.metadata?.mock ? "Mock" : "Output";
     meta.append(id, detail, badge);
+    appendV2ReviewDetails(meta, review);
     card.append(preview, meta);
     els.v2Outputs.appendChild(card);
   });
@@ -16841,6 +16851,7 @@ function renderV2History(items) {
     const details = document.createElement("span");
     details.textContent = historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at));
     meta.append(prompt, details);
+    appendV2ReviewDetails(meta, item.review);
 
     const footer = document.createElement("div");
     footer.className = "output-meta v2-history-footer";
@@ -17059,7 +17070,7 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
     thumbnailUrl: v2HistoryImageUrl(item),
     previewUrl: v2HistoryPreviewCandidates(item)[0] || v2HistoryImageUrl(item),
     format: v2HistoryFormat(item),
-    meta: historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at)),
+    meta: [historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at)), v2ReviewText(item.review), v2ReviewExplanation(item.review)].filter(Boolean).join(" · "),
     promptText: v2PromptTextFromHistory(item),
     actions,
   });
@@ -17725,6 +17736,26 @@ function v2ReviewText(review) {
     return review.decision === "pass" ? "视觉审核通过" : "视觉审核需确认，图片已保留";
   }
   return "待人工确认（未做视觉审核）";
+}
+
+function v2ReviewExplanation(review) {
+  return [...new Set((review?.revision_directives || []).filter((line) => typeof line === "string" && line.trim()))].join("；");
+}
+
+function appendV2ReviewDetails(container, review) {
+  const label = document.createElement("span");
+  label.textContent = v2ReviewText(review);
+  container.appendChild(label);
+  const explanation = v2ReviewExplanation(review);
+  if (explanation) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "查看审核说明";
+    const text = document.createElement("p");
+    text.textContent = explanation;
+    details.append(summary, text);
+    container.appendChild(details);
+  }
 }
 
 function v2ReviewLabel(decision) {

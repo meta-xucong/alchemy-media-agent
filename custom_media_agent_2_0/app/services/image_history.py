@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from app.config import settings
 from app.repositories import repository
-from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageOutput
+from app.schemas import ImageHistoryItem, ImageHistoryResponse, ImageJob, ImageOutput, ImageReviewDecision
 from app.services.favorites import (
     attach_ready_favorites, delete_favorite, favorite_scope_predicate,
     list_favorite_ids, prepare_favorites_index, require_favorites_ready,
@@ -154,7 +154,7 @@ def list_image_history(
         # The consistent count/page is now captured. Do not pin the history WAL
         # snapshot while decoding or querying the independent favorites store.
         connection.commit()
-        history_items = [ImageHistoryItem.model_validate_json(row[0]) for row in rows]
+        history_items = _with_current_reviews([ImageHistoryItem.model_validate_json(row[0]) for row in rows])
         favorite_ids = {item.output_id for item in history_items} if favorite else list_favorite_ids(
             veyra_user_id=veyra_user_id,
             include_legacy_public=include_legacy_public,
@@ -224,9 +224,34 @@ def get_prepared_image_history_item(output_id: str) -> ImageHistoryItem | None:
         row = connection.execute(
             "SELECT payload FROM v2_image_history WHERE output_id=?", (output_id,)
         ).fetchone()
-        return ImageHistoryItem.model_validate_json(row[0]) if row else None
+        return _with_current_reviews([ImageHistoryItem.model_validate_json(row[0])])[0] if row else None
     finally:
         connection.close()
+
+
+def _with_current_reviews(items: list[ImageHistoryItem]) -> list[ImageHistoryItem]:
+    """Project the visible page's canonical verdicts without rewriting history."""
+    reviews = {}
+    database = repository.database_path
+    # Imported legacy history can predate native output records entirely.
+    if items and database.is_file():
+        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.75)
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            by_id = {item.output_id: item for item in items}
+            placeholders = ",".join("?" for _ in by_id)
+            rows = connection.execute(
+                "SELECT record_key, json_extract(payload,'$.job_id'), "
+                "json_extract(payload,'$.metadata.veyra_user_id'), json_extract(payload,'$.review') "
+                f"FROM v2_records WHERE namespace='outputs' AND record_key IN ({placeholders})", list(by_id),
+            )
+            for output_id, job_id, owner_id, review in rows:
+                item = by_id[output_id]
+                if job_id == item.job_id and owner_id == _legacy_history_owner_id(item.metadata) and review:
+                    reviews[output_id] = ImageReviewDecision.model_validate_json(review)
+        finally:
+            connection.close()
+    return [item.model_copy(update={"review": reviews.get(item.output_id)}) for item in items]
 
 
 def delete_image_history_item(output_id: str) -> dict[str, Any]:
