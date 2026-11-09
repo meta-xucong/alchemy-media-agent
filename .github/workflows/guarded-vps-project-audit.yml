@@ -108,6 +108,100 @@ jobs:
               }, sort_keys=True), flush=True)
           REMOTE_PY
 
+      - name: Retire only the exact verified failed build container
+        if: ${{ startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_retire_busy_noyce_') }}
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" == b6bcd4fb442b4ceaf1cd37f63b902588554676ee ]]
+          [[ "$PLANNING_OPERATION_ID" =~ ^doc277_project_planning_container_retire_busy_noyce_[0-9a-f]{64}$ ]]
+          expected_container_id="${PLANNING_OPERATION_ID##*_}"
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" "python3 - '$EXPECTED_SHA' '$expected_container_id'" <<'REMOTE_PY'
+          import fcntl
+          import json
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          expected_sha, expected_container_id = sys.argv[1:]
+          expected_candidate_sha = '899e09a480b81dbace326f1dc1294841ea7b399c'
+          expected_created = '2026-11-09T04:11:25.859355038Z'
+          expected_started = '2026-11-09T04:11:26.174275829Z'
+          expected_finished = '2026-11-09T04:13:29.466075295Z'
+          expected_image_id = 'sha256:624e358cf2bc27532805e946749ab808b62a69e1a8c8f7bc857326e1b882c0f5'
+          expected_pip_command = 'python -m pip install --index-url "$PIP_INDEX_URL" --upgrade pip && python -m pip install --index-url "$PIP_INDEX_URL" -r requirements.txt'
+
+          def cmd(*args):
+              result = subprocess.run(args, capture_output=True, text=True, check=False)
+              if result.returncode:
+                  raise RuntimeError('command_failed:' + args[0])
+              return result.stdout.strip()
+
+          def protected_state():
+              active = Path('/opt/alchemy-media-agent').resolve(strict=True)
+              assert active == Path('/opt/alchemy-media-agent-releases/doc276-277-' + expected_sha[:12])
+              assert cmd('git', '-C', str(active), 'rev-parse', 'HEAD') == expected_sha
+              v1 = cmd('docker', 'inspect', 'alchemy-media-agent', '--format', '{{.Id}}|{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}')
+              bridge = cmd('docker', 'inspect', 'alchemy-render-bridge-api', '--format', '{{.Id}}|{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}')
+              assert v1.split('|')[-1] == 'true' and bridge.split('|')[-1] == 'true'
+              images = {}
+              for tag in ('alchemy-media-agent:latest', 'alchemy-media-agent:rollback-pr29',
+                          'alchemy-media-agent:candidate-' + expected_candidate_sha):
+                  images[tag] = cmd('docker', 'image', 'inspect', '--format', '{{.Id}}', tag)
+              units = {unit: cmd('systemctl', 'is-active', unit) for unit in (
+                  'alchemy-v2-api.service', 'alchemy-v2-worker.service', 'alchemy-v2-sync-worker.service')}
+              assert set(units.values()) == {'active'}
+              return {'active_release': str(active), 'v1': v1, 'bridge': bridge, 'images': images, 'units': units}
+
+          def health():
+              for url in ('http://127.0.0.1:8017/healthz', 'http://127.0.0.1:8020/api/v2/health'):
+                  cmd('curl', '--noproxy', '*', '-fsS', '--max-time', '10', url)
+
+          with open('/run/lock/alchemy-media-agent-release.lock', 'a') as lock:
+              fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              before = protected_state()
+              health()
+              rows = json.loads(cmd('docker', 'container', 'inspect', '--size', expected_container_id))
+              assert len(rows) == 1
+              row = rows[0]
+              config = row.get('Config', {})
+              state = row.get('State', {})
+              actual_command = config.get('Cmd') or []
+              command_matches = (
+                  len(actual_command) == 3 and actual_command[:2] == ['/bin/sh', '-c']
+                  and ' '.join(actual_command[2].split()) == expected_pip_command
+              )
+              assert row.get('Id') == expected_container_id
+              assert row.get('Name') == '/busy_noyce'
+              assert row.get('Created') == expected_created
+              assert row.get('Image') == expected_image_id
+              assert state.get('Status') == 'exited' and state.get('Running') is False and state.get('ExitCode') == 0
+              assert state.get('StartedAt') == expected_started and state.get('FinishedAt') == expected_finished
+              assert row.get('SizeRw') == 363282400
+              assert row.get('Mounts') == [] and config.get('WorkingDir') == '/app'
+              assert command_matches
+              assert row.get('HostConfig', {}).get('RestartPolicy', {}).get('Name') in ('', 'no')
+              print(json.dumps({'status': 'verified_failed_pip_build_container', 'container_id': expected_container_id,
+                                'name': row['Name'], 'size_rw': row['SizeRw'], 'mount_count': 0,
+                                'restart_policy_disabled': True}, sort_keys=True), flush=True)
+              cmd('docker', 'container', 'rm', expected_container_id)
+              assert expected_container_id not in cmd('docker', 'container', 'ls', '-aq', '--no-trunc').splitlines()
+              assert protected_state() == before
+              health()
+              assert protected_state() == before
+              print(json.dumps({'status': 'retired_exact_failed_pip_build_container',
+                                'protected_state_unchanged': True,
+                                'free_bytes': shutil.disk_usage('/').free}, sort_keys=True), flush=True)
+          REMOTE_PY
+
       - name: Read project and delivery records without mutation
         if: ${{ !startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_') }}
         env:
