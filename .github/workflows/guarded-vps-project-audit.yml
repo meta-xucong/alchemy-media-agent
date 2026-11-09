@@ -49,7 +49,67 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
 
+      - name: Inspect exact stopped build container without mutation
+        if: ${{ startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_inspect_') }}
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PLANNING_OPERATION_ID: ${{ inputs.planning_operation_id }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PLANNING_OPERATION_ID" == doc277_project_planning_container_inspect_busy_noyce ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" "python3 - '$EXPECTED_SHA' busy_noyce" <<'REMOTE_PY'
+          import fcntl
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          expected_sha, name = sys.argv[1:]
+          def cmd(*args):
+              result = subprocess.run(args, capture_output=True, text=True, check=False)
+              if result.returncode:
+                  raise RuntimeError('command_failed:' + args[0])
+              return result.stdout.strip()
+          with open('/run/lock/alchemy-media-agent-release.lock', 'a') as lock:
+              fcntl.flock(lock, fcntl.LOCK_EX)
+              active = Path('/opt/alchemy-media-agent').resolve(strict=True)
+              assert active == Path('/opt/alchemy-media-agent-releases/doc276-277-' + expected_sha[:12])
+              assert cmd('git', '-C', str(active), 'rev-parse', 'HEAD') == expected_sha
+              assert cmd('docker', 'inspect', 'alchemy-media-agent', '--format', '{{.State.Running}}') == 'true'
+              assert cmd('docker', 'inspect', 'alchemy-render-bridge-api', '--format', '{{.State.Running}}') == 'true'
+              for unit in ('alchemy-v2-api.service', 'alchemy-v2-worker.service', 'alchemy-v2-sync-worker.service'):
+                  assert cmd('systemctl', 'is-active', unit) == 'active'
+              for url in ('http://127.0.0.1:8017/healthz', 'http://127.0.0.1:8020/api/v2/health'):
+                  cmd('curl', '--noproxy', '*', '-fsS', '--max-time', '10', url)
+              row = json.loads(cmd('docker', 'container', 'inspect', '--size', name))[0]
+              config = row.get('Config', {})
+              state = row.get('State', {})
+              raw_command = config.get('Cmd') or []
+              expected_command = 'python -m pip install --index-url "$PIP_INDEX_URL" --upgrade pip && python -m pip install --index-url "$PIP_INDEX_URL" -r requirements.txt'
+              actual_command = ' '.join((raw_command[2] if len(raw_command) == 3 else '').split())
+              command_matches_pip_install = (
+                  len(raw_command) == 3 and raw_command[:2] == ['/bin/sh', '-c']
+                  and actual_command == expected_command
+              )
+              print(json.dumps({
+                  'container_id': row.get('Id'), 'name': row.get('Name'), 'created': row.get('Created'),
+                  'state': {key: state.get(key) for key in ('Status', 'Running', 'ExitCode', 'StartedAt', 'FinishedAt')},
+                  'size_rw': row.get('SizeRw'), 'mount_count': len(row.get('Mounts', [])),
+                  'mount_destinations': [mount.get('Destination') for mount in row.get('Mounts', [])],
+                  'command_matches_pip_install': command_matches_pip_install,
+                  'working_dir': config.get('WorkingDir'), 'image_id': row.get('Image'),
+                  'restart_policy': row.get('HostConfig', {}).get('RestartPolicy'),
+              }, sort_keys=True), flush=True)
+          REMOTE_PY
+
       - name: Read project and delivery records without mutation
+        if: ${{ !startsWith(inputs.planning_operation_id, 'doc277_project_planning_container_') }}
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PROJECT_ID: ${{ inputs.project_id }}
