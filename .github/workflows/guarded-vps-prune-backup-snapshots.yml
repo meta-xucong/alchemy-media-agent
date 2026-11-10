@@ -1,0 +1,113 @@
+name: Guarded VPS Retain One Rollback Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact main commit containing the snapshot retention guard"
+        required: true
+        type: string
+      expected_active_sha:
+        description: "Exact active release that must remain running"
+        required: true
+        type: string
+      expected_rollback_sha:
+        description: "Exact previous formal release protected by rollback-pr29"
+        required: true
+        type: string
+      keep_name:
+        description: "The one verified pre-cutover snapshot to retain"
+        required: true
+        type: string
+      mode:
+        description: "Inspect all snapshots first, then retire only the exact inspected inventory"
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - retire
+      selection:
+        description: "Exact metadata inventory returned by inspect; required for retire"
+        required: false
+        type: string
+        default: ""
+      confirmation:
+        description: "Type RETAIN-ONE-ROLLBACK-SNAPSHOT to apply the exact inventory cleanup"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guarded-vps-release-maintenance
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact guard revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Inspect or retain one verified rollback snapshot
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_ACTIVE_SHA: ${{ inputs.expected_active_sha }}
+          EXPECTED_ROLLBACK_SHA: ${{ inputs.expected_rollback_sha }}
+          KEEP_NAME: ${{ inputs.keep_name }}
+          MODE: ${{ inputs.mode }}
+          SELECTION: ${{ inputs.selection }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER || 'root' }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_ACTIVE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$KEEP_NAME" =~ ^pr29-[0-9a-f]{12}-[0-9]{8}T[0-9]{6}Z$ ]]
+          [[ "$MODE" == inspect || "$MODE" == retire ]]
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]
+          if [ "$MODE" = inspect ]; then
+            [ -z "$SELECTION" ] && [ -z "$CONFIRMATION" ]
+          else
+            [[ "$SELECTION" =~ ^[A-Za-z0-9,:_-]+$ ]]
+            [ "${#SELECTION}" -le 20000 ]
+            [[ "$CONFIRMATION" == RETAIN-ONE-ROLLBACK-SNAPSHOT ]]
+          fi
+          remote="${VPS_USER}@${VPS_HOST}"
+          remote_args="--expected-active-sha '$EXPECTED_ACTIVE_SHA' --expected-rollback-sha '$EXPECTED_ROLLBACK_SHA' --keep-name '$KEEP_NAME' --mode '$MODE'"
+          if [ "$MODE" = retire ]; then
+            remote_args="$remote_args --selection '$SELECTION' --confirmation '$CONFIRMATION'"
+          fi
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "install -d -m 755 /run/lock && flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - $remote_args" \
+            < scripts/vps_prune_backup_snapshots.py

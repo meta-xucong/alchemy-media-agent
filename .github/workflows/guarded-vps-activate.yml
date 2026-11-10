@@ -934,6 +934,19 @@ jobs:
           static_contains "$public_base_url/mobile-static/mobile.js" review_withheld_face_integrity || fail_public_open public_mobile_static_marker_missing
           project_status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$public_base_url/api/v3/creative-agent/projects" || true)"
           protected_ok "$project_status" || fail_public_open v3_projects_not_protected
+          rollback_sha="$(git -C "$old_release" rev-parse HEAD)" || fail_public_open rollback_revision_unavailable
+          if backup_retention_output="$(python3 "$candidate_release/scripts/vps_prune_backup_snapshots.py" \
+            --expected-active-sha "$expected_sha" \
+            --expected-rollback-sha "$rollback_sha" \
+            --keep-name "${maintenance_backup##*/}" \
+            --mode retain-latest \
+            --confirmation RETAIN-ONE-ROLLBACK-SNAPSHOT 2>&1)"; then
+            printf '%s\n' "$backup_retention_output"
+            printf 'GUARDED_ACTIVATE_BACKUP_RETENTION=pass\n'
+          else
+            printf '%s\n' "$backup_retention_output" >&2
+            printf 'GUARDED_ACTIVATE_BACKUP_RETENTION=blocked\n' >&2
+          fi
           if [ "$maintenance_timer_was_active" = 1 ]; then
             systemctl start alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_failed
             systemctl is-active --quiet alchemy-v3-storage-maintenance.timer || fail_public_open maintenance_timer_restore_unverified

@@ -1,0 +1,101 @@
+name: Guarded VPS Retire Inactive V2 Runtime Archives
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact main commit containing the retirement guard"
+        required: true
+        type: string
+      expected_active_sha:
+        description: "Exact active release that must remain protected"
+        required: true
+        type: string
+      mode:
+        description: "Inspect every inactive runtime archive first, then retire only the exact inspected revisions"
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - retire
+      selection:
+        description: "Exact identity selection string returned by inspect; required for retire"
+        required: false
+        type: string
+        default: ""
+      confirmation:
+        description: "Type RETIRE-UNREFERENCED-V2-RUNTIME-ARCHIVES for the exact inspected archive cleanup"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guarded-vps-release-maintenance
+  cancel-in-progress: false
+
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact guard revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Inspect or retire exact unreferenced dependency archives
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_ACTIVE_SHA: ${{ inputs.expected_active_sha }}
+          MODE: ${{ inputs.mode }}
+          SELECTION: ${{ inputs.selection }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER || 'root' }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_ACTIVE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$MODE" == inspect || "$MODE" == retire ]]
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]
+          if [ "$MODE" = inspect ]; then
+            [ -z "$SELECTION" ] && [ -z "$CONFIRMATION" ]
+          else
+            [[ "$SELECTION" =~ ^[0-9a-f]{40}:[0-9]+:[0-9]+:[0-9]+:[0-9]+(,[0-9a-f]{40}:[0-9]+:[0-9]+:[0-9]+:[0-9]+){0,39}$ ]]
+            [ "${#SELECTION}" -le 8192 ]
+            [[ "$CONFIRMATION" == RETIRE-UNREFERENCED-V2-RUNTIME-ARCHIVES ]]
+          fi
+          remote="${VPS_USER}@${VPS_HOST}"
+          remote_args="--expected-active-sha '$EXPECTED_ACTIVE_SHA' --mode '$MODE'"
+          if [ "$MODE" = retire ]; then
+            remote_args="$remote_args --selection '$SELECTION' --confirmation '$CONFIRMATION'"
+          fi
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "install -d -m 755 /run/lock && flock -w 300 /run/lock/alchemy-media-agent-release.lock python3 - $remote_args" \
+            < scripts/vps_retire_inactive_runtime_archives.py
