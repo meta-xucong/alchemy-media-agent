@@ -401,6 +401,87 @@ def list_v2_api_unknown_job_ids(root: Path) -> list[str]:
     return sorted(job_ids)
 
 
+def _bridge_unit_is_terminal(state: str, data: dict) -> bool:
+    terminal = state in {"acked", "api_completed"}
+    # An artifact-ready Bridge task remains unresolved unless cancellation was
+    # explicitly requested and reconciled. Reconciliation does not rewrite
+    # the immutable execution result.
+    if (
+        not terminal
+        and state == "artifacts_ready"
+        and data.get("route") == "bridge"
+        and data.get("cancel_requested") is True
+        and data.get("cancel_reconciled") is True
+    ):
+        terminal = True
+    if state in {"canceled", "failed", "expired"}:
+        terminal = not data.get("cancel_requested") or bool(data.get("cancel_reconciled"))
+    return terminal
+
+
+def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) -> dict:
+    """Report unresolved Bridge unit metadata without exposing payloads or mutating stores."""
+    if root.exists() and not root.is_dir():
+        raise CutoverBlocked("bridge_state_root_invalid")
+
+    native_jobs: dict[str, dict] = {}
+    if v2_repository is not None and v2_repository.exists():
+        db = _readonly(v2_repository)
+        try:
+            if "v2_records" not in _tables(db):
+                raise CutoverBlocked("v2_direct_job_state_unreadable")
+            for raw, in db.execute("SELECT payload FROM v2_records WHERE namespace='image_jobs'"):
+                job = json.loads(raw)
+                if not isinstance(job, dict) or not isinstance(job.get("job_id"), str):
+                    raise ValueError()
+                native_jobs[job["job_id"]] = job
+        except (sqlite3.Error, ValueError, TypeError):
+            raise CutoverBlocked("v2_direct_job_state_unreadable") from None
+        finally:
+            db.close()
+
+    units = []
+    for path in sorted(root.glob("*/primary.sqlite3")) if root.exists() else ():
+        db = _readonly(path)
+        try:
+            if "units" not in _tables(db):
+                raise CutoverBlocked("bridge_ledger_unreadable")
+            for state, raw in db.execute("SELECT state,data FROM units"):
+                data = json.loads(raw)
+                if not isinstance(data, dict) or not isinstance(state, str):
+                    raise ValueError()
+                if _bridge_unit_is_terminal(state, data):
+                    continue
+                unit_id = data.get("unit_id")
+                if not isinstance(unit_id, str):
+                    unit_id = None
+                job_id = unit_id.partition(":")[0] if unit_id and ":" in unit_id else unit_id
+                native = native_jobs.get(job_id) if job_id else None
+                outputs = native.get("outputs") if isinstance(native, dict) else None
+                units.append({
+                    "unit_id": unit_id,
+                    "state": state,
+                    "product": data.get("product") if isinstance(data.get("product"), str) else None,
+                    "route": data.get("route") if isinstance(data.get("route"), str) else None,
+                    "cancel_requested": data.get("cancel_requested") is True,
+                    "cancel_reconciled": data.get("cancel_reconciled") is True,
+                    "remote_task_present": isinstance(data.get("task_id"), str) and bool(data["task_id"]),
+                    "receipt_present": isinstance(data.get("receipt_id"), str) and bool(data["receipt_id"]),
+                    "bridge_image_metadata_present": isinstance(data.get("image"), dict),
+                    "native_job_status": native.get("status") if isinstance(native, dict) else None,
+                    "native_output_count": len(outputs) if isinstance(outputs, list) else None,
+                    "native_created_at": native.get("created_at") if isinstance(native, dict) else None,
+                    "native_updated_at": native.get("updated_at") if isinstance(native, dict) else None,
+                })
+        except (sqlite3.Error, ValueError, TypeError):
+            raise CutoverBlocked("bridge_ledger_unreadable") from None
+        finally:
+            db.close()
+
+    units.sort(key=lambda item: (item["unit_id"] or "", item["state"]))
+    return {"status": "listed", "unresolved_count": len(units), "units": units}
+
+
 def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                         v2_repository: Path | None = None,
                         abandoned_api_job_ids: set[str] | None = None) -> dict[str, int]:
@@ -460,22 +541,7 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                     counts["bridge_explicitly_abandoned_api_units"] += 1
                     continue
                 # api_ready is NOT terminal: a direct request can still dispatch.
-                terminal = state in {"acked", "api_completed"}
-                # An artifact-ready Bridge task remains unresolved unless the
-                # product explicitly abandoned it and remote cancellation has
-                # been reconciled. Reconcile may confirm an already-ready task
-                # without changing its immutable execution state.
-                if (
-                    not terminal
-                    and state == "artifacts_ready"
-                    and data.get("route") == "bridge"
-                    and data.get("cancel_requested") is True
-                    and data.get("cancel_reconciled") is True
-                ):
-                    terminal = True
-                if state in {"canceled", "failed", "expired"}:
-                    terminal = not data.get("cancel_requested") or bool(data.get("cancel_reconciled"))
-                counts["bridge_unresolved_units"] += not terminal
+                counts["bridge_unresolved_units"] += not _bridge_unit_is_terminal(state, data)
         except (sqlite3.Error, ValueError, TypeError):
             raise CutoverBlocked("bridge_ledger_unreadable") from None
         finally:
@@ -1201,6 +1267,9 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--abandon-api-unknown-job-id", action="append", default=[])
     list_api_unknown = subparsers.add_parser("list-v2-api-unknown-job-ids")
     list_api_unknown.add_argument("--bridge-state-root", required=True, type=Path)
+    list_bridge_units = subparsers.add_parser("list-unresolved-bridge-units")
+    list_bridge_units.add_argument("--bridge-state-root", required=True, type=Path)
+    list_bridge_units.add_argument("--v2-repository", type=Path)
     bridge_paths = subparsers.add_parser("verify-bridge-storage-configuration")
     bridge_paths.add_argument("--v1-environment", required=True, type=Path)
     bridge_paths.add_argument("--v2-environment", required=True, type=Path)
@@ -1253,6 +1322,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "list-v2-api-unknown-job-ids":
             result = {"status": "listed", "job_ids": list_v2_api_unknown_job_ids(args.bridge_state_root)}
+        elif args.command == "list-unresolved-bridge-units":
+            result = list_unresolved_bridge_units(args.bridge_state_root, args.v2_repository)
         elif args.command == "inspect-active-work":
             result = inspect_active_work(
                 args.v1_database,

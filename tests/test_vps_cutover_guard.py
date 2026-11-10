@@ -1105,6 +1105,77 @@ def test_v2_api_unknown_job_listing_fails_closed_on_malformed_unit_identity(tmp_
         _MODULE.list_v2_api_unknown_job_ids(root)
 
 
+def test_unresolved_bridge_unit_report_correlates_native_job_without_exposing_payload(tmp_path):
+    root, _, repository = _bridge_inventory_fixture(
+        tmp_path, 'artifacts_ready', native_status='completed', route='bridge',
+    )
+    ledger = root / 'v2' / 'primary.sqlite3'
+    with sqlite3.connect(ledger) as db:
+        db.execute(
+            'UPDATE units SET data=?',
+            (json.dumps({
+                'product': 'v2', 'unit_id': 'job1:0', 'route': 'bridge',
+                'task_id': 'private-remote-task-id', 'receipt_id': 'private-receipt-id',
+                'image': {'mime_type': 'image/png', 'width': 1024, 'height': 1024},
+                'payload': {'prompt': 'private prompt', 'token': 'private credential'},
+            }),),
+        )
+        db.execute(
+            'INSERT INTO units VALUES (?,?)',
+            ('acked', json.dumps({'product': 'v2', 'unit_id': 'job2:0', 'route': 'bridge'})),
+        )
+    with sqlite3.connect(repository) as db:
+        db.execute(
+            'UPDATE v2_records SET payload=?',
+            (json.dumps({
+                'job_id': 'job1', 'status': 'completed',
+                'outputs': [{'output_id': 'private-output-id', 'image_data': 'private image'}],
+                'created_at': '2026-11-10T10:00:00Z', 'updated_at': '2026-11-10T10:05:00Z',
+                'prompt': 'private native prompt',
+            }),),
+        )
+    before = {path: path.read_bytes() for path in (ledger, repository)}
+
+    result = _MODULE.list_unresolved_bridge_units(root, repository)
+
+    assert result == {
+        'status': 'listed',
+        'unresolved_count': 1,
+        'units': [{
+            'unit_id': 'job1:0', 'state': 'artifacts_ready', 'product': 'v2', 'route': 'bridge',
+            'cancel_requested': False, 'cancel_reconciled': False,
+            'remote_task_present': True, 'receipt_present': True,
+            'bridge_image_metadata_present': True, 'native_job_status': 'completed',
+            'native_output_count': 1, 'native_created_at': '2026-11-10T10:00:00Z',
+            'native_updated_at': '2026-11-10T10:05:00Z',
+        }],
+    }
+    serialized = json.dumps(result)
+    for private_value in (
+        'private prompt', 'private credential', 'private-remote-task-id',
+        'private-receipt-id', 'private-output-id', 'private image',
+    ):
+        assert private_value not in serialized
+    assert {path: path.read_bytes() for path in (ledger, repository)} == before
+
+
+def test_unresolved_bridge_unit_report_cli_emits_json(tmp_path, capsys):
+    root, _, repository = _bridge_inventory_fixture(
+        tmp_path, 'running', native_status='running', route='bridge',
+    )
+
+    exit_code = _MODULE.main([
+        'list-unresolved-bridge-units', '--bridge-state-root', str(root),
+        '--v2-repository', str(repository),
+    ])
+
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert report['status'] == 'listed'
+    assert report['unresolved_count'] == 1
+    assert report['units'][0]['state'] == 'running'
+
+
 @pytest.mark.parametrize('state', ['acked','api_completed','canceled','failed','expired'])
 def test_bridge_completed_inventory_is_idle(tmp_path, state):
     args = _bridge_inventory_fixture(tmp_path,state)

@@ -162,6 +162,22 @@ jobs:
               --release-root "$active_release")"; then
               bridge_control="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["control_path"])' <<<"$bridge_paths")"
               bridge_state="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state_root"])' <<<"$bridge_paths")"
+              # Report only opaque unit identity and lifecycle metadata. The
+              # helper deliberately omits prompts, references, image bytes,
+              # credentials, and remote task/receipt identifiers.
+              bridge_diagnostic_script="$(mktemp)"
+              if git -C "$active_release" show "$expected_sha:scripts/vps_cutover_guard.py" > "$bridge_diagnostic_script"; then
+                bridge_unit_report="$(python3 "$bridge_diagnostic_script" list-unresolved-bridge-units \
+                  --bridge-state-root "$bridge_state" --v2-repository "$v2_data/repository.sqlite3" 2>/dev/null || true)"
+                if [[ "$bridge_unit_report" == *'"status":"listed"'* ]]; then
+                  printf 'GUARDED_PREFLIGHT_BRIDGE_WORK=%s\n' "$bridge_unit_report"
+                else
+                  printf 'GUARDED_PREFLIGHT_BRIDGE_WORK_STATUS=unavailable\n'
+                fi
+              else
+                printf 'GUARDED_PREFLIGHT_BRIDGE_WORK_STATUS=unavailable\n'
+              fi
+              rm -f -- "$bridge_diagnostic_script"
               estimate_inventory="$(mktemp)"
               if for root in "$v1_media" "$v2_data" "$v2_history_dir" "$bridge_state"; do
                 [ -d "$root" ] || exit 1
