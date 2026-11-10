@@ -156,6 +156,13 @@ def test_mountinfo_parser_decodes_escaped_mount_paths():
     assert parsed == {'/var/backups/alchemy/a b'}
 
 
+def test_inventory_names_the_unclassified_snapshot_entry_and_stops(tmp_path):
+    root, _, _ = fixture_snapshots(tmp_path)
+    (root / 'pr29-partial').mkdir()
+    with pytest.raises(guard.SnapshotBlocked, match='snapshot_name_invalid:pr29-partial'):
+        guard.inventory_snapshots(root=root)
+
+
 def test_selection_rejects_duplicate_or_malformed_tokens(tmp_path):
     root, _, _ = fixture_snapshots(tmp_path)
     snapshots, _ = guard.inventory_snapshots(root=root)

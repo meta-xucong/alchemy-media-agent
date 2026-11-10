@@ -227,7 +227,7 @@ def inventory_snapshots(*, root: Path = ROOT) -> tuple[list[dict], list[dict]]:
         if SNAPSHOT_NAME.fullmatch(path.name):
             snapshots.append(snapshot_identity(path.name, root=root, mounts=mounts))
         elif path.name.startswith('pr29-'):
-            raise SnapshotBlocked('snapshot_name_invalid')
+            raise SnapshotBlocked('snapshot_name_invalid:' + path.name)
         else:
             try:
                 info = path.lstat()
