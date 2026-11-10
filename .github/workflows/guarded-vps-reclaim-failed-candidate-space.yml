@@ -155,27 +155,17 @@ jobs:
               raise SystemExit("artifact_container_not_cleanly_exited")
           if container.get("Mounts"):
               raise SystemExit("artifact_container_has_mounts")
+          command = " ".join((container.get("Config") or {}).get("Entrypoint") or []) + " " + " ".join((container.get("Config") or {}).get("Cmd") or [])
+          if "scripts/fetch_v3_identity_models.py" not in command or "/app/models/v3_identity" not in command:
+              raise SystemExit("artifact_container_not_v3_model_build_step")
           PY
-          image_json="$(docker image inspect "sha256:$image_id")" || stop artifact_image_missing
-          python3 - "$image_json" <<'PY'
-          import json
-          import sys
-          image = json.loads(sys.argv[1])[0]
-          if image.get("RepoTags") not in (None, [], ["<none>:<none>"]):
-              raise SystemExit("artifact_image_tagged")
-          if image.get("RepoDigests") not in (None, []):
-              raise SystemExit("artifact_image_has_repo_digest")
-          PY
-          mapfile -t image_containers < <(docker ps -aq --filter "ancestor=sha256:$image_id")
-          [ "${#image_containers[@]}" -eq 1 ] && [ "${image_containers[0]}" = "$container_id" ] || stop artifact_image_referenced_elsewhere
 
           printf 'GUARDED_FAILED_BUILD_RECLAIM_RUN_ID=%s\n' "$failed_run_id"
           printf 'GUARDED_FAILED_BUILD_RECLAIM_CONTAINER=%s\n' "$container_id"
           printf 'GUARDED_FAILED_BUILD_RECLAIM_IMAGE=sha256:%s\n' "$image_id"
           docker rm "$container_id" >/dev/null || stop artifact_container_removal_failed
           if docker inspect "$container_id" >/dev/null 2>&1; then stop artifact_container_still_present; fi
-          docker image rm "sha256:$image_id" >/dev/null || stop artifact_image_removal_failed
-          if docker image inspect "sha256:$image_id" >/dev/null 2>&1; then stop artifact_image_still_present; fi
+          printf 'GUARDED_FAILED_BUILD_RECLAIM_IMAGE_PRESERVED=sha256:%s\n' "$image_id"
 
           pip_cache="$(python3 -m pip cache dir 2>/dev/null)" || stop pip_cache_location_unavailable
           expected_pip_cache="$HOME/.cache/pip"
