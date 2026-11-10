@@ -1238,6 +1238,24 @@ def test_api_unknown_diagnostic_separates_terminal_unknown_from_blockers(tmp_pat
     assert 'payload' not in report['units'][0]
 
 
+def test_api_unknown_classification_accepts_omitted_default_cancel_flag(tmp_path):
+    root, frozen, repository = _terminal_api_unknown_fixture(tmp_path)
+    ledger = root / 'v2' / 'primary.sqlite3'
+    with sqlite3.connect(ledger) as db:
+        state, raw = db.execute('SELECT state,data FROM units').fetchone()
+        data = json.loads(raw)
+        data.pop('cancel_requested')
+        db.execute('UPDATE units SET data=?', (json.dumps(data),))
+
+    counts = _MODULE.inspect_bridge_work(root, frozen, repository)
+    report = _MODULE.list_unresolved_bridge_units(root, repository)
+
+    assert counts['bridge_unresolved_units'] == 0
+    assert counts['bridge_terminal_unknown_api_outcomes'] == 1
+    assert report['blocking_count'] == 0
+    assert report['units'][0]['classification'] == 'terminal_unknown_api_outcome'
+
+
 def test_active_work_report_is_idle_but_counts_unknown_api_outcome(tmp_path):
     v1, v2, projects = _databases(tmp_path)
     bridge_root, frozen, repository = _terminal_api_unknown_fixture(tmp_path)

@@ -426,7 +426,10 @@ def _terminal_unknown_v2_api_outcome(state: str, data: dict, native_job: dict | 
         or data.get("state") != state
         or data.get("product") != "v2"
         or data.get("route") != "api"
-        or data.get("cancel_requested") is not False
+        # The Bridge ledger omits cancel_requested until a cancellation is
+        # requested. Treat only absent/explicit False as the default no-cancel
+        # state; malformed values and True remain fail-closed.
+        or ("cancel_requested" in data and data.get("cancel_requested") is not False)
         or data.get("task_id") not in (None, "")
         or data.get("receipt_id") not in (None, "")
         or data.get("image") is not None

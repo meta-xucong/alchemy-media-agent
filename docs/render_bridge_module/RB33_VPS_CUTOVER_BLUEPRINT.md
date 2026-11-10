@@ -401,7 +401,10 @@ It reports a V2/API unknown unit as `bridge_terminal_unknown_api_outcomes`
 without blocking cutover only when the matching native V2 job is failed with
 zero outputs, has `provider_id=render_bridge`, and records the exact terminal
 `api_execution_unknown` error; the Bridge row must have no task, receipt, image,
-or cancellation intent. The Bridge ledger and native job are read only and
+or cancellation intent. The Bridge schema omits `cancel_requested` until a
+cancellation is requested, so an absent field is the default no-cancel state;
+explicit false is accepted, while true or malformed values remain blocking.
+The Bridge ledger and native job are read only and
 remain unchanged. Diagnostics retain the row and identify it as
 `terminal_unknown_api_outcome`; the outcome stays uncertain and is never marked
 successful. Any missing or mismatched evidence remains blocking. The per-run
