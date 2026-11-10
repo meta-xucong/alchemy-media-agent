@@ -402,6 +402,14 @@ jobs:
           cat "$bridge_preflight_log"
 
           if [[ "$CANDIDATE_V3_PREFLIGHT_ONLY" == "true" ]]; then
+            if [[ "$CANDIDATE_V3_ALLOW_FAILED_EMPTY_V2_API_UNKNOWNS" == "true" ]]; then
+              eligible_api_receipt="$(grep -F 'GUARDED_CANDIDATE_V3_ELIGIBLE_API_UNKNOWN_JOB_IDS=' "$lifecycle_log" | tail -n 1 || true)"
+              [[ "$eligible_api_receipt" =~ ^GUARDED_CANDIDATE_V3_ELIGIBLE_API_UNKNOWN_JOB_IDS=(job_[0-9a-f]{12}(,job_[0-9a-f]{12})*)?$ ]] || {
+                echo "candidate_v3_api_unknown_receipt_invalid" >&2
+                exit 2
+              }
+              printf '%s\n' "$eligible_api_receipt"
+            fi
             echo "GUARDED_CANDIDATE_V3_PREFLIGHT_ONLY=pass"
             exit 0
           fi
