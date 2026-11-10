@@ -296,6 +296,10 @@ jobs:
             stop_reason active_or_unknown_work_detected
           fi
           printf '%s\n' "$active_work_report"
+          if [ "$allow_failed_empty_v2_api_unknowns" = true ]; then
+            verified_api_job_ids="${abandon_api_ids//$'\n'/,}"
+            printf 'GUARDED_CANDIDATE_V3_ELIGIBLE_API_UNKNOWN_JOB_IDS=%s\n' "$verified_api_job_ids"
+          fi
           available_bytes="$(df -PB1 /var/lib/alchemy | awk 'NR == 2 {print $4}')"
           [[ "$available_bytes" =~ ^[0-9]+$ ]] && [ "$available_bytes" -ge 536870912 ] || stop_reason candidate_smoke_disk_floor_not_met
           [ ! -e "$marker" ] || stop_reason generation_already_attempted_for_sha
