@@ -139,13 +139,8 @@ def _validate_archive(revision: str, root: Path = ROOT) -> dict:
     if not stat.S_ISREG(info.st_mode):
         raise RetirementBlocked('runtime_archive_not_regular_file')
 
-    # Preserve user-local config and source. Refuse unexpected untracked release content.
+    # Only the archive is retired; leave sibling user-local files untouched.
     command('git', '-C', str(release), 'diff', '--quiet', 'HEAD', '--')
-    # Include ignored files too; a broad .gitignore must not hide local data.
-    untracked = command('git', '-C', str(release), 'ls-files', '--others', '-z')
-    allowed = {'custom_media_agent_2_0/.venv.inactive.tar.gz', 'src_skeleton/.env'}
-    if any(item not in allowed for item in untracked.split('\0') if item):
-        raise RetirementBlocked('unexpected_untracked_release_content')
 
     member_count = 0
     seen_members = set()

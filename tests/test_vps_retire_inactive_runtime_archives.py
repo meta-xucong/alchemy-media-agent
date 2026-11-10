@@ -119,18 +119,22 @@ def test_reference_check_blocks_all_mutation(tmp_path, monkeypatch):
     assert archive.is_file()
 
 
-def test_unexpected_untracked_release_content_blocks_cleanup(tmp_path, monkeypatch):
+def test_untracked_sibling_content_is_preserved_during_archive_cleanup(tmp_path, monkeypatch):
     root, active, release, archive = fixture_release(tmp_path, monkeypatch)
-    (release / 'unexpected.log').write_text('preserve', encoding='utf-8')
+    unexpected = release / 'unexpected.log'
+    unexpected.write_text('preserve', encoding='utf-8')
     original = guard.command
     def run(*args):
         if args[:3] == ('git', '-C', str(release)) and args[3:4] == ('ls-files',):
             return 'unexpected.log\0'
         return original(*args)
     monkeypatch.setattr(guard, 'command', run)
-    with pytest.raises(guard.RetirementBlocked, match='unexpected_untracked'):
-        guard.inventory_archives(ACTIVE_SHA, root=root, active=active)
-    assert archive.is_file()
+    result = guard.retire_archives([OLD_SHA], ACTIVE_SHA, root=root, active=active,
+                                   ledger=tmp_path / 'ledger.jsonl')
+    assert result['retired_count'] == 1
+    assert not archive.exists()
+    assert unexpected.read_text(encoding='utf-8') == 'preserve'
+    assert (release / 'src_skeleton/.env').read_text(encoding='utf-8') == 'SECRET=not-read\n'
 
 
 def test_workflow_streams_the_exact_guard_script_and_requires_inspection_identity():
