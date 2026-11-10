@@ -1,0 +1,27 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "guarded-vps-reclaim-failed-candidate-space.yml"
+
+
+def test_failed_candidate_reclaimer_is_exact_and_guarded() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "RECLAIM-FAILED-CANDIDATE-SPACE" in source
+    assert "artifact_outside_failed_run_window" in source
+    assert 'state.get("Status") != "exited"' in source
+    assert 'if container.get("Mounts"):' in source
+    assert "artifact_image_referenced_elsewhere" in source
+    assert 'docker rm "$container_id"' in source
+    assert 'docker image rm "sha256:$image_id"' in source
+    assert "python3 -m pip cache purge" in source
+    assert "apt-get clean" in source
+    assert "package_manager_active" in source
+    assert "docker system prune" not in source
+    assert "docker container prune" not in source
+
+    assert source.index("active_v1_health_failed") < source.index('docker rm "$container_id"')
+    assert source.index('state.get("Status") != "exited"') < source.index('docker rm "$container_id"')
+    assert source.index("artifact_image_referenced_elsewhere") < source.index('docker rm "$container_id"')
+    assert source.index("package_manager_active") < source.index("apt-get clean")

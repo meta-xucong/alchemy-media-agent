@@ -1,0 +1,196 @@
+name: Guarded VPS Reclaim Failed Candidate Build Space
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact origin/main commit containing this guarded recovery workflow"
+        required: true
+        type: string
+      expected_active_sha:
+        description: "Exact running release that must remain active"
+        required: true
+        type: string
+      expected_candidate_sha:
+        description: "Exact inactive candidate release being prepared"
+        required: true
+        type: string
+      failed_run_id:
+        description: "GitHub Actions run ID that created the failed build artifact"
+        required: true
+        type: string
+      artifact_container_id:
+        description: "Exact stopped, unmounted container ID from the failed build"
+        required: true
+        type: string
+      artifact_image_id:
+        description: "Exact untagged image ID used by that stopped container"
+        required: true
+        type: string
+      artifact_created_after:
+        description: "UTC lower bound for artifact creation, YYYY-MM-DDTHH:MM:SSZ"
+        required: true
+        type: string
+      artifact_created_before:
+        description: "UTC upper bound for artifact creation, YYYY-MM-DDTHH:MM:SSZ"
+        required: true
+        type: string
+      confirmation:
+        description: "Type RECLAIM-FAILED-CANDIDATE-SPACE"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  reclaim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout guarded workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Reclaim only the verified failed-build artifacts and package caches
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_ACTIVE_SHA: ${{ inputs.expected_active_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.expected_candidate_sha }}
+          FAILED_RUN_ID: ${{ inputs.failed_run_id }}
+          ARTIFACT_CONTAINER_ID: ${{ inputs.artifact_container_id }}
+          ARTIFACT_IMAGE_ID: ${{ inputs.artifact_image_id }}
+          ARTIFACT_CREATED_AFTER: ${{ inputs.artifact_created_after }}
+          ARTIFACT_CREATED_BEFORE: ${{ inputs.artifact_created_before }}
+          RECLAIM_CONFIRMATION: ${{ inputs.confirmation }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_ACTIVE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$FAILED_RUN_ID" =~ ^[0-9]{8,16}$ ]]
+          [[ "$ARTIFACT_CONTAINER_ID" =~ ^[0-9a-f]{12,64}$ ]]
+          [[ "$ARTIFACT_IMAGE_ID" =~ ^[0-9a-f]{12,64}$ ]]
+          [[ "$ARTIFACT_CREATED_AFTER" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          [[ "$ARTIFACT_CREATED_BEFORE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          [[ "$RECLAIM_CONFIRMATION" == "RECLAIM-FAILED-CANDIDATE-SPACE" ]]
+          [ "$EXPECTED_ACTIVE_SHA" != "$EXPECTED_CANDIDATE_SHA" ]
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_ACTIVE_SHA' '$EXPECTED_CANDIDATE_SHA' '$FAILED_RUN_ID' '$ARTIFACT_CONTAINER_ID' '$ARTIFACT_IMAGE_ID' '$ARTIFACT_CREATED_AFTER' '$ARTIFACT_CREATED_BEFORE'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          expected_active_sha="$1"
+          expected_candidate_sha="$2"
+          failed_run_id="$3"
+          container_prefix="$4"
+          image_prefix="$5"
+          created_after="$6"
+          created_before="$7"
+          stop() { printf 'GUARDED_FAILED_BUILD_RECLAIM_STOP=%s\n' "$1" >&2; exit 1; }
+
+          install -d -m 755 /run/lock
+          exec 9>/run/lock/alchemy-media-agent-release.lock
+          flock -w 300 9 || stop shared_release_lock_unavailable
+          deploy_link=/opt/alchemy-media-agent
+          active_release="$(realpath "$deploy_link")" || stop active_release_unavailable
+          expected_active_release="/opt/alchemy-media-agent-releases/doc276-277-${expected_active_sha:0:12}"
+          candidate_release="/opt/alchemy-media-agent-releases/doc276-277-${expected_candidate_sha:0:12}"
+          [ "$active_release" = "$expected_active_release" ] || stop active_release_changed
+          [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_active_sha" ] || stop active_release_sha_mismatch
+          [ -d "$candidate_release" ] || stop candidate_release_missing
+          [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_candidate_sha" ] || stop candidate_release_sha_mismatch
+          [ -x "$candidate_release/custom_media_agent_2_0/.venv/bin/python" ] || stop candidate_runtime_missing
+          docker inspect alchemy-media-agent:latest >/dev/null 2>&1 || stop active_image_missing
+          docker inspect alchemy-media-agent:rollback-pr29 >/dev/null 2>&1 || stop rollback_image_missing
+          [ "$(docker inspect alchemy-media-agent --format '{{.State.Running}}')" = true ] || stop active_v1_not_running
+          curl --noproxy '*' -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:8017/healthz >/dev/null || stop active_v1_health_failed
+          curl --noproxy '*' -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:8020/api/v2/health >/dev/null || stop active_v2_health_failed
+
+          tag="alchemy-media-agent:candidate-${expected_candidate_sha}"
+          if docker image inspect "$tag" >/dev/null 2>&1; then stop candidate_image_already_exists; fi
+          [[ "$failed_run_id" =~ ^[0-9]{8,16}$ ]] || stop invalid_failed_run_id
+          after_epoch="$(date -u -d "$created_after" +%s)" || stop artifact_time_invalid
+          before_epoch="$(date -u -d "$created_before" +%s)" || stop artifact_time_invalid
+          [ "$before_epoch" -gt "$after_epoch" ] || stop artifact_time_window_invalid
+          [ "$((before_epoch - after_epoch))" -le 900 ] || stop artifact_time_window_too_wide
+
+          container_json="$(docker inspect "$container_prefix")" || stop artifact_container_missing
+          container_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])[0]["Id"])' "$container_json")" || stop artifact_container_unreadable
+          [[ "$container_id" == "$container_prefix"* ]] || stop artifact_container_id_mismatch
+          container_image="$(docker inspect "$container_id" --format '{{.Image}}')" || stop artifact_container_image_unreadable
+          image_id="${container_image#sha256:}"
+          [[ "$image_id" == "$image_prefix"* ]] || stop artifact_image_id_mismatch
+          container_created="$(docker inspect "$container_id" --format '{{.Created}}')" || stop artifact_container_time_unreadable
+          container_epoch="$(date -u -d "$container_created" +%s)" || stop artifact_container_time_invalid
+          [ "$container_epoch" -ge "$after_epoch" ] && [ "$container_epoch" -le "$before_epoch" ] || stop artifact_outside_failed_run_window
+          python3 - "$container_json" <<'PY'
+          import json
+          import sys
+          container = json.loads(sys.argv[1])[0]
+          state = container.get("State") or {}
+          if state.get("Status") != "exited" or state.get("ExitCode") != 0:
+              raise SystemExit("artifact_container_not_cleanly_exited")
+          if container.get("Mounts"):
+              raise SystemExit("artifact_container_has_mounts")
+          PY
+          image_json="$(docker image inspect "sha256:$image_id")" || stop artifact_image_missing
+          python3 - "$image_json" <<'PY'
+          import json
+          import sys
+          image = json.loads(sys.argv[1])[0]
+          if image.get("RepoTags") not in (None, [], ["<none>:<none>"]):
+              raise SystemExit("artifact_image_tagged")
+          if image.get("RepoDigests") not in (None, []):
+              raise SystemExit("artifact_image_has_repo_digest")
+          PY
+          mapfile -t image_containers < <(docker ps -aq --filter "ancestor=sha256:$image_id")
+          [ "${#image_containers[@]}" -eq 1 ] && [ "${image_containers[0]}" = "$container_id" ] || stop artifact_image_referenced_elsewhere
+
+          printf 'GUARDED_FAILED_BUILD_RECLAIM_RUN_ID=%s\n' "$failed_run_id"
+          printf 'GUARDED_FAILED_BUILD_RECLAIM_CONTAINER=%s\n' "$container_id"
+          printf 'GUARDED_FAILED_BUILD_RECLAIM_IMAGE=sha256:%s\n' "$image_id"
+          docker rm "$container_id" >/dev/null || stop artifact_container_removal_failed
+          if docker inspect "$container_id" >/dev/null 2>&1; then stop artifact_container_still_present; fi
+          docker image rm "sha256:$image_id" >/dev/null || stop artifact_image_removal_failed
+          if docker image inspect "sha256:$image_id" >/dev/null 2>&1; then stop artifact_image_still_present; fi
+
+          pip_cache="$(python3 -m pip cache dir 2>/dev/null)" || stop pip_cache_location_unavailable
+          expected_pip_cache="$HOME/.cache/pip"
+          [ "$(realpath -m "$pip_cache")" = "$(realpath -m "$expected_pip_cache")" ] || stop pip_cache_path_unexpected
+          if [ -d "$pip_cache" ]; then python3 -m pip cache purge >/dev/null || stop pip_cache_purge_failed; fi
+          if command -v apt-get >/dev/null 2>&1; then
+            if ps -eo comm= | grep -Eq '^(apt|apt-get|dpkg|unattended-upgr)$'; then stop package_manager_active; fi
+            apt-get clean || stop apt_cache_purge_failed
+          fi
+
+          [ "$(realpath "$deploy_link")" = "$active_release" ] || stop active_release_changed_during_reclaim
+          [ "$(docker inspect alchemy-media-agent --format '{{.State.Running}}')" = true ] || stop active_v1_stopped_during_reclaim
+          curl --noproxy '*' -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:8017/healthz >/dev/null || stop active_v1_health_failed_after_reclaim
+          curl --noproxy '*' -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:8020/api/v2/health >/dev/null || stop active_v2_health_failed_after_reclaim
+          printf 'GUARDED_FAILED_BUILD_RECLAIM_RESULT=pass\n'
+          df -PB1 /var/lib/alchemy /var/lib/docker /var/backups/alchemy \
+            | awk 'NR > 1 {printf "GUARDED_FAILED_BUILD_RECLAIM_DISK size_bytes=%s used_bytes=%s available_bytes=%s mount=%s\n", $2, $3, $4, $6}'
+          REMOTE_SCRIPT
