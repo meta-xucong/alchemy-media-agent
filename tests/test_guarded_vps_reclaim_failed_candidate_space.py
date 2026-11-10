@@ -9,6 +9,9 @@ def test_failed_candidate_reclaimer_is_exact_and_guarded() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
 
     assert "RECLAIM-FAILED-CANDIDATE-SPACE" in source
+    assert "cache_only" in source
+    assert '[ "$ARTIFACT_CONTAINER_ID" = none ]' in source
+    assert '[ "$ARTIFACT_IMAGE_ID" = none ]' in source
     assert "artifact_outside_failed_run_window" in source
     assert 'state.get("Status") != "exited"' in source
     assert 'if container.get("Mounts"):' in source
@@ -28,3 +31,5 @@ def test_failed_candidate_reclaimer_is_exact_and_guarded() -> None:
     assert source.index('state.get("Status") != "exited"') < source.index('docker rm "$container_id"')
     assert source.index("artifact_container_not_dockerfile_build_step") < source.index('docker rm "$container_id"')
     assert source.index("package_manager_active") < source.index("apt-get clean")
+    assert source.index('if [ "$mode" = full ]; then') < source.index('docker rm "$container_id"')
+    assert source.index('elif [ "$mode" != cache_only ]; then') < source.index("pip_cache=")
