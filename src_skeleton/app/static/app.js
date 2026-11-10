@@ -19440,15 +19440,12 @@ function renderGallery(outputs) {
     const card = node.querySelector(".output-card");
     const preview = node.querySelector(".output-preview");
     const id = node.querySelector(".output-id");
+    const provider = node.querySelector(".output-provider");
     const link = node.querySelector(".download-link");
-    const footer = node.querySelector(".output-meta");
     preview.dataset.label = `${output.format.toUpperCase()} · ${index + 1}`;
     preview.innerHTML = `<img class="output-image" alt="生成结果 ${index + 1}" loading="lazy" decoding="async" />`;
     id.textContent = output.id;
-    const provider = document.createElement("span");
-    provider.className = "output-provider";
     provider.textContent = outputProviderResultText(output, state.currentJob);
-    footer.insertBefore(provider, link);
     bindDownloadLink(link, v1ExplicitDownloadUrl(output), `${output.id}.${output.format === "jpeg" ? "jpg" : output.format}`);
     preview.addEventListener("click", () => {
       document.querySelectorAll(".output-card").forEach((item) => item.classList.remove("selected"));
@@ -19583,9 +19580,14 @@ function renderHistory(items) {
 
     const footer = document.createElement("div");
     footer.className = "output-meta";
+    const diagnostics = document.createElement("details");
+    diagnostics.className = "output-diagnostics";
+    const diagnosticsSummary = document.createElement("summary");
+    diagnosticsSummary.textContent = "图片 ID";
     const id = document.createElement("span");
     id.className = "output-id";
     id.textContent = item.id;
+    diagnostics.append(diagnosticsSummary, id);
     const link = document.createElement("a");
     link.className = "download-link";
     bindDownloadLink(link, v1ExplicitDownloadUrl(item), `${item.id}.${item.format === "jpeg" ? "jpg" : item.format}`);
@@ -19612,7 +19614,7 @@ function renderHistory(items) {
     actions.className = "history-card-actions";
     actions.append(link);
     if (deleteButton) actions.append(deleteButton);
-    footer.append(id, actions);
+    footer.append(diagnostics, actions);
     meta.append(prompt, details);
     card.append(preview, favoriteButton, meta, footer);
     els.historyGallery.appendChild(card);

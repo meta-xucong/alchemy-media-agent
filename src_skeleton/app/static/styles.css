@@ -1770,6 +1770,26 @@ input[type="range"] {
   white-space: nowrap;
 }
 
+.output-diagnostics {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.output-diagnostics summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.output-diagnostics .output-id {
+  display: block;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 10px;
+}
+
 .download-link {
   color: var(--brass);
   text-decoration: none;
