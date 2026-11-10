@@ -367,10 +367,9 @@ def verify_bridge_runtime(container: object, processes: list[dict[str, str]],
 def list_v2_api_unknown_job_ids(root: Path) -> list[str]:
     """List V2 API-unknown job IDs without changing either durable store.
 
-    The caller still has to pass each ID to ``inspect_active_work``. That
-    guard remains authoritative and accepts an ID only when its V2 job is
-    failed with an empty output list and every matching Bridge unit is the
-    expected V2/API ``api_execution_unknown`` record.
+    This is diagnostic only. ``inspect_active_work`` classifies a terminal
+    failed/no-output owner job from its persisted V2 and Bridge evidence; no
+    per-release job-ID override is required.
     """
     if root.exists() and not root.is_dir():
         raise CutoverBlocked("bridge_state_root_invalid")
@@ -393,7 +392,7 @@ def list_v2_api_unknown_job_ids(root: Path) -> list[str]:
                 unit_id = data.get("unit_id")
                 job_id = unit_id.partition(":")[0] if isinstance(unit_id, str) and ":" in unit_id else ""
                 if not job_id:
-                    raise CutoverBlocked("api_abandonment_not_eligible")
+                    raise CutoverBlocked("api_unknown_identity_unreadable")
                 job_ids.add(job_id)
         except (sqlite3.Error, ValueError, TypeError):
             raise CutoverBlocked("bridge_ledger_unreadable") from None
@@ -420,6 +419,36 @@ def _bridge_unit_is_terminal(state: str, data: dict) -> bool:
     return terminal
 
 
+def _terminal_unknown_v2_api_outcome(state: str, data: dict, native_job: dict | None) -> bool:
+    """Separate a non-replayable API outcome from active work when its owner is terminal."""
+    if (
+        state != "api_execution_unknown"
+        or data.get("state") != state
+        or data.get("product") != "v2"
+        or data.get("route") != "api"
+        or data.get("cancel_requested") is not False
+        or data.get("task_id") not in (None, "")
+        or data.get("receipt_id") not in (None, "")
+        or data.get("image") is not None
+        or not isinstance(native_job, dict)
+        or native_job.get("status") != "failed"
+        or native_job.get("provider_id") != "render_bridge"
+        or native_job.get("outputs") != []
+    ):
+        return False
+    error = native_job.get("error")
+    if not isinstance(error, dict):
+        return False
+    detail = error.get("detail")
+    return (
+        error.get("provider") == "render_bridge"
+        and error.get("error_code") == "bridge_terminal"
+        and error.get("retryable") is False
+        and isinstance(detail, dict)
+        and detail.get("state") == "api_execution_unknown"
+    )
+
+
 def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) -> dict:
     """Report unresolved Bridge unit metadata without exposing payloads or mutating stores."""
     if root.exists() and not root.is_dir():
@@ -442,6 +471,7 @@ def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) 
             db.close()
 
     units = []
+    blocking_count = 0
     for path in sorted(root.glob("*/primary.sqlite3")) if root.exists() else ():
         db = _readonly(path)
         try:
@@ -458,6 +488,9 @@ def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) 
                     unit_id = None
                 job_id = unit_id.partition(":")[0] if unit_id and ":" in unit_id else unit_id
                 native = native_jobs.get(job_id) if job_id else None
+                terminal_unknown_api = _terminal_unknown_v2_api_outcome(state, data, native)
+                blocks_cutover = not terminal_unknown_api
+                blocking_count += blocks_cutover
                 outputs = native.get("outputs") if isinstance(native, dict) else None
                 error = native.get("error") if isinstance(native, dict) else None
                 error_code = error.get("error_code") if isinstance(error, dict) else None
@@ -466,6 +499,8 @@ def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) 
                 units.append({
                     "unit_id": unit_id,
                     "state": state,
+                    "classification": "terminal_unknown_api_outcome" if terminal_unknown_api else "unresolved_active_work",
+                    "blocks_cutover": blocks_cutover,
                     "product": data.get("product") if isinstance(data.get("product"), str) else None,
                     "route": data.get("route") if isinstance(data.get("route"), str) else None,
                     "cancel_requested": data.get("cancel_requested") is True,
@@ -488,23 +523,18 @@ def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) 
             db.close()
 
     units.sort(key=lambda item: (item["unit_id"] or "", item["state"]))
-    return {"status": "listed", "unresolved_count": len(units), "units": units}
+    return {"status": "listed", "unresolved_count": len(units),
+            "blocking_count": blocking_count, "units": units}
 
 
 def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
-                        v2_repository: Path | None = None,
-                        abandoned_api_job_ids: set[str] | None = None) -> dict[str, int]:
+                        v2_repository: Path | None = None) -> dict[str, int]:
     counts = {"bridge_unresolved_units": 0, "bridge_unresolved_frozen_jobs": 0,
-              "v2_direct_active_jobs": 0, "bridge_explicitly_abandoned_api_units": 0}
-    abandoned_api_job_ids = abandoned_api_job_ids or set()
-    if any(not isinstance(job_id, str) or not job_id for job_id in abandoned_api_job_ids):
-        raise CutoverBlocked("api_abandonment_not_eligible")
-    if abandoned_api_job_ids and (v2_repository is None or not v2_repository.exists()):
-        raise CutoverBlocked("api_abandonment_not_eligible")
+              "v2_direct_active_jobs": 0, "bridge_terminal_unknown_api_outcomes": 0}
     if root.exists() and not root.is_dir():
         raise CutoverBlocked("bridge_state_root_invalid")
     native_terminal = set()
-    abandoned_api_jobs: set[str] = set()
+    native_jobs: dict[str, dict] = {}
     if v2_repository is not None and v2_repository.exists():
         db = _readonly(v2_repository)
         try:
@@ -512,24 +542,17 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                 job = json.loads(raw)
                 if not isinstance(job, dict) or not isinstance(job.get("job_id"), str):
                     raise ValueError()
-                if job["job_id"] in abandoned_api_job_ids:
-                    outputs = job.get("outputs")
-                    if job.get("status") != "failed" or not isinstance(outputs, list) or outputs:
-                        raise CutoverBlocked("api_abandonment_not_eligible")
-                    if job["job_id"] in abandoned_api_jobs:
-                        raise CutoverBlocked("api_abandonment_not_eligible")
-                    abandoned_api_jobs.add(job["job_id"])
+                if job["job_id"] in native_jobs:
+                    raise ValueError()
+                native_jobs[job["job_id"]] = job
                 if job.get("status") in {"completed", "failed", "cancelled"}:
                     native_terminal.add(job["job_id"])
                 else:
                     counts["v2_direct_active_jobs"] += 1
-            if abandoned_api_jobs != abandoned_api_job_ids:
-                raise CutoverBlocked("api_abandonment_not_eligible")
         except (sqlite3.Error, ValueError, TypeError):
             raise CutoverBlocked("v2_direct_job_state_unreadable") from None
         finally:
             db.close()
-    seen_abandoned_units: set[str] = set()
     for path in sorted(root.glob("*/primary.sqlite3")):
         db = _readonly(path)
         try:
@@ -539,15 +562,8 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
                     raise ValueError()
                 unit_id = data.get("unit_id")
                 job_id = unit_id.partition(":")[0] if isinstance(unit_id, str) and ":" in unit_id else ""
-                if job_id in abandoned_api_job_ids:
-                    if (
-                        state != "api_execution_unknown"
-                        or data.get("route") != "api"
-                        or data.get("product") != "v2"
-                    ):
-                        raise CutoverBlocked("api_abandonment_not_eligible")
-                    seen_abandoned_units.add(job_id)
-                    counts["bridge_explicitly_abandoned_api_units"] += 1
+                if _terminal_unknown_v2_api_outcome(state, data, native_jobs.get(job_id)):
+                    counts["bridge_terminal_unknown_api_outcomes"] += 1
                     continue
                 # api_ready is NOT terminal: a direct request can still dispatch.
                 counts["bridge_unresolved_units"] += not _bridge_unit_is_terminal(state, data)
@@ -555,8 +571,6 @@ def inspect_bridge_work(root: Path, frozen_root: Path | None = None,
             raise CutoverBlocked("bridge_ledger_unreadable") from None
         finally:
             db.close()
-    if seen_abandoned_units != abandoned_api_job_ids:
-        raise CutoverBlocked("api_abandonment_not_eligible")
     if frozen_root and frozen_root.exists():
         pending = set()
         for path in frozen_root.glob("*.json"):
@@ -587,7 +601,6 @@ def inspect_active_work(
     bridge_state_root: Path | None = None,
     bridge_frozen_root: Path | None = None,
     v2_repository: Path | None = None,
-    abandoned_api_job_ids: set[str] | None = None,
 ) -> dict:
     container_started = _parse_cutover_timestamp(v3_container_started_at)
     if v3_container_started_at is not None and container_started is None:
@@ -721,10 +734,10 @@ def inspect_active_work(
 
     if bridge_state_root is not None:
         counts.update(inspect_bridge_work(
-            bridge_state_root, bridge_frozen_root, v2_repository, abandoned_api_job_ids,
+            bridge_state_root, bridge_frozen_root, v2_repository,
         ))
     active = sum(value for key, value in counts.items()
-                 if key not in {"v3_preserved_planned_jobs", "bridge_explicitly_abandoned_api_units"})
+                 if key not in {"v3_preserved_planned_jobs", "bridge_terminal_unknown_api_outcomes"})
     return {"status": "idle" if active == 0 else "blocked", "scope": "durable_active_work_inventory",
             "counts": counts, "active_work_items": active}
 
@@ -1273,7 +1286,6 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("--bridge-state-root", type=Path)
     inspect.add_argument("--bridge-frozen-root", type=Path)
     inspect.add_argument("--v2-repository", type=Path)
-    inspect.add_argument("--abandon-api-unknown-job-id", action="append", default=[])
     list_api_unknown = subparsers.add_parser("list-v2-api-unknown-job-ids")
     list_api_unknown.add_argument("--bridge-state-root", required=True, type=Path)
     list_bridge_units = subparsers.add_parser("list-unresolved-bridge-units")
@@ -1342,7 +1354,6 @@ def main(argv: list[str] | None = None) -> int:
                 bridge_state_root=args.bridge_state_root,
                 bridge_frozen_root=args.bridge_frozen_root,
                 v2_repository=args.v2_repository,
-                abandoned_api_job_ids=set(args.abandon_api_unknown_job_id),
             )
         elif args.command == "verify-bridge-runtime":
             result = verify_bridge_runtime(json.load(sys.stdin), [read_process_environment(pid) for pid in args.pid],

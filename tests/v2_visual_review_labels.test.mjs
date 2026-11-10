@@ -32,6 +32,19 @@ for (const path of ['../src_skeleton/app/static/app.js', '../src_skeleton/app/mo
     assert.ok(source.includes('appendV2ReviewDetails(meta, review);'));
     assert.ok(!source.includes('Math.round((review.score || 0) * 100)'));
   });
+  test(`${path}: API-unknown failure notice is visible and terminal`, () => {
+    const first = source.indexOf('function v2RunNotice(');
+    const end = source.indexOf('\nfunction ', first + 10);
+    const context = vm.createContext({});
+    vm.runInContext(source.slice(first, end), context);
+    const message = 'API 执行结果未知（请求可能已到达上游）；系统不会自动重试，以免重复生成或扣费。本次未收到可展示的图片。';
+    const notice = context.v2RunNotice({status:'failed',next_actions:[message],
+      generation_jobs:[{status:'failed',outputs:[],error:{message}}]});
+    assert.equal(notice.type,'error');
+    assert.match(notice.message,/结果未知/);
+    assert.match(notice.message,/不会自动重试/);
+    assert.match(notice.message,/未收到可展示的图片/);
+  });
   test(`${path}: final notice and real history/lightbox consumers expose review and retain the image`, async () => {
     const grid = node('div');
     let lightbox;

@@ -1003,10 +1003,14 @@ def test_api_response_loss_is_not_another_provider_attempt(isolated, monkeypatch
             raise V2ImageProviderError("response lost", provider="native_api")
     async def select(hint): return Provider()
     monkeypatch.setattr(generation, "get_v2_image_provider", select)
-    first = asyncio.run(generation.create_image_job(request(), job_id="api-loss"))
+    first = run_immediate(generation.create_image_job(request(), job_id="api-loss"))
     assert first.status == "failed"
-    again = asyncio.run(generation.create_image_job(request(), job_id="api-loss"))
+    again = run_immediate(generation.create_image_job(request(), job_id="api-loss"))
     assert again.error["detail"]["state"] == "api_execution_unknown"
+    assert again.error["message"] == (
+        "API 执行结果未知（请求可能已到达上游）；系统不会自动重试，以免重复生成或扣费。"
+        "本次未收到可展示的图片。"
+    )
     assert len(calls) == 1
 
 

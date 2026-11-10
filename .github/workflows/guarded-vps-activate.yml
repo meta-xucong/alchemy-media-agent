@@ -15,10 +15,6 @@ on:
         description: "Operator-selected minimum free bytes required on every affected data/backup filesystem"
         required: true
         type: string
-      abandoned_api_job_ids:
-        description: "Comma-separated V2 job IDs explicitly abandoned for this cutover (only failed jobs with no outputs and api_execution_unknown ledger units qualify)"
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -57,7 +53,6 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           MAINTENANCE_CONFIRMATION: ${{ inputs.maintenance_confirmation }}
           MINIMUM_FREE_BYTES: ${{ inputs.minimum_free_bytes }}
-          ABANDONED_API_JOB_IDS: ${{ inputs.abandoned_api_job_ids }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
@@ -67,27 +62,19 @@ jobs:
           [[ "$MAINTENANCE_CONFIRMATION" == "CUTOVER-PR29" ]]
           [[ "$MINIMUM_FREE_BYTES" =~ ^[1-9][0-9]*$ ]]
           [[ ${#MINIMUM_FREE_BYTES} -le 18 ]]
-          [[ -z "$ABANDONED_API_JOB_IDS" || "$ABANDONED_API_JOB_IDS" =~ ^job_[0-9a-f]{12}(,job_[0-9a-f]{12})*$ ]]
           remote="${VPS_USER:-root}@${VPS_HOST}"
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=accept-new \
-            "$remote" "bash -s -- '$EXPECTED_SHA' '$MINIMUM_FREE_BYTES' CUTOVER-PR29 '$ABANDONED_API_JOB_IDS'" <<'REMOTE_SCRIPT'
+            "$remote" "bash -s -- '$EXPECTED_SHA' '$MINIMUM_FREE_BYTES' CUTOVER-PR29" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
           expected_sha="$1"
           minimum_free_bytes="$2"
           maintenance_confirmation="$3"
-          abandoned_api_job_ids="$4"
           [ "$maintenance_confirmation" = CUTOVER-PR29 ] || { echo GUARDED_ACTIVATE_STOP=maintenance_confirmation_missing >&2; exit 1; }
           [[ "$minimum_free_bytes" =~ ^[1-9][0-9]*$ ]] || { echo GUARDED_ACTIVATE_STOP=invalid_disk_budget >&2; exit 1; }
           [ "${#minimum_free_bytes}" -le 18 ] || { echo GUARDED_ACTIVATE_STOP=invalid_disk_budget >&2; exit 1; }
-          [[ -z "$abandoned_api_job_ids" || "$abandoned_api_job_ids" =~ ^job_[0-9a-f]{12}(,job_[0-9a-f]{12})*$ ]] || { echo GUARDED_ACTIVATE_STOP=invalid_abandoned_api_job_ids >&2; exit 1; }
-          abandoned_api_args=()
-          if [ -n "$abandoned_api_job_ids" ]; then
-            IFS=',' read -r -a abandoned_jobs <<< "$abandoned_api_job_ids"
-            for job_id in "${abandoned_jobs[@]}"; do abandoned_api_args+=(--abandon-api-unknown-job-id "$job_id"); done
-          fi
           install -d -m 755 /run/lock
           exec 9>/run/lock/alchemy-media-agent-release.lock
           flock -w 300 9 || { echo GUARDED_ACTIVATE_STOP=shared_release_lock_unavailable >&2; exit 1; }
@@ -762,7 +749,6 @@ jobs:
           verify_v3_runtime_storage_roots "$old_env" || stop_pre v3_storage_roots_unverified
           verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || stop_pre candidate_v3_storage_roots_unverified
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
-            "${abandoned_api_args[@]}" \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
             --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
             --v2-repository "$v2_data/repository.sqlite3" \
@@ -823,7 +809,6 @@ jobs:
           verify_v3_runtime_storage_roots "$old_env" || stop_pre durable_v3_storage_roots_changed_while_fencing
           verify_v3_runtime_storage_roots "$candidate_release/src_skeleton/.env" || stop_pre candidate_v3_storage_roots_changed_while_fencing
           python3 "$candidate_release/scripts/vps_cutover_guard.py" inspect-active-work \
-            "${abandoned_api_args[@]}" \
             --v1-database "$v1_media/repository.sqlite3" --v2-queue-database "$v2_queue_db" \
             --bridge-state-root "$bridge_state" --bridge-frozen-root "$v2_data/render_bridge_primary/requests" \
             --v2-repository "$v2_data/repository.sqlite3" \

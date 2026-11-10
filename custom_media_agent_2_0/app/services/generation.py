@@ -198,6 +198,8 @@ async def create_image_job(
                 if exc.state == "bridge_store_busy"
                 else BRIDGE_ATTENTION_MESSAGES[exc.attention_code]
                 if exc.attention_code in BRIDGE_ATTENTION_MESSAGES
+                else BRIDGE_ATTENTION_MESSAGES[exc.state]
+                if exc.state in BRIDGE_ATTENTION_MESSAGES
                 else "The same image task is retained for recovery."
             )
             error = V2ImageProviderError(message,

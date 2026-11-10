@@ -1041,12 +1041,12 @@ def test_bridge_paths_reject_checkout_or_relative(tmp_path):
 
 
 def _bridge_inventory_fixture(tmp_path, state, native_status='completed', cancel=False, reconciled=False,
-                              route=None):
+                              route=None, native_provider_id=None, native_error=None, native_outputs=None):
     root = tmp_path / 'ledgers'
     (root / 'v2').mkdir(parents=True)
     db = sqlite3.connect(root / 'v2' / 'primary.sqlite3')
     db.execute('CREATE TABLE units(state TEXT, data TEXT)')
-    db.execute('INSERT INTO units VALUES (?,?)', (state, json.dumps(dict(product='v2', unit_id='job1:0', route=route or ('api' if state.startswith('api') else 'bridge'), cancel_requested=cancel, cancel_reconciled=reconciled))))
+    db.execute('INSERT INTO units VALUES (?,?)', (state, json.dumps(dict(state=state, product='v2', unit_id='job1:0', route=route or ('api' if state.startswith('api') else 'bridge'), cancel_requested=cancel, cancel_reconciled=reconciled))))
     db.commit(); db.close()
     frozen = tmp_path / 'requests'; frozen.mkdir()
     (frozen / 'job.json').write_text(json.dumps({'job_id': 'job1', 'request': {}}))
@@ -1055,7 +1055,13 @@ def _bridge_inventory_fixture(tmp_path, state, native_status='completed', cancel
     repository = tmp_path / 'repository.sqlite3'
     db = sqlite3.connect(repository)
     db.execute('CREATE TABLE v2_records(namespace TEXT,payload TEXT)')
-    db.execute('INSERT INTO v2_records VALUES (?,?)', ('image_jobs', json.dumps({'job_id':'job1','status':native_status,'outputs':[]})))
+    native_job = {'job_id': 'job1', 'status': native_status,
+                  'outputs': [] if native_outputs is None else native_outputs}
+    if native_provider_id is not None:
+        native_job['provider_id'] = native_provider_id
+    if native_error is not None:
+        native_job['error'] = native_error
+    db.execute('INSERT INTO v2_records VALUES (?,?)', ('image_jobs', json.dumps(native_job)))
     db.commit(); db.close()
     return root, frozen, repository
 
@@ -1101,7 +1107,7 @@ def test_v2_api_unknown_job_listing_fails_closed_on_malformed_unit_identity(tmp_
             (json.dumps({'product': 'v2', 'route': 'api'}),),
         )
 
-    with pytest.raises(_MODULE.CutoverBlocked, match='api_abandonment_not_eligible'):
+    with pytest.raises(_MODULE.CutoverBlocked, match='api_unknown_identity_unreadable'):
         _MODULE.list_v2_api_unknown_job_ids(root)
 
 
@@ -1144,8 +1150,11 @@ def test_unresolved_bridge_unit_report_correlates_native_job_without_exposing_pa
     assert result == {
         'status': 'listed',
         'unresolved_count': 1,
+        'blocking_count': 1,
         'units': [{
-            'unit_id': 'job1:0', 'state': 'artifacts_ready', 'product': 'v2', 'route': 'bridge',
+            'unit_id': 'job1:0', 'state': 'artifacts_ready',
+            'classification': 'unresolved_active_work', 'blocks_cutover': True,
+            'product': 'v2', 'route': 'bridge',
             'cancel_requested': False, 'cancel_reconciled': False,
             'remote_task_present': True, 'receipt_present': True,
             'bridge_image_metadata_present': True, 'native_job_status': 'completed',
@@ -1165,6 +1174,86 @@ def test_unresolved_bridge_unit_report_correlates_native_job_without_exposing_pa
     assert {path: path.read_bytes() for path in (ledger, repository)} == before
 
 
+def _terminal_api_unknown_fixture(tmp_path, *, native_status='failed', native_provider_id='render_bridge',
+                                  native_error=None, native_outputs=None, bridge_extra=None):
+    root, frozen, repository = _bridge_inventory_fixture(
+        tmp_path, 'api_execution_unknown', native_status=native_status, route='api',
+        native_provider_id=native_provider_id,
+        native_error=native_error or {
+            'provider': 'render_bridge', 'error_code': 'bridge_terminal',
+            'retryable': False, 'detail': {'state': 'api_execution_unknown'},
+        },
+        native_outputs=native_outputs,
+    )
+    if bridge_extra:
+        with sqlite3.connect(root / 'v2' / 'primary.sqlite3') as db:
+            state, raw = db.execute('SELECT state,data FROM units').fetchone()
+            data = json.loads(raw)
+            data.update(bridge_extra)
+            db.execute('UPDATE units SET state=?,data=?', (state, json.dumps(data)))
+    return root, frozen, repository
+
+
+def test_failed_v2_api_unknown_is_reported_but_does_not_block_cutover(tmp_path):
+    root, frozen, repository = _terminal_api_unknown_fixture(tmp_path)
+    ledger = root / 'v2' / 'primary.sqlite3'
+    with sqlite3.connect(ledger) as db:
+        before = db.execute('SELECT state,data FROM units').fetchone()
+
+    counts = _MODULE.inspect_bridge_work(root, frozen, repository)
+
+    assert counts['bridge_unresolved_units'] == 0
+    assert counts['bridge_terminal_unknown_api_outcomes'] == 1
+    with sqlite3.connect(ledger) as db:
+        assert db.execute('SELECT state,data FROM units').fetchone() == before
+
+
+@pytest.mark.parametrize('kwargs', [
+    {'native_status': 'running'},
+    {'native_outputs': [{'output_id': 'out-existing'}]},
+    {'native_provider_id': 'openai_gpt_image'},
+    {'native_error': {'provider': 'render_bridge', 'error_code': 'bridge_terminal',
+                      'retryable': False, 'detail': {'state': 'bridge_submission_unknown'}}},
+    {'bridge_extra': {'task_id': 'unexpected-task'}},
+    {'bridge_extra': {'image': {'mime_type': 'image/png'}}},
+])
+def test_api_unknown_only_stops_blocking_when_native_failure_proves_terminal_no_output(kwargs, tmp_path):
+    root, frozen, repository = _terminal_api_unknown_fixture(tmp_path, **kwargs)
+
+    counts = _MODULE.inspect_bridge_work(root, frozen, repository)
+
+    assert counts['bridge_unresolved_units'] == 1
+    assert counts['bridge_terminal_unknown_api_outcomes'] == 0
+
+
+def test_api_unknown_diagnostic_separates_terminal_unknown_from_blockers(tmp_path):
+    root, _, repository = _terminal_api_unknown_fixture(tmp_path)
+
+    report = _MODULE.list_unresolved_bridge_units(root, repository)
+
+    assert report['unresolved_count'] == 1
+    assert report['blocking_count'] == 0
+    assert report['units'][0]['classification'] == 'terminal_unknown_api_outcome'
+    assert report['units'][0]['blocks_cutover'] is False
+    assert 'payload' not in report['units'][0]
+
+
+def test_active_work_report_is_idle_but_counts_unknown_api_outcome(tmp_path):
+    v1, v2, projects = _databases(tmp_path)
+    bridge_root, frozen, repository = _terminal_api_unknown_fixture(tmp_path)
+
+    report = _MODULE.inspect_active_work(
+        v1, v2, projects,
+        bridge_state_root=bridge_root,
+        bridge_frozen_root=frozen,
+        v2_repository=repository,
+    )
+
+    assert report['status'] == 'idle'
+    assert report['active_work_items'] == 0
+    assert report['counts']['bridge_terminal_unknown_api_outcomes'] == 1
+
+
 def test_unresolved_bridge_unit_report_cli_emits_json(tmp_path, capsys):
     root, _, repository = _bridge_inventory_fixture(
         tmp_path, 'running', native_status='running', route='bridge',
@@ -1179,6 +1268,7 @@ def test_unresolved_bridge_unit_report_cli_emits_json(tmp_path, capsys):
     assert exit_code == 0
     assert report['status'] == 'listed'
     assert report['unresolved_count'] == 1
+    assert report['blocking_count'] == 1
     assert report['units'][0]['state'] == 'running'
 
 
@@ -1192,49 +1282,6 @@ def test_bridge_completed_inventory_is_idle(tmp_path, state):
 def test_bridge_pending_units_prevent_cutover(tmp_path, state):
     args = _bridge_inventory_fixture(tmp_path,state)
     assert _MODULE.inspect_bridge_work(*args)['bridge_unresolved_units'] == 1
-
-
-def test_explicitly_abandoned_failed_api_job_does_not_rewrite_unknown_ledger(tmp_path):
-    root, frozen, repository = _bridge_inventory_fixture(
-        tmp_path, 'api_execution_unknown', native_status='failed', route='api',
-    )
-
-    counts = _MODULE.inspect_bridge_work(
-        root, frozen, repository, abandoned_api_job_ids={'job1'},
-    )
-
-    assert counts['bridge_unresolved_units'] == 0
-    assert counts['bridge_explicitly_abandoned_api_units'] == 1
-    with sqlite3.connect(root / 'v2' / 'primary.sqlite3') as db:
-        state, raw = db.execute('SELECT state,data FROM units').fetchone()
-    assert state == 'api_execution_unknown'
-    assert json.loads(raw)['route'] == 'api'
-
-
-def test_explicit_abandonment_does_not_cover_other_or_nonfailed_api_work(tmp_path):
-    root, frozen, repository = _bridge_inventory_fixture(
-        tmp_path, 'api_execution_unknown', native_status='running', route='api',
-    )
-
-    with pytest.raises(_MODULE.CutoverBlocked, match='api_abandonment_not_eligible'):
-        _MODULE.inspect_bridge_work(
-            root, frozen, repository, abandoned_api_job_ids={'job1'},
-        )
-
-
-def test_explicit_abandonment_requires_empty_output_list(tmp_path):
-    root, frozen, repository = _bridge_inventory_fixture(
-        tmp_path, 'api_execution_unknown', native_status='failed', route='api',
-    )
-    with sqlite3.connect(repository) as db:
-        db.execute('UPDATE v2_records SET payload=?', (
-            json.dumps({'job_id':'job1','status':'failed','outputs':[{'output_id':'existing'}]}),
-        ))
-
-    with pytest.raises(_MODULE.CutoverBlocked, match='api_abandonment_not_eligible'):
-        _MODULE.inspect_bridge_work(
-            root, frozen, repository, abandoned_api_job_ids={'job1'},
-        )
 
 
 def test_direct_job_and_frozen_without_neutral_unit_blocks(tmp_path):

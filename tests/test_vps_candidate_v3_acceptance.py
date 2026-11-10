@@ -10,17 +10,17 @@ from scripts import vps_candidate_v3_smoke as smoke
 from scripts import vps_candidate_v3_bridge_preflight as bridge_preflight
 
 
-def test_candidate_workflow_defaults_failed_empty_api_unknown_exemption_off():
+def test_candidate_workflow_has_no_per_run_api_unknown_exemption():
     workflow = yaml.safe_load(
         Path(".github/workflows/guarded-vps-candidate-v3-smoke.yml").read_text(encoding="utf-8")
     )
     triggers = workflow.get("on", workflow.get(True))
     inputs = triggers["workflow_dispatch"]["inputs"]
 
-    assert inputs["allow_failed_empty_v2_api_unknowns"]["default"] is False
-    assert "list-v2-api-unknown-job-ids" in Path(
-        ".github/workflows/guarded-vps-candidate-v3-smoke.yml"
-    ).read_text(encoding="utf-8")
+    assert "allow_failed_empty_v2_api_unknowns" not in inputs
+    workflow_source = Path(".github/workflows/guarded-vps-candidate-v3-smoke.yml").read_text(encoding="utf-8")
+    assert "abandon-api-unknown-job-id" not in workflow_source
+    assert "GUARDED_CANDIDATE_V3_ELIGIBLE_API_UNKNOWN_JOB_IDS" not in workflow_source
 
 
 def _delivery_item(**changes):

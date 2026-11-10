@@ -20,6 +20,7 @@ from app.services import task_queue
 from app.services.uploaded_assets import uploaded_asset_path
 
 ATTENTION_MESSAGES = {
+    "api_execution_unknown": "API 执行结果未知（请求可能已到达上游）；系统不会自动重试，以免重复生成或扣费。本次未收到可展示的图片。",
     "codex_turn_timed_out": "Codex 生图超过 600 秒；本机进程已停止，Bridge 确认后已释放执行名额，但上游可能仍完成。重新生成可能产生重复结果；本任务不会自动切换 API。",
     "codex_turn_timeout_unconfirmed": "Codex 生图超过 600 秒，但 Bridge 未能确认本机进程已退出；名额仍被占用并等待对账。本任务不会自动切换 API。",
     "execution_reconciliation_overdue": "执行租约已过期，但没有证据证明上游执行已停止。任务仍保留在 Bridge 中，请核对同一任务。",

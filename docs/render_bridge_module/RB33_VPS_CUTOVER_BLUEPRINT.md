@@ -384,3 +384,38 @@ The persisted task/attempt/receipt, product history/project projection and
 successful preview/download responses are authoritative here. No API fallback
 or second image-generation attempt was used to satisfy these records. No
 image-content hash/checksum was computed or checked.
+
+## 2026-11-11 follow-up: terminal V2 API-unknown cutover classification
+
+The earlier instruction to pass exact failed V2 API-unknown job IDs on each
+release was a temporary cutover workaround. It is superseded by this correction.
+The ledger correctly keeps `api_execution_unknown` after the API claim is
+persisted: the upstream may have accepted the request, and another provider
+call could create or charge for a duplicate. The release guard incorrectly
+treated that permanent no-replay state as active, recoverable work. Passing an
+ID only excluded the row for that one release and left the underlying
+classification unchanged, so the same IDs had to be supplied again later.
+
+The guard now separates active work from an outcome that cannot be reconciled.
+It reports a V2/API unknown unit as `bridge_terminal_unknown_api_outcomes`
+without blocking cutover only when the matching native V2 job is failed with
+zero outputs, has `provider_id=render_bridge`, and records the exact terminal
+`api_execution_unknown` error; the Bridge row must have no task, receipt, image,
+or cancellation intent. The Bridge ledger and native job are read only and
+remain unchanged. Diagnostics retain the row and identify it as
+`terminal_unknown_api_outcome`; the outcome stays uncertain and is never marked
+successful. Any missing or mismatched evidence remains blocking. The per-run
+job-ID exemption was removed from activation and candidate smoke workflows.
+
+V2's terminal error notice now says the upstream outcome is unknown, no image
+was received, and the system will not retry automatically to avoid duplicate
+generation or billing. The UI already displays failed run/job messages; this
+correction makes the message match the persisted no-retry state. Zero-output
+failed jobs remain outside the image gallery because there is no image to
+display.
+
+Focused regression coverage proves the exact failed/no-output case is
+non-blocking and still reported, while running jobs, output-bearing jobs,
+provider/error mismatches, or unexpected remote artifacts remain blocking.
+The same tests verify that classification does not mutate either durable
+store.
