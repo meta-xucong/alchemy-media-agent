@@ -97,7 +97,7 @@ jobs:
           if [ "$MODE" = inspect ]; then
             [ -z "$SELECTION" ] && [ -z "$CONFIRMATION" ]
           else
-            [[ "$SELECTION" =~ ^[A-Za-z0-9,:_-]+$ ]]
+            [[ "$SELECTION" =~ ^[A-Za-z0-9,:._-]+$ ]]
             [ "${#SELECTION}" -le 20000 ]
             [[ "$CONFIRMATION" == RETAIN-ONE-ROLLBACK-SNAPSHOT ]]
           fi

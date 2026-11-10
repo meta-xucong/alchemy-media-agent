@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import importlib.util
 import json
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -43,21 +43,26 @@ def fixture_snapshots(tmp_path: Path):
         backup = root / name
         backup.mkdir()
         (backup / 'old.db').write_bytes(name.encode('ascii'))
-    return root, keep, [root / name for name in old_names]
+    old_archives = ['pr29-' + 'e' * 12 + '-20261106T010101Z.verified.tar.gz',
+                    'pr29-' + 'f' * 12 + '-20261105T010101Z.verified.tar.gz']
+    for name in old_archives:
+        (root / name).write_bytes(b'previously verified backup archive')
+    return root, keep, [root / name for name in old_names], [root / name for name in old_archives]
 
 
 def test_inventory_selection_tracks_full_snapshot_metadata_and_preserves_unclassified_entries(tmp_path):
-    root, keep, old = fixture_snapshots(tmp_path)
+    root, keep, old, archives = fixture_snapshots(tmp_path)
     (root / 'operator-note.txt').write_text('preserve', encoding='utf-8')
     snapshots, others = guard.inventory_snapshots(root=root)
-    assert {item['name'] for item in snapshots} == {KEEP_NAME, *(path.name for path in old)}
+    assert {item['name'] for item in snapshots} == {KEEP_NAME, *(path.name for path in old), *(path.name for path in archives)}
+    assert sum(item['kind'] == 'archive' for item in snapshots) == len(archives)
     assert guard.parse_selection(','.join(guard.selection_token(item) for item in snapshots))
     assert others == [{'name': 'operator-note.txt', 'kind': 'file_or_link', 'bytes': 8}]
     guard.verify_keep_snapshot(next(item for item in snapshots if item['name'] == KEEP_NAME), ACTIVE_SHA, root=root)
 
 
 def test_changed_snapshot_after_inspect_blocks_all_deletion(tmp_path):
-    root, keep, old = fixture_snapshots(tmp_path)
+    root, keep, old, archives = fixture_snapshots(tmp_path)
     before, _ = guard.inventory_snapshots(root=root)
     selection = ','.join(guard.selection_token(item) for item in before)
     (old[0] / 'old.db').write_bytes(b'changed after inspect')
@@ -65,11 +70,11 @@ def test_changed_snapshot_after_inspect_blocks_all_deletion(tmp_path):
         guard.retire_snapshots(selection, KEEP_NAME, ACTIVE_SHA, ROLLBACK_SHA,
                                root=root, ledger=root / 'ledger.jsonl',
                                live_check=lambda: None, reference_check=lambda _: None)
-    assert keep.is_dir() and all(path.is_dir() for path in old)
+    assert keep.is_dir() and all(path.is_dir() for path in old) and all(path.is_file() for path in archives)
 
 
 def test_retirement_keeps_only_verified_previous_release_checkpoint_and_records_receipts(tmp_path):
-    root, keep, old = fixture_snapshots(tmp_path)
+    root, keep, old, archives = fixture_snapshots(tmp_path)
     before, _ = guard.inventory_snapshots(root=root)
     selection = ','.join(guard.selection_token(item) for item in before)
     ledger = root / 'vps-backup-snapshot-retirement.jsonl'
@@ -78,19 +83,21 @@ def test_retirement_keeps_only_verified_previous_release_checkpoint_and_records_
                                     root=root, ledger=ledger,
                                     live_check=lambda: checked.append('live'),
                                     reference_check=lambda paths: checked.append(tuple(paths)))
-    assert result['retired_count'] == 2
-    assert {item['name'] for item in result['retired']} == {path.name for path in old}
+    assert result['retired_count'] == 4
+    assert result['retired_directories'] == len(old)
+    assert result['retired_archives'] == len(archives)
+    assert {item['name'] for item in result['retired']} == {path.name for path in [*old, *archives]}
     assert result['kept_snapshot'] == KEEP_NAME
-    assert keep.is_dir() and all(not path.exists() for path in old)
+    assert keep.is_dir() and all(not path.exists() for path in [*old, *archives])
     remaining, _ = guard.inventory_snapshots(root=root)
     assert [item['name'] for item in remaining] == [KEEP_NAME]
     states = [json.loads(line)['state'] for line in ledger.read_text(encoding='utf-8').splitlines()]
-    assert states == ['intent', 'removed', 'intent', 'removed']
+    assert states == ['intent', 'removed'] * 4
     assert checked.count('live') == 2
 
 
 def test_keep_checkpoint_must_match_current_revision_and_have_complete_restore_manifest(tmp_path):
-    root, keep, _ = fixture_snapshots(tmp_path)
+    root, keep, _, _ = fixture_snapshots(tmp_path)
     snapshot = guard.snapshot_identity(KEEP_NAME, root=root)
     with pytest.raises(guard.SnapshotBlocked, match='keep_snapshot_not_current_cutover'):
         guard.verify_keep_snapshot(snapshot, ROLLBACK_SHA, root=root)
@@ -100,7 +107,7 @@ def test_keep_checkpoint_must_match_current_revision_and_have_complete_restore_m
 
 
 def test_unsupported_or_linked_snapshot_entries_block_inventory(tmp_path):
-    root, _, old = fixture_snapshots(tmp_path)
+    root, _, old, _ = fixture_snapshots(tmp_path)
     try:
         (old[0] / 'linked').symlink_to(old[0] / 'old.db')
     except OSError:
@@ -110,7 +117,7 @@ def test_unsupported_or_linked_snapshot_entries_block_inventory(tmp_path):
 
 
 def test_mountpoint_inside_snapshot_blocks_recursive_deletion(tmp_path, monkeypatch):
-    root, _, old = fixture_snapshots(tmp_path)
+    root, _, old, _ = fixture_snapshots(tmp_path)
     mount = old[0] / 'nested'
     mount.mkdir()
     original_is_mount = Path.is_mount
@@ -120,7 +127,7 @@ def test_mountpoint_inside_snapshot_blocks_recursive_deletion(tmp_path, monkeypa
 
 
 def test_mountinfo_identity_detects_same_device_bind_mounts(tmp_path, monkeypatch):
-    root, _, old = fixture_snapshots(tmp_path)
+    root, _, old, _ = fixture_snapshots(tmp_path)
     mount = old[0] / 'nested'
     mount.mkdir()
     monkeypatch.setattr(guard, 'mount_points', lambda: {mount.as_posix()})
@@ -129,7 +136,7 @@ def test_mountinfo_identity_detects_same_device_bind_mounts(tmp_path, monkeypatc
 
 
 def test_mount_added_after_retirement_intent_stops_before_recursive_delete(tmp_path, monkeypatch):
-    root, keep, old = fixture_snapshots(tmp_path)
+    root, keep, old, _ = fixture_snapshots(tmp_path)
     mount = old[0] / 'nested'
     mount.mkdir()
     before, _ = guard.inventory_snapshots(root=root)
@@ -157,14 +164,14 @@ def test_mountinfo_parser_decodes_escaped_mount_paths():
 
 
 def test_inventory_names_the_unclassified_snapshot_entry_and_stops(tmp_path):
-    root, _, _ = fixture_snapshots(tmp_path)
+    root, _, _, _ = fixture_snapshots(tmp_path)
     (root / 'pr29-partial').mkdir()
     with pytest.raises(guard.SnapshotBlocked, match='snapshot_name_invalid:pr29-partial'):
         guard.inventory_snapshots(root=root)
 
 
 def test_selection_rejects_duplicate_or_malformed_tokens(tmp_path):
-    root, _, _ = fixture_snapshots(tmp_path)
+    root, _, _, _ = fixture_snapshots(tmp_path)
     snapshots, _ = guard.inventory_snapshots(root=root)
     token = guard.selection_token(snapshots[0])
     with pytest.raises(guard.SnapshotBlocked, match='selection_invalid'):
@@ -179,6 +186,24 @@ def test_activation_prunes_only_after_public_acceptance_and_keeps_the_new_rollba
     assert workflow.index('--mode retain-latest') < workflow.index('GUARDED_ACTIVATE_RESULT=pass')
     assert '--keep-name "${maintenance_backup##*/}"' in workflow
     assert 'GUARDED_ACTIVATE_BACKUP_RETENTION=blocked' in workflow
+
+
+def test_archive_name_and_metadata_are_bound_in_the_inspection_selection(tmp_path):
+    root, _, _, archives = fixture_snapshots(tmp_path)
+    before, _ = guard.inventory_snapshots(root=root)
+    archive = next(item for item in before if item['name'] == archives[0].name)
+    token = guard.selection_token(archive)
+    assert token.startswith('archive:' + archives[0].name + ':')
+    assert guard.parse_selection(token)[archives[0].name][0] == 'archive'
+    archives[0].write_bytes(b'changed after inspection')
+    after, _ = guard.inventory_snapshots(root=root)
+    with pytest.raises(guard.SnapshotBlocked, match='inventory_changed_since_inspection'):
+        guard.verify_inspected_inventory(token, after)
+
+
+def test_archive_retirement_workflow_allows_dots_in_inspected_selection():
+    workflow = (Path(__file__).parents[1] / '.github/workflows/guarded-vps-prune-backup-snapshots.yml').read_text(encoding='utf-8')
+    assert '^[A-Za-z0-9,:._-]+$' in workflow
 
 
 def test_live_state_requires_the_exact_rollback_release_and_verified_runtime(monkeypatch, tmp_path):

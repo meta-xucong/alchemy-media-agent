@@ -21,6 +21,7 @@ ACTIVE = Path('/opt/alchemy-media-agent')
 RELEASES = Path('/opt/alchemy-media-agent-releases')
 LEDGER = ROOT / 'vps-backup-snapshot-retirement.jsonl'
 SNAPSHOT_NAME = re.compile(r'pr29-[0-9a-f]{12}-[0-9]{8}T[0-9]{6}Z')
+ARCHIVE_NAME = re.compile(r'pr29-[0-9a-f]{12}-[0-9]{8}T[0-9]{6}Z\.verified\.tar\.gz')
 REVISION = re.compile(r'[0-9a-f]{40}')
 MAX_SELECTION = 100
 MAX_SELECTION_BYTES = 20000
@@ -202,6 +203,7 @@ def snapshot_identity(name: str, *, root: Path = ROOT, mounts: set[str] | None =
     rows.sort()
     fingerprint = hashlib.sha256(json.dumps(rows, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
     return {
+        'kind': 'directory',
         'name': name,
         'path': str(path),
         'device': root_info.st_dev,
@@ -217,6 +219,43 @@ def snapshot_identity(name: str, *, root: Path = ROOT, mounts: set[str] | None =
     }
 
 
+def archive_identity(name: str, *, root: Path = ROOT, mounts: set[str] | None = None) -> dict:
+    if not ARCHIVE_NAME.fullmatch(name):
+        raise SnapshotBlocked('snapshot_archive_name_invalid:' + name)
+    path = root / name
+    if root.resolve() != root or path.resolve() != path:
+        raise SnapshotBlocked('snapshot_archive_path_linked')
+    try:
+        info = path.lstat()
+        root_info = root.stat()
+    except OSError:
+        raise SnapshotBlocked('snapshot_archive_missing') from None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SnapshotBlocked('snapshot_archive_not_regular_file')
+    mounts = mount_points() if mounts is None else mounts
+    if info.st_dev != root_info.st_dev or path.is_mount() or path.as_posix() in mounts:
+        raise SnapshotBlocked('snapshot_archive_mount_or_device_change')
+
+    identity = (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns,
+                info.st_ctime_ns, info.st_uid, info.st_gid, info.st_nlink)
+    fingerprint = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+    return {
+        'kind': 'archive',
+        'name': name,
+        'path': str(path),
+        'device': info.st_dev,
+        'inode': info.st_ino,
+        'mtime_ns': info.st_mtime_ns,
+        'ctime_ns': info.st_ctime_ns,
+        'mode': stat.S_IMODE(info.st_mode),
+        'uid': info.st_uid,
+        'gid': info.st_gid,
+        'bytes': info.st_size,
+        'entries': 1,
+        'metadata_fingerprint': fingerprint,
+    }
+
+
 def inventory_snapshots(*, root: Path = ROOT) -> tuple[list[dict], list[dict]]:
     if not root.is_dir() or root.resolve() != root:
         raise SnapshotBlocked('backup_root_invalid')
@@ -226,6 +265,8 @@ def inventory_snapshots(*, root: Path = ROOT) -> tuple[list[dict], list[dict]]:
     for path in sorted(root.iterdir(), key=lambda item: item.name):
         if SNAPSHOT_NAME.fullmatch(path.name):
             snapshots.append(snapshot_identity(path.name, root=root, mounts=mounts))
+        elif ARCHIVE_NAME.fullmatch(path.name):
+            snapshots.append(archive_identity(path.name, root=root, mounts=mounts))
         elif path.name.startswith('pr29-'):
             raise SnapshotBlocked('snapshot_name_invalid:' + path.name)
         else:
@@ -241,7 +282,7 @@ def inventory_snapshots(*, root: Path = ROOT) -> tuple[list[dict], list[dict]]:
 
 
 def selection_token(item: dict) -> str:
-    values = (item['name'], item['device'], item['inode'], item['mtime_ns'], item['ctime_ns'],
+    values = (item['kind'], item['name'], item['device'], item['inode'], item['mtime_ns'], item['ctime_ns'],
               item['bytes'], item['entries'], item['metadata_fingerprint'])
     return ':'.join(str(value) for value in values)
 
@@ -252,11 +293,13 @@ def parse_selection(selection: str) -> dict[str, tuple]:
     parsed = {}
     for token in selection.split(','):
         parts = token.split(':')
-        if (len(parts) != 8 or not SNAPSHOT_NAME.fullmatch(parts[0])
-                or any(not part.isdecimal() for part in parts[1:7])
-                or not re.fullmatch(r'[0-9a-f]{64}', parts[7]) or parts[0] in parsed):
+        if (len(parts) != 9 or parts[0] not in {'directory', 'archive'}
+                or not (SNAPSHOT_NAME.fullmatch(parts[1]) if parts[0] == 'directory'
+                        else ARCHIVE_NAME.fullmatch(parts[1]))
+                or any(not part.isdecimal() for part in parts[2:8])
+                or not re.fullmatch(r'[0-9a-f]{64}', parts[8]) or parts[1] in parsed):
             raise SnapshotBlocked('selection_invalid')
-        parsed[parts[0]] = (*map(int, parts[1:7]), parts[7])
+        parsed[parts[1]] = (parts[0], *map(int, parts[2:8]), parts[8])
     if not 1 <= len(parsed) <= MAX_SELECTION:
         raise SnapshotBlocked('selection_invalid')
     return parsed
@@ -264,7 +307,7 @@ def parse_selection(selection: str) -> dict[str, tuple]:
 
 def verify_inspected_inventory(selection: str, current: list[dict]) -> None:
     inspected = parse_selection(selection)
-    actual = {item['name']: (item['device'], item['inode'], item['mtime_ns'], item['ctime_ns'],
+    actual = {item['name']: (item['kind'], item['device'], item['inode'], item['mtime_ns'], item['ctime_ns'],
                              item['bytes'], item['entries'], item['metadata_fingerprint']) for item in current}
     if inspected != actual:
         raise SnapshotBlocked('inventory_changed_since_inspection')
@@ -360,6 +403,8 @@ def retire_snapshots(selection: str, keep_name: str, expected_active: str, expec
     by_name = {item['name']: item for item in snapshots}
     if keep_name not in by_name:
         raise SnapshotBlocked('keep_snapshot_not_in_inventory')
+    if by_name[keep_name]['kind'] != 'directory':
+        raise SnapshotBlocked('keep_snapshot_not_directory')
     verify_keep_snapshot(by_name[keep_name], expected_active, root=root)
     deleting = [item for item in snapshots if item['name'] != keep_name]
     live_check = live_check or (lambda: assert_live_state(expected_active, expected_rollback))
@@ -369,26 +414,31 @@ def retire_snapshots(selection: str, keep_name: str, expected_active: str, expec
 
     removed = []
     for inspected in deleting:
-        current = snapshot_identity(inspected['name'], root=root)
+        identity = snapshot_identity if inspected['kind'] == 'directory' else archive_identity
+        current = identity(inspected['name'], root=root)
         if current != inspected:
             raise SnapshotBlocked('snapshot_changed_after_inspection')
         reference_check([Path(inspected['path'])])
         stamp = datetime.now(timezone.utc).isoformat()
         entry = {'schema_version': 1, 'operation': 'retire_old_backup_snapshot',
-                 'name': inspected['name'], 'bytes': inspected['bytes'], 'entries': inspected['entries'],
+                 'kind': inspected['kind'], 'name': inspected['name'], 'bytes': inspected['bytes'],
+                 'entries': inspected['entries'],
                  'device': inspected['device'], 'inode': inspected['inode'], 'timestamp_utc': stamp}
         append_ledger({**entry, 'state': 'intent'}, ledger)
-        current = snapshot_identity(inspected['name'], root=root)
+        current = identity(inspected['name'], root=root)
         if current != inspected:
             raise SnapshotBlocked('snapshot_changed_before_delete')
-        shutil.rmtree(inspected['path'])
+        if inspected['kind'] == 'directory':
+            shutil.rmtree(inspected['path'])
+        else:
+            os.unlink(inspected['path'])
         if Path(inspected['path']).exists():
             raise SnapshotBlocked('snapshot_still_present')
         append_ledger({**entry, 'state': 'removed'}, ledger)
-        removed.append({'name': inspected['name'], 'bytes': inspected['bytes']})
+        removed.append({'kind': inspected['kind'], 'name': inspected['name'], 'bytes': inspected['bytes']})
 
     remaining, other_entries = inventory_snapshots(root=root)
-    if [item['name'] for item in remaining] != [keep_name]:
+    if len(remaining) != 1 or remaining[0]['name'] != keep_name or remaining[0]['kind'] != 'directory':
         raise SnapshotBlocked('unexpected_snapshot_after_retirement')
     preserved = next((item for item in remaining if item['name'] == keep_name), None)
     if preserved != by_name[keep_name]:
@@ -397,6 +447,8 @@ def retire_snapshots(selection: str, keep_name: str, expected_active: str, expec
     live_check()
     return {'retired': removed, 'retired_count': len(removed),
             'freed_snapshot_bytes': sum(item['bytes'] for item in removed),
+            'retired_archives': sum(item['kind'] == 'archive' for item in removed),
+            'retired_directories': sum(item['kind'] == 'directory' for item in removed),
             'kept_snapshot': keep_name, 'other_root_entries_preserved': other_entries}
 
 
@@ -429,11 +481,15 @@ def main() -> int:
             by_name = {item['name']: item for item in snapshots}
             if args.keep_name not in by_name:
                 raise SnapshotBlocked('keep_snapshot_not_in_inventory')
+            if by_name[args.keep_name]['kind'] != 'directory':
+                raise SnapshotBlocked('keep_snapshot_not_directory')
             verify_keep_snapshot(by_name[args.keep_name], args.expected_active_sha)
             print(json.dumps({'status': 'plan', 'active_sha': args.expected_active_sha,
                               'rollback_sha': args.expected_rollback_sha, 'keep_snapshot': args.keep_name,
                               'snapshot_count': len(snapshots), 'delete_count': len(snapshots) - 1,
                               'delete_bytes': sum(item['bytes'] for item in snapshots if item['name'] != args.keep_name),
+                              'directory_count': sum(item['kind'] == 'directory' for item in snapshots),
+                              'archive_count': sum(item['kind'] == 'archive' for item in snapshots),
                               'snapshots': snapshots,
                               'selection': ','.join(selection_token(item) for item in snapshots),
                               'other_root_entries_preserved': other_entries}, sort_keys=True), flush=True)
