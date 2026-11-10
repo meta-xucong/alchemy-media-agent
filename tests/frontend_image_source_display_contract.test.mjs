@@ -67,6 +67,10 @@ test("V1 image IDs stay collapsed until requested", () => {
     desktopHtml,
     /<details class="output-diagnostics">\s*<summary>图片 ID<\/summary>\s*<span class="output-id"><\/span>\s*<\/details>/,
   );
+  assert.match(
+    desktopHtml,
+    /<details class="status-id-details">\s*<summary>跟踪 ID<\/summary>\s*<strong id="traceId">-<\/strong>\s*<\/details>/,
+  );
 
   const galleryStart = desktopJs.indexOf("function renderGallery(outputs)");
   const historyStart = desktopJs.indexOf("function renderHistory(items)");

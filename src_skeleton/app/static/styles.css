@@ -1080,6 +1080,21 @@ select:focus,
   white-space: nowrap;
 }
 
+.status-id-details {
+  min-width: 0;
+}
+
+.status-id-details summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.status-id-details strong {
+  display: block;
+  margin-top: 5px;
+}
+
 .provider-list,
 .event-list,
 .form-grid {
