@@ -156,8 +156,13 @@ jobs:
           if container.get("Mounts"):
               raise SystemExit("artifact_container_has_mounts")
           command = " ".join((container.get("Config") or {}).get("Entrypoint") or []) + " " + " ".join((container.get("Config") or {}).get("Cmd") or [])
-          if "scripts/fetch_v3_identity_models.py" not in command or "/app/models/v3_identity" not in command:
-              raise SystemExit("artifact_container_not_v3_model_build_step")
+          build_steps = (
+              "python -m pip install",
+              "scripts/fetch_v3_identity_models.py",
+              "apt-get install -y --no-install-recommends fonts-noto-cjk",
+          )
+          if not any(step in command for step in build_steps):
+              raise SystemExit("artifact_container_not_dockerfile_build_step")
           PY
 
           printf 'GUARDED_FAILED_BUILD_RECLAIM_RUN_ID=%s\n' "$failed_run_id"

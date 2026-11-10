@@ -13,7 +13,8 @@ def test_failed_candidate_reclaimer_is_exact_and_guarded() -> None:
     assert 'state.get("Status") != "exited"' in source
     assert 'if container.get("Mounts"):' in source
     assert "scripts/fetch_v3_identity_models.py" in source
-    assert "artifact_container_not_v3_model_build_step" in source
+    assert "python -m pip install" in source
+    assert "artifact_container_not_dockerfile_build_step" in source
     assert "GUARDED_FAILED_BUILD_RECLAIM_IMAGE_PRESERVED" in source
     assert 'docker rm "$container_id"' in source
     assert 'docker image rm "sha256:$image_id"' not in source
@@ -25,5 +26,5 @@ def test_failed_candidate_reclaimer_is_exact_and_guarded() -> None:
 
     assert source.index("active_v1_health_failed") < source.index('docker rm "$container_id"')
     assert source.index('state.get("Status") != "exited"') < source.index('docker rm "$container_id"')
-    assert source.index("artifact_container_not_v3_model_build_step") < source.index('docker rm "$container_id"')
+    assert source.index("artifact_container_not_dockerfile_build_step") < source.index('docker rm "$container_id"')
     assert source.index("package_manager_active") < source.index("apt-get clean")
