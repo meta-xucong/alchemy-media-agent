@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import posixpath
+import re
 import shutil
 import sqlite3
 import stat
@@ -458,6 +459,10 @@ def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) 
                 job_id = unit_id.partition(":")[0] if unit_id and ":" in unit_id else unit_id
                 native = native_jobs.get(job_id) if job_id else None
                 outputs = native.get("outputs") if isinstance(native, dict) else None
+                error = native.get("error") if isinstance(native, dict) else None
+                error_code = error.get("error_code") if isinstance(error, dict) else None
+                error_provider = error.get("provider") if isinstance(error, dict) else None
+                provider_id = native.get("provider_id") if isinstance(native, dict) else None
                 units.append({
                     "unit_id": unit_id,
                     "state": state,
@@ -470,6 +475,10 @@ def list_unresolved_bridge_units(root: Path, v2_repository: Path | None = None) 
                     "bridge_image_metadata_present": isinstance(data.get("image"), dict),
                     "native_job_status": native.get("status") if isinstance(native, dict) else None,
                     "native_output_count": len(outputs) if isinstance(outputs, list) else None,
+                    "native_provider_id": provider_id if isinstance(provider_id, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", provider_id) else None,
+                    "native_error_code": error_code if isinstance(error_code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", error_code) else None,
+                    "native_error_provider": error_provider if isinstance(error_provider, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", error_provider) else None,
+                    "native_error_retryable": error.get("retryable") if isinstance(error, dict) and type(error.get("retryable")) is bool else None,
                     "native_created_at": native.get("created_at") if isinstance(native, dict) else None,
                     "native_updated_at": native.get("updated_at") if isinstance(native, dict) else None,
                 })

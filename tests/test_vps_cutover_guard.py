@@ -1132,6 +1132,9 @@ def test_unresolved_bridge_unit_report_correlates_native_job_without_exposing_pa
                 'outputs': [{'output_id': 'private-output-id', 'image_data': 'private image'}],
                 'created_at': '2026-11-10T10:00:00Z', 'updated_at': '2026-11-10T10:05:00Z',
                 'prompt': 'private native prompt',
+                'provider_id': 'image_provider',
+                'error': {'error_code': 'provider_timeout', 'provider': 'image_provider',
+                          'retryable': True, 'message': 'private error detail'},
             }),),
         )
     before = {path: path.read_bytes() for path in (ledger, repository)}
@@ -1146,7 +1149,9 @@ def test_unresolved_bridge_unit_report_correlates_native_job_without_exposing_pa
             'cancel_requested': False, 'cancel_reconciled': False,
             'remote_task_present': True, 'receipt_present': True,
             'bridge_image_metadata_present': True, 'native_job_status': 'completed',
-            'native_output_count': 1, 'native_created_at': '2026-11-10T10:00:00Z',
+            'native_output_count': 1, 'native_provider_id': 'image_provider',
+            'native_error_code': 'provider_timeout', 'native_error_provider': 'image_provider',
+            'native_error_retryable': True, 'native_created_at': '2026-11-10T10:00:00Z',
             'native_updated_at': '2026-11-10T10:05:00Z',
         }],
     }
@@ -1154,6 +1159,7 @@ def test_unresolved_bridge_unit_report_correlates_native_job_without_exposing_pa
     for private_value in (
         'private prompt', 'private credential', 'private-remote-task-id',
         'private-receipt-id', 'private-output-id', 'private image',
+        'private error detail',
     ):
         assert private_value not in serialized
     assert {path: path.read_bytes() for path in (ledger, repository)} == before
