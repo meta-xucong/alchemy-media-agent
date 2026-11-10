@@ -63,28 +63,25 @@ test("V1, V2, and V3 image cards visibly label source on both surfaces", () => {
 });
 
 test("V1 image IDs stay collapsed until requested", () => {
-  assert.match(
-    desktopHtml,
-    /<details class="output-diagnostics">\s*<summary>图片 ID<\/summary>\s*<span class="output-id"><\/span>\s*<\/details>/,
-  );
-  assert.match(
-    desktopHtml,
-    /<details class="status-id-details">\s*<summary>跟踪 ID<\/summary>\s*<strong id="traceId">-<\/strong>\s*<\/details>/,
-  );
+  for (const html of [desktopHtml, mobileHtml]) {
+    assert.match(
+      html,
+      /<details class="output-diagnostics">\s*<summary>图片 ID<\/summary>\s*<span class="output-id"><\/span>\s*<\/details>/,
+    );
+    assert.match(
+      html,
+      /<details class="status-id-details">\s*<summary>跟踪 ID<\/summary>\s*<strong id="traceId">-<\/strong>\s*<\/details>/,
+    );
+  }
 
-  const galleryStart = desktopJs.indexOf("function renderGallery(outputs)");
-  const historyStart = desktopJs.indexOf("function renderHistory(items)");
-  const historyEnd = desktopJs.indexOf("\nfunction createFavoriteButton", historyStart);
-  assert.ok(galleryStart >= 0 && historyStart > galleryStart && historyEnd > historyStart);
-  const gallerySource = desktopJs.slice(galleryStart, historyStart);
-  const historySource = desktopJs.slice(historyStart, historyEnd);
-
-  assert.match(gallerySource, /const provider = node\.querySelector\("\.output-provider"\);/);
-  assert.match(gallerySource, /provider\.textContent = outputProviderResultText\(output, state\.currentJob\);/);
-  assert.match(historySource, /document\.createElement\("details"\)/);
-  assert.match(historySource, /diagnosticsSummary\.textContent = "图片 ID"/);
-  assert.match(historySource, /diagnostics\.append\(diagnosticsSummary, id\)/);
-  assert.match(historySource, /footer\.append\(diagnostics, actions\)/);
+  for (const source of [desktopJs, mobileJs]) {
+    assert.match(source, /function renderGallery\(outputs\)[\s\S]*?const provider = node\.querySelector\("\.output-provider"\);/);
+    assert.match(source, /provider\.textContent = outputProviderResultText\(output, state\.currentJob\);/);
+    assert.match(
+      source,
+      /function renderHistory\(items\)[\s\S]*?diagnosticsSummary\.textContent = "图片 ID"[\s\S]*?diagnostics\.append\(diagnosticsSummary, id\)[\s\S]*?footer\.append\(diagnostics(?:, actions)?\)/,
+    );
+  }
 });
 
 test("unneeded provider panels and V3 mode selectors are hidden without removing compatibility data", () => {

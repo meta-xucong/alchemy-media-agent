@@ -190,8 +190,10 @@
                   <strong id="outputCount">0</strong>
                 </div>
                 <div>
-                  <span class="metric-label">Trace</span>
-                  <strong id="traceId">-</strong>
+                  <details class="status-id-details">
+                    <summary>跟踪 ID</summary>
+                    <strong id="traceId">-</strong>
+                  </details>
                 </div>
               </div>
             </section>
@@ -1767,7 +1769,11 @@
       <article class="output-card">
         <button class="output-preview" type="button"></button>
         <div class="output-meta">
-          <span class="output-id"></span>
+          <span class="output-provider"></span>
+          <details class="output-diagnostics">
+            <summary>图片 ID</summary>
+            <span class="output-id"></span>
+          </details>
           <a class="download-link" href="#">下载原图</a>
         </div>
       </article>

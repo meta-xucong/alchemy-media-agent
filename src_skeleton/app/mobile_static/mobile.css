@@ -4721,6 +4721,38 @@ select:focus {
   font-size: 10.5px;
 }
 
+.output-diagnostics {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.output-diagnostics summary,
+.status-id-details summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.output-diagnostics .output-id {
+  display: block;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 10px;
+}
+
+.status-id-details {
+  min-width: 0;
+}
+
+.status-id-details strong {
+  display: block;
+  margin-top: 5px;
+}
+
 .v2-favorite-reference-card {
   gap: 8px;
   padding: 10px 11px;
