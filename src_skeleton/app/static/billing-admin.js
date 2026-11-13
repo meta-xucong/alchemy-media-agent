@@ -297,6 +297,7 @@ function initializeBridgeAdmin() {
   const get = (id) => document.querySelector(`#bridgeAdmin${id}`);
   const fields = get("Fields"), hint = get("Hint"), result = get("Result"), status = get("State");
   const rewardState = document.querySelector("#bridgeRewardState");
+  const rewardSummary = document.querySelector("#bridgeRewardSummary");
   const rewardRows = document.querySelector("#bridgeRewardRows");
   const rewardRefresh = document.querySelector("#bridgeRewardRefresh");
   const url = get("Url"), workspace = get("Workspace"), nativeProfiles = get("NativeProfiles"), native = get("Native");
@@ -354,6 +355,12 @@ function initializeBridgeAdmin() {
       get("Open").hidden = true;
       status.textContent = error.status === 401 ? "请先登录" : "需要管理员权限";
       hint.textContent = error.status === 401 ? "请登录管理员账户后重新打开此页。" : "请让管理员帮你完成设置。";
+      if (rewardState) rewardState.textContent = error.status === 401 ? "请先登录管理员账号" : "需要管理员权限";
+      if (rewardRows) {
+        const empty = document.createElement("div"); empty.className = "bridge-node-empty";
+        empty.textContent = error.status === 401 ? "登录管理员账号后可查看节点状态和奖励统计。" : "当前账号没有查看节点统计的权限。";
+        rewardRows.replaceChildren(empty);
+      }
     } else {
       let code;
       try { code = JSON.parse(error.message).detail?.code; } catch {}
@@ -363,45 +370,132 @@ function initializeBridgeAdmin() {
     controls();
   }
   async function refreshRewards() {
-    if (!authorized || !rewardState || !rewardRows) return;
+    if (!authorized || !rewardState || !rewardSummary || !rewardRows) return;
     rewardState.textContent = "正在读取…";
     try {
       const value = await adminRequest("/v1/admin/render-bridge/rewards");
-      rewardRows.replaceChildren();
       if (!value.available) {
-        rewardState.textContent = value.code === "reward_metrics_not_configured" ? "未配置统计连接" : "统计暂不可用";
-        const row = document.createElement("tr"), cell = document.createElement("td");
-        cell.colSpan = 9; cell.textContent = "请检查 Bridge 奖励只读连接及服务状态。"; row.append(cell); rewardRows.append(row); return;
+        rewardState.textContent = value.code === "reward_metrics_not_configured" ? "统计连接尚未配置" : "节点数据暂不可用";
+        rewardSummary.replaceChildren();
+        for (const [label, detail] of [["节点总数", "连接统计后显示"], ["忙碌节点", "当前正在处理任务"], ["成功图片", "节点账本累计"], ["累计奖励积分", "从账号绑定起按图片累计"]]) {
+          const card = document.createElement("div"); card.className = "bridge-reward-stat";
+          const name = document.createElement("span"); name.textContent = label;
+          const count = document.createElement("strong"); count.textContent = "—";
+          const note = document.createElement("small"); note.textContent = detail;
+          card.append(name, count, note); rewardSummary.append(card);
+        }
+        const empty = document.createElement("div"); empty.className = "bridge-node-empty";
+        empty.textContent = "暂时无法读取节点统计，请稍后刷新或检查连接设置。";
+        rewardRows.replaceChildren(empty); return;
       }
       const labels = { online: "在线", busy: "忙碌", needs_attention: "需处理", offline: "离线",
         active: "正常", draining: "暂停接单", revoked: "已撤销",
         assigned: "已分配", claimed: "已领取", running: "执行中", uploading: "上传中",
         awaiting_user: "待人工", execution_unknown: "结果未知", succeeded: "成功", failed: "失败",
         cancelled: "已取消", artifacts_ready: "已提交" };
-      const addCell = (row, text) => { const cell = document.createElement("td"); cell.textContent = String(text ?? "—"); row.append(cell); };
-      for (const node of value.nodes || []) {
-        const row = document.createElement("tr"), m = node.metrics || {}, current = node.current_execution;
-        const unresolved = Number(m.in_progress || 0) + Number(m.awaiting_user || 0) + Number(m.unknown || 0);
-        const ack = `收 ${m.ack_accepted || 0} · 拒 ${m.ack_rejected || 0} · 待 ${m.ack_pending || 0}`;
-        addCell(row, `${node.pool_name || "节点池"} · ${node.node_id}`);
-        addCell(row, node.provider_ref || "未关联");
-        const heartbeatAge = Number.isInteger(node.heartbeat_age_seconds) ? ` · ${node.heartbeat_age_seconds} 秒前` : "";
-        addCell(row, `${labels[node.node_state] || "未知"} · ${labels[node.liveness] || "未知"}${heartbeatAge}`);
-        const started = current?.started_at ? new Date(current.started_at).toLocaleTimeString() : "";
-        addCell(row, current ? `${labels[current.state] || "处理中"} · ${current.profile || ""}${started ? ` · ${started}` : ""}` : "空闲");
-        addCell(row, m.total_started || 0); addCell(row, m.succeeded || 0); addCell(row, m.failed || 0);
-        addCell(row, unresolved); addCell(row, ack); rewardRows.append(row);
+      const nodes = Array.isArray(value.nodes) ? value.nodes : [];
+      const safeCount = (count) => Number.isSafeInteger(count) && count >= 0 ? count : null;
+      const countText = (count) => count === null ? "—" : count.toLocaleString("zh-CN");
+      const imageCounts = nodes.map((node) => safeCount(node.metrics?.rewardable_images));
+      const allImageCountsAvailable = imageCounts.every((count) => count !== null);
+      const imageTotal = allImageCountsAvailable
+        ? imageCounts.reduce((sum, count) => sum + BigInt(count), 0n) : null;
+      const totalNodes = nodes.length;
+      const onlineNodes = nodes.filter((node) => ["online", "busy"].includes(node.liveness)).length;
+      const busyNodes = nodes.filter((node) => node.liveness === "busy").length;
+      const rewardTotals = value.reward_totals || {};
+      const pointsTotal = value.reward_account_stats_available === true && rewardTotals.complete === true
+        && typeof rewardTotals.reward_points === "string" && /^\d+\.\d{2}$/.test(rewardTotals.reward_points)
+        ? rewardTotals.reward_points : "—";
+      const pointsDetail = value.reward_account_stats_available !== true
+        ? "账号奖励统计暂不可用"
+        : rewardTotals.complete === true
+          ? `${countText(safeCount(rewardTotals.bound_nodes))} 台已绑定账号`
+          : `${countText(safeCount(rewardTotals.pending_nodes))} 台奖励数据待确认`;
+      const summaryItems = [
+        ["节点总数", countText(totalNodes), `${onlineNodes} 台在线`],
+        ["忙碌节点", countText(busyNodes), "当前正在处理任务"],
+        ["成功图片", countText(imageTotal), "已确认交付"],
+        ["累计奖励积分", pointsTotal, pointsDetail],
+      ];
+      rewardSummary.replaceChildren();
+      for (const [label, count, detail] of summaryItems) {
+        const card = document.createElement("div"); card.className = "bridge-reward-stat";
+        const name = document.createElement("span"); name.textContent = label;
+        const number = document.createElement("strong"); number.textContent = count;
+        const note = document.createElement("small"); note.textContent = detail;
+        card.append(name, number, note); rewardSummary.append(card);
       }
-      if (!rewardRows.children.length) {
-        const row = document.createElement("tr"), cell = document.createElement("td");
-        cell.colSpan = 9; cell.textContent = "当前没有已登记节点。"; row.append(cell); rewardRows.append(row);
+
+      const ageText = (seconds) => {
+        if (!Number.isSafeInteger(seconds) || seconds < 0) return "心跳时间未知";
+        if (seconds < 60) return `最近心跳 ${seconds} 秒前`;
+        if (seconds < 3600) return `最近心跳 ${Math.floor(seconds / 60)} 分钟前`;
+        return `最近心跳 ${Math.floor(seconds / 3600)} 小时前`;
+      };
+      const statusText = { online: "在线", busy: "忙碌", needs_attention: "需关注", offline: "离线" };
+      const statusClass = { online: "online", busy: "busy", needs_attention: "attention", offline: "offline" };
+      const receiveText = { active: "接单正常", draining: "暂停接单", revoked: "已停用" };
+      const createMetric = (label, value) => {
+        const item = document.createElement("div"); item.className = "bridge-node-metric";
+        const caption = document.createElement("span"); caption.textContent = label;
+        const number = document.createElement("strong"); number.textContent = value;
+        item.append(caption, number); return item;
+      };
+      rewardRows.replaceChildren();
+      for (const node of nodes) {
+        const metrics = node.metrics || {};
+        const imageCount = safeCount(metrics.rewardable_images);
+        const failedCount = safeCount(metrics.failed);
+        const card = document.createElement("article"); card.className = "bridge-node-card"; card.setAttribute("role", "listitem");
+        const heading = document.createElement("div"); heading.className = "bridge-node-heading";
+        const identity = document.createElement("div"); identity.className = "bridge-node-identity";
+        const name = document.createElement("strong"); name.textContent = node.pool_name || "RenderBridge 节点";
+        const id = document.createElement("code"); id.textContent = node.node_id || "节点 ID 未知";
+        identity.append(name, id);
+        const state = document.createElement("span");
+        state.className = `bridge-node-status is-${statusClass[node.liveness] || "unknown"}`;
+        state.textContent = statusText[node.liveness] || "状态未知";
+        heading.append(identity, state);
+
+        const meta = document.createElement("p"); meta.className = "bridge-node-meta";
+        meta.textContent = `${receiveText[node.node_state] || "接单状态未知"} · ${ageText(node.heartbeat_age_seconds)}`;
+        const accountMeta = document.createElement("p"); accountMeta.className = "bridge-node-meta";
+        if (node.reward_account_bound === false) accountMeta.textContent = "未绑定 Alchemy 账号";
+        else if (node.reward_status === "baseline_pending") accountMeta.textContent = "奖励基线待初始化";
+        else if (node.reward_account_bound === true && node.reward_status === "accruing") accountMeta.textContent = "已绑定 Alchemy 账号 · 按绑定后图片累计奖励";
+        else accountMeta.textContent = "账号奖励状态暂不可用";
+        const current = document.createElement("p"); current.className = "bridge-node-current";
+        if (node.current_execution) {
+          current.textContent = `当前任务：${labels[node.current_execution.state] || "处理中"}`;
+        } else {
+          current.textContent = "当前没有执行中的任务";
+          current.classList.add("is-idle");
+        }
+
+        const stats = document.createElement("div"); stats.className = "bridge-node-stats";
+        const nodePoints = node.reward_status === "unbound" && node.reward_account_bound === false
+          ? "0.00"
+          : node.reward_status === "accruing" && typeof node.reward_points === "string" && /^\d+\.\d{2}$/.test(node.reward_points)
+            ? node.reward_points : "—";
+        stats.append(createMetric("成功图片", countText(imageCount)));
+        stats.append(createMetric("计奖图片", countText(safeCount(node.reward_images))));
+        stats.append(createMetric("奖励积分", nodePoints));
+        stats.append(createMetric("失败任务", countText(failedCount)));
+        card.append(heading, meta, accountMeta, current, stats); rewardRows.append(card);
+      }
+      if (!nodes.length) {
+        const empty = document.createElement("div"); empty.className = "bridge-node-empty";
+        empty.textContent = "还没有接入的节点。启动节点程序后，状态会显示在这里。";
+        rewardRows.append(empty);
       }
       const trackingDate = value.tracking_since ? new Date(value.tracking_since).toLocaleDateString() : "未知日期";
-      rewardState.textContent = `统计自 ${trackingDate} · 已更新 ${new Date().toLocaleTimeString()} · 每 15 秒刷新${value.truncated ? " · 节点超出显示上限" : ""}`;
+      rewardState.textContent = `统计自 ${trackingDate} · 每 15 秒更新 · 当前 ${new Date().toLocaleTimeString()}${value.truncated ? " · 仅显示部分节点" : ""}`;
     } catch {
       rewardState.textContent = "统计暂不可用";
-      const row = document.createElement("tr"), cell = document.createElement("td");
-      cell.colSpan = 9; cell.textContent = "读取失败，请稍后重试。"; rewardRows.replaceChildren(row); row.append(cell);
+      const empty = document.createElement("div"); empty.className = "bridge-node-empty";
+      empty.textContent = "读取失败，请稍后刷新。"; rewardRows.replaceChildren(empty);
+      rewardSummary.querySelectorAll(".bridge-reward-stat strong").forEach((item) => { item.textContent = "—"; });
     }
   }
   function payload(value) {
@@ -439,7 +533,7 @@ function initializeBridgeAdmin() {
     save({ mode: saved.mode, base_url: url.value, workspace: workspace.value,
       profiles: toolButtons.filter((button) => button.getAttribute("aria-pressed") === "true").map((button) => button.dataset.profile),
       auto_fallback_enabled: saved.auto_fallback_enabled === true, queue_wait_seconds: Number(get("QueueWait").value),
-      native_enabled: native.checked, native_profiles: Array.from(nativeProfiles.selectedOptions, (option) => option.value) }, "高级设置已保存。需要确认连接时，点击检查连接。");
+      native_enabled: native.checked, native_profiles: Array.from(nativeProfiles.selectedOptions, (option) => option.value) }, "连接设置已保存。需要确认连接时，点击检查连接。");
   });
   get("Probe").addEventListener("click", async () => {
     if (busy || !saved || !authorized) return;

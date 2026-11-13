@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -109,6 +110,15 @@ class NodeRewardAccountStore:
                 FROM node_reward_node_bindings WHERE user_id=?
                 ORDER BY bound_at DESC,pool_id,node_id,executor_instance
             """, (user_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_all_bindings(self) -> list[dict]:
+        with closing(self._connect()) as con:
+            rows = con.execute("""
+                SELECT pool_id,node_id,executor_instance,user_id,bound_at,baseline_images
+                FROM node_reward_node_bindings
+                ORDER BY bound_at,pool_id,node_id,executor_instance
+            """).fetchall()
         return [dict(row) for row in rows]
 
 

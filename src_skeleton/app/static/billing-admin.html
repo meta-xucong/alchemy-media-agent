@@ -29,54 +29,61 @@
       <main class="homepage billing-admin-page">
         <section class="panel flow-section render-bridge-console" aria-labelledby="bridgeAdminTitle">
           <div class="panel-head section-title">
-            <div><p class="eyebrow">Render Bridge</p><h3 id="bridgeAdminTitle">渲染桥接设置</h3></div>
-            <span id="bridgeAdminState" class="state-pill" role="status">读取中</span>
+            <div><p class="eyebrow">RenderBridge</p><h3 id="bridgeAdminTitle">节点看板</h3></div>
+            <span id="bridgeAdminState" class="state-pill" role="status">正在读取</span>
           </div>
-          <p class="micro-copy">连接电脑上的绘图工具。开启后仍需检查工具状态，不代表已经完成真实生图验证。</p>
-          <p id="bridgeAdminToolSummary" class="micro-copy">正在读取当前工具…</p>
-          <div class="panel-head section-title">
-            <div><h4>节点执行与奖励统计</h4><p class="micro-copy">统计从账本启用后开始；成功按图片回执提交计算，失败只计 Bridge 确认的终态。</p></div>
-            <div class="v2-status-actions"><span id="bridgeRewardState" class="micro-copy" role="status">等待管理员认证</span><button id="bridgeRewardRefresh" class="button secondary" type="button" disabled>刷新统计</button></div>
+          <div class="bridge-reward-toolbar">
+            <span id="bridgeRewardState" class="micro-copy" role="status">等待管理员认证</span>
+            <button id="bridgeRewardRefresh" class="button secondary" type="button" disabled>刷新</button>
           </div>
-          <div class="bridge-admin-result" style="overflow-x:auto"><table><thead><tr><th>节点 / 池</th><th>提供者标识</th><th>在线状态</th><th>当前执行</th><th>总开始</th><th>成功</th><th>失败</th><th>处理中 / 待确认</th><th>交付 ACK</th></tr></thead><tbody id="bridgeRewardRows"><tr><td colspan="9">尚未读取</td></tr></tbody></table></div>
-          <div id="bridgeAdminActions" class="billing-actions" aria-label="桥接操作">
-            <button id="bridgeAdminEnable" class="button primary" type="button" disabled>开启</button>
-            <button id="bridgeAdminPause" class="button secondary" type="button" disabled>暂停</button>
-            <button id="bridgeAdminDisable" class="button secondary" type="button" disabled>关闭</button>
-            <button id="bridgeAdminProbe" class="button secondary" type="button" disabled>检查连接</button>
+          <div id="bridgeRewardSummary" class="bridge-reward-summary" aria-label="节点统计总览" aria-live="polite">
+            <div class="bridge-reward-stat"><span>节点总数</span><strong>—</strong><small>正在读取</small></div>
+            <div class="bridge-reward-stat"><span>忙碌节点</span><strong>—</strong><small>当前正在处理任务</small></div>
+            <div class="bridge-reward-stat"><span>成功图片</span><strong>—</strong><small>节点账本累计</small></div>
+            <div class="bridge-reward-stat"><span>累计奖励积分</span><strong>—</strong><small>从账号绑定起按图片累计</small></div>
           </div>
-          <p><a id="bridgeAdminOpen" class="surface-switch-link" href="/render-bridge-preview" hidden>打开桥接试用入口</a></p>
-          <p class="micro-copy">暂停或关闭：不接新的桥接任务，已受理任务仍按原任务恢复，不会重新生图。</p>
-          <label class="billing-toggle-row"><input id="bridgeAdminFallback" type="checkbox" disabled /><span>试用入口：本地繁忙或不可用时允许云端生图</span></label>
-          <p class="micro-copy">仅对用户明确选择并同意的新试用任务生效。云端沿用已配置的 Sub2API 账号和费用规则，可能收费，也可能接收文字与参考素材；不是免费或零积分生图。此选项只控制试用入口，试用结果仍仅供审核。</p>
-          <p class="micro-copy">本地恢复后，新任务优先本地；已经在云端制作的任务继续完成，不会重新生成。</p>
-          <p class="micro-copy">普通生图：启用 Codex 工具后，优先桥接；仅明确未受理或不支持所需能力时使用原 Provider。已受理任务不因排队而转移，原有审核与费用规则保留。</p>
-          <p id="bridgeAdminHint" class="micro-copy" role="status">正在读取设置，请稍候。</p>
-          <details id="bridgeAdminAdvanced" class="bridge-admin-details">
-            <summary>高级设置</summary>
-            <p class="micro-copy">首次连接请找管理员完成。这里的修改需要单独保存；上方按钮只改变已保存连接的开关。</p>
-            <form id="bridgeAdminForm" aria-describedby="bridgeAdminHint">
-              <fieldset id="bridgeAdminFields" disabled>
-                <div class="bridge-admin-grid">
-                  <label class="field"><span>本地排队等待上限（秒）</span><input id="bridgeAdminQueueWait" type="number" min="1" max="3600" step="1" value="30" required /><small>默认 30 秒。仅在安全退队且云端权限、费用和素材要求都满足时转用云端。</small></label>
-                  <label class="field"><span>Bridge 服务地址</span><input id="bridgeAdminUrl" type="url" maxlength="2048" placeholder="https://bridge.example.com" autocomplete="off" /></label>
-                  <label class="field"><span>工作区标识</span><input id="bridgeAdminWorkspace" maxlength="128" autocomplete="off" /></label>
-                  <div class="field"><span>连接凭据</span><p id="bridgeAdminCredential" class="micro-copy">检查中</p><small>凭据由管理员在服务器上设置，网页不会显示或保存密钥。</small></div>
-                  <div class="field"><span id="bridgeAdminToolsLabel">允许使用的绘图工具</span><div id="bridgeAdminProfiles" class="billing-actions" role="group" aria-labelledby="bridgeAdminToolsLabel">
-                    <button class="button secondary" type="button" data-profile="fake-image" aria-pressed="false">模拟测试</button>
-                    <button class="button secondary" type="button" data-profile="codex-image" aria-pressed="false">Codex 绘图</button>
-                    <button class="button secondary" type="button" data-profile="midjourney-manual" aria-pressed="false">Midjourney 人工导入</button>
-                  </div><small>只修改允许使用的工具，不会安装、授权或自动调用真实工具。</small></div>
-                  <label class="field"><span>原生开发入口的工具（可多选）</span><select id="bridgeAdminNativeProfiles" multiple size="3"><option value="fake-image">模拟测试</option><option value="codex-image">Codex 绘图</option><option value="midjourney-manual">Midjourney 人工导入</option></select></label>
-                </div>
-                <label class="billing-toggle-row"><input id="bridgeAdminNative" type="checkbox" /><span>启用原生开发验证入口（不是生产切换）</span></label>
-                <div class="billing-actions"><button id="bridgeAdminSave" class="button primary" type="submit">保存高级设置</button></div>
-              </fieldset>
-            </form>
-          </details>
-          <details id="bridgeAdminDiagnostics" class="bridge-admin-details">
-            <summary>诊断详情</summary>
-            <div id="bridgeAdminResult" class="bridge-admin-result" aria-live="polite">尚未检查连接。页面不会自动探测。</div>
+          <div id="bridgeRewardRows" class="bridge-node-list" role="list" aria-label="RenderBridge 节点">
+            <div class="bridge-node-empty">正在读取节点状态…</div>
+          </div>
+          <details id="bridgeAdminOperations" class="bridge-admin-details">
+            <summary>连接设置与运维</summary>
+            <p class="micro-copy">日常查看节点和奖励请使用上方看板。以下内容用于管理员调整接单与连接设置。</p>
+            <p id="bridgeAdminToolSummary" class="micro-copy">正在读取当前工具…</p>
+            <div id="bridgeAdminActions" class="billing-actions" aria-label="桥接操作">
+              <button id="bridgeAdminEnable" class="button primary" type="button" disabled>开启接单</button>
+              <button id="bridgeAdminPause" class="button secondary" type="button" disabled>暂停接单</button>
+              <button id="bridgeAdminDisable" class="button secondary" type="button" disabled>关闭</button>
+              <button id="bridgeAdminProbe" class="button secondary" type="button" disabled>检查连接</button>
+            </div>
+            <p><a id="bridgeAdminOpen" class="surface-switch-link" href="/render-bridge-preview" hidden>打开桥接试用入口</a></p>
+            <label class="billing-toggle-row"><input id="bridgeAdminFallback" type="checkbox" disabled /><span>试用入口：本地繁忙或不可用时允许云端生图</span></label>
+            <p class="micro-copy">仅对用户明确选择并同意的新试用任务生效；云端沿用 Sub2API 费用规则，可能收费。暂停或关闭不接新任务，已受理任务仍会继续完成。</p>
+            <p id="bridgeAdminHint" class="micro-copy" role="status">正在读取设置，请稍候。</p>
+            <details id="bridgeAdminAdvanced" class="bridge-admin-details">
+              <summary>高级连接设置</summary>
+              <form id="bridgeAdminForm" aria-describedby="bridgeAdminHint">
+                <fieldset id="bridgeAdminFields" disabled>
+                  <div class="bridge-admin-grid">
+                    <label class="field"><span>本地排队等待上限（秒）</span><input id="bridgeAdminQueueWait" type="number" min="1" max="3600" step="1" value="30" required /><small>仅在安全退队且云端权限、费用和素材要求都满足时转用云端。</small></label>
+                    <label class="field"><span>Bridge 服务地址</span><input id="bridgeAdminUrl" type="url" maxlength="2048" placeholder="https://bridge.example.com" autocomplete="off" /></label>
+                    <label class="field"><span>工作区标识</span><input id="bridgeAdminWorkspace" maxlength="128" autocomplete="off" /></label>
+                    <div class="field"><span>连接凭据</span><p id="bridgeAdminCredential" class="micro-copy">检查中</p><small>凭据由管理员在服务器上设置，网页不会显示或保存密钥。</small></div>
+                    <div class="field"><span id="bridgeAdminToolsLabel">允许使用的绘图工具</span><div id="bridgeAdminProfiles" class="billing-actions" role="group" aria-labelledby="bridgeAdminToolsLabel">
+                      <button class="button secondary" type="button" data-profile="fake-image" aria-pressed="false">模拟测试</button>
+                      <button class="button secondary" type="button" data-profile="codex-image" aria-pressed="false">Codex 绘图</button>
+                      <button class="button secondary" type="button" data-profile="midjourney-manual" aria-pressed="false">Midjourney 人工导入</button>
+                    </div><small>这里只配置允许的工具，不会自动安装或授权。</small></div>
+                    <label class="field"><span>原生开发入口的工具（可多选）</span><select id="bridgeAdminNativeProfiles" multiple size="3"><option value="fake-image">模拟测试</option><option value="codex-image">Codex 绘图</option><option value="midjourney-manual">Midjourney 人工导入</option></select></label>
+                  </div>
+                  <label class="billing-toggle-row"><input id="bridgeAdminNative" type="checkbox" /><span>启用原生开发验证入口</span></label>
+                  <div class="billing-actions"><button id="bridgeAdminSave" class="button primary" type="submit">保存连接设置</button></div>
+                </fieldset>
+              </form>
+            </details>
+            <details id="bridgeAdminDiagnostics" class="bridge-admin-details">
+              <summary>连接诊断</summary>
+              <div id="bridgeAdminResult" class="bridge-admin-result" aria-live="polite">尚未检查连接。</div>
+            </details>
           </details>
         </section>
         <section class="panel flow-section billing-console-panel">

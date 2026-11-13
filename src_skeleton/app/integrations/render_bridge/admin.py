@@ -22,7 +22,7 @@ from .client import BridgeClient, BridgeError, BridgeRewardClient
 from .diagnostics import capabilities_projection
 from .routes import HEADERS, PREFIX, install_render_bridge
 from .settings import BridgeSettings
-from .node_rewards import install_node_reward_account_routes
+from .node_rewards import POINTS_PER_IMAGE, install_node_reward_account_routes
 from .store import TERMINAL
 
 from render_bridge_primary import (PrimarySettings, PrimaryTransport, control_path, state_root,
@@ -431,7 +431,71 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
     @router.get("/rewards")
     async def rewards(request: Request):
         await authorize(request)
-        return JSONResponse(await controller.reward_metrics(), headers=HEADERS)
+        value = await controller.reward_metrics()
+        if value.get("available") is not True or not isinstance(value.get("nodes"), list):
+            return JSONResponse(value, headers=HEADERS)
+
+        projected = dict(value)
+        nodes = [dict(item) for item in value["nodes"] if isinstance(item, dict)]
+        store = getattr(app.state, "node_reward_account_store", None)
+        try:
+            bindings = store.list_all_bindings() if store is not None else None
+        except (sqlite3.Error, OSError):
+            bindings = None
+
+        if bindings is None:
+            for node in nodes:
+                node.update(reward_account_bound=None, reward_images=None,
+                            reward_points=None, reward_status="unavailable")
+            projected.update(nodes=nodes, reward_account_stats_available=False,
+                             reward_totals={"complete": False, "bound_nodes": None,
+                                            "reward_images": None, "reward_points": None,
+                                            "pending_nodes": None})
+            return JSONResponse(projected, headers=HEADERS)
+
+        binding_index = {
+            (item["pool_id"], item["node_id"], item["executor_instance"]): item
+            for item in bindings
+        }
+        visible_identities = set()
+        accrued_total = 0
+        pending_nodes = 0
+        for node in nodes:
+            identity = (node.get("pool_id"), node.get("node_id"), node.get("executor_instance"))
+            visible_identities.add(identity)
+            binding = binding_index.get(identity)
+            if binding is None:
+                node.update(reward_account_bound=False, reward_images=0,
+                            reward_points="0.00", reward_status="unbound")
+                continue
+
+            metrics = node.get("metrics") if isinstance(node.get("metrics"), dict) else {}
+            ledger_images = metrics.get("rewardable_images")
+            baseline_images = binding.get("baseline_images")
+            if (type(ledger_images) is not int or ledger_images < 0
+                    or type(baseline_images) is not int or baseline_images < 0):
+                node.update(reward_account_bound=True, reward_images=None,
+                            reward_points=None, reward_status="baseline_pending"
+                            if baseline_images is None else "metrics_unavailable")
+                pending_nodes += 1
+                continue
+
+            images = max(0, ledger_images - baseline_images)
+            points = f"{POINTS_PER_IMAGE * images:.2f}"
+            node.update(reward_account_bound=True, reward_images=images,
+                        reward_points=points, reward_status="accruing")
+            accrued_total += images
+
+        missing_bindings = len(set(binding_index) - visible_identities)
+        pending_nodes += missing_bindings
+        complete = pending_nodes == 0
+        projected.update(nodes=nodes, reward_account_stats_available=True,
+                         reward_totals={"complete": complete, "bound_nodes": len(bindings),
+                                        "reward_images": accrued_total if complete else None,
+                                        "reward_points": f"{POINTS_PER_IMAGE * accrued_total:.2f}"
+                                        if complete else None,
+                                        "pending_nodes": pending_nodes})
+        return JSONResponse(projected, headers=HEADERS)
 
     @router.post("/settings")
     async def save(request: Request):
