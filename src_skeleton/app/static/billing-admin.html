@@ -34,6 +34,11 @@
           </div>
           <p class="micro-copy">连接电脑上的绘图工具。开启后仍需检查工具状态，不代表已经完成真实生图验证。</p>
           <p id="bridgeAdminToolSummary" class="micro-copy">正在读取当前工具…</p>
+          <div class="panel-head section-title">
+            <div><h4>节点执行与奖励统计</h4><p class="micro-copy">统计从账本启用后开始；成功按图片回执提交计算，失败只计 Bridge 确认的终态。</p></div>
+            <div class="v2-status-actions"><span id="bridgeRewardState" class="micro-copy" role="status">等待管理员认证</span><button id="bridgeRewardRefresh" class="button secondary" type="button" disabled>刷新统计</button></div>
+          </div>
+          <div class="bridge-admin-result" style="overflow-x:auto"><table><thead><tr><th>节点 / 池</th><th>提供者标识</th><th>在线状态</th><th>当前执行</th><th>总开始</th><th>成功</th><th>失败</th><th>处理中 / 待确认</th><th>交付 ACK</th></tr></thead><tbody id="bridgeRewardRows"><tr><td colspan="9">尚未读取</td></tr></tbody></table></div>
           <div id="bridgeAdminActions" class="billing-actions" aria-label="桥接操作">
             <button id="bridgeAdminEnable" class="button primary" type="button" disabled>开启</button>
             <button id="bridgeAdminPause" class="button secondary" type="button" disabled>暂停</button>

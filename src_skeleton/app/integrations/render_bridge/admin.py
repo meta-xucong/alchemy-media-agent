@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 from urllib.parse import urlsplit
 
@@ -17,7 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing import Literal
 
-from .client import BridgeClient, BridgeError
+from .client import BridgeClient, BridgeError, BridgeRewardClient
 from .diagnostics import capabilities_projection
 from .routes import HEADERS, PREFIX, install_render_bridge
 from .settings import BridgeSettings
@@ -42,7 +43,8 @@ class AdminSettingsUpdate(BaseModel):
 
 class BridgeAdminController:
     def __init__(self, *, baseline, admin_resolver, session_user, auth_enabled,
-                 project_snapshot, native_gateway_factory=None, client_factory=BridgeClient):
+                 project_snapshot, native_gateway_factory=None, client_factory=BridgeClient,
+                 reward_client_factory=BridgeRewardClient):
         self.baseline = baseline
         self.config = baseline
         # Shared control-plane configuration is product-neutral. In particular,
@@ -53,6 +55,7 @@ class BridgeAdminController:
         self.session_user, self.auth_enabled = session_user, auth_enabled
         self.project_snapshot, self.native_gateway_factory = project_snapshot, native_gateway_factory
         self.client_factory = client_factory
+        self.reward_client_factory = reward_client_factory
         self.application = None
         self.lifespan = None
         self.lock = asyncio.Lock()
@@ -235,11 +238,76 @@ class BridgeAdminController:
                 "profiles": list(config.profiles), "native_enabled": config.native_enabled,
                 "auto_fallback_enabled": config.auto_fallback_enabled, "queue_wait_seconds": config.queue_wait_seconds,
                 "native_profiles": list(config.native_profiles), "credential_configured": bool(config.token),
-                "credential_source": "server_environment", "persisted": self.persisted,
+                "credential_source": "server_environment", "reward_metrics_configured": bool(config.reward_read_token),
+                "persisted": self.persisted,
                 "updated_at": self.updated_at, "configuration_error": self.error or config.config_error,
                 "runtime_active": bool(self.application and not self.error),
                 "recovery": "paused" if not self.application or self.error else "running",
                 "real_generation_verified": False, "formal_delivery": False}
+
+    async def reward_metrics(self):
+        config = self.config
+        if not config.reward_read_token or not config.base_url:
+            return {"available": False, "code": "reward_metrics_not_configured", "nodes": []}
+        client = None
+        try:
+            client = self.reward_client_factory(config.base_url, config.reward_read_token)
+            async with asyncio.timeout(10):
+                raw = await client.nodes()
+            nodes = []
+            allowed_profiles = {"fake-image", "codex-image", "midjourney-manual"}
+            allowed_counts = ("total_started", "succeeded", "failed", "in_progress",
+                              "awaiting_user", "unknown", "canceled", "ack_accepted",
+                              "ack_rejected", "ack_pending")
+            for item in raw.get("nodes", []):
+                if not isinstance(item, dict):
+                    continue
+                node_id, executor, pool_id = (item.get("node_id"), item.get("executor_instance"),
+                                               item.get("pool_id"))
+                if not all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", v)
+                           for v in (node_id, executor, pool_id)):
+                    continue
+                provider_ref = item.get("provider_ref")
+                if provider_ref is not None and (not isinstance(provider_ref, str)
+                        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}", provider_ref)):
+                    provider_ref = None
+                raw_metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+                metrics = {key: value for key in allowed_counts
+                           if type(value := raw_metrics.get(key)) is int and 0 <= value <= 2**53}
+                current = item.get("current_execution")
+                if isinstance(current, dict):
+                    state = current.get("state")
+                    current = {"state": state[:32] if isinstance(state, str) else "unknown",
+                               "profile": current.get("profile") if isinstance(current.get("profile"), str)
+                                   and current.get("profile") in allowed_profiles else None,
+                               "started_at": current.get("started_at") if isinstance(current.get("started_at"), str) else None,
+                               "counted": current.get("counted") is True}
+                else:
+                    current = None
+                profiles = item.get("profiles") if isinstance(item.get("profiles"), list) else []
+                heartbeat_age = item.get("heartbeat_age_seconds")
+                nodes.append({"pool_id": pool_id, "pool_name": str(item.get("pool_name", ""))[:80],
+                    "node_id": node_id, "executor_instance": executor, "provider_ref": provider_ref,
+                    "node_state": item.get("node_state") if isinstance(item.get("node_state"), str) and item.get("node_state") in
+                        {"active", "draining", "revoked"} else "unknown",
+                    "liveness": item.get("liveness") if isinstance(item.get("liveness"), str) and item.get("liveness") in
+                        {"online", "busy", "needs_attention", "offline"} else "unknown",
+                    "heartbeat_age_seconds": heartbeat_age if type(heartbeat_age) is int and heartbeat_age >= 0 else None,
+                    "last_seen_at": item.get("last_seen_at") if isinstance(item.get("last_seen_at"), str) else None,
+                    "profiles": [p for p in profiles if isinstance(p, str) and p in allowed_profiles],
+                    "current_execution": current, "metrics": metrics})
+            return {"available": True, "tracking": "since_schema_v5_activation",
+                    "tracking_since": raw.get("tracking_since"),
+                    "truncated": raw.get("truncated") is True, "nodes": nodes}
+        except TimeoutError:
+            return {"available": False, "code": "reward_metrics_timeout", "nodes": []}
+        except BridgeError as exc:
+            return {"available": False, "code": exc.code, "nodes": []}
+        except (ValueError, TypeError):
+            return {"available": False, "code": "reward_metrics_configuration_invalid", "nodes": []}
+        finally:
+            if client is not None:
+                await client.close()
 
     async def save(self, body):
         try:
@@ -327,11 +395,12 @@ class BridgeDispatch:
 
 
 def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabled, project_snapshot,
-                                native_gateway_factory=None, baseline=None, client_factory=BridgeClient):
+                                native_gateway_factory=None, baseline=None, client_factory=BridgeClient,
+                                reward_client_factory=BridgeRewardClient):
     controller = BridgeAdminController(baseline=baseline or BridgeSettings.from_env(preserve_disabled=True),
         admin_resolver=admin_resolver, session_user=session_user, auth_enabled=auth_enabled,
         project_snapshot=project_snapshot, native_gateway_factory=native_gateway_factory,
-        client_factory=client_factory)
+        client_factory=client_factory, reward_client_factory=reward_client_factory)
     router = APIRouter(prefix="/v1/admin/render-bridge")
 
     async def authorize(request, *, write=False):
@@ -351,6 +420,11 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
     async def settings(request: Request):
         await authorize(request)
         return JSONResponse(controller.projection(), headers=HEADERS)
+
+    @router.get("/rewards")
+    async def rewards(request: Request):
+        await authorize(request)
+        return JSONResponse(await controller.reward_metrics(), headers=HEADERS)
 
     @router.post("/settings")
     async def save(request: Request):

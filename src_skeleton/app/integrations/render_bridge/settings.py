@@ -11,6 +11,7 @@ class BridgeSettings:
     mode: str = "disabled"
     base_url: str = ""
     token: str = field(default="", repr=False)
+    reward_read_token: str = field(default="", repr=False)
     workspace: str = ""
     storage: Path = Path(".render_bridge_preview")
     allow_local_preview: bool = False
@@ -28,13 +29,15 @@ class BridgeSettings:
     @classmethod
     def from_env(cls, *, preserve_disabled: bool = False) -> "BridgeSettings":
         mode = os.getenv("ALCHEMY_RENDER_BRIDGE_MODE", "disabled").strip().lower()
+        reward_read_token = os.getenv("ALCHEMY_RENDER_BRIDGE_REWARD_READ_TOKEN", "")
         # Legacy disabled mounting reads no other settings. The administrator
         # control plane may inspect environment defaults without constructing
         # directories, clients or workers. Invalid settings never activate it.
         if mode == "disabled" and not preserve_disabled:
-            return cls()
+            return cls(reward_read_token=reward_read_token)
         if mode not in {"disabled", "enabled", "draining"}:
-            return cls(mode="disabled", config_error="invalid_mode")
+            return cls(mode="disabled", reward_read_token=reward_read_token,
+                       config_error="invalid_mode")
         base = os.getenv("ALCHEMY_RENDER_BRIDGE_URL", "").rstrip("/")
         token = os.getenv("ALCHEMY_RENDER_BRIDGE_TOKEN", "")
         workspace = os.getenv("ALCHEMY_RENDER_BRIDGE_WORKSPACE", "")
@@ -70,7 +73,8 @@ class BridgeSettings:
                 raise ValueError()
         except ValueError:
             queue_wait, error = 30, "invalid_queue_wait_seconds"
-        return cls(mode=mode, base_url=base, token=token, workspace=workspace,
+        return cls(mode=mode, base_url=base, token=token, reward_read_token=reward_read_token,
+                   workspace=workspace,
                    storage=Path(os.getenv("ALCHEMY_RENDER_BRIDGE_STORAGE", ".render_bridge_preview")),
                    allow_local_preview=os.getenv("ALCHEMY_RENDER_BRIDGE_LOCAL_PREVIEW") == "true",
                    native_enabled=native_enabled,

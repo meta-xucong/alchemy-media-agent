@@ -296,6 +296,9 @@ function initializeBridgeAdmin() {
   if (!form) return;
   const get = (id) => document.querySelector(`#bridgeAdmin${id}`);
   const fields = get("Fields"), hint = get("Hint"), result = get("Result"), status = get("State");
+  const rewardState = document.querySelector("#bridgeRewardState");
+  const rewardRows = document.querySelector("#bridgeRewardRows");
+  const rewardRefresh = document.querySelector("#bridgeRewardRefresh");
   const url = get("Url"), workspace = get("Workspace"), nativeProfiles = get("NativeProfiles"), native = get("Native");
   const toolButtons = Array.from(get("Profiles").querySelectorAll("button[data-profile]"));
   const actions = { enabled: get("Enable"), draining: get("Pause"), disabled: get("Disable") };
@@ -317,6 +320,7 @@ function initializeBridgeAdmin() {
     for (const [mode, button] of Object.entries(actions)) button.disabled = busy || !authorized || saved?.mode === mode;
     get("Probe").disabled = busy || !authorized;
     get("Fallback").disabled = busy || !authorized;
+    if (rewardRefresh) rewardRefresh.disabled = busy || !authorized;
   }
   function ready(value) { return Boolean(value.base_url && value.workspace && value.credential_configured); }
   function basicStatus(value) {
@@ -357,6 +361,48 @@ function initializeBridgeAdmin() {
       hint.textContent = errors[code] || "暂时没有完成，请稍后重试。仍不成功时，请找管理员帮忙。";
     }
     controls();
+  }
+  async function refreshRewards() {
+    if (!authorized || !rewardState || !rewardRows) return;
+    rewardState.textContent = "正在读取…";
+    try {
+      const value = await adminRequest("/v1/admin/render-bridge/rewards");
+      rewardRows.replaceChildren();
+      if (!value.available) {
+        rewardState.textContent = value.code === "reward_metrics_not_configured" ? "未配置统计连接" : "统计暂不可用";
+        const row = document.createElement("tr"), cell = document.createElement("td");
+        cell.colSpan = 9; cell.textContent = "请检查 Bridge 奖励只读连接及服务状态。"; row.append(cell); rewardRows.append(row); return;
+      }
+      const labels = { online: "在线", busy: "忙碌", needs_attention: "需处理", offline: "离线",
+        active: "正常", draining: "暂停接单", revoked: "已撤销",
+        assigned: "已分配", claimed: "已领取", running: "执行中", uploading: "上传中",
+        awaiting_user: "待人工", execution_unknown: "结果未知", succeeded: "成功", failed: "失败",
+        cancelled: "已取消", artifacts_ready: "已提交" };
+      const addCell = (row, text) => { const cell = document.createElement("td"); cell.textContent = String(text ?? "—"); row.append(cell); };
+      for (const node of value.nodes || []) {
+        const row = document.createElement("tr"), m = node.metrics || {}, current = node.current_execution;
+        const unresolved = Number(m.in_progress || 0) + Number(m.awaiting_user || 0) + Number(m.unknown || 0);
+        const ack = `收 ${m.ack_accepted || 0} · 拒 ${m.ack_rejected || 0} · 待 ${m.ack_pending || 0}`;
+        addCell(row, `${node.pool_name || "节点池"} · ${node.node_id}`);
+        addCell(row, node.provider_ref || "未关联");
+        const heartbeatAge = Number.isInteger(node.heartbeat_age_seconds) ? ` · ${node.heartbeat_age_seconds} 秒前` : "";
+        addCell(row, `${labels[node.node_state] || "未知"} · ${labels[node.liveness] || "未知"}${heartbeatAge}`);
+        const started = current?.started_at ? new Date(current.started_at).toLocaleTimeString() : "";
+        addCell(row, current ? `${labels[current.state] || "处理中"} · ${current.profile || ""}${started ? ` · ${started}` : ""}` : "空闲");
+        addCell(row, m.total_started || 0); addCell(row, m.succeeded || 0); addCell(row, m.failed || 0);
+        addCell(row, unresolved); addCell(row, ack); rewardRows.append(row);
+      }
+      if (!rewardRows.children.length) {
+        const row = document.createElement("tr"), cell = document.createElement("td");
+        cell.colSpan = 9; cell.textContent = "当前没有已登记节点。"; row.append(cell); rewardRows.append(row);
+      }
+      const trackingDate = value.tracking_since ? new Date(value.tracking_since).toLocaleDateString() : "未知日期";
+      rewardState.textContent = `统计自 ${trackingDate} · 已更新 ${new Date().toLocaleTimeString()} · 每 15 秒刷新${value.truncated ? " · 节点超出显示上限" : ""}`;
+    } catch {
+      rewardState.textContent = "统计暂不可用";
+      const row = document.createElement("tr"), cell = document.createElement("td");
+      cell.colSpan = 9; cell.textContent = "读取失败，请稍后重试。"; rewardRows.replaceChildren(row); row.append(cell);
+    }
   }
   function payload(value) {
     return { mode: value.mode, base_url: value.base_url, workspace: value.workspace,
@@ -430,5 +476,7 @@ function initializeBridgeAdmin() {
     } catch (error) { fail(error); }
     finally { busy = false; controls(); }
   });
-  adminRequest("/v1/admin/render-bridge/settings").then((value) => { authorized = true; render(value); }).catch(fail);
+  if (rewardRefresh) rewardRefresh.addEventListener("click", refreshRewards);
+  setInterval(() => { if (!document.hidden) refreshRewards(); }, 15000);
+  adminRequest("/v1/admin/render-bridge/settings").then((value) => { authorized = true; render(value); controls(); refreshRewards(); }).catch(fail);
 }

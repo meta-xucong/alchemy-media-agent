@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.integrations.render_bridge.admin import AdminSettingsUpdate, install_render_bridge_admin
-from app.integrations.render_bridge.client import BridgeClient
+from app.integrations.render_bridge.client import BridgeClient, BridgeRewardClient
 from app.integrations.render_bridge.models import PreviewCreate
 from app.integrations.render_bridge.service import PreviewService
 from app.integrations.render_bridge.settings import BridgeSettings
@@ -25,7 +25,7 @@ def neutral_control_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT", str(tmp_path / "neutral-ledgers"))
 
 
-def fixture(tmp_path, *, upstream=None, baseline=None):
+def fixture(tmp_path, *, upstream=None, baseline=None, reward_factory=None):
     calls = []
     constructed = []
     def respond(request):
@@ -49,7 +49,8 @@ def fixture(tmp_path, *, upstream=None, baseline=None):
     app.get("/healthz")(lambda: {"ok": True})
     controller = install_render_bridge_admin(app, baseline=baseline, admin_resolver=admin,
         session_user=lambda *_: 1, auth_enabled=lambda: True,
-        project_snapshot=lambda *_: {"revision": "fixture-revision"}, client_factory=factory)
+        project_snapshot=lambda *_: {"revision": "fixture-revision"}, client_factory=factory,
+        reward_client_factory=reward_factory or BridgeRewardClient)
     return app, controller, calls, constructed
 
 
@@ -80,6 +81,48 @@ def test_admin_authority_required(tmp_path, method, path):
         assert client.request(method, BASE + path).status_code == 401
         assert client.request(method, BASE + path, headers={"Authorization": "Bearer ordinary-user"}).status_code == 403
     assert not calls
+
+
+def test_reward_metrics_are_admin_only_and_sanitize_bridge_projection(tmp_path):
+    calls = []
+
+    class FakeRewardClient:
+        async def nodes(self):
+            return {"tracking": "since_schema_v5_activation", "tracking_since": "2026-11-12T00:00:00Z",
+                "truncated": False, "nodes": [{"pool_id": "pool_fixture", "pool_name": "fixture",
+                "node_id": "node_fixture", "executor_instance": "executor_fixture", "provider_ref": "account-17",
+                "node_state": "active", "liveness": "online", "heartbeat_age_seconds": 4,
+                "profiles": ["fake-image", "private-profile"],
+                "current_execution": {"state": "running", "profile": "fake-image",
+                                      "started_at": "2026-11-12T00:01:00Z", "task_id": "private-task"},
+                "metrics": {"total_started": 3, "succeeded": 1, "failed": 0, "private_counter": 999},
+                "private_field": SECRET}]}
+
+        async def close(self):
+            return None
+
+    def reward_factory(base_url, token):
+        calls.append((base_url, token))
+        return FakeRewardClient()
+
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
+        reward_read_token="dedicated-reward-reader", workspace="fixture-workspace",
+        storage=tmp_path / "bridge")
+    app, _, _, _ = fixture(tmp_path, baseline=baseline, reward_factory=reward_factory)
+    with TestClient(app) as client:
+        assert client.get(BASE + "/rewards").status_code == 401
+        response = client.get(BASE + "/rewards", headers=HEADERS)
+        assert response.status_code == 200, response.text
+        value = response.json()
+        assert value["available"] is True
+        assert value["nodes"][0]["metrics"] == {"total_started": 3, "succeeded": 1, "failed": 0}
+        assert value["nodes"][0]["provider_ref"] == "account-17"
+        assert value["nodes"][0]["profiles"] == ["fake-image"]
+        assert "task_id" not in value["nodes"][0]["current_execution"]
+        assert "private_field" not in response.text and "private-task" not in response.text
+        assert SECRET not in response.text and "dedicated-reward-reader" not in response.text
+        assert response.headers["cache-control"] == "no-store"
+    assert calls == [("https://bridge.test", "dedicated-reward-reader")]
 
 
 def test_mutation_and_probe_require_same_origin_guard(tmp_path):

@@ -14,7 +14,11 @@ API = "/v1/admin/render-bridge"
 @pytest.fixture(scope="module")
 def browser():
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        launch_options = {"headless": True}
+        executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+        if executable:
+            launch_options["executable_path"] = executable
+        browser = playwright.chromium.launch(**launch_options)
         yield browser
         browser.close()
 
@@ -23,6 +27,7 @@ class AdminFixture:
     def __init__(self, status=200):
         self.status = status
         self.probes = 0
+        self.reward_requests = 0
         self.hold_save = False
         self.pending_save = None
         self.saves = []
@@ -64,6 +69,21 @@ class AdminFixture:
             assert request.method == "POST" and request.headers["x-alchemy-bridge-admin"] == "1"
             self.probes += 1
             route.fulfill(json={"connection": "reachable", "authentication": "accepted", "capabilities": "compatible", "node_readiness": "offline", "profiles": [{"execution_profile_id": "fake-image", "availability": "offline"}], "admission": {"accepting_new_tasks": False, "mode": "draining"}, "real_generation_verified": False})
+        elif path == API + "/rewards":
+            if self.status != 200:
+                route.fulfill(status=self.status, json={"detail": {"code": "admin_required"}})
+                return
+            self.reward_requests += 1
+            route.fulfill(json={"available": True, "tracking": "since_schema_v5_activation",
+                "tracking_since": "2026-11-12T00:00:00Z", "truncated": False,
+                "nodes": [{"pool_id": "pool_fixture", "pool_name": "测试节点池",
+                    "node_id": "node_fixture", "executor_instance": "executor_fixture",
+                    "provider_ref": "account-17", "node_state": "active", "liveness": "online",
+                    "heartbeat_age_seconds": 4, "current_execution": {"state": "running",
+                    "profile": "fake-image", "started_at": "2026-11-12T00:01:00Z"},
+                    "metrics": {"total_started": 3, "succeeded": 1, "failed": 0,
+                    "in_progress": 1, "awaiting_user": 0, "unknown": 1,
+                    "ack_accepted": 1, "ack_rejected": 0, "ack_pending": 0}}]})
         elif path == "/api/v2/veyra/billing/settings":
             route.fulfill(json={"rules": [], "persisted": True})
         elif path == "/v1/admin/retention/settings":
@@ -247,4 +267,23 @@ def test_failed_fallback_save_restores_saved_opt_in(browser):
     expect(page.locator('#bridgeAdminFallback')).not_to_be_checked()
     expect(page.locator('#bridgeAdminFallback')).to_be_disabled()
     assert not fixture.saves
+    page.close()
+
+
+def test_admin_reward_table_shows_node_metrics_and_refreshes(browser):
+    page = browser.new_page(viewport={"width": 1440, "height": 1000})
+    fixture = AdminFixture()
+    page.route("**/*", fixture.route)
+    page.goto(ORIGIN + "/admin/billing")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("node_fixture")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("account-17")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("3")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("1")
+    expect(page.locator("#bridgeRewardState")).to_contain_text("统计自")
+    assert fixture.reward_requests == 1
+    page.locator("#bridgeRewardRefresh").click()
+    page.wait_for_function("() => document.querySelector('#bridgeRewardState').textContent.includes('统计自')")
+    page.wait_for_timeout(100)
+    assert fixture.reward_requests == 2
+    assert not fixture.unexpected
     page.close()

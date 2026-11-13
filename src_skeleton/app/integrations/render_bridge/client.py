@@ -146,3 +146,56 @@ class BridgeClient:
                    "reason_code": "native_registered",
                    "native_registration_ref": native_registration_ref}
         return await self._json("POST", f"receipts/{self._key(receipt_id)}/ack", json=payload)
+
+
+class BridgeRewardClient:
+    """Dedicated read-only client for node accounting; never uses the Bridge control token."""
+
+    def __init__(self, base_url: str, token: str, *, transport=None):
+        self.http = httpx.AsyncClient(
+            base_url=base_url + "/bridge/rewards/v1/",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=httpx.Timeout(8.0, connect=3.0, pool=1.0),
+            limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            follow_redirects=False, trust_env=False,
+            verify=os.environ.get("ALCHEMY_RENDER_BRIDGE_CA_BUNDLE") or True,
+            transport=transport,
+        )
+
+    async def close(self):
+        await self.http.aclose()
+
+    async def nodes(self):
+        import json
+        try:
+            async with self.http.stream("GET", "nodes?limit=1000") as response:
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > 1_048_576:
+                        raise BridgeError("bridge_response_too_large", retryable=False)
+                if response.status_code >= 300:
+                    code = "bridge_request_failed"
+                    try:
+                        candidate = json.loads(body).get("error", {}).get("code", "")
+                        if isinstance(candidate, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", candidate):
+                            code = candidate
+                    except (ValueError, AttributeError, TypeError):
+                        pass
+                    raise BridgeError(code, status=response.status_code,
+                                      retryable=response.status_code in {408, 429} or response.status_code >= 500)
+                value = json.loads(body)
+                if (not isinstance(value, dict)
+                        or value.get("tracking") != "since_schema_v5_activation"
+                        or not isinstance(value.get("tracking_since"), str)
+                        or type(value.get("truncated")) is not bool
+                        or not isinstance(value.get("nodes"), list)
+                        or len(value["nodes"]) > 1000):
+                    raise ValueError()
+                return value
+        except BridgeError:
+            raise
+        except (httpx.HTTPError, OSError):
+            raise BridgeError("bridge_unreachable") from None
+        except (ValueError, TypeError):
+            raise BridgeError("invalid_bridge_response", retryable=False) from None
