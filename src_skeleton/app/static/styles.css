@@ -11494,3 +11494,144 @@ body.v3-page-loading-active {
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
+
+.node-rewards-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.node-rewards-summary {
+  margin-bottom: 0;
+}
+
+.node-rewards-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.node-rewards-code-row[hidden] {
+  display: none;
+}
+
+.node-rewards-code {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  background: rgba(248, 247, 241, 0.82);
+  font: 600 14px/1.4 ui-monospace, Consolas, monospace;
+}
+
+.node-rewards-code-row small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.node-rewards-node-list {
+  display: grid;
+  gap: 10px;
+}
+
+.node-rewards-node {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(250, 249, 244, 0.75);
+}
+
+.node-rewards-node-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.node-rewards-node-heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.node-rewards-status {
+  flex: 0 0 auto;
+  color: var(--sage-deep);
+  font-size: 12px;
+}
+
+.node-rewards-identity,
+.node-rewards-execution {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.node-rewards-node-stats {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.node-rewards-node-stats span,
+.node-rewards-node-stats small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.node-rewards-node-stats strong {
+  color: var(--sage-deep);
+}
+
+.node-rewards-policy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .node-rewards-code-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.node-rewards-bind-form {
+  display: grid;
+  gap: 8px;
+}
+
+.node-rewards-id-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.node-rewards-id-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.node-rewards-node-id {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  background: rgba(248, 247, 241, 0.82);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .node-rewards-id-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -95,7 +95,7 @@ def test_reward_metrics_are_admin_only_and_sanitize_bridge_projection(tmp_path):
                 "profiles": ["fake-image", "private-profile"],
                 "current_execution": {"state": "running", "profile": "fake-image",
                                       "started_at": "2026-11-12T00:01:00Z", "task_id": "private-task"},
-                "metrics": {"total_started": 3, "succeeded": 1, "failed": 0, "private_counter": 999},
+                "metrics": {"total_started": 3, "succeeded": 1, "failed": 0, "rewardable_images": 2, "private_counter": 999},
                 "private_field": SECRET}]}
 
         async def close(self):
@@ -115,7 +115,7 @@ def test_reward_metrics_are_admin_only_and_sanitize_bridge_projection(tmp_path):
         assert response.status_code == 200, response.text
         value = response.json()
         assert value["available"] is True
-        assert value["nodes"][0]["metrics"] == {"total_started": 3, "succeeded": 1, "failed": 0}
+        assert value["nodes"][0]["metrics"] == {"total_started": 3, "succeeded": 1, "failed": 0, "rewardable_images": 2}
         assert value["nodes"][0]["provider_ref"] == "account-17"
         assert value["nodes"][0]["profiles"] == ["fake-image"]
         assert "task_id" not in value["nodes"][0]["current_execution"]

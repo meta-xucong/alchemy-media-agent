@@ -419,6 +419,7 @@ def _shell_asset_version_replacements() -> dict[str, str]:
         "__API_ACCESS_JS_VERSION__": _shell_asset_version(STATIC_DIR / "api-access.js"),
         "__API_ACCESS_CSS_VERSION__": _shell_asset_version(STATIC_DIR / "api-access.css"),
         "__ACCOUNT_ACCESS_VERSION__": _shell_asset_version(STATIC_DIR / "account-access.js"),
+        "__NODE_REWARDS_VERSION__": _shell_asset_version(STATIC_DIR / "node-rewards.js"),
         "__MOBILE_STYLES_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.css"),
         "__MOBILE_APP_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.js"),
     }
@@ -4374,4 +4375,6 @@ install_render_bridge_admin(
     auth_enabled=lambda: settings.veyra_auth_enabled,
     project_snapshot=_render_bridge_preview_project_snapshot,
     native_gateway_factory=_create_render_bridge_native_gateway,
+    account_loader=lambda user_id: _veyra_account(user_id),
+    node_rewards_database_path=media_store.root / "render_bridge" / "node-rewards.sqlite3",
 )

@@ -1615,7 +1615,7 @@
           </div>
           <nav class="account-center-nav" aria-label="账户中心子页面" role="tablist">
             <button class="account-center-nav-button active" data-account-view-target="overview" type="button" role="tab" aria-selected="true">账户概览</button>
-            <button class="account-center-nav-button" data-account-view-target="access" type="button" role="tab" aria-selected="false">API 与 MCP</button>
+            <button class="account-center-nav-button" data-account-view-target="access" type="button" role="tab" aria-selected="false">API 与 MCP</button><button class="account-center-nav-button" data-account-view-target="node-rewards" type="button" role="tab" aria-selected="false">节点奖励</button>
           </nav>
           <div id="accountOverviewPanel" class="account-center-view" data-account-view="overview">
             <section class="panel flow-section veyra-account-panel">
@@ -1638,7 +1638,43 @@
             <section class="panel flow-section account-record-section"><div class="panel-head section-title"><div><p class="eyebrow">Templates</p><h3>历史使用模板</h3></div></div><div id="veyraTemplateHistoryList" class="account-template-list" aria-live="polite"></div></section>
             <section class="panel flow-section account-record-section"><div class="panel-head section-title"><div><p class="eyebrow">Usage</p><h3>资金消耗记录</h3></div></div><div id="veyraUsageList" class="account-usage-list" aria-live="polite"></div></section>
           </div>
-          <section id="accountAccessPanel" class="account-center-view account-access-panel" data-account-view="access" data-account-access hidden>
+          <section id="accountNodeRewardsPanel" class="account-center-view node-rewards-panel" data-account-view="node-rewards" data-node-rewards hidden>
+                <div class="account-access-hero">
+                  <div>
+                    <p class="eyebrow">Node Rewards</p>
+                    <h3>节点奖励</h3>
+                    <p>使用当前登录的 Alchemy 账户绑定节点，并查看本账户累计的成功图片与奖励积分。</p>
+                  </div>
+                  <span id="nodeRewardsState" class="state-pill">等待登录</span>
+                </div>
+                <div id="nodeRewardsNotice" class="account-data-notice node-rewards-notice" role="status" aria-live="polite" hidden></div>
+                <div class="account-summary-grid node-rewards-summary" aria-label="节点奖励统计">
+                  <article class="account-kpi"><span>已绑定节点</span><strong id="nodeRewardsNodeCount">-</strong><small>当前 Alchemy 账户</small></article>
+                  <article class="account-kpi"><span>成功图片</span><strong id="nodeRewardsImageCount">-</strong><small>只统计真实图片</small></article>
+                  <article class="account-kpi"><span>奖励积分</span><strong id="nodeRewardsPoints">-</strong><small>每张成功图片 0.02 积分</small></article>
+                </div>
+                                  <section class="account-access-card node-rewards-bind-card">
+                    <div class="account-access-card-head">
+                      <div><h4>绑定节点</h4><p>登录当前 Alchemy 账户后，输入节点本地状态页显示的节点 ID。绑定后，此节点的成功图片奖励归属到当前账户。</p></div>
+                    </div>
+                    <form id="nodeRewardsBindForm" class="node-rewards-bind-form" autocomplete="off">
+                      <label class="node-rewards-id-label" for="nodeRewardsNodeIdInput">节点 ID</label>
+                      <div class="node-rewards-id-row">
+                        <input id="nodeRewardsNodeIdInput" class="node-rewards-node-id" name="node_id" maxlength="128" pattern="[A-Za-z0-9_-]{1,128}" placeholder="输入节点 ID" required />
+                        <button id="nodeRewardsBindNodeBtn" class="button primary" type="submit">绑定此节点</button>
+                      </div>
+                    </form>
+                  </section>
+                  <section class="account-access-card node-rewards-node-card">
+                  <div class="account-access-card-head">
+                    <div><h4>我的节点</h4><p id="nodeRewardsTrackingSince">奖励统计开始时间：读取中</p></div>
+                    <button id="nodeRewardsRefreshBtn" class="button compact ghost" type="button">刷新</button>
+                  </div>
+                  <div id="nodeRewardsNodeList" class="node-rewards-node-list" aria-live="polite"></div>
+                </section>
+                <p class="node-rewards-policy">仅真实成功图片计奖；测试图片不计奖。目前没有扣分规则，奖励积分独立展示，不影响账户余额和生图扣费。</p>
+              </section>
+              <section id="accountAccessPanel" class="account-center-view account-access-panel" data-account-view="access" data-account-access hidden>
             <div class="account-access-hero"><div><p class="eyebrow">Developer Access</p><h3>API 与 MCP</h3><p>API 供脚本直接生图；MCP 供 Codex、Claude 等客户端调用同一套能力。</p></div><span id="accountAccessState" class="state-pill">正在验证</span></div>
             <div class="account-access-explain"><article><strong>API 直接调用</strong><span>适合脚本、网站或自动化程序，包含创建项目、提交生图和获取结果。</span></article><article><strong>MCP 连接工具</strong><span>适合 Codex、Claude 等客户端，用自然语言调用 Alchemy。</span></article></div>
             <div id="accountAccessNotice" class="account-data-notice" role="status" aria-live="polite" hidden></div>
@@ -1781,6 +1817,6 @@
 
     <script src="/static/continuity-anchor.js?v=__CONTINUITY_ANCHOR_VERSION__" defer></script>
     <script src="/mobile-static/mobile.js?v=__MOBILE_APP_VERSION__" defer></script>
-    <script src="/static/account-access.js?v=__ACCOUNT_ACCESS_VERSION__" defer></script>
+    <script src="/static/account-access.js?v=__ACCOUNT_ACCESS_VERSION__" defer></script><script src="/static/node-rewards.js?v=__NODE_REWARDS_VERSION__" defer></script>
   </body>
 </html>

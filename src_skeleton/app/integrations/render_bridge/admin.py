@@ -22,6 +22,7 @@ from .client import BridgeClient, BridgeError, BridgeRewardClient
 from .diagnostics import capabilities_projection
 from .routes import HEADERS, PREFIX, install_render_bridge
 from .settings import BridgeSettings
+from .node_rewards import install_node_reward_account_routes
 from .store import TERMINAL
 
 from render_bridge_primary import (PrimarySettings, PrimaryTransport, control_path, state_root,
@@ -258,7 +259,7 @@ class BridgeAdminController:
             allowed_profiles = {"fake-image", "codex-image", "midjourney-manual"}
             allowed_counts = ("total_started", "succeeded", "failed", "in_progress",
                               "awaiting_user", "unknown", "canceled", "ack_accepted",
-                              "ack_rejected", "ack_pending")
+                              "ack_rejected", "ack_pending", "rewardable_images")
             for item in raw.get("nodes", []):
                 if not isinstance(item, dict):
                     continue
@@ -396,11 +397,17 @@ class BridgeDispatch:
 
 def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabled, project_snapshot,
                                 native_gateway_factory=None, baseline=None, client_factory=BridgeClient,
-                                reward_client_factory=BridgeRewardClient):
+                                reward_client_factory=BridgeRewardClient, account_loader=None,
+                                node_rewards_database_path=None):
     controller = BridgeAdminController(baseline=baseline or BridgeSettings.from_env(preserve_disabled=True),
         admin_resolver=admin_resolver, session_user=session_user, auth_enabled=auth_enabled,
         project_snapshot=project_snapshot, native_gateway_factory=native_gateway_factory,
         client_factory=client_factory, reward_client_factory=reward_client_factory)
+    install_node_reward_account_routes(app, session_user=session_user,
+        account_loader=account_loader, auth_enabled=auth_enabled,
+        reward_metrics_loader=controller.reward_metrics,
+        database_path=(node_rewards_database_path or
+                       controller.baseline.storage / "node-rewards.sqlite3"))
     router = APIRouter(prefix="/v1/admin/render-bridge")
 
     async def authorize(request, *, write=False):
