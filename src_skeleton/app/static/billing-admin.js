@@ -304,7 +304,7 @@ function initializeBridgeAdmin() {
   const toolButtons = Array.from(get("Profiles").querySelectorAll("button[data-profile]"));
   const actions = { enabled: get("Enable"), draining: get("Pause"), disabled: get("Disable") };
   const toolNames = { "fake-image": "模拟测试（不生成真实图片）", "codex-image": "Codex 绘图", "midjourney-manual": "Midjourney 人工导入" };
-  let saved = null, busy = false, authorized = false;
+  let saved = null, busy = false, authorized = false, correctingRewardBinding = false;
   const errors = {
     bridge_configuration_missing: "请找管理员完成首次连接，再点击开启。",
     credential_endpoint_mismatch: "连接地址还未准备好，请找管理员确认连接设置。",
@@ -322,6 +322,94 @@ function initializeBridgeAdmin() {
     get("Probe").disabled = busy || !authorized;
     get("Fallback").disabled = busy || !authorized;
     if (rewardRefresh) rewardRefresh.disabled = busy || !authorized;
+  }
+  function rewardBindingCorrection(node) {
+    if (node.reward_status !== "accruing"
+        || !Number.isSafeInteger(node.metrics?.rewardable_images)
+        || node.metrics.rewardable_images < 0
+        || node.reward_account_bound !== true
+        || !Number.isSafeInteger(node.reward_account_user_id)
+        || !Number.isSafeInteger(node.binding_revision)
+        || !node.pool_id || !node.node_id || !node.executor_instance) return null;
+    const details = document.createElement("details");
+    details.className = "bridge-admin-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "修正账号归属";
+    const note = document.createElement("p");
+    note.className = "micro-copy";
+    note.textContent = "仅用于管理员核实后的误绑纠正。转移前累计留在原账号，新账号从当前 Bridge 图片计数之后开始累计。";
+    const form = document.createElement("form");
+    form.dataset.rewardBindingCorrection = "true";
+    form.dataset.poolId = String(node.pool_id);
+    form.dataset.nodeId = String(node.node_id);
+    form.dataset.executorInstance = String(node.executor_instance);
+    form.dataset.expectedUserId = String(node.reward_account_user_id);
+    form.dataset.expectedRevision = String(node.binding_revision);
+    const label = document.createElement("label"); label.className = "field";
+    const caption = document.createElement("span"); caption.textContent = "目标 Alchemy 账号 ID";
+    const input = document.createElement("input"); input.type = "number"; input.min = "1";
+    input.step = "1"; input.required = true; input.inputMode = "numeric";
+    input.setAttribute("aria-label", "目标 Alchemy 账号 ID");
+    label.append(caption, input);
+    const button = document.createElement("button");
+    button.className = "button secondary"; button.type = "submit";
+    button.textContent = "核实后修正";
+    const actions = document.createElement("div"); actions.className = "billing-actions";
+    actions.append(button); form.append(label, actions);
+    details.append(summary, note, form);
+    return details;
+  }
+  async function submitRewardBindingCorrection(event) {
+    const form = event.target.closest("form[data-reward-binding-correction]");
+    if (!form) return;
+    event.preventDefault();
+    if (!authorized || correctingRewardBinding) return;
+    const input = form.querySelector('input[type="number"]');
+    const newUserId = Number(input?.value);
+    if (!Number.isSafeInteger(newUserId) || newUserId <= 0) {
+      showGlobalToast("请输入有效的目标 Alchemy 账号 ID。", "error"); return;
+    }
+    const oldUserId = Number(form.dataset.expectedUserId);
+    if (newUserId === oldUserId) {
+      showGlobalToast("目标账号与当前账号相同，无需修正。", "error"); return;
+    }
+    const count = Number(form.dataset.rewardableImages);
+    const boundary = Number.isSafeInteger(count) && count >= 0 ? count.toLocaleString("zh-CN") : "当前可验证的";
+    if (!window.confirm(`节点 ${form.dataset.nodeId} 将从账号 ${oldUserId} 转到账号 ${newUserId}。截至 Bridge 当前已确认 ${boundary} 张可计奖图片，历史累计保留给原账号，新账号从该计数之后开始。继续吗？`)) return;
+    correctingRewardBinding = true;
+    const button = form.querySelector('button[type="submit"]');
+    if (button) { button.disabled = true; button.textContent = "正在修正…"; }
+    try {
+      await adminRequest("/v1/admin/render-bridge/rewards/bindings/correct", {
+        method: "POST",
+        headers: { "X-Alchemy-Bridge-Admin": "1" },
+        body: {
+          pool_id: form.dataset.poolId,
+          node_id: form.dataset.nodeId,
+          executor_instance: form.dataset.executorInstance,
+          expected_user_id: oldUserId,
+          expected_revision: Number(form.dataset.expectedRevision),
+          new_user_id: newUserId,
+        },
+      });
+      showGlobalToast("账号归属已修正，正在刷新奖励统计。");
+      await refreshRewards();
+    } catch (error) {
+      let code;
+      try { code = JSON.parse(error.message).detail?.code; } catch {}
+      const messages = {
+        node_reward_binding_stale: "绑定已被其他操作更新，请刷新后重新核实。",
+        node_reward_baseline_unavailable: "奖励基线尚未确认，本次没有修改绑定；请先等待基线初始化。",
+        reward_metrics_incomplete: "Bridge 计数暂不完整，本次没有修改绑定。",
+        reward_image_count_unavailable: "Bridge 图片计数不可用，本次没有修改绑定。",
+        reward_destination_account_unavailable: "目标账号不存在或未启用，本次没有修改绑定。",
+        node_reward_metrics_regressed: "Bridge 计数低于原基线，本次没有修改绑定。",
+      };
+      showGlobalToast(messages[code] || "修正未完成，请刷新并确认管理员权限。", "error");
+    } finally {
+      correctingRewardBinding = false;
+      if (button) { button.disabled = false; button.textContent = "核实后修正"; }
+    }
   }
   function ready(value) { return Boolean(value.base_url && value.workspace && value.credential_configured); }
   function basicStatus(value) {
@@ -462,8 +550,15 @@ function initializeBridgeAdmin() {
         meta.textContent = `${receiveText[node.node_state] || "接单状态未知"} · ${ageText(node.heartbeat_age_seconds)}`;
         const accountMeta = document.createElement("p"); accountMeta.className = "bridge-node-meta";
         if (node.reward_account_bound === false) accountMeta.textContent = "未绑定 Alchemy 账号";
+        else if (node.reward_account_bound === true && Number.isSafeInteger(node.reward_account_user_id)) {
+          const historicalImages = safeCount(node.historical_reward_images);
+          const historicalPoints = typeof node.historical_reward_points === "string"
+            && /^\d+\.\d{2}$/.test(node.historical_reward_points) ? node.historical_reward_points : "0.00";
+          accountMeta.textContent = `当前账号 #${node.reward_account_user_id}`
+            + (historicalImages > 0 ? ` · 历史归属 ${countText(historicalImages)} 张 / ${historicalPoints} 积分` : "")
+            + (node.reward_status === "baseline_pending" ? " · 奖励基线待初始化，暂不能修正" : "");
+        }
         else if (node.reward_status === "baseline_pending") accountMeta.textContent = "奖励基线待初始化";
-        else if (node.reward_account_bound === true && node.reward_status === "accruing") accountMeta.textContent = "已绑定 Alchemy 账号 · 按绑定后图片累计奖励";
         else accountMeta.textContent = "账号奖励状态暂不可用";
         const current = document.createElement("p"); current.className = "bridge-node-current";
         if (node.current_execution) {
@@ -480,9 +575,13 @@ function initializeBridgeAdmin() {
             ? node.reward_points : "—";
         stats.append(createMetric("成功图片", countText(imageCount)));
         stats.append(createMetric("计奖图片", countText(safeCount(node.reward_images))));
-        stats.append(createMetric("奖励积分", nodePoints));
+        stats.append(createMetric("当前账号积分", nodePoints));
         stats.append(createMetric("失败任务", countText(failedCount)));
-        card.append(heading, meta, accountMeta, current, stats); rewardRows.append(card);
+        const correction = value.truncated === true ? null : rewardBindingCorrection(node);
+        if (correction) correction.querySelector("form").dataset.rewardableImages = String(metrics.rewardable_images ?? "");
+        card.append(heading, meta, accountMeta, current, stats);
+        if (correction) card.append(correction);
+        rewardRows.append(card);
       }
       if (!nodes.length) {
         const empty = document.createElement("div"); empty.className = "bridge-node-empty";
@@ -571,6 +670,7 @@ function initializeBridgeAdmin() {
     finally { busy = false; controls(); }
   });
   if (rewardRefresh) rewardRefresh.addEventListener("click", refreshRewards);
+  rewardRows?.addEventListener("submit", submitRewardBindingCorrection);
   setInterval(() => { if (!document.hidden) refreshRewards(); }, 15000);
   adminRequest("/v1/admin/render-bridge/settings").then((value) => { authorized = true; render(value); controls(); refreshRewards(); }).catch(fail);
 }

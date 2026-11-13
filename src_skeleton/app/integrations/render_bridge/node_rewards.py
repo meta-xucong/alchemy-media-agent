@@ -50,6 +50,7 @@ class NodeRewardAccountStore:
                 user_id INTEGER NOT NULL,
                 bound_at INTEGER NOT NULL,
                 baseline_images INTEGER,
+                binding_revision INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY (pool_id, node_id, executor_instance)
             )
         """)
@@ -58,6 +59,32 @@ class NodeRewardAccountStore:
         if "baseline_images" not in columns:
             con.execute(
                 "ALTER TABLE node_reward_node_bindings ADD COLUMN baseline_images INTEGER")
+        if "binding_revision" not in columns:
+            con.execute("""ALTER TABLE node_reward_node_bindings
+                ADD COLUMN binding_revision INTEGER NOT NULL DEFAULT 1""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS node_reward_binding_history (
+                history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pool_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                executor_instance TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                bound_at INTEGER NOT NULL,
+                corrected_at INTEGER NOT NULL,
+                baseline_images INTEGER NOT NULL,
+                final_images INTEGER NOT NULL CHECK(final_images >= 0),
+                corrected_by_admin_user_id INTEGER
+            )
+        """)
+        history_columns = {row["name"] for row in con.execute(
+            "PRAGMA table_info(node_reward_binding_history)")}
+        if "corrected_by_admin_user_id" not in history_columns:
+            con.execute("""ALTER TABLE node_reward_binding_history
+                ADD COLUMN corrected_by_admin_user_id INTEGER""")
+        con.execute("""
+            CREATE INDEX IF NOT EXISTS node_reward_binding_history_user_idx
+            ON node_reward_binding_history(user_id, corrected_at)
+        """)
         con.execute("""
             CREATE INDEX IF NOT EXISTS node_reward_node_bindings_user_idx
             ON node_reward_node_bindings(user_id, bound_at)
@@ -85,6 +112,49 @@ class NodeRewardAccountStore:
             """, (*identity, user_id, now, baseline_images))
         return {"status": "bound"}
 
+    def correct_binding(self, *, pool_id: str, node_id: str, executor_instance: str,
+                        expected_user_id: int, expected_revision: int,
+                        new_user_id: int, observed_images: int,
+                        corrected_by_admin_user_id: int) -> dict:
+        identity = (pool_id, node_id, executor_instance)
+        now = int(self.clock())
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("""
+                SELECT user_id,bound_at,baseline_images,binding_revision
+                FROM node_reward_node_bindings
+                WHERE pool_id=? AND node_id=? AND executor_instance=?
+            """, identity).fetchone()
+            if row is None:
+                raise NodeRewardStoreError("node_reward_binding_not_found", 404)
+            if (row["user_id"] != expected_user_id
+                    or row["binding_revision"] != expected_revision):
+                raise NodeRewardStoreError("node_reward_binding_stale", 409)
+            baseline = row["baseline_images"]
+            if baseline is None:
+                raise NodeRewardStoreError("node_reward_baseline_unavailable", 409)
+            if observed_images < baseline:
+                raise NodeRewardStoreError("node_reward_metrics_regressed", 409)
+            accrued = observed_images - baseline
+            con.execute("""
+                INSERT INTO node_reward_binding_history
+                    (pool_id,node_id,executor_instance,user_id,bound_at,corrected_at,
+                     baseline_images,final_images,corrected_by_admin_user_id)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (*identity, expected_user_id, row["bound_at"], now,
+                  baseline, accrued, corrected_by_admin_user_id))
+            updated = con.execute("""
+                UPDATE node_reward_node_bindings
+                SET user_id=?,bound_at=?,baseline_images=?,binding_revision=binding_revision+1
+                WHERE pool_id=? AND node_id=? AND executor_instance=?
+                  AND user_id=? AND binding_revision=?
+            """, (new_user_id, now, observed_images, *identity,
+                  expected_user_id, expected_revision)).rowcount
+            if updated != 1:
+                raise NodeRewardStoreError("node_reward_binding_stale", 409)
+        return {"status": "corrected", "revision": expected_revision + 1,
+                "former_images": accrued, "reward_points": _points(accrued)}
+
     def initialize_baseline(self, user_id: int, *, pool_id: str, node_id: str,
                             executor_instance: str, baseline_images: int) -> int:
         identity = (pool_id, node_id, executor_instance)
@@ -106,18 +176,40 @@ class NodeRewardAccountStore:
     def list_bindings(self, user_id: int) -> list[dict]:
         with self._connect() as con:
             rows = con.execute("""
-                SELECT pool_id,node_id,executor_instance,bound_at,baseline_images
+                SELECT pool_id,node_id,executor_instance,bound_at,baseline_images,
+                       binding_revision
                 FROM node_reward_node_bindings WHERE user_id=?
                 ORDER BY bound_at DESC,pool_id,node_id,executor_instance
+            """, (user_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_binding_history(self, user_id: int) -> list[dict]:
+        with self._connect() as con:
+            rows = con.execute("""
+                SELECT pool_id,node_id,executor_instance,bound_at,corrected_at,
+                       baseline_images,final_images
+                FROM node_reward_binding_history WHERE user_id=?
+                ORDER BY corrected_at DESC,history_id DESC
             """, (user_id,)).fetchall()
         return [dict(row) for row in rows]
 
     def list_all_bindings(self) -> list[dict]:
         with closing(self._connect()) as con:
             rows = con.execute("""
-                SELECT pool_id,node_id,executor_instance,user_id,bound_at,baseline_images
+                SELECT pool_id,node_id,executor_instance,user_id,bound_at,baseline_images,
+                       binding_revision
                 FROM node_reward_node_bindings
                 ORDER BY bound_at,pool_id,node_id,executor_instance
+            """).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_all_binding_history(self) -> list[dict]:
+        with closing(self._connect()) as con:
+            rows = con.execute("""
+                SELECT pool_id,node_id,executor_instance,user_id,bound_at,corrected_at,
+                       baseline_images,final_images,corrected_by_admin_user_id
+                FROM node_reward_binding_history
+                ORDER BY corrected_at,history_id
             """).fetchall()
         return [dict(row) for row in rows]
 
@@ -208,17 +300,35 @@ def install_node_reward_account_routes(
         user_id = await current_user_id(request)
         try:
             bindings = store.list_bindings(user_id)
+            history = store.list_binding_history(user_id)
         except (sqlite3.Error, OSError):
             return JSONResponse({"available": False, "code": "node_reward_storage_unavailable",
                                  "totals": None, "nodes": []},
                                 status_code=200, headers=NO_STORE)
+        history_images = sum(item["final_images"] for item in history)
+        history_nodes = [{
+            "pool_name": "历史节点",
+            "node_id": item["node_id"],
+            "executor_instance": item["executor_instance"],
+            "node_state": "corrected",
+            "liveness": "offline",
+            "last_seen_at": None,
+            "current_execution": None,
+            "successful_images": item["final_images"],
+            "reward_points": _points(item["final_images"]),
+            "bound_at": _utc(item["bound_at"]),
+            "corrected_at": _utc(item["corrected_at"]),
+            "binding_status": "corrected",
+        } for item in history]
         if not bindings:
             return JSONResponse({
                 "available": True,
-                "tracking_since": None,
+                "tracking_since": _utc(min((item["bound_at"] for item in history), default=0))
+                    if history else None,
                 "reward_points_per_image": "0.02",
-                "totals": {"bound_nodes": 0, "successful_images": 0, "reward_points": "0.00"},
-                "nodes": [],
+                "totals": {"bound_nodes": 0, "successful_images": history_images,
+                           "reward_points": _points(history_images)},
+                "nodes": history_nodes,
             }, headers=NO_STORE)
 
         try:
@@ -234,7 +344,7 @@ def install_node_reward_account_routes(
             for item in raw["nodes"] if isinstance(item, dict)
         }
         nodes = []
-        total_images = 0
+        total_images = history_images
         for binding in bindings:
             item = node_index.get((binding["pool_id"], binding["node_id"], binding["executor_instance"]))
             if item is None:
@@ -269,10 +379,15 @@ def install_node_reward_account_routes(
                 "successful_images": images,
                 "reward_points": _points(images),
                 "bound_at": _utc(binding["bound_at"]),
+                "binding_status": "active",
             })
+        nodes.extend(history_nodes)
         return JSONResponse({
             "available": True,
-            "tracking_since": _utc(min(binding["bound_at"] for binding in bindings)),
+            "tracking_since": _utc(min(
+                [binding["bound_at"] for binding in bindings]
+                + [item["bound_at"] for item in history]
+            )),
             "reward_points_per_image": "0.02",
             "totals": {"bound_nodes": len(bindings), "successful_images": total_images,
                        "reward_points": _points(total_images)},

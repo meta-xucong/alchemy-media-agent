@@ -31,6 +31,14 @@ class AdminFixture:
         self.hold_save = False
         self.pending_save = None
         self.saves = []
+        self.corrections = []
+        self.reward_owner_id = 17
+        self.binding_revision = 1
+        self.reward_images = 3
+        self.reward_points = "0.06"
+        self.historical_reward_images = 0
+        self.historical_reward_points = "0.00"
+        self.reward_status = "accruing"
         self.unexpected = []
         self.value = {"mode": "disabled", "base_url": "https://bridge.fixture", "workspace": "fixture-workspace",
             "profiles": ["fake-image"], "native_enabled": False, "native_profiles": ["fake-image"],
@@ -74,11 +82,19 @@ class AdminFixture:
                 route.fulfill(status=self.status, json={"detail": {"code": "admin_required"}})
                 return
             self.reward_requests += 1
+            totals_complete = self.reward_status == "accruing"
+            current_images = self.reward_images if isinstance(self.reward_images, int) else 0
+            total_images = current_images + self.historical_reward_images
             route.fulfill(json={"available": True, "tracking": "since_schema_v5_activation",
                 "tracking_since": "2026-11-12T00:00:00Z", "truncated": False,
                 "reward_account_stats_available": True,
-                "reward_totals": {"complete": True, "bound_nodes": 1, "reward_images": 3,
-                                  "reward_points": "0.06", "pending_nodes": 0},
+                "reward_totals": {"complete": totals_complete, "bound_nodes": 1,
+                    "reward_images": total_images if totals_complete else None,
+                    "reward_points": f"{0.02 * total_images:.2f}" if totals_complete else None,
+                    "historical_images": self.historical_reward_images,
+                    "historical_points": self.historical_reward_points,
+                    "historical_periods": 1 if self.historical_reward_images else 0,
+                    "pending_nodes": 0 if totals_complete else 1},
                 "nodes": [{"pool_id": "pool_fixture", "pool_name": "测试节点池",
                     "node_id": "node_fixture", "executor_instance": "executor_fixture",
                     "provider_ref": "account-17", "node_state": "active", "liveness": "online",
@@ -86,8 +102,24 @@ class AdminFixture:
                     "profile": "fake-image", "started_at": "2026-11-12T00:01:00Z"},
                     "metrics": {"total_started": 3, "succeeded": 1, "failed": 1,
                     "in_progress": 1, "awaiting_user": 0, "unknown": 1, "rewardable_images": 5},
-                    "reward_account_bound": True, "reward_images": 3,
-                    "reward_points": "0.06", "reward_status": "accruing"}]})
+                    "reward_account_bound": True, "reward_images": self.reward_images,
+                    "reward_points": self.reward_points, "reward_status": self.reward_status,
+                    "reward_account_user_id": self.reward_owner_id,
+                    "binding_revision": self.binding_revision,
+                    "historical_reward_images": self.historical_reward_images,
+                    "historical_reward_points": self.historical_reward_points}]})
+        elif path == API + "/rewards/bindings/correct":
+            assert request.method == "POST"
+            assert request.headers["x-alchemy-bridge-admin"] == "1"
+            body = request.post_data_json
+            self.corrections.append(body)
+            self.historical_reward_images += self.reward_images if isinstance(self.reward_images, int) else 0
+            self.historical_reward_points = f"{0.02 * self.historical_reward_images:.2f}"
+            self.reward_images = 0
+            self.reward_points = "0.00"
+            self.reward_owner_id = body["new_user_id"]
+            self.binding_revision += 1
+            route.fulfill(json={"status": "corrected", "revision": self.binding_revision})
         elif path == "/api/v2/veyra/billing/settings":
             route.fulfill(json={"rules": [], "persisted": True})
         elif path == "/v1/admin/retention/settings":
@@ -307,4 +339,46 @@ def test_admin_node_dashboard_shows_reward_totals_and_refreshes(browser):
     page.wait_for_timeout(100)
     assert fixture.reward_requests == 2
     assert not fixture.unexpected
+    page.close()
+
+
+def test_admin_can_correct_account_binding_with_historical_totals_kept(browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    fixture = AdminFixture()
+    page.route("**/*", fixture.route)
+    page.goto(ORIGIN + "/admin/billing")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("当前账号 #17")
+    correction = page.locator("#bridgeRewardRows details").filter(has_text="修正账号归属")
+    expect(correction).to_be_visible()
+    correction.locator("summary").click()
+    correction.locator('input[type="number"]').fill("42")
+    page.once("dialog", lambda dialog: dialog.accept())
+    correction.get_by_role("button", name="核实后修正").click()
+
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("当前账号 #42")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("历史归属 3 张 / 0.06 积分")
+    expect(page.locator("#bridgeRewardSummary .bridge-reward-stat").nth(3)).to_contain_text("0.06")
+    assert fixture.corrections == [{
+        "pool_id": "pool_fixture", "node_id": "node_fixture",
+        "executor_instance": "executor_fixture", "expected_user_id": 17,
+        "expected_revision": 1, "new_user_id": 42,
+    }]
+    assert fixture.reward_requests == 2
+    assert not fixture.unexpected
+    page.close()
+
+
+def test_admin_hides_correction_until_reward_baseline_is_verified(browser):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    fixture = AdminFixture()
+    fixture.reward_status = "baseline_pending"
+    fixture.reward_images = None
+    fixture.reward_points = None
+    page.route("**/*", fixture.route)
+    page.goto(ORIGIN + "/admin/billing")
+
+    card = page.locator("#bridgeRewardRows [role='listitem']").filter(has_text="node_fixture")
+    expect(card).to_contain_text("奖励基线待初始化，暂不能修正")
+    expect(card.locator("details")).to_have_count(0)
+    assert not fixture.corrections and not fixture.unexpected
     page.close()

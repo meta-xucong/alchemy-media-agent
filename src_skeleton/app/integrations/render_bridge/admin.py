@@ -22,7 +22,7 @@ from .client import BridgeClient, BridgeError, BridgeRewardClient
 from .diagnostics import capabilities_projection
 from .routes import HEADERS, PREFIX, install_render_bridge
 from .settings import BridgeSettings
-from .node_rewards import POINTS_PER_IMAGE, install_node_reward_account_routes
+from .node_rewards import NodeRewardStoreError, POINTS_PER_IMAGE, install_node_reward_account_routes
 from .store import TERMINAL
 
 from render_bridge_primary import (PrimarySettings, PrimaryTransport, control_path, state_root,
@@ -40,6 +40,16 @@ class AdminSettingsUpdate(BaseModel):
     queue_wait_seconds: int = Field(default=30, ge=1, le=3600)
     native_enabled: bool = False
     native_profiles: list[Literal["fake-image", "codex-image", "midjourney-manual"]] = Field(default=["fake-image"], min_length=1, max_length=3)
+
+
+class RewardBindingCorrection(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    pool_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    node_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    executor_instance: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    expected_user_id: int = Field(gt=0)
+    expected_revision: int = Field(ge=1)
+    new_user_id: int = Field(gt=0)
 
 
 class BridgeAdminController:
@@ -413,7 +423,7 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
     async def authorize(request, *, write=False):
         value = admin_resolver(request, request.headers.get("authorization", ""))
         if inspect.isawaitable(value):
-            await value
+            value = await value
         if write:
             if request.headers.get("x-alchemy-bridge-admin") != "1" or request.headers.get("sec-fetch-site") not in {None, "same-origin", "none"}:
                 raise HTTPException(403, detail={"code": "same_origin_required"})
@@ -422,6 +432,7 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
                 actual, supplied = urlsplit(str(request.base_url)), urlsplit(origin)
                 if (actual.scheme, actual.netloc) != (supplied.scheme, supplied.netloc) or supplied.path not in {"", "/"}:
                     raise HTTPException(403, detail={"code": "same_origin_required"})
+        return value
 
     @router.get("/settings")
     async def settings(request: Request):
@@ -440,10 +451,12 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
         store = getattr(app.state, "node_reward_account_store", None)
         try:
             bindings = store.list_all_bindings() if store is not None else None
+            binding_history = store.list_all_binding_history() if store is not None else None
         except (sqlite3.Error, OSError):
             bindings = None
+            binding_history = None
 
-        if bindings is None:
+        if bindings is None or binding_history is None:
             for node in nodes:
                 node.update(reward_account_bound=None, reward_images=None,
                             reward_points=None, reward_status="unavailable")
@@ -457,18 +470,29 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
             (item["pool_id"], item["node_id"], item["executor_instance"]): item
             for item in bindings
         }
+        history_index = {}
+        for item in binding_history:
+            identity = (item["pool_id"], item["node_id"], item["executor_instance"])
+            history_index[identity] = history_index.get(identity, 0) + item["final_images"]
         visible_identities = set()
         accrued_total = 0
+        historical_total = sum(item["final_images"] for item in binding_history)
         pending_nodes = 0
         for node in nodes:
             identity = (node.get("pool_id"), node.get("node_id"), node.get("executor_instance"))
             visible_identities.add(identity)
             binding = binding_index.get(identity)
+            historical_images = history_index.get(identity, 0)
+            node.update(historical_reward_images=historical_images,
+                        historical_reward_points=f"{POINTS_PER_IMAGE * historical_images:.2f}")
             if binding is None:
                 node.update(reward_account_bound=False, reward_images=0,
                             reward_points="0.00", reward_status="unbound")
                 continue
 
+            node.update(reward_account_bound=True,
+                        reward_account_user_id=binding["user_id"],
+                        binding_revision=binding["binding_revision"])
             metrics = node.get("metrics") if isinstance(node.get("metrics"), dict) else {}
             ledger_images = metrics.get("rewardable_images")
             baseline_images = binding.get("baseline_images")
@@ -491,11 +515,88 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
         complete = pending_nodes == 0
         projected.update(nodes=nodes, reward_account_stats_available=True,
                          reward_totals={"complete": complete, "bound_nodes": len(bindings),
-                                        "reward_images": accrued_total if complete else None,
-                                        "reward_points": f"{POINTS_PER_IMAGE * accrued_total:.2f}"
+                                        "reward_images": accrued_total + historical_total if complete else None,
+                                        "reward_points": f"{POINTS_PER_IMAGE * (accrued_total + historical_total):.2f}"
                                         if complete else None,
+                                        "historical_images": historical_total,
+                                        "historical_points": f"{POINTS_PER_IMAGE * historical_total:.2f}",
+                                        "historical_periods": len(binding_history),
                                         "pending_nodes": pending_nodes})
         return JSONResponse(projected, headers=HEADERS)
+
+    @router.post("/rewards/bindings/correct")
+    async def correct_reward_binding(request: Request):
+        admin_identity = await authorize(request, write=True)
+        admin_user_id = admin_identity.get("user_id") if isinstance(admin_identity, dict) else None
+        if type(admin_user_id) is not int or admin_user_id <= 0:
+            raise HTTPException(503, detail={"code": "admin_identity_unavailable"}, headers=HEADERS)
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 4096:
+                raise HTTPException(413, detail={"code": "request_too_large"}, headers=HEADERS)
+        try:
+            correction = RewardBindingCorrection.model_validate_json(body)
+        except ValidationError:
+            raise HTTPException(422, detail={"code": "invalid_reward_binding_correction"},
+                                headers=HEADERS) from None
+        if correction.new_user_id == correction.expected_user_id:
+            raise HTTPException(422, detail={"code": "reward_account_unchanged"}, headers=HEADERS)
+        if account_loader is None:
+            raise HTTPException(503, detail={"code": "reward_account_validation_unavailable"},
+                                headers=HEADERS)
+        try:
+            target_account = account_loader(correction.new_user_id)
+            if inspect.isawaitable(target_account):
+                target_account = await target_account
+        except Exception:
+            raise HTTPException(503, detail={"code": "reward_account_validation_unavailable"},
+                                headers=HEADERS) from None
+        if (getattr(target_account, "user_id", None) != correction.new_user_id
+                or getattr(target_account, "status", "") != "active"):
+            raise HTTPException(409, detail={"code": "reward_destination_account_unavailable"},
+                                headers=HEADERS)
+
+        try:
+            metrics = await controller.reward_metrics()
+        except Exception:
+            raise HTTPException(503, detail={"code": "reward_metrics_unavailable"},
+                                headers=HEADERS) from None
+        if (metrics.get("available") is not True or metrics.get("truncated") is not False
+                or not isinstance(metrics.get("nodes"), list)):
+            raise HTTPException(503, detail={"code": "reward_metrics_incomplete"}, headers=HEADERS)
+        identity = (correction.pool_id, correction.node_id, correction.executor_instance)
+        matches = [item for item in metrics["nodes"] if isinstance(item, dict) and
+                   (item.get("pool_id"), item.get("node_id"), item.get("executor_instance")) == identity]
+        if len(matches) != 1:
+            code = "reward_node_not_found" if not matches else "reward_node_ambiguous"
+            raise HTTPException(409 if matches else 404, detail={"code": code}, headers=HEADERS)
+        node = matches[0]
+        node_metrics = node.get("metrics") if isinstance(node.get("metrics"), dict) else {}
+        observed_images = node_metrics.get("rewardable_images")
+        if type(observed_images) is not int or observed_images < 0:
+            raise HTTPException(503, detail={"code": "reward_image_count_unavailable"}, headers=HEADERS)
+        store = getattr(app.state, "node_reward_account_store", None)
+        if store is None:
+            raise HTTPException(503, detail={"code": "node_reward_storage_unavailable"}, headers=HEADERS)
+        try:
+            result = store.correct_binding(
+                pool_id=correction.pool_id,
+                node_id=correction.node_id,
+                executor_instance=correction.executor_instance,
+                expected_user_id=correction.expected_user_id,
+                expected_revision=correction.expected_revision,
+                new_user_id=correction.new_user_id,
+                observed_images=observed_images,
+                corrected_by_admin_user_id=admin_user_id,
+            )
+        except NodeRewardStoreError as exc:
+            raise HTTPException(exc.status, detail={"code": exc.code}, headers=HEADERS) from None
+        except (sqlite3.Error, OSError):
+            raise HTTPException(503, detail={"code": "node_reward_storage_unavailable"},
+                                headers=HEADERS) from None
+        return JSONResponse({**result, "node_id": correction.node_id,
+                             "image_boundary": observed_images}, headers=HEADERS)
 
     @router.post("/settings")
     async def save(request: Request):

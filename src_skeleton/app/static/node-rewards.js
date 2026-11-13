@@ -128,7 +128,9 @@
     const title = text("strong", item.pool_name || item.node_id || "共享节点");
     const livenessLabels = { online: "在线", busy: "运行中", needs_attention: "需要检查", offline: "离线" };
     const stateLabels = { active: "已启用", draining: "暂停接单", revoked: "已停用" };
-    const stateLabel = livenessLabels[item.liveness] || stateLabels[item.node_state] || "状态未知";
+    const stateLabel = item.binding_status === "corrected"
+      ? "归属已修正"
+      : livenessLabels[item.liveness] || stateLabels[item.node_state] || "状态未知";
     heading.append(title, text("span", stateLabel, "node-rewards-status"));
     row.append(heading);
     row.append(text("p", "节点 ID：" + (item.node_id || "-"), "node-rewards-identity"));
@@ -137,7 +139,9 @@
     stats.append(
       text("span", "成功图片 " + Number(item.successful_images || 0).toLocaleString("zh-CN")),
       text("strong", item.reward_points + " 积分"),
-      text("small", "最近在线：" + date(item.last_seen_at)),
+      text("small", item.binding_status === "corrected"
+        ? "归属修正于：" + date(item.corrected_at)
+        : "最近在线：" + date(item.last_seen_at)),
       text("small", "绑定于：" + date(item.bound_at)),
     );
     row.append(stats);
