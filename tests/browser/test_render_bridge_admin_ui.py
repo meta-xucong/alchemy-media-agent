@@ -76,14 +76,18 @@ class AdminFixture:
             self.reward_requests += 1
             route.fulfill(json={"available": True, "tracking": "since_schema_v5_activation",
                 "tracking_since": "2026-11-12T00:00:00Z", "truncated": False,
+                "reward_account_stats_available": True,
+                "reward_totals": {"complete": True, "bound_nodes": 1, "reward_images": 3,
+                                  "reward_points": "0.06", "pending_nodes": 0},
                 "nodes": [{"pool_id": "pool_fixture", "pool_name": "测试节点池",
                     "node_id": "node_fixture", "executor_instance": "executor_fixture",
                     "provider_ref": "account-17", "node_state": "active", "liveness": "online",
-                    "heartbeat_age_seconds": 4, "current_execution": {"state": "running",
+                    "heartbeat_age_seconds": 4, "current_execution": {"state": "awaiting_user",
                     "profile": "fake-image", "started_at": "2026-11-12T00:01:00Z"},
-                    "metrics": {"total_started": 3, "succeeded": 1, "failed": 0,
-                    "in_progress": 1, "awaiting_user": 0, "unknown": 1,
-                    "ack_accepted": 1, "ack_rejected": 0, "ack_pending": 0}}]})
+                    "metrics": {"total_started": 3, "succeeded": 1, "failed": 1,
+                    "in_progress": 1, "awaiting_user": 0, "unknown": 1, "rewardable_images": 5},
+                    "reward_account_bound": True, "reward_images": 3,
+                    "reward_points": "0.06", "reward_status": "accruing"}]})
         elif path == "/api/v2/veyra/billing/settings":
             route.fulfill(json={"rules": [], "persisted": True})
         elif path == "/v1/admin/retention/settings":
@@ -135,10 +139,11 @@ def test_simple_admin_buttons_advanced_settings_and_mobile_layout(browser):
     expect(page.locator("#bridgeAdminOpen")).to_be_hidden()
     assert "fake-image" not in page.locator(".render-bridge-console").inner_text()
     assert fixture.probes == 0
+    page.locator("#bridgeAdminOperations summary").click()
     page.get_by_role("button", name="检查连接", exact=True).click()
     expect(page.locator("#bridgeAdminHint")).to_contain_text("先点击开启")
     assert fixture.probes == 0
-    page.get_by_role("button", name="开启", exact=True).click()
+    page.get_by_role("button", name="开启接单", exact=True).click()
     expect(page.locator("#bridgeAdminState")).to_have_text("已开启，待检查")
     expect(page.locator("#bridgeAdminOpen")).to_have_attribute("href", "/render-bridge-preview")
     expect(page.locator("#bridgeAdminOpen")).to_be_visible()
@@ -148,12 +153,14 @@ def test_simple_admin_buttons_advanced_settings_and_mobile_layout(browser):
     expect(page.locator("#bridgeAdminState")).to_have_text("绘图电脑不在线")
     expect(page.locator("#bridgeAdminHint")).to_contain_text("请打开绘图电脑上的桥接程序")
     expect(page.locator("#bridgeAdminResult")).to_be_hidden()
+    page.locator("#bridgeAdminOperations summary").click()
     assert_independent_cards(page, 24)
     screenshot(page, "admin-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
     assert_independent_cards(page, 18)
     screenshot(page, "admin-mobile.png")
     assert page.locator(".render-bridge-console").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
+    page.locator("#bridgeAdminOperations summary").click()
     page.locator("#bridgeAdminAdvanced summary").click()
     expect(page.locator("#bridgeAdminUrl")).to_be_visible()
     expect(page.locator("#bridgeAdminCredential")).to_have_text("已配置 · 不显示密钥")
@@ -161,13 +168,13 @@ def test_simple_admin_buttons_advanced_settings_and_mobile_layout(browser):
     page.get_by_role("button", name="Codex 绘图", exact=True).click()
     expect(page.get_by_role("button", name="Codex 绘图", exact=True)).to_have_attribute("aria-pressed", "true")
     # Unsaved advanced edits cannot silently add a real tool when pausing.
-    page.get_by_role("button", name="暂停", exact=True).click()
+    page.get_by_role("button", name="暂停接单", exact=True).click()
     expect(page.locator("#bridgeAdminState")).to_have_text("已暂停")
     assert fixture.saves[-1]["mode"] == "draining"
     assert fixture.saves[-1]["profiles"] == ["fake-image"]
     expect(page.locator("#bridgeAdminHint")).to_contain_text("已有任务会继续完成")
-    page.get_by_role("button", name="保存高级设置", exact=True).click()
-    expect(page.locator("#bridgeAdminHint")).to_contain_text("高级设置已保存")
+    page.get_by_role("button", name="保存连接设置", exact=True).click()
+    expect(page.locator("#bridgeAdminHint")).to_contain_text("连接设置已保存")
     page.locator("#bridgeAdminDiagnostics summary").click()
     expect(page.locator("#bridgeAdminResult")).to_be_visible()
     screenshot(page, "admin-advanced-mobile.png")
@@ -187,7 +194,8 @@ def test_incomplete_setup_offers_plain_language_next_step(browser):
     page.route("**/*", fixture.route)
     page.goto(ORIGIN + "/admin/billing")
     expect(page.locator("#bridgeAdminState")).to_have_text("还没连接好")
-    page.get_by_role("button", name="开启", exact=True).click()
+    page.locator("#bridgeAdminOperations summary").click()
+    page.get_by_role("button", name="开启接单", exact=True).click()
     expect(page.locator("#bridgeAdminHint")).to_have_text("请找管理员完成首次连接，再点击开启。")
     assert not fixture.saves and not fixture.probes
     assert "HTTP" not in page.locator(".render-bridge-console").inner_text()
@@ -216,14 +224,15 @@ def test_pending_action_disables_duplicate_clicks(browser):
     page.route("**/*", fixture.route)
     page.goto(ORIGIN + "/admin/billing")
     expect(page.locator("#bridgeAdminState")).to_have_text("已关闭")
-    page.get_by_role("button", name="开启", exact=True).click()
+    page.locator("#bridgeAdminOperations summary").click()
+    page.get_by_role("button", name="开启接单", exact=True).click()
     expect(page.locator("#bridgeAdminState")).to_have_text("正在保存…")
-    for name in ("开启", "暂停", "关闭", "检查连接"):
+    for name in ("开启接单", "暂停接单", "关闭", "检查连接"):
         expect(page.get_by_role("button", name=name, exact=True)).to_be_disabled()
     assert len(fixture.saves) == 1
     fixture.pending_save.fulfill(json=fixture.value)
     expect(page.locator("#bridgeAdminState")).to_have_text("已开启，待检查")
-    expect(page.get_by_role("button", name="暂停", exact=True)).to_be_enabled()
+    expect(page.get_by_role("button", name="暂停接单", exact=True)).to_be_enabled()
     page.close()
 
 
@@ -232,6 +241,7 @@ def test_fallback_toggle_preserves_saved_settings_and_threshold_is_advanced(brow
     fixture = AdminFixture()
     page.route('**/*', fixture.route)
     page.goto(ORIGIN + '/admin/billing')
+    page.locator('#bridgeAdminOperations summary').click()
     expect(page.locator('#bridgeAdminFallback')).to_be_enabled()
     expect(page.locator('#bridgeAdminFallback')).not_to_be_checked()
     expect(page.locator('#bridgeAdminQueueWait')).to_be_hidden()
@@ -246,8 +256,8 @@ def test_fallback_toggle_preserves_saved_settings_and_threshold_is_advanced(brow
     assert fixture.saves[-1]['profiles'] == ['fake-image']
     assert fixture.saves[-1]['mode'] == 'disabled'
     page.locator('#bridgeAdminQueueWait').fill('60')
-    page.get_by_role('button', name='保存高级设置', exact=True).click()
-    expect(page.locator('#bridgeAdminHint')).to_contain_text('高级设置已保存')
+    page.get_by_role('button', name='保存连接设置', exact=True).click()
+    expect(page.locator('#bridgeAdminHint')).to_contain_text('连接设置已保存')
     assert fixture.saves[-1]['auto_fallback_enabled'] is True
     assert fixture.saves[-1]['queue_wait_seconds'] == 60
     assert_independent_cards(page, 18)
@@ -260,6 +270,7 @@ def test_failed_fallback_save_restores_saved_opt_in(browser):
     fixture = AdminFixture()
     page.route('**/*', fixture.route)
     page.goto(ORIGIN + '/admin/billing')
+    page.locator('#bridgeAdminOperations summary').click()
     expect(page.locator('#bridgeAdminFallback')).to_be_enabled()
     fixture.status = 403
     page.locator('#bridgeAdminFallback').check()
@@ -270,15 +281,25 @@ def test_failed_fallback_save_restores_saved_opt_in(browser):
     page.close()
 
 
-def test_admin_reward_table_shows_node_metrics_and_refreshes(browser):
+def test_admin_node_dashboard_shows_reward_totals_and_refreshes(browser):
     page = browser.new_page(viewport={"width": 1440, "height": 1000})
     fixture = AdminFixture()
     page.route("**/*", fixture.route)
     page.goto(ORIGIN + "/admin/billing")
+    expect(page.locator("#bridgeAdminOperations")).not_to_have_attribute("open", "")
+    expect(page.locator("#bridgeAdminActions")).to_be_hidden()
     expect(page.locator("#bridgeRewardRows")).to_contain_text("node_fixture")
-    expect(page.locator("#bridgeRewardRows")).to_contain_text("account-17")
+    summary = page.locator("#bridgeRewardSummary .bridge-reward-stat")
+    expect(summary.nth(0)).to_contain_text("1 台在线")
+    expect(summary.nth(1)).to_contain_text("0")
+    expect(summary.nth(2)).to_contain_text("5")
+    expect(summary.nth(3)).to_contain_text("0.06")
+    expect(summary.nth(3)).to_contain_text("1 台已绑定账号")
     expect(page.locator("#bridgeRewardRows")).to_contain_text("3")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("0.06")
     expect(page.locator("#bridgeRewardRows")).to_contain_text("1")
+    expect(page.locator("#bridgeRewardRows")).to_contain_text("待人工")
+    expect(page.locator("#bridgeRewardRows")).not_to_contain_text("account-17")
     expect(page.locator("#bridgeRewardState")).to_contain_text("统计自")
     assert fixture.reward_requests == 1
     page.locator("#bridgeRewardRefresh").click()

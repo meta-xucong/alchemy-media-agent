@@ -117,12 +117,27 @@ def test_reward_metrics_are_admin_only_and_sanitize_bridge_projection(tmp_path):
         assert value["available"] is True
         assert value["nodes"][0]["metrics"] == {"total_started": 3, "succeeded": 1, "failed": 0, "rewardable_images": 2}
         assert value["nodes"][0]["provider_ref"] == "account-17"
+        assert value["reward_account_stats_available"] is True
+        assert value["reward_totals"] == {"complete": True, "bound_nodes": 0,
+            "reward_images": 0, "reward_points": "0.00", "pending_nodes": 0}
+        assert value["nodes"][0]["reward_account_bound"] is False
+        assert value["nodes"][0]["reward_points"] == "0.00"
         assert value["nodes"][0]["profiles"] == ["fake-image"]
         assert "task_id" not in value["nodes"][0]["current_execution"]
         assert "private_field" not in response.text and "private-task" not in response.text
         assert SECRET not in response.text and "dedicated-reward-reader" not in response.text
         assert response.headers["cache-control"] == "no-store"
-    assert calls == [("https://bridge.test", "dedicated-reward-reader")]
+        app.state.node_reward_account_store.bind_node(17, pool_id="pool_fixture", node_id="node_fixture",
+            executor_instance="executor_fixture", baseline_images=1)
+        credited = client.get(BASE + "/rewards", headers=HEADERS).json()
+        assert credited["nodes"][0]["reward_account_bound"] is True
+        assert credited["nodes"][0]["reward_images"] == 1
+        assert credited["nodes"][0]["reward_points"] == "0.02"
+        assert credited["reward_totals"] == {"complete": True, "bound_nodes": 1,
+            "reward_images": 1, "reward_points": "0.02", "pending_nodes": 0}
+        assert "user_id" not in credited["nodes"][0]
+    assert calls == [("https://bridge.test", "dedicated-reward-reader"),
+                     ("https://bridge.test", "dedicated-reward-reader")]
 
 
 def test_mutation_and_probe_require_same_origin_guard(tmp_path):

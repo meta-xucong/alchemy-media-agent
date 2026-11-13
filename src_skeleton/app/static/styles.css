@@ -11402,6 +11402,44 @@ body.v3-page-loading-active {
 #bridgeAdminProfiles button[aria-pressed="true"] { border-color: var(--ink, #171411); background: var(--black-soft, #f3f0ea); box-shadow: inset 0 0 0 1px var(--ink, #171411); }
 .render-bridge-console [hidden] { display: none !important; }
 
+.bridge-reward-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 16px; }
+.bridge-reward-toolbar .micro-copy { margin: 0; }
+.bridge-reward-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.bridge-reward-stat { display: grid; gap: 5px; min-width: 0; padding: 15px 16px; border: 1px solid var(--line, #d5d0c8); border-radius: 13px; background: rgba(250, 249, 244, 0.78); }
+.bridge-reward-stat > span, .bridge-node-metric > span { color: var(--muted, #716a62); font-size: 12px; line-height: 1.4; }
+.bridge-reward-stat > strong { color: var(--ink, #171411); font-size: clamp(20px, 2vw, 27px); line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.bridge-reward-stat > small { color: var(--muted, #716a62); font-size: 11px; line-height: 1.4; }
+.bridge-node-list { display: grid; gap: 12px; min-width: 0; }
+.bridge-node-card { display: grid; gap: 10px; min-width: 0; padding: 16px; border: 1px solid var(--line, #d5d0c8); border-radius: 14px; background: var(--panel, #fffdfa); }
+.bridge-node-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
+.bridge-node-identity { display: grid; gap: 4px; min-width: 0; }
+.bridge-node-identity > strong { color: var(--ink, #171411); font-size: 15px; line-height: 1.4; }
+.bridge-node-identity > code { color: var(--muted, #716a62); font: 12px/1.45 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+.bridge-node-status { flex: 0 0 auto; padding: 5px 10px; border: 1px solid transparent; border-radius: 999px; font-size: 12px; font-weight: 650; line-height: 1.2; }
+.bridge-node-status.is-online { color: #28593c; border-color: #c7ddcc; background: #eef7ef; }
+.bridge-node-status.is-busy { color: #725018; border-color: #e9d7ac; background: #fbf5e7; }
+.bridge-node-status.is-attention { color: #875044; border-color: #e9c9c1; background: #fcf0ed; }
+.bridge-node-status.is-offline, .bridge-node-status.is-unknown { color: #6d675e; border-color: #dedbd4; background: #f3f1ed; }
+.bridge-node-meta, .bridge-node-current { margin: 0; color: var(--muted, #716a62); font-size: 12px; line-height: 1.45; }
+.bridge-node-current { color: #76571d; }
+.bridge-node-current.is-idle { color: var(--muted, #716a62); }
+.bridge-node-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 2px; }
+.bridge-node-metric { display: grid; gap: 4px; min-width: 0; padding: 10px 12px; border-radius: 10px; background: rgba(248, 247, 241, 0.82); }
+.bridge-node-metric > strong { color: var(--ink, #171411); font-size: 17px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.bridge-node-empty { padding: 20px; border: 1px dashed var(--line, #d5d0c8); border-radius: 12px; color: var(--muted, #716a62); text-align: center; line-height: 1.5; }
+@media (max-width: 760px) {
+  .bridge-reward-summary, .bridge-node-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .bridge-reward-toolbar { align-items: flex-start; }
+  .bridge-reward-summary { gap: 8px; }
+  .bridge-reward-stat { padding: 12px; }
+  .bridge-node-card { padding: 13px; }
+  .bridge-node-heading { align-items: flex-start; }
+  .bridge-node-stats { gap: 6px; }
+  .bridge-node-metric { padding: 9px; }
+}
+
 /* Administrator modules are separate cards, without changing shared panels. */
 .billing-admin-page {
   display: grid;
