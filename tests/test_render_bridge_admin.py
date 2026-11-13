@@ -1,6 +1,7 @@
 """Administrator control plane uses fixture transports, never real credentials."""
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -25,7 +26,7 @@ def neutral_control_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("ALCHEMY_RENDER_BRIDGE_PRIMARY_STATE_ROOT", str(tmp_path / "neutral-ledgers"))
 
 
-def fixture(tmp_path, *, upstream=None, baseline=None, reward_factory=None):
+def fixture(tmp_path, *, upstream=None, baseline=None, reward_factory=None, account_loader=None):
     calls = []
     constructed = []
     def respond(request):
@@ -43,14 +44,19 @@ def fixture(tmp_path, *, upstream=None, baseline=None, reward_factory=None):
             raise HTTPException(401)
         if authorization != "Bearer fixture-admin":
             raise HTTPException(403)
+        return {"user_id": 7, "is_admin": True}
     baseline = baseline or BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
         workspace="fixture-workspace", storage=tmp_path / "bridge", poll_seconds=3600)
     app = FastAPI()
     app.get("/healthz")(lambda: {"ok": True})
     controller = install_render_bridge_admin(app, baseline=baseline, admin_resolver=admin,
-        session_user=lambda *_: 1, auth_enabled=lambda: True,
+        session_user=lambda _request, authorization: (
+            int(authorization.removeprefix("Bearer account-"))
+            if authorization.startswith("Bearer account-") else 1
+        ), auth_enabled=lambda: True,
         project_snapshot=lambda *_: {"revision": "fixture-revision"}, client_factory=factory,
-        reward_client_factory=reward_factory or BridgeRewardClient)
+        reward_client_factory=reward_factory or BridgeRewardClient,
+        account_loader=account_loader or (lambda user_id: SimpleNamespace(user_id=user_id, status="active")))
     return app, controller, calls, constructed
 
 
@@ -119,7 +125,8 @@ def test_reward_metrics_are_admin_only_and_sanitize_bridge_projection(tmp_path):
         assert value["nodes"][0]["provider_ref"] == "account-17"
         assert value["reward_account_stats_available"] is True
         assert value["reward_totals"] == {"complete": True, "bound_nodes": 0,
-            "reward_images": 0, "reward_points": "0.00", "pending_nodes": 0}
+            "reward_images": 0, "reward_points": "0.00", "historical_images": 0,
+            "historical_points": "0.00", "historical_periods": 0, "pending_nodes": 0}
         assert value["nodes"][0]["reward_account_bound"] is False
         assert value["nodes"][0]["reward_points"] == "0.00"
         assert value["nodes"][0]["profiles"] == ["fake-image"]
@@ -134,10 +141,194 @@ def test_reward_metrics_are_admin_only_and_sanitize_bridge_projection(tmp_path):
         assert credited["nodes"][0]["reward_images"] == 1
         assert credited["nodes"][0]["reward_points"] == "0.02"
         assert credited["reward_totals"] == {"complete": True, "bound_nodes": 1,
-            "reward_images": 1, "reward_points": "0.02", "pending_nodes": 0}
+            "reward_images": 1, "reward_points": "0.02", "historical_images": 0,
+            "historical_points": "0.00", "historical_periods": 0, "pending_nodes": 0}
         assert "user_id" not in credited["nodes"][0]
     assert calls == [("https://bridge.test", "dedicated-reward-reader"),
                      ("https://bridge.test", "dedicated-reward-reader")]
+
+
+def test_admin_binding_correction_preserves_each_account_and_guards_stale_requests(tmp_path):
+    nodes = [{"pool_id": "pool_fixture", "pool_name": "fixture",
+        "node_id": "node_fixture", "executor_instance": "executor_fixture",
+        "provider_ref": None, "node_state": "active", "liveness": "online",
+        "heartbeat_age_seconds": 4, "profiles": ["fake-image"], "current_execution": None,
+        "metrics": {"total_started": 8, "succeeded": 4, "failed": 0,
+                    "rewardable_images": 6}}]
+
+    class FakeRewardClient:
+        async def nodes(self):
+            return {"tracking_since": "2026-11-12T00:00:00Z", "truncated": False,
+                    "nodes": nodes}
+
+        async def close(self):
+            return None
+
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
+        reward_read_token="dedicated-reward-reader", workspace="fixture-workspace",
+        storage=tmp_path / "bridge")
+    app, _, _, _ = fixture(tmp_path, baseline=baseline,
+        reward_factory=lambda *_: FakeRewardClient())
+    store = app.state.node_reward_account_store
+    store.bind_node(17, pool_id="pool_fixture", node_id="node_fixture",
+                    executor_instance="executor_fixture", baseline_images=3)
+    correction = {"pool_id": "pool_fixture", "node_id": "node_fixture",
+        "executor_instance": "executor_fixture", "expected_user_id": 17,
+        "expected_revision": 1, "new_user_id": 23}
+    write_headers = {**HEADERS, "Origin": "http://testserver"}
+
+    with TestClient(app) as client:
+        assert client.post(BASE + "/rewards/bindings/correct", json=correction).status_code == 401
+        foreign_origin = client.post(BASE + "/rewards/bindings/correct",
+            headers={**write_headers, "Origin": "https://other.test"}, json=correction)
+        assert foreign_origin.status_code == 403
+
+        transferred = client.post(BASE + "/rewards/bindings/correct",
+                                  headers=write_headers, json=correction)
+        assert transferred.status_code == 200, transferred.text
+        assert transferred.json() == {"status": "corrected", "revision": 2,
+            "former_images": 3, "reward_points": "0.06", "node_id": "node_fixture",
+            "image_boundary": 6}
+        stale = client.post(BASE + "/rewards/bindings/correct",
+                            headers=write_headers, json=correction)
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["code"] == "node_reward_binding_stale"
+
+        nodes[0]["metrics"]["rewardable_images"] = 8
+        old_account = client.get("/api/account/node-rewards",
+            headers={"Authorization": "Bearer account-17"}).json()
+        assert old_account["totals"] == {"bound_nodes": 0,
+            "successful_images": 3, "reward_points": "0.06"}
+        assert old_account["nodes"][0]["binding_status"] == "corrected"
+        assert old_account["nodes"][0]["successful_images"] == 3
+
+        new_account = client.get("/api/account/node-rewards",
+            headers={"Authorization": "Bearer account-23"}).json()
+        assert new_account["totals"] == {"bound_nodes": 1,
+            "successful_images": 2, "reward_points": "0.04"}
+        assert new_account["nodes"][0]["successful_images"] == 2
+
+        admin_value = client.get(BASE + "/rewards", headers=HEADERS).json()
+        assert admin_value["nodes"][0]["reward_account_user_id"] == 23
+        assert admin_value["nodes"][0]["binding_revision"] == 2
+        assert admin_value["nodes"][0]["historical_reward_images"] == 3
+        assert admin_value["reward_totals"] == {"complete": True, "bound_nodes": 1,
+            "reward_images": 5, "reward_points": "0.10", "historical_images": 3,
+            "historical_points": "0.06", "historical_periods": 1, "pending_nodes": 0}
+
+    history = store.list_all_binding_history()
+    assert len(history) == 1 and history[0]["corrected_by_admin_user_id"] == 7
+
+
+@pytest.mark.parametrize("metrics,expected_code,expected_status", [
+    ({"available": True, "truncated": True, "nodes": []}, "reward_metrics_incomplete", 503),
+    ({"available": True, "truncated": False, "nodes": []}, "reward_node_not_found", 404),
+    ({"available": True, "truncated": False, "nodes": [
+      {"pool_id": "pool_fixture", "node_id": "node_fixture",
+       "executor_instance": "executor_fixture", "metrics": {"rewardable_images": 6}},
+      {"pool_id": "pool_fixture", "node_id": "node_fixture",
+       "executor_instance": "executor_fixture", "metrics": {"rewardable_images": 6}},
+    ]}, "reward_node_ambiguous", 409),
+    ({"available": True, "truncated": False, "nodes": [{"pool_id": "pool_fixture",
+      "node_id": "node_fixture", "executor_instance": "executor_fixture",
+      "metrics": {"rewardable_images": -1}}]}, "reward_image_count_unavailable", 503),
+    ({"available": True, "truncated": False, "nodes": [{"pool_id": "pool_fixture",
+      "node_id": "node_fixture", "executor_instance": "executor_fixture",
+      "metrics": {"rewardable_images": 2}}]}, "node_reward_metrics_regressed", 409),
+])
+def test_admin_binding_correction_fails_closed_without_complete_image_count(
+        tmp_path, metrics, expected_code, expected_status):
+    class FakeRewardClient:
+        async def nodes(self):
+            return metrics
+
+        async def close(self):
+            return None
+
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
+        reward_read_token="dedicated-reward-reader", workspace="fixture-workspace",
+        storage=tmp_path / "bridge")
+    app, _, _, _ = fixture(tmp_path, baseline=baseline,
+        reward_factory=lambda *_: FakeRewardClient())
+    store = app.state.node_reward_account_store
+    store.bind_node(17, pool_id="pool_fixture", node_id="node_fixture",
+                    executor_instance="executor_fixture", baseline_images=3)
+    correction = {"pool_id": "pool_fixture", "node_id": "node_fixture",
+        "executor_instance": "executor_fixture", "expected_user_id": 17,
+        "expected_revision": 1, "new_user_id": 23}
+
+    with TestClient(app) as client:
+        response = client.post(BASE + "/rewards/bindings/correct",
+            headers={**HEADERS, "Origin": "http://testserver"}, json=correction)
+        assert response.status_code == expected_status
+        assert response.json()["detail"]["code"] == expected_code
+
+    assert store.list_all_bindings()[0]["user_id"] == 17
+    assert store.list_all_bindings()[0]["binding_revision"] == 1
+    assert store.list_all_binding_history() == []
+
+
+def test_admin_binding_correction_rejects_inactive_destination_account(tmp_path):
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
+        reward_read_token="dedicated-reward-reader", workspace="fixture-workspace",
+        storage=tmp_path / "bridge")
+    app, _, _, _ = fixture(tmp_path, baseline=baseline,
+        account_loader=lambda user_id: SimpleNamespace(user_id=user_id, status="disabled"))
+    store = app.state.node_reward_account_store
+    store.bind_node(17, pool_id="pool_fixture", node_id="node_fixture",
+                    executor_instance="executor_fixture", baseline_images=3)
+    correction = {"pool_id": "pool_fixture", "node_id": "node_fixture",
+        "executor_instance": "executor_fixture", "expected_user_id": 17,
+        "expected_revision": 1, "new_user_id": 23}
+
+    with TestClient(app) as client:
+        response = client.post(BASE + "/rewards/bindings/correct",
+            headers={**HEADERS, "Origin": "http://testserver"}, json=correction)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "reward_destination_account_unavailable"
+    assert store.list_all_bindings()[0]["user_id"] == 17
+    assert store.list_all_bindings()[0]["binding_revision"] == 1
+    assert store.list_all_binding_history() == []
+
+
+def test_admin_binding_correction_rejects_missing_legacy_baseline_without_writes(tmp_path):
+    class FakeRewardClient:
+        async def nodes(self):
+            return {"available": True, "truncated": False, "nodes": [{
+                "pool_id": "pool_fixture", "node_id": "node_fixture",
+                "executor_instance": "executor_fixture",
+                "metrics": {"rewardable_images": 6}}]}
+
+        async def close(self):
+            return None
+
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
+        reward_read_token="dedicated-reward-reader", workspace="fixture-workspace",
+        storage=tmp_path / "bridge")
+    app, _, _, _ = fixture(tmp_path, baseline=baseline,
+        reward_factory=lambda *_: FakeRewardClient())
+    store = app.state.node_reward_account_store
+    store.bind_node(17, pool_id="pool_fixture", node_id="node_fixture",
+                    executor_instance="executor_fixture", baseline_images=3)
+    with store._connect() as con:
+        con.execute("UPDATE node_reward_node_bindings SET baseline_images=NULL "
+                    "WHERE pool_id=? AND node_id=? AND executor_instance=?",
+                    ("pool_fixture", "node_fixture", "executor_fixture"))
+    correction = {"pool_id": "pool_fixture", "node_id": "node_fixture",
+        "executor_instance": "executor_fixture", "expected_user_id": 17,
+        "expected_revision": 1, "new_user_id": 23}
+
+    with TestClient(app) as client:
+        response = client.post(BASE + "/rewards/bindings/correct",
+            headers={**HEADERS, "Origin": "http://testserver"}, json=correction)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "node_reward_baseline_unavailable"
+    binding = store.list_all_bindings()[0]
+    assert binding["user_id"] == 17 and binding["binding_revision"] == 1
+    assert binding["baseline_images"] is None
+    assert store.list_all_binding_history() == []
 
 
 def test_mutation_and_probe_require_same_origin_guard(tmp_path):
