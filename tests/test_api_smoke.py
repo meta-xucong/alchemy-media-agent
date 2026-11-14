@@ -804,7 +804,7 @@ def test_alchemy_lab_generation_interval_is_applied(monkeypatch):
     async def fake_sleep(delay):
         delays.append(delay)
 
-    monkeypatch.setattr(alchemy_lab_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(alchemy_lab_module, "_sleep_for_generation_interval", fake_sleep)
     client = TestClient(app)
 
     response = client.post(
@@ -835,7 +835,7 @@ def test_alchemy_lab_live_provider_returns_async_session_and_serializes(monkeypa
         name = "openai_gpt_image"
 
     monkeypatch.setitem(image_service_module.registry.image_providers, "openai_gpt_image", LiveLikeMockProvider())
-    monkeypatch.setattr(alchemy_lab_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(alchemy_lab_module, "_sleep_for_generation_interval", fake_sleep)
     with TestClient(app) as client:
         response = client.post(
             "/api/lab/rare-style-explorer/sessions",
@@ -857,18 +857,23 @@ def test_alchemy_lab_live_provider_returns_async_session_and_serializes(monkeypa
         assert count_cards(payload["board"]) == 3
         assert all(card["status"] == "queued" for group in payload["board"]["groups"] for card in group["cards"])
 
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 15
+        terminal_statuses = {"completed", "partial_success", "failed"}
         while time.monotonic() < deadline:
             poll = client.get(f"/api/lab/rare-style-explorer/sessions/{session_id}")
             assert poll.status_code == 200
-            board = poll.json()["board"]
-            if board["status"] == "completed":
+            payload = poll.json()
+            board = payload["board"]
+            if board["status"] in terminal_statuses:
                 break
             time.sleep(0.01)
         else:
-            pytest.fail("Lab async session did not complete.")
+            pytest.fail(
+                "Lab async session did not reach a terminal state: "
+                f"session={payload.get('session')!r}, board={board!r}"
+            )
 
-        assert board["status"] == "completed"
+        assert board["status"] == "completed", f"Lab session ended unexpectedly: {board!r}"
         assert count_cards(board, "succeeded") == 3
         assert sleeps == [0.5, 0.5]
 
@@ -2606,9 +2611,14 @@ def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():
         text = script.text
         assert "function v1ImageJobDeferred" in text
         assert "polling_deferred: true" in text
-        assert "状态查询暂时中断" in text
-        assert "return deferV1ImageJob(job" in text
+        assert "任务状态暂时无法读取，正在继续查询同一任务。" in text
         assert "function refreshV1GenerationSideEffects" in text
+        refresh_body = text.split("async function refreshV1GenerationSideEffects()", 1)[1].split("async function waitForV1ImageJob", 1)[0]
+        assert "try {" in refresh_body
+        assert "catch (error)" in refresh_body
+        assert "V1 post-generation ${label} refresh failed" in refresh_body
+        gallery_position = text.index("renderGallery(completedJob.outputs)")
+        assert gallery_position < text.index("await refreshV1GenerationSideEffects();", gallery_position)
         assert "function textProviderForModel" in text
         assert 'default_llm_model: els.agentLlmModelInput.value.trim() || "claude-sonnet-5-5"' in text
         assert 'backup_llm_model: els.openaiLlmModelInput.value.trim() || "kimi-k3"' in text

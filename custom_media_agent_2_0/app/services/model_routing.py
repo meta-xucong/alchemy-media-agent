@@ -5,8 +5,9 @@ from __future__ import annotations
 def configured_fallback_models(config, *, exclude_model: str | None = None) -> list[str]:
     primary = (exclude_model or config.claude_orchestrator_model or "").strip()
     models = list(config.claude_orchestrator_fallback_models or ())
-    if config.claude_orchestrator_fallback_model:
-        models.append(config.claude_orchestrator_fallback_model)
+    legacy_model = getattr(config, "claude_orchestrator_fallback_model", None)
+    if legacy_model:
+        models.append(legacy_model)
     return list(dict.fromkeys(str(model).strip() for model in models
                              if str(model).strip() and str(model).strip() != primary))
 

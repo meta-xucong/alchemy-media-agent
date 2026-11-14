@@ -1079,6 +1079,34 @@ def test_doc260_bridge_no_image_sha_target_uses_store_identity_without_reading_i
 def test_doc260_bridge_no_image_sha_marker_is_server_owned() -> None:
     service = _service(Path("doc260-bridge-no-sha-server-owned"))
 
+    bridge_request = service._coerce_create_job_request(  # noqa: SLF001
+        {
+            "user_input": "Create one neutral still-life image.",
+            "metadata": {"render_bridge_primary_no_image_sha": True},
+        }
+    )
+    service._assert_runtime_metadata_server_owned(  # noqa: SLF001
+        bridge_request,
+        trusted_capability_plan_reuse=False,
+        trusted_render_bridge_plan=True,
+    )
+
+    forged_request = service._coerce_create_job_request(  # noqa: SLF001
+        {
+            "user_input": "Create one neutral still-life image.",
+            "metadata": {
+                "render_bridge_primary_no_image_sha": True,
+                "v3_job_instance_id": "forged-instance",
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned: v3_job_instance_id"):
+        service._assert_runtime_metadata_server_owned(  # noqa: SLF001
+            forged_request,
+            trusted_capability_plan_reuse=False,
+            trusted_render_bridge_plan=True,
+        )
+
     with pytest.raises(ValueError, match="runtime_metadata_server_owned: render_bridge_primary_no_image_sha"):
         service.create_job(
             {

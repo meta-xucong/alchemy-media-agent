@@ -10,6 +10,16 @@ from app.schemas import OrchestratorStatusResponse, V2RuntimeModelSettingsRespon
 from app.schemas import V2RuntimeModelSettingsRequest
 from app.services import runtime_model_settings
 from app.services import claude_orchestrator
+from app.services.model_routing import configured_fallback_models
+
+
+def test_v2_fallback_queue_accepts_settings_without_legacy_field() -> None:
+    config = SimpleNamespace(
+        claude_orchestrator_model="claude-sonnet-5-5",
+        claude_orchestrator_fallback_models=("kimi-k3", "gpt-6.1-sol"),
+    )
+
+    assert configured_fallback_models(config) == ["kimi-k3", "gpt-6.1-sol"]
 
 
 def test_v2_fallback_uses_selected_model_and_unified_gateway(monkeypatch) -> None:

@@ -20,6 +20,7 @@ const functions = [
   "renderFavoritePicker", "renderV2FavoriteReferencePicker", "editableFavoriteHistoryItems", "v2FavoriteReferenceItems",
   "closeFavoritePicker", "closeV2FavoriteReferencePicker", "renderHeroHistory", "releaseImageObjectUrl", "bindImageWithFallback",
   "v2HistoryEndpoint", "v2HistoryPath", "loadV2RequestWithTimeout", "loadV2HistoryWithTimeout", "loadV2HistoryResponse",
+  "v2ReviewShortText", "v2ReviewExplanation", "appendV2ReviewDetails", "shortOutputId",
 ];
 function extract(source, name) {
   const start = new RegExp(`^(?:async )?function ${name}\\(`, "m").exec(source);
