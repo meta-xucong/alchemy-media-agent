@@ -199,3 +199,25 @@ class BridgeRewardClient:
             raise BridgeError("bridge_unreachable") from None
         except (ValueError, TypeError):
             raise BridgeError("invalid_bridge_response", retryable=False) from None
+
+    async def claim_approval(self, digest: str):
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise BridgeError("invalid_claim_digest", retryable=False)
+        try:
+            response = await self.http.get(
+                "claim-approval", headers={"X-Reward-Claim-Digest": digest})
+            if response.status_code != 200:
+                raise BridgeError("claim_approval_unavailable", status=response.status_code,
+                                  retryable=response.status_code in {408, 429} or response.status_code >= 500)
+            if len(response.content) > 65536:
+                raise BridgeError("invalid_claim_approval_response", retryable=False)
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError()
+            return value
+        except BridgeError:
+            raise
+        except (httpx.HTTPError, OSError):
+            raise BridgeError("bridge_unreachable") from None
+        except (ValueError, TypeError):
+            raise BridgeError("invalid_claim_approval_response", retryable=False) from None

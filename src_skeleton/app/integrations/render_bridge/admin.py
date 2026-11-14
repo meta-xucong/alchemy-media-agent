@@ -320,6 +320,42 @@ class BridgeAdminController:
             if client is not None:
                 await client.close()
 
+    async def reward_claim_approval(self, digest: str):
+        config = self.config
+        if (not config.reward_read_token or not config.base_url
+                or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+            return {"available": False, "code": "claim_approval_not_configured"}
+        client = None
+        try:
+            client = self.reward_client_factory(config.base_url, config.reward_read_token)
+            async with asyncio.timeout(10):
+                raw = await client.claim_approval(digest)
+            if not isinstance(raw, dict):
+                raise ValueError()
+            identity = (raw.get("pool_id"), raw.get("node_id"), raw.get("executor_instance"))
+            if not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value)
+                       for value in identity):
+                raise ValueError()
+            state = raw.get("node_state")
+            if state not in {"active", "draining", "revoked"}:
+                raise ValueError()
+            images = raw.get("rewardable_images")
+            if type(images) is not int or not 0 <= images <= 2**53:
+                raise ValueError()
+            return {"available": True, "pool_id": identity[0], "node_id": identity[1],
+                    "executor_instance": identity[2], "node_state": state,
+                    "rewardable_images": images,
+                    "pool_name": str(raw.get("pool_name", ""))[:80]}
+        except TimeoutError:
+            return {"available": False, "code": "claim_approval_timeout"}
+        except BridgeError:
+            return {"available": False, "code": "claim_approval_unavailable"}
+        except (ValueError, TypeError, AttributeError):
+            return {"available": False, "code": "claim_approval_invalid"}
+        finally:
+            if client is not None:
+                await client.close()
+
     async def save(self, body):
         try:
             config = self.validate(body)
@@ -416,6 +452,7 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
     install_node_reward_account_routes(app, session_user=session_user,
         account_loader=account_loader, auth_enabled=auth_enabled,
         reward_metrics_loader=controller.reward_metrics,
+        reward_claim_approval_loader=controller.reward_claim_approval,
         database_path=(node_rewards_database_path or
                        controller.baseline.storage / "node-rewards.sqlite3"))
     router = APIRouter(prefix="/v1/admin/render-bridge")
