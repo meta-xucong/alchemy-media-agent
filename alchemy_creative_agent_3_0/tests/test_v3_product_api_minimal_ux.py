@@ -1,4 +1,5 @@
 import base64
+import gc
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 import os
@@ -1648,7 +1649,10 @@ def test_persistent_job_store_recent_reads_only_the_requested_page(tmp_path, mon
         "job_history_page_09",
     ]
     assert len(reads) == 3
-    assert store._records == {}  # noqa: SLF001
+    assert set(store._records) == {record.job_id for record in recent}  # noqa: SLF001
+    del recent
+    gc.collect()
+    assert len(store._records) == 0  # noqa: SLF001
 
 
 def test_persistent_job_store_can_stream_all_records_without_caching_the_catalog(tmp_path) -> None:
@@ -1666,10 +1670,10 @@ def test_persistent_job_store_can_stream_all_records_without_caching_the_catalog
 
     first = next(iterator)
     assert first.job_id.startswith("job_stream_")
-    assert store._records == {}  # noqa: SLF001
+    assert len(store._records) == 0  # noqa: SLF001
     rest = list(iterator)
     assert len(rest) == 6
-    assert store._records == {}  # noqa: SLF001
+    assert len(store._records) == 0  # noqa: SLF001
 
 
 def test_history_loads_only_enough_owner_scoped_records_for_requested_page(tmp_path, monkeypatch) -> None:
@@ -1719,7 +1723,7 @@ def test_history_loads_only_enough_owner_scoped_records_for_requested_page(tmp_p
         "job_owner_history_03",
     ]
     assert len(reads) == 7
-    assert store._records == {}  # noqa: SLF001
+    assert len(store._records) == 0  # noqa: SLF001
 
 
 def test_persistent_job_store_retries_a_transient_windows_replace_lock(monkeypatch) -> None:

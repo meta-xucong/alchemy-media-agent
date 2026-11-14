@@ -1989,6 +1989,7 @@ class V3ProductApiService:
             trusted_professional_character_card=trusted_professional_character_card,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
             trusted_doc270_ecommerce_view_activation=trusted_doc270_ecommerce_view_activation,
+            trusted_render_bridge_plan=_render_bridge_plan_identity is not None,
         )
         self._bind_bridge_primary_real_image_requirement(
             create_request,
@@ -18603,10 +18604,13 @@ class V3ProductApiService:
         trusted_professional_character_card: bool = False,
         trusted_professional_anchor_preparation: bool = False,
         trusted_doc270_ecommerce_view_activation: bool = False,
+        trusted_render_bridge_plan: bool = False,
     ) -> None:
         """Keep browser/API metadata from impersonating a frozen runtime job."""
 
         supplied = set(dict(request.metadata or {})).intersection(self._SERVER_OWNED_RUNTIME_METADATA)
+        if trusted_render_bridge_plan:
+            supplied.discard("render_bridge_primary_no_image_sha")
         if supplied and not (
             trusted_capability_plan_reuse
             or trusted_professional_character_card

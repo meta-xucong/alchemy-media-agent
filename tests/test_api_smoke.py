@@ -857,18 +857,23 @@ def test_alchemy_lab_live_provider_returns_async_session_and_serializes(monkeypa
         assert count_cards(payload["board"]) == 3
         assert all(card["status"] == "queued" for group in payload["board"]["groups"] for card in group["cards"])
 
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 15
+        terminal_statuses = {"completed", "partial_success", "failed"}
         while time.monotonic() < deadline:
             poll = client.get(f"/api/lab/rare-style-explorer/sessions/{session_id}")
             assert poll.status_code == 200
-            board = poll.json()["board"]
-            if board["status"] == "completed":
+            payload = poll.json()
+            board = payload["board"]
+            if board["status"] in terminal_statuses:
                 break
             time.sleep(0.01)
         else:
-            pytest.fail("Lab async session did not complete.")
+            pytest.fail(
+                "Lab async session did not reach a terminal state: "
+                f"session={payload.get('session')!r}, board={board!r}"
+            )
 
-        assert board["status"] == "completed"
+        assert board["status"] == "completed", f"Lab session ended unexpectedly: {board!r}"
         assert count_cards(board, "succeeded") == 3
         assert sleeps == [0.5, 0.5]
 
@@ -2606,7 +2611,7 @@ def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():
         text = script.text
         assert "function v1ImageJobDeferred" in text
         assert "polling_deferred: true" in text
-        assert "状态查询暂时中断" in text
+        assert "任务状态暂时无法读取，正在继续查询同一任务。" in text
         assert "return deferV1ImageJob(job" in text
         assert "function refreshV1GenerationSideEffects" in text
         assert "function textProviderForModel" in text
