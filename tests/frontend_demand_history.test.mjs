@@ -96,6 +96,7 @@ const historyFunctions = [
   "loadRemainingV1HistoryForFavorites", "loadRemainingV2HistoryForFavorites",
   "v2HistoryEndpoint", "v2HistoryPath", "loadV2RequestWithTimeout",
   "loadV2HistoryWithTimeout", "loadV2HistoryResponse", "v2HistoryLoadErrorMessage",
+  "v2ReviewShortText", "v2ReviewExplanation", "appendV2ReviewDetails", "shortOutputId",
 ];
 
 function installHistoryRenderers(h, module) {
@@ -995,7 +996,7 @@ for (const shell of shells) {
       h.context.v3ApiBase = "/api/v3/creative-agent";
       h.context.v3ProjectFetchLimit = h.context.v3ProjectHomePageSize;
       h.context.v3State.projects = [];
-      h.install(["initialV3ScenarioFromPath", "initialV3WorkspaceFromRoute", "initV3Shell", "mergeV3ProjectItems"]);
+      h.install(["initialV3ScenarioFromPath", "initV3Shell", "mergeV3ProjectItems"]);
       h.context.window.location.search = "?module=v3";
       await h.listeners.get("DOMContentLoaded")();
     } else {

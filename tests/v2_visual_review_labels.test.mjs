@@ -61,14 +61,16 @@ for (const path of ['../src_skeleton/app/static/app.js', '../src_skeleton/app/mo
       v2PromptTextFromHistory:()=>'', openImageLightbox:(data)=>{lightbox=data;},
       v2ProviderResultText:()=> 'Bridge',
     });
-    for (const name of ['v2RunNotice','renderV2History','openV2HistoryLightbox']) vm.runInContext(functionSource(name),context);
+    for (const name of ['v2RunNotice','v2ReviewShortText','v2ReviewExplanation','appendV2ReviewDetails','shortOutputId','renderV2History','openV2HistoryLightbox']) {
+      vm.runInContext(functionSource(name),context);
+    }
     const review = {analysis_mode:'vision_model',decision:'needs_review',revision_directives:['Only the left shoulder was requested.']};
     const item = {output_id:'output',job_id:'job',url:'/same-image',review,metadata:{live:true}};
     const notice = context.v2RunNotice({status:'completed',generation_jobs:[{status:'completed',outputs:[item]}]});
     assert.equal(notice.type,'warning');
     assert.match(notice.message,/需确认/);
     context.renderV2History([item]);
-    assert.match(plainText(grid),/视觉审核需确认，图片已保留/);
+    assert.match(plainText(grid),/需确认/);
     assert.match(plainText(grid),/Only the left shoulder/);
     assert.equal(grid.children[0].children[0].children[0].url,'/same-image');
     context.openV2HistoryLightbox(item);

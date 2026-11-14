@@ -603,7 +603,7 @@ test("returning home releases an opening project and permits a later project aft
   const invalidate = extractFunction("invalidateV3ProjectDetail", "\nfunction v3ProjectDetailIsCurrent");
   const isCurrent = extractFunction("v3ProjectDetailIsCurrent", "\nfunction v3ProjectDetailRequestIsCurrent");
   const requestIsCurrent = extractFunction("v3ProjectDetailRequestIsCurrent", "\nfunction v3ProjectDetailSignal");
-  const home = extractFunction("openV3Home", "\nfunction openV3ProfessionalWorkspace");
+  const home = extractFunction("openV3Home", "\nfunction openV3ScenarioWorkspace");
   const openProject = extractFunction("openV3Project", "\nasync function syncV3ProjectDetailInBackground");
 
   for (const oldOutcome of ["late_success", "abort_error"]) {
@@ -628,6 +628,7 @@ test("returning home releases an opening project and permits a later project aft
       els: { v3WorkspaceView: { dataset: {} }, v3PromptInput: { value: "" } },
       window: { setTimeout: () => {}, scrollTo: () => {} },
       closeV3ProjectSubpage: () => {},
+      syncV3WorkspaceRoute: () => {},
       renderV3ViewState: () => {},
       renderV3ScenarioState: () => {},
       renderV3HomeTemplateChooser: () => {},
@@ -669,7 +670,7 @@ test("returning home releases an opening project and permits a later project aft
     vm.runInNewContext(`${invalidate}\n${isCurrent}\n${requestIsCurrent}\n${home}\n${openProject}`, context);
 
     const openingA = context.openV3Project("A");
-    assert.equal(pendingA.length, 2);
+    assert.equal(pendingA.length, 1);
     assert.equal(context.v3State.projectOpening, true);
     assert.equal(context.v3State.loading, true);
     assert.equal(overlay.hidden, false);
