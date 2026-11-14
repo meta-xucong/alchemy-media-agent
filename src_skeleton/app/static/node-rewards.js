@@ -6,7 +6,9 @@
   if (!root) return;
 
   const sessionKey = "alchemy_veyra_access_token";
-  const state = { loading: false, binding: false, epoch: 0, challenge: "" };
+  const state = { loading: false, binding: false, epoch: 0, challenge: "",
+                  claimEpoch: 0, pollTimer: null };
+  const CLAIM_POLL_MS = 5000;
   const $ = (selector) => root.querySelector(selector);
   const labels = {
     session_login_required: "请先登录 Alchemy 账户。",
@@ -17,14 +19,11 @@
     node_reward_image_count_unavailable: "Bridge 暂未提供真实图片计数，当前不会计算奖励。",
     node_reward_history_unavailable: "暂时无法读取已绑定节点的记录，请稍后刷新。",
     node_reward_storage_unavailable: "节点绑定信息暂时无法读取，请稍后重试。",
-    node_reward_metrics_incomplete: "Bridge 节点列表未完整返回，暂时无法验证该节点。",
-    node_reward_claim_unverified: "节点尚未确认此绑定码。请先在目标节点的本地状态页输入并确认，再回来完成绑定。",
+    node_reward_claim_unverified: "正在等待目标节点确认；确认后会自动绑定。",
     node_reward_claim_invalid: "绑定码无效或已使用，请重新创建。",
     node_reward_claim_expired: "绑定码已过期，请重新创建。",
-    node_reward_claim_mismatch: "确认绑定码的不是当前选择节点，请重新创建并在目标节点本地确认。",
-    node_reward_claim_verification_unavailable: "暂时无法验证节点控制权，请稍后重试。",
-    node_not_registered: "Bridge 中没有找到此节点，请确认节点已完成注册并联网。",
-    node_identity_ambiguous: "节点 ID 重复，暂时无法唯一确认。请联系管理员。",
+    node_reward_claim_mismatch: "Bridge 返回的节点证明无效，请重新创建绑定码。",
+
     node_revoked: "这台节点已停用，无法绑定奖励。",
     node_not_active: "这台节点当前不可用，暂时无法绑定奖励。",
     node_already_bound: "这台节点已绑定到其他 Alchemy 账户。",
@@ -97,15 +96,21 @@
   }
 
   function setChallenge(value) {
-    state.challenge = value || "";
+    const next = value || "";
+    if (state.challenge !== next) {
+      state.challenge = next;
+      state.claimEpoch += 1;
+      if (state.pollTimer) window.clearTimeout(state.pollTimer);
+      state.pollTimer = null;
+    }
     const row = $("#nodeRewardsClaimRow");
     const code = $("#nodeRewardsClaimCode");
-    const finish = $("#nodeRewardsFinishBindBtn");
+    const create = $("#nodeRewardsBindNodeBtn");
     if (row) row.hidden = !state.challenge;
     if (code) code.textContent = state.challenge;
-    if (finish) {
-      finish.hidden = !state.challenge;
-      finish.disabled = !state.challenge;
+    if (create) {
+      create.disabled = state.binding || Boolean(state.challenge);
+      create.textContent = state.challenge ? "等待节点确认…" : "创建绑定码";
     }
   }
 
@@ -198,7 +203,7 @@
     list.replaceChildren();
     const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
     if (!nodes.length) {
-      list.append(text("p", "还没有绑定节点。输入节点本地状态页显示的 ID 创建绑定码，到该节点本地确认后，再回来完成绑定。",
+      list.append(text("p", "还没有绑定节点。先创建绑定码，在目标机器的本地状态页确认；每台机器分别创建一次。",
                       "account-access-empty"));
       return;
     }
@@ -224,14 +229,7 @@
   }
 
   async function createBindingClaim() {
-    if (state.binding) return;
-    const input = $("#nodeRewardsNodeIdInput");
-    const nodeId = input ? input.value.trim() : "";
-    if (!nodeId) {
-      showNotice("请输入节点状态页显示的节点 ID。");
-      input?.focus();
-      return;
-    }
+    if (state.binding || state.challenge) return;
     state.binding = true;
     const button = $("#nodeRewardsBindNodeBtn");
     if (button) {
@@ -243,7 +241,7 @@
     try {
       const result = await request("/api/account/node-rewards/claims", {
         method: "POST",
-        body: { node_id: nodeId },
+        body: {},
       });
       if (!result || result.status !== "challenge_created"
           || typeof result.challenge !== "string"
@@ -251,49 +249,69 @@
         throw errorFor("node_reward_claim_verification_unavailable", 503);
       }
       setChallenge(result.challenge);
-      showNotice("绑定码已创建。请在这台节点的本地状态页确认，再回来完成绑定。");
+      showNotice("绑定码已创建。请在目标机器的 RenderBridge 本地状态页输入并确认；确认后本页会自动完成绑定。");
+      scheduleBindingPoll(state.claimEpoch, 1200);
     } catch (error) {
       showNotice(friendly(error));
     } finally {
       state.binding = false;
       if (button) {
-        button.disabled = false;
-        button.textContent = state.challenge ? "重新创建绑定码" : "创建绑定码";
+        button.disabled = Boolean(state.challenge);
+        button.textContent = state.challenge ? "等待节点确认…" : "创建绑定码";
       }
     }
   }
 
-  async function finishBinding() {
-    if (state.binding || !state.challenge) return;
+  function scheduleBindingPoll(epoch, delay = CLAIM_POLL_MS) {
+    if (!state.challenge || epoch !== state.claimEpoch || state.pollTimer) return;
+    state.pollTimer = window.setTimeout(() => {
+      state.pollTimer = null;
+      pollBinding(epoch);
+    }, delay);
+  }
+
+  async function pollBinding(epoch) {
+    if (state.binding || !state.challenge || epoch !== state.claimEpoch) return;
     state.binding = true;
-    const button = $("#nodeRewardsFinishBindBtn");
-    if (button) {
-      button.disabled = true;
-      button.textContent = "正在验证…";
-    }
-    showNotice("");
     try {
       const result = await request("/api/account/node-rewards/bindings", {
         method: "POST",
         body: { challenge: state.challenge },
       });
-      setChallenge("");
-      const input = $("#nodeRewardsNodeIdInput");
-      if (input) input.value = "";
-      showNotice(result.status === "already_bound"
-        ? "此节点已绑定到当前 Alchemy 账户。"
-        : "节点已绑定到当前 Alchemy 账户。");
-      await load();
-    } catch (error) {
-      if (["node_reward_claim_invalid", "node_reward_claim_expired",
-           "node_reward_claim_mismatch"].includes(error && error.message)) {
-        setChallenge("");
+      if (epoch !== state.claimEpoch || !state.challenge) return;
+      if (!result || !["bound", "already_bound"].includes(result.status)
+          || typeof result.node_id !== "string") {
+        throw errorFor("node_reward_claim_unverified", 503);
       }
-      showNotice(friendly(error));
+      const message = result.status === "already_bound"
+        ? "此节点已绑定到当前 Alchemy 账户。"
+        : "节点 " + result.node_id + " 已绑定到当前 Alchemy 账户。";
+      setChallenge("");
+      await load();
+      showNotice(message);
+    } catch (error) {
+      if (epoch !== state.claimEpoch || !state.challenge) return;
+      const terminal = [
+        "node_reward_claim_invalid", "node_reward_claim_expired",
+        "node_reward_claim_mismatch", "node_already_bound",
+        "node_revoked", "node_not_active",
+      ];
+      if (terminal.includes(error && error.message)) {
+        setChallenge("");
+        showNotice(friendly(error));
+        return;
+      }
+      showNotice(error && error.message === "node_reward_claim_unverified"
+        ? "等待目标节点在本地确认；确认后会自动完成绑定。"
+        : friendly(error));
+      scheduleBindingPoll(epoch, CLAIM_POLL_MS);
     } finally {
       state.binding = false;
-      if (button) button.textContent = "我已在本机确认，完成绑定";
-      if (button) button.disabled = !state.challenge;
+      const create = $("#nodeRewardsBindNodeBtn");
+      if (create) {
+        create.disabled = Boolean(state.challenge);
+        create.textContent = state.challenge ? "等待节点确认…" : "创建绑定码";
+      }
     }
   }
 
@@ -308,13 +326,6 @@
   }
 
   $("#nodeRewardsBindForm")?.addEventListener("submit", (event) => { event.preventDefault(); createBindingClaim(); });
-  $("#nodeRewardsNodeIdInput")?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      createBindingClaim();
-    }
-  });
-  $("#nodeRewardsFinishBindBtn")?.addEventListener("click", finishBinding);
   $("#nodeRewardsCopyClaimBtn")?.addEventListener("click", copyChallenge);
   $("#nodeRewardsRefreshBtn")?.addEventListener("click", load);
   document.addEventListener("alchemy:account-view", (event) => {
@@ -329,5 +340,8 @@
   });
   window.addEventListener("pagehide", () => {
     state.epoch += 1;
+    state.claimEpoch += 1;
+    if (state.pollTimer) window.clearTimeout(state.pollTimer);
+    state.pollTimer = null;
   });
 })();
