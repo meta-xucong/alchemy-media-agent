@@ -76,9 +76,9 @@ def _approval(node, *, images=None):
     }
 
 
-def _start_claim(client, *, node_id="node_1", account=41):
+def _start_claim(client, *, account=41):
     response = client.post("/api/account/node-rewards/claims",
-                           headers=_headers(account), json={"node_id": node_id})
+                           headers=_headers(account), json={})
     assert response.status_code == 200
     return response.json()["challenge"]
 
@@ -195,41 +195,37 @@ def test_node_reward_binding_rejects_cross_account_claim_and_unverified_origin(t
 
         bad_origin = client.post("/api/account/node-rewards/claims",
                                  headers={**_headers(), "Origin": "https://other.test"},
-                                 json={"node_id": "node_1"})
+                                 json={})
         assert bad_origin.status_code == 403
 
 
-def test_node_reward_binding_requires_login_and_unique_live_node_identity(tmp_path):
-    app = _app(tmp_path, [_node(), _node(pool_id="pool_2", executor="executor_2")])
+
+def test_node_reward_claim_is_account_created_without_node_id(tmp_path):
+    app = _app(tmp_path, [_node(), _node(pool_id="pool_2", executor="executor_2")],
+               truncated=True)
     with TestClient(app) as client:
         no_login = client.get("/api/account/node-rewards")
         assert no_login.status_code == 401
 
-        ambiguous = client.post("/api/account/node-rewards/claims",
-                                headers=_headers(), json={"node_id": "node_1"})
-        assert ambiguous.status_code == 409
-        assert ambiguous.json()["detail"]["code"] == "node_identity_ambiguous"
+        supplied_node = client.post("/api/account/node-rewards/claims",
+                                    headers=_headers(), json={"node_id": "node_1"})
+        assert supplied_node.status_code == 422
 
-        malformed = client.post("/api/account/node-rewards/claims",
-                                headers=_headers(), json={"node_id": "node_1", "user_id": 42})
-        assert malformed.status_code == 422
+        challenge = client.post("/api/account/node-rewards/claims",
+                                headers=_headers(), json={})
+        assert challenge.status_code == 200
+        assert challenge.json()["status"] == "challenge_created"
+        assert "node_id" not in challenge.json()
+        assert challenge.json()["challenge"]
 
         id_only = client.post("/api/account/node-rewards/bindings",
                               headers=_headers(), json={"node_id": "node_1"})
         assert id_only.status_code == 422
 
-    partial_app = _app(tmp_path / "partial", [_node()], truncated=True)
-    with TestClient(partial_app) as partial_client:
-        incomplete = partial_client.post("/api/account/node-rewards/claims",
-                                          headers=_headers(), json={"node_id": "node_1"})
-        assert incomplete.status_code == 503
-        assert incomplete.json()["detail"]["code"] == "node_reward_metrics_incomplete"
 
-
-def test_unconfirmed_or_mismatched_claim_never_binds(tmp_path):
-    node = _node()
+def test_unconfirmed_claim_waits_for_bridge_proof_and_binds_its_identity(tmp_path):
     approvals = {}
-    app = _app(tmp_path, [node], approvals=approvals)
+    app = _app(tmp_path, [_node()], approvals=approvals)
     with TestClient(app) as client:
         challenge = _start_claim(client)
         missing = _confirm_claim(client, challenge)
@@ -237,13 +233,15 @@ def test_unconfirmed_or_mismatched_claim_never_binds(tmp_path):
         assert missing.json()["detail"]["code"] == "node_reward_claim_unverified"
         assert app.state.node_reward_account_store.list_all_bindings() == []
 
-        other_node = _node(pool_id="pool_other", executor="executor_other")
-        _register_approval(approvals, challenge, other_node)
-        mismatch = _confirm_claim(client, challenge)
-        assert mismatch.status_code == 409
-        assert mismatch.json()["detail"]["code"] == "node_reward_claim_mismatch"
-        assert app.state.node_reward_account_store.list_all_bindings() == []
-
+        proved_node = _node(pool_id="pool_other", node_id="node_other",
+                            executor="executor_other")
+        _register_approval(approvals, challenge, proved_node)
+        bound = _confirm_claim(client, challenge)
+        assert bound.status_code == 200
+        assert bound.json()["node_id"] == "node_other"
+        binding = app.state.node_reward_account_store.list_all_bindings()[0]
+        assert (binding["pool_id"], binding["node_id"], binding["executor_instance"]) == (
+            "pool_other", "node_other", "executor_other")
 
 def test_claim_challenge_is_account_bound_expiring_and_only_digest_is_stored(tmp_path):
     node = _node()
@@ -293,27 +291,41 @@ def test_unusable_approval_never_creates_binding(tmp_path, node_state, images, s
         assert app.state.node_reward_account_store.list_all_bindings() == []
 
 
-def test_claim_identity_disambiguates_by_full_tuple_and_baselines_from_bridge_approval(tmp_path):
+
+def test_bridge_proof_selects_full_identity_even_when_node_ids_are_duplicated(tmp_path):
     node = _node(images=3)
     duplicate = _node(pool_id="pool_2", executor="executor_2", images=99)
     approvals = {}
     app = _app(tmp_path, [node, duplicate], approvals=approvals)
     with TestClient(app) as client:
-        ambiguous = client.post("/api/account/node-rewards/claims",
-                                headers=_headers(), json={"node_id": "node_1"})
-        assert ambiguous.status_code == 409
-
-    app = _app(tmp_path / "unique", [node], approvals=approvals)
-    with TestClient(app) as client:
         challenge = _start_claim(client)
-        _register_approval(approvals, challenge, node, images=17)
+        _register_approval(approvals, challenge, duplicate, images=17)
         bound = _confirm_claim(client, challenge)
         assert bound.status_code == 200
+        assert bound.json()["node_id"] == "node_1"
         binding = app.state.node_reward_account_store.list_all_bindings()[0]
-        assert binding["pool_id"] == "pool_1"
-        assert binding["executor_instance"] == "executor_1"
+        assert binding["pool_id"] == "pool_2"
+        assert binding["executor_instance"] == "executor_2"
         assert binding["baseline_images"] == 17
 
+
+def test_one_account_can_bind_multiple_nodes_with_separate_claims(tmp_path):
+    nodes = [
+        _node(node_id="node_1", pool_id="pool_1", executor="executor_1", images=4),
+        _node(node_id="node_2", pool_id="pool_1", executor="executor_2", images=8),
+    ]
+    approvals = {}
+    app = _app(tmp_path, nodes, approvals=approvals)
+    with TestClient(app) as client:
+        for node in nodes:
+            challenge = _start_claim(client)
+            _register_approval(approvals, challenge, node)
+            response = _confirm_claim(client, challenge)
+            assert response.status_code == 200
+            assert response.json()["node_id"] == node["node_id"]
+
+        summary = client.get("/api/account/node-rewards", headers=_headers()).json()
+        assert summary["totals"]["bound_nodes"] == 2
 
 def test_claim_codes_are_not_echoed_in_responses(tmp_path):
     node = _node()

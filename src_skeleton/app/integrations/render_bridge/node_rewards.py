@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 POINTS_PER_IMAGE = Decimal("0.02")
@@ -25,8 +25,6 @@ NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 class CreateNodeRewardClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-
-    node_id: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER)
 
 
 class NodeRewardStoreError(Exception):
@@ -134,25 +132,25 @@ class NodeRewardAccountStore:
         return {"status": "bound"}
 
     def create_binding_challenge(self, user_id: int, *, challenge_digest: str,
-                                 pool_id: str, node_id: str, executor_instance: str,
                                  ttl_seconds: int = NODE_REWARD_CLAIM_TTL_SECONDS) -> int:
         now = int(self.clock())
         expires_at = now + ttl_seconds
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             con.execute("DELETE FROM node_reward_binding_challenges WHERE expires_at<=?", (now,))
+            # Keep the legacy identity columns empty; the confirmed Bridge proof owns node identity.
             con.execute("""
                 INSERT INTO node_reward_binding_challenges
                     (challenge_digest,user_id,pool_id,node_id,executor_instance,created_at,expires_at)
-                VALUES (?,?,?,?,?,?,?)
-            """, (challenge_digest, user_id, pool_id, node_id, executor_instance, now, expires_at))
+                VALUES (?,?,'','','',?,?)
+            """, (challenge_digest, user_id, now, expires_at))
         return expires_at
 
     def pending_binding_challenge(self, user_id: int, *, challenge_digest: str) -> dict:
         now = int(self.clock())
         with self._connect() as con:
             row = con.execute("""
-                SELECT user_id,pool_id,node_id,executor_instance,expires_at,consumed_at
+                SELECT user_id,expires_at,consumed_at
                 FROM node_reward_binding_challenges WHERE challenge_digest=? AND user_id=?
             """, (challenge_digest, user_id)).fetchone()
         if row is None:
@@ -171,7 +169,7 @@ class NodeRewardAccountStore:
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             challenge = con.execute("""
-                SELECT pool_id,node_id,executor_instance,expires_at,consumed_at
+                SELECT expires_at,consumed_at
                 FROM node_reward_binding_challenges
                 WHERE challenge_digest=? AND user_id=?
             """, (challenge_digest, user_id)).fetchone()
@@ -181,8 +179,6 @@ class NodeRewardAccountStore:
                 raise NodeRewardStoreError("node_reward_claim_expired", 410)
             if challenge["consumed_at"] is not None:
                 raise NodeRewardStoreError("node_reward_claim_invalid", 409)
-            if (challenge["pool_id"], challenge["node_id"], challenge["executor_instance"]) != identity:
-                raise NodeRewardStoreError("node_reward_claim_mismatch", 409)
             existing = con.execute("""
                 SELECT user_id FROM node_reward_node_bindings
                 WHERE pool_id=? AND node_id=? AND executor_instance=?
@@ -501,40 +497,16 @@ def install_node_reward_account_routes(
     async def create_binding_claim(body: CreateNodeRewardClaimRequest, request: Request):
         user_id = await current_user_id(request)
         _write_same_origin(request)
+        challenge = secrets.token_urlsafe(32)
+        digest = hashlib.sha256(challenge.encode("ascii")).hexdigest()
         try:
-            raw = await reward_metrics()
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, dict) else {}
-            raise HTTPException(503, detail={"code": detail.get("code", "node_reward_metrics_unavailable")},
-                                headers=NO_STORE) from exc
-        if raw.get("truncated") is True:
-            raise HTTPException(503, detail={"code": "node_reward_metrics_incomplete"},
-                                headers=NO_STORE)
-        matches = [item for item in raw["nodes"] if isinstance(item, dict)
-                   and item.get("node_id") == body.node_id]
-        if not matches:
-            raise HTTPException(404, detail={"code": "node_not_registered"}, headers=NO_STORE)
-        if len(matches) != 1:
-            raise HTTPException(409, detail={"code": "node_identity_ambiguous"}, headers=NO_STORE)
-        node = matches[0]
-        if node.get("node_state") not in {"active", "draining"}:
-            code = "node_revoked" if node.get("node_state") == "revoked" else "node_not_active"
-            raise HTTPException(409, detail={"code": code}, headers=NO_STORE)
-        try:
-            image_count(node)
-            challenge = secrets.token_urlsafe(32)
-            digest = hashlib.sha256(challenge.encode("ascii")).hexdigest()
             expires_at = store.create_binding_challenge(
-                user_id, challenge_digest=digest, pool_id=node["pool_id"],
-                node_id=node["node_id"], executor_instance=node["executor_instance"])
-        except NodeRewardStoreError as exc:
-            raise HTTPException(exc.status, detail={"code": exc.code}, headers=NO_STORE) from None
+                user_id, challenge_digest=digest)
         except (sqlite3.Error, OSError):
             raise HTTPException(503, detail={"code": "node_reward_storage_unavailable"},
                                 headers=NO_STORE) from None
-        return JSONResponse({"status": "challenge_created", "node_id": body.node_id,
-                             "pool_name": node.get("pool_name", ""),
-                             "challenge": challenge, "expires_at": _utc(expires_at)},
+        return JSONResponse({"status": "challenge_created", "challenge": challenge,
+                             "expires_at": _utc(expires_at)},
                             headers=NO_STORE)
 
     @router.post("/bindings")
@@ -549,7 +521,7 @@ def install_node_reward_account_routes(
             raise HTTPException(422, detail={"code": "node_reward_claim_invalid"}, headers=NO_STORE)
         digest = _claim_digest(body.get("challenge"))
         try:
-            pending = store.pending_binding_challenge(user_id, challenge_digest=digest)
+            store.pending_binding_challenge(user_id, challenge_digest=digest)
         except NodeRewardStoreError as exc:
             raise HTTPException(exc.status, detail={"code": exc.code}, headers=NO_STORE) from None
         except (sqlite3.Error, OSError):
@@ -571,10 +543,8 @@ def install_node_reward_account_routes(
                                 headers=NO_STORE)
         identity_fields = ("pool_id", "node_id", "executor_instance")
         identity = tuple(approval.get(field) for field in identity_fields)
-        if (not all(isinstance(value, str) and re.fullmatch(_IDENTIFIER, value)
-                    for value in identity)
-                or identity != (pending["pool_id"], pending["node_id"],
-                                pending["executor_instance"])):
+        if not all(isinstance(value, str) and re.fullmatch(_IDENTIFIER, value)
+                   for value in identity):
             raise HTTPException(409, detail={"code": "node_reward_claim_mismatch"},
                                 headers=NO_STORE)
         node_state = approval.get("node_state")

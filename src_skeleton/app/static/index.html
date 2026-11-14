@@ -1134,21 +1134,18 @@
                 </div>
                                   <section class="account-access-card node-rewards-bind-card">
                     <div class="account-access-card-head">
-                      <div><h4>绑定节点</h4><p>登录当前 Alchemy 账户，输入节点 ID 创建一次性绑定码；再到该节点的本地状态页确认，最后回来完成绑定。</p></div>
+                      <div><h4>绑定节点</h4><p>在当前 Alchemy 账户创建绑定码，再到目标机器的 RenderBridge 本地状态页输入并确认。确认后自动绑定；多台机器分别创建绑定码即可。</p></div>
                     </div>
                     <form id="nodeRewardsBindForm" class="node-rewards-bind-form" autocomplete="off">
-                      <label class="node-rewards-id-label" for="nodeRewardsNodeIdInput">节点 ID</label>
                       <div class="node-rewards-id-row">
-                        <input id="nodeRewardsNodeIdInput" class="node-rewards-node-id" name="node_id" maxlength="128" pattern="[A-Za-z0-9_-]{1,128}" placeholder="输入节点 ID" required />
                         <button id="nodeRewardsBindNodeBtn" class="button primary" type="submit">创建绑定码</button>
                       </div>
                     </form>
                     <div id="nodeRewardsClaimRow" class="node-rewards-code-row" hidden>
                       <code id="nodeRewardsClaimCode" class="node-rewards-code"></code>
                       <button id="nodeRewardsCopyClaimBtn" class="button compact ghost" type="button">复制绑定码</button>
-                      <small>10 分钟内有效。请只在你自己的目标节点本地状态页确认此码，再回来完成绑定。</small>
+                      <small>10 分钟内有效。请在你要绑定的那台机器本地确认；完成后此页面会自动更新。</small>
                     </div>
-                    <button id="nodeRewardsFinishBindBtn" class="button" type="button" disabled hidden>我已在本机确认，完成绑定</button>
                   </section>
                   <section class="account-access-card node-rewards-node-card">
                   <div class="account-access-card-head">

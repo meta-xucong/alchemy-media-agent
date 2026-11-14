@@ -1,5 +1,6 @@
 """Administrator control plane uses fixture transports, never real credentials."""
 import asyncio
+import hashlib
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -748,3 +749,61 @@ def test_no_primary_state_means_no_maintenance_transport(tmp_path, monkeypatch):
     _, controller, _, _ = fixture(tmp_path)
     monkeypatch.setattr(admin, "PrimaryTransport", lambda _: pytest.fail("unexpected transport"))
     asyncio.run(controller.maintain_primary_once())
+
+
+def test_account_node_binding_waits_for_bridge_approval_and_uses_proved_identity(tmp_path):
+    approval = {"confirmed": False}
+    digests = []
+
+    def reward_response(request):
+        assert request.method == "GET"
+        assert request.url.path == "/bridge/rewards/v1/claim-approval"
+        digest = request.headers["x-reward-claim-digest"]
+        assert len(digest) == 64
+        digests.append(digest)
+        if not approval["confirmed"]:
+            return httpx.Response(404, json={"error": {"code": "claim_approval_not_found"}})
+        return httpx.Response(200, json={
+            "pool_id": "pool_proved",
+            "node_id": "node_proved",
+            "executor_instance": "executor_proved",
+            "node_state": "active",
+            "rewardable_images": 7,
+            "pool_name": "Proved node",
+        })
+
+    def reward_factory(base_url, token):
+        assert base_url == "https://bridge.test"
+        assert token == "dedicated-reward-reader"
+        return BridgeRewardClient(base_url, token,
+                                  transport=httpx.MockTransport(reward_response))
+
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
+        reward_read_token="dedicated-reward-reader", workspace="fixture-workspace",
+        storage=tmp_path / "bridge")
+    app, _, _, _ = fixture(tmp_path, baseline=baseline, reward_factory=reward_factory)
+    headers = {"Authorization": "Bearer fixture-account", "Origin": "http://testserver",
+               "X-Alchemy-UI": "node-rewards"}
+    with TestClient(app) as client:
+        created = client.post("/api/account/node-rewards/claims", headers=headers, json={})
+        assert created.status_code == 200, created.text
+        assert "node_id" not in created.json()
+        challenge = created.json()["challenge"]
+        digest = hashlib.sha256(challenge.encode("ascii")).hexdigest()
+
+        waiting = client.post("/api/account/node-rewards/bindings", headers=headers,
+                              json={"challenge": challenge})
+        assert waiting.status_code == 503
+        assert waiting.json()["detail"]["code"] == "node_reward_claim_unverified"
+        assert app.state.node_reward_account_store.list_all_bindings() == []
+
+        approval["confirmed"] = True
+        bound = client.post("/api/account/node-rewards/bindings", headers=headers,
+                            json={"challenge": challenge})
+        assert bound.status_code == 200, bound.text
+        assert bound.json()["node_id"] == "node_proved"
+        assert digests == [digest, digest]
+        binding = app.state.node_reward_account_store.list_all_bindings()[0]
+        assert (binding["pool_id"], binding["node_id"], binding["executor_instance"],
+                binding["baseline_images"]) == (
+            "pool_proved", "node_proved", "executor_proved", 7)
