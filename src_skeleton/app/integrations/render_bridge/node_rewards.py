@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import secrets
 import sqlite3
@@ -13,7 +14,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 POINTS_PER_IMAGE = Decimal("0.02")
@@ -25,6 +26,14 @@ NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 class CreateNodeRewardClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class NodeBindingStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    pool_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    node_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    executor_instance: str = Field(min_length=1, max_length=128,
+                                   pattern=r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class NodeRewardStoreError(Exception):
@@ -275,6 +284,15 @@ class NodeRewardAccountStore:
             """, (user_id,)).fetchall()
         return [dict(row) for row in rows]
 
+    def bound_user_id(self, *, pool_id: str, node_id: str,
+                      executor_instance: str) -> int | None:
+        with closing(self._connect()) as con:
+            row = con.execute("""
+                SELECT user_id FROM node_reward_node_bindings
+                WHERE pool_id=? AND node_id=? AND executor_instance=?
+            """, (pool_id, node_id, executor_instance)).fetchone()
+        return int(row["user_id"]) if row is not None else None
+
     def list_binding_history(self, user_id: int) -> list[dict]:
         with self._connect() as con:
             rows = con.execute("""
@@ -320,6 +338,15 @@ def _claim_digest(challenge: object) -> str:
     return hashlib.sha256(challenge.encode("ascii")).hexdigest()
 
 
+def _node_binding_status_message(timestamp: str, identity: tuple[str, str, str]) -> bytes:
+    return "\n".join(("renderbridge-node-binding-v1", timestamp, *identity)).encode("ascii")
+
+
+def _node_binding_status_key(secret: str) -> bytes:
+    return hmac.new(secret.encode("ascii"), b"alchemy-node-binding-status-key-v1",
+                    hashlib.sha256).digest()
+
+
 def _write_same_origin(request: Request) -> None:
     if request.headers.get("x-alchemy-ui") != "node-rewards":
         raise HTTPException(403, detail={"code": "same_origin_required"}, headers=NO_STORE)
@@ -353,9 +380,11 @@ def install_node_reward_account_routes(
     auth_enabled,
     reward_metrics_loader,
     reward_claim_approval_loader=None,
+    node_binding_status_secret=None,
     database_path: Path,
 ):
     router = APIRouter(prefix="/api/account/node-rewards")
+    internal_router = APIRouter(prefix="/api/internal/render-bridge", include_in_schema=False)
     store = NodeRewardAccountStore(database_path)
 
     async def current_user_id(request: Request) -> int:
@@ -385,6 +414,45 @@ def install_node_reward_account_routes(
         if not isinstance(raw.get("nodes"), list):
             raise HTTPException(503, detail={"code": "node_reward_metrics_unavailable"}, headers=NO_STORE)
         return raw
+
+    @internal_router.post("/node-account-binding")
+    async def local_node_account_binding(body: NodeBindingStatusRequest, request: Request):
+        secret = node_binding_status_secret
+        if not isinstance(secret, str) or not secret:
+            raise HTTPException(503, detail={"code": "node_binding_status_unavailable"},
+                                headers=NO_STORE)
+        timestamps = request.headers.getlist("x-bridge-account-status-timestamp")
+        signatures = request.headers.getlist("x-bridge-account-status-signature")
+        if (len(timestamps) != 1 or len(signatures) != 1
+                or not re.fullmatch(r"[0-9]{1,12}", timestamps[0])
+                or not re.fullmatch(r"[0-9a-f]{64}", signatures[0])):
+            raise HTTPException(401, detail={"code": "node_binding_status_unauthorized"},
+                                headers=NO_STORE)
+        timestamp = int(timestamps[0])
+        if abs(int(time.time()) - timestamp) > 120:
+            raise HTTPException(401, detail={"code": "node_binding_status_unauthorized"},
+                                headers=NO_STORE)
+        identity = (body.pool_id, body.node_id, body.executor_instance)
+        try:
+            expected = hmac.new(
+                _node_binding_status_key(secret),
+                _node_binding_status_message(timestamps[0], identity),
+                hashlib.sha256,
+            ).hexdigest()
+        except UnicodeEncodeError:
+            raise HTTPException(503, detail={"code": "node_binding_status_unavailable"},
+                                headers=NO_STORE) from None
+        if not hmac.compare_digest(signatures[0], expected):
+            raise HTTPException(401, detail={"code": "node_binding_status_unauthorized"},
+                                headers=NO_STORE)
+        try:
+            user_id = store.bound_user_id(pool_id=identity[0], node_id=identity[1],
+                                          executor_instance=identity[2])
+        except (sqlite3.Error, OSError):
+            raise HTTPException(503, detail={"code": "node_reward_storage_unavailable"},
+                                headers=NO_STORE) from None
+        return JSONResponse({"available": True, "bound": user_id is not None,
+                             "account_user_id": user_id}, headers=NO_STORE)
 
     def image_count(item: dict) -> int:
         metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
@@ -570,4 +638,5 @@ def install_node_reward_account_routes(
                             headers=NO_STORE)
 
     app.include_router(router)
+    app.include_router(internal_router)
     app.state.node_reward_account_store = store

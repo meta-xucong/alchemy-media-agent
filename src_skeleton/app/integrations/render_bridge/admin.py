@@ -453,6 +453,7 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
         account_loader=account_loader, auth_enabled=auth_enabled,
         reward_metrics_loader=controller.reward_metrics,
         reward_claim_approval_loader=controller.reward_claim_approval,
+        node_binding_status_secret=controller.baseline.reward_read_token,
         database_path=(node_rewards_database_path or
                        controller.baseline.storage / "node-rewards.sqlite3"))
     router = APIRouter(prefix="/v1/admin/render-bridge")

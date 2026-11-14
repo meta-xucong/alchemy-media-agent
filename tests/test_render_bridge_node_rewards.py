@@ -1,7 +1,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
+import hmac
 import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI
@@ -35,6 +37,7 @@ def _app(tmp_path, nodes, *, truncated=False, approvals=None):
         reward_metrics_loader=metrics,
         reward_claim_approval_loader=lambda digest: approvals.get(
             digest, {"available": False, "code": "claim_approval_not_found"}),
+        node_binding_status_secret="bridge-reward-secret",
         database_path=Path(tmp_path) / "node-rewards.sqlite3",
     )
     return app
@@ -91,6 +94,20 @@ def _confirm_claim(client, challenge, *, account=41):
 def _register_approval(approvals, challenge, node, *, images=None):
     digest = hashlib.sha256(challenge.encode("ascii")).hexdigest()
     approvals[digest] = _approval(node, images=images)
+
+
+def _binding_status_headers(node, *, secret="bridge-reward-secret", timestamp=None):
+    timestamp = int(time.time()) if timestamp is None else timestamp
+    message = "\n".join(("renderbridge-node-binding-v1", str(timestamp), node["pool_id"],
+                          node["node_id"], node["executor_instance"]))
+    key = hmac.new(secret.encode("ascii"), b"alchemy-node-binding-status-key-v1",
+                   hashlib.sha256).digest()
+    signature = hmac.new(key, message.encode("ascii"),
+                         hashlib.sha256).hexdigest()
+    return {
+        "X-Bridge-Account-Status-Timestamp": str(timestamp),
+        "X-Bridge-Account-Status-Signature": signature,
+    }
 
 
 def test_node_reward_binding_is_account_scoped_and_points_are_separate(tmp_path):
@@ -375,3 +392,68 @@ def test_concurrent_verified_claims_produce_only_one_binding(tmp_path):
     assert len(errors) == 1
     assert getattr(errors[0], "code", None) == "node_already_bound"
     assert len(store.list_all_bindings()) == 1
+
+
+def test_bridge_signed_local_status_returns_only_current_account_reference(tmp_path):
+    node = _node()
+    app = _app(tmp_path, [node])
+    app.state.node_reward_account_store.bind_node(
+        41, pool_id=node["pool_id"], node_id=node["node_id"],
+        executor_instance=node["executor_instance"], baseline_images=3)
+    identity = {key: node[key] for key in
+                ("pool_id", "node_id", "executor_instance")}
+
+    with TestClient(app) as client:
+        headers = _binding_status_headers(node)
+        response = client.post("/api/internal/render-bridge/node-account-binding",
+                               headers=headers, json=identity)
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json() == {
+            "available": True, "bound": True, "account_user_id": 41,
+        }
+        assert "email" not in response.text
+        assert "node_token" not in response.text
+
+        wrong_signature = {**headers, "X-Bridge-Account-Status-Signature": "0" * 64}
+        rejected = client.post("/api/internal/render-bridge/node-account-binding",
+                               headers=wrong_signature, json=identity)
+        assert rejected.status_code == 401
+
+        expired = _binding_status_headers(node, timestamp=int(time.time()) - 600)
+        rejected = client.post("/api/internal/render-bridge/node-account-binding",
+                               headers=expired, json=identity)
+        assert rejected.status_code == 401
+
+        extra_identity = {**identity, "user_id": 42}
+        rejected = client.post("/api/internal/render-bridge/node-account-binding",
+                               headers=headers, json=extra_identity)
+        assert rejected.status_code == 422
+
+
+def test_bridge_signed_local_status_reflects_unbind_without_exposing_history(tmp_path):
+    node = _node()
+    app = _app(tmp_path, [node])
+    store = app.state.node_reward_account_store
+    store.bind_node(41, pool_id=node["pool_id"], node_id=node["node_id"],
+                    executor_instance=node["executor_instance"], baseline_images=3)
+    identity = {key: node[key] for key in
+                ("pool_id", "node_id", "executor_instance")}
+
+    with TestClient(app) as client:
+        headers = _binding_status_headers(node)
+        active = client.post("/api/internal/render-bridge/node-account-binding",
+                             headers=headers, json=identity)
+        assert active.json() == {
+            "available": True, "bound": True, "account_user_id": 41,
+        }
+
+        with sqlite3.connect(store.path) as con:
+            con.execute("DELETE FROM node_reward_node_bindings WHERE pool_id=? AND node_id=? "
+                        "AND executor_instance=?",
+                        (node["pool_id"], node["node_id"], node["executor_instance"]))
+        unbound = client.post("/api/internal/render-bridge/node-account-binding",
+                              headers=_binding_status_headers(node), json=identity)
+        assert unbound.status_code == 200
+        assert unbound.json() == {"available": True, "bound": False,
+                                  "account_user_id": None}

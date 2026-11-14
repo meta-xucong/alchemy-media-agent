@@ -16,6 +16,7 @@
 - [RB33](RB33_VPS_CUTOVER_BLUEPRINT.md): stepwise Alchemy VPS release and RenderBridge API-pull cutover blueprint, with current phase evidence.
 - [RB34](RB34_V2_EXISTING_TASK_RECOVERY_WITHOUT_REQUEST_SHA.md): recover the existing V2 Bridge artifact by its durable job/task identities without generating a request or image SHA.
 - [RB35](RB35_NODE_REWARD_BINDING_CORRECTION.md): correct an accidental node reward account binding through an admin-verified, revision-guarded transfer that preserves both accounts' image totals.
+- [RB36](RB36_LOCAL_NODE_ACCOUNT_STATUS.md): show the current Alchemy account binding in the authenticated loopback Node Agent status page through a narrow signed lookup.
 
 RB00–RB12 and the integration package's older native/preview documents describe
 historical experimental milestones. Their evidence remains pinned to those

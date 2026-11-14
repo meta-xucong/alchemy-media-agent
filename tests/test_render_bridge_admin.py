@@ -62,6 +62,21 @@ def fixture(tmp_path, *, upstream=None, baseline=None, reward_factory=None, acco
     return app, controller, calls, constructed
 
 
+def test_install_passes_reward_read_secret_to_signed_node_account_status_route(tmp_path, monkeypatch):
+    import app.integrations.render_bridge.admin as admin_module
+    captured = {}
+
+    def capture_install(_app, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(admin_module, "install_node_reward_account_routes", capture_install)
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test", token=SECRET,
+        reward_read_token="reward-read-fixture", workspace="fixture-workspace",
+        storage=tmp_path / "bridge")
+    fixture(tmp_path, baseline=baseline)
+    assert captured["node_binding_status_secret"] == "reward-read-fixture"
+
+
 def settings(**changes):
     return {"mode": "enabled", "base_url": "https://bridge.test", "workspace": "fixture-workspace",
             "profiles": ["fake-image"], "native_enabled": False, "native_profiles": ["fake-image"], **changes}
