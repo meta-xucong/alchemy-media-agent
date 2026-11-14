@@ -1,4 +1,5 @@
 """Administrator control plane uses fixture transports, never real credentials."""
+import asyncio
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ import httpx
 import pytest
 
 from app.integrations.render_bridge.admin import AdminSettingsUpdate, install_render_bridge_admin
-from app.integrations.render_bridge.client import BridgeClient, BridgeRewardClient
+from app.integrations.render_bridge.client import BridgeClient, BridgeError, BridgeRewardClient
 from app.integrations.render_bridge.models import PreviewCreate
 from app.integrations.render_bridge.service import PreviewService
 from app.integrations.render_bridge.settings import BridgeSettings
@@ -498,6 +499,79 @@ def test_attention_projection_uses_curated_messages_and_legacy_support():
     assert attention_projection({"action_required": "import_original"})["code"] == "import_original"
     assert attention_projection({"action_required_detail": {"code": "unknown", "message": SECRET}}) is None
     assert attention_projection({"action_required_detail": {"code": []}}) is None
+
+
+def test_reward_claim_lookup_uses_fixed_path_and_digest_header():
+    digest = "a" * 64
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={"pool_id": "pool_1", "node_id": "node_1",
+            "executor_instance": "executor_1", "node_state": "active",
+            "rewardable_images": 4, "pool_name": "Fixture"})
+
+    client = BridgeRewardClient("https://bridge.test", "reward-reader",
+                                transport=httpx.MockTransport(respond))
+    try:
+        value = asyncio.run(client.claim_approval(digest))
+    finally:
+        asyncio.run(client.close())
+    assert value["node_id"] == "node_1"
+    assert len(calls) == 1
+    request = calls[0]
+    assert request.method == "GET"
+    assert request.url.path == "/bridge/rewards/v1/claim-approval"
+    assert request.url.query == b""
+    assert request.headers["x-reward-claim-digest"] == digest
+    assert request.headers["authorization"] == "Bearer reward-reader"
+    assert request.content == b""
+
+
+def test_reward_claim_lookup_rejects_malformed_digest_without_request():
+    calls = []
+    client = BridgeRewardClient("https://bridge.test", "reward-reader",
+                                transport=httpx.MockTransport(lambda request: calls.append(request)))
+    try:
+        with pytest.raises(BridgeError):
+            asyncio.run(client.claim_approval("bad-digest"))
+    finally:
+        asyncio.run(client.close())
+    assert calls == []
+
+
+def test_reward_claim_approval_uses_reader_credential_and_whitelists_fields(tmp_path):
+    digest = "b" * 64
+    calls = []
+
+    class FakeRewardClient:
+        async def claim_approval(self, supplied_digest):
+            calls.append((supplied_digest,))
+            return {"pool_id": "pool_1", "node_id": "node_1",
+                "executor_instance": "executor_1", "node_state": "active",
+                "rewardable_images": 8, "pool_name": "Fixture",
+                "private_field": "must-not-escape"}
+
+        async def close(self):
+            return None
+
+    def factory(base_url, token):
+        calls.append((base_url, token))
+        return FakeRewardClient()
+
+    baseline = BridgeSettings(mode="disabled", base_url="https://bridge.test",
+        token="control-secret", reward_read_token="reader-secret",
+        workspace="fixture-workspace", storage=tmp_path / "bridge")
+    app, controller, _, _ = fixture(tmp_path, baseline=baseline, reward_factory=factory)
+    result = asyncio.run(controller.reward_claim_approval(digest))
+    assert calls[0] == ("https://bridge.test", "reader-secret")
+    assert calls[1] == (digest,)
+    assert result == {"available": True, "pool_id": "pool_1", "node_id": "node_1",
+        "executor_instance": "executor_1", "node_state": "active",
+        "rewardable_images": 8, "pool_name": "Fixture"}
+    assert "control-secret" not in repr(calls)
+    assert "reader-secret" not in repr(result)
+    assert "must-not-escape" not in repr(result)
 
 
 def test_attention_projection_includes_codex_timeout_but_not_remote_text():
