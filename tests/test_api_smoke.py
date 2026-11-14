@@ -804,7 +804,7 @@ def test_alchemy_lab_generation_interval_is_applied(monkeypatch):
     async def fake_sleep(delay):
         delays.append(delay)
 
-    monkeypatch.setattr(alchemy_lab_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(alchemy_lab_module, "_sleep_for_generation_interval", fake_sleep)
     client = TestClient(app)
 
     response = client.post(
@@ -835,7 +835,7 @@ def test_alchemy_lab_live_provider_returns_async_session_and_serializes(monkeypa
         name = "openai_gpt_image"
 
     monkeypatch.setitem(image_service_module.registry.image_providers, "openai_gpt_image", LiveLikeMockProvider())
-    monkeypatch.setattr(alchemy_lab_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(alchemy_lab_module, "_sleep_for_generation_interval", fake_sleep)
     with TestClient(app) as client:
         response = client.post(
             "/api/lab/rare-style-explorer/sessions",
@@ -2612,8 +2612,13 @@ def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():
         assert "function v1ImageJobDeferred" in text
         assert "polling_deferred: true" in text
         assert "任务状态暂时无法读取，正在继续查询同一任务。" in text
-        assert "return deferV1ImageJob(job" in text
         assert "function refreshV1GenerationSideEffects" in text
+        refresh_body = text.split("async function refreshV1GenerationSideEffects()", 1)[1].split("async function waitForV1ImageJob", 1)[0]
+        assert "try {" in refresh_body
+        assert "catch (error)" in refresh_body
+        assert "V1 post-generation ${label} refresh failed" in refresh_body
+        gallery_position = text.index("renderGallery(completedJob.outputs)")
+        assert gallery_position < text.index("await refreshV1GenerationSideEffects();", gallery_position)
         assert "function textProviderForModel" in text
         assert 'default_llm_model: els.agentLlmModelInput.value.trim() || "claude-sonnet-5-5"' in text
         assert 'backup_llm_model: els.openaiLlmModelInput.value.trim() || "kimi-k3"' in text

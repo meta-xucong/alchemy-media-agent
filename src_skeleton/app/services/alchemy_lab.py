@@ -892,7 +892,7 @@ async def _run_exploration_session_owned(session_id: str, *, veyra_user_id: int 
         if _primary_session_canceled(checkpoint):
             return checkpoint
         if wait_seconds > 0:
-            await asyncio.sleep(wait_seconds)
+            await _sleep_for_generation_interval(wait_seconds)
 
     session.errors = [variant.error for variant in session.variants if variant.error]
     succeeded = [variant for variant in session.variants if variant.status == "succeeded"]
@@ -1277,6 +1277,12 @@ def _progress_payload(
 
 async def _sleep_before_retry(error: ExplorationError | None, *, attempt: int) -> None:
     delay = _retry_backoff_seconds(error, attempt=attempt)
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+async def _sleep_for_generation_interval(delay: float) -> None:
+    """Yield between generated variants so other async tasks can make progress."""
     if delay > 0:
         await asyncio.sleep(delay)
 
