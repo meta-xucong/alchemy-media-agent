@@ -229,11 +229,22 @@ async def _run_owned(job, request, *, edit, transport, existing):
                         retryable=False,
                     )
                     return True
-                message = (
-                    "Render Bridge input storage stayed busy; no remote image task was created."
-                    if result.reason == "bridge_store_busy"
-                    else "Render Bridge owns this image; resume the same task."
-                )
+                if result.reason == "bridge_store_busy":
+                    message = "Render Bridge input storage stayed busy; no remote image task was created."
+                elif result.state == "failed":
+                    message = (
+                        "Render Bridge confirmed this image task failed. No image was returned. "
+                        "Start a new image request to try again."
+                    )
+                elif result.state == "expired":
+                    message = (
+                        "Render Bridge marked this image task expired. No image was returned. "
+                        "Review the task status before submitting another request."
+                    )
+                elif result.state == "canceled":
+                    message = "This Render Bridge image task was canceled. No image was returned."
+                else:
+                    message = "Render Bridge owns this image; resume the same task."
                 job.error = ProviderError(code=f"bridge_{result.state}", message=message, retryable=False)
                 return True
             image = result.image

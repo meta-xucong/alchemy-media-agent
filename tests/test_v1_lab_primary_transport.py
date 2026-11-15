@@ -139,12 +139,31 @@ def test_v1_pending_restart_same_origin_no_api(runtime, state):
     if state == 'bridge_submission_unknown': bridge.error = BridgeError('bridge_unreachable')
     job = asyncio.run(submit())
     assert job.status == JobStatus.generating and api.calls == 0
+    assert job.error and 'resume the same task' in job.error.message
     assert repository.recover_interrupted_jobs(batch_size=1) == 0
     resumed = asyncio.run(primary.resume_primary_job(job.id))
     assert resumed.status == JobStatus.generating and bridge.creates == 1 and api.calls == 0
     bridge.state = 'artifacts_ready'
     resumed = asyncio.run(primary.resume_primary_job(job.id))
     assert resumed.status == JobStatus.ready and len(resumed.outputs) == 1
+    assert bridge.creates == 1 and api.calls == 0
+
+
+@pytest.mark.parametrize('state,expected_status,expected_message', [
+    ('failed', JobStatus.failed, 'confirmed this image task failed'),
+    ('expired', JobStatus.failed, 'marked this image task expired'),
+    ('canceled', JobStatus.canceled, 'image task was canceled'),
+])
+def test_v1_terminal_bridge_states_do_not_claim_same_task_can_resume(
+        runtime, state, expected_status, expected_message):
+    bridge, api = runtime
+    bridge.state = state
+    job = asyncio.run(submit())
+
+    assert job.status == expected_status
+    assert job.error.code == f'bridge_{state}'
+    assert expected_message in job.error.message
+    assert 'resume the same task' not in job.error.message
     assert bridge.creates == 1 and api.calls == 0
 
 
