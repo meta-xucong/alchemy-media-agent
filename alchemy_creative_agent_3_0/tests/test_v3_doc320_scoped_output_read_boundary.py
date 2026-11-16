@@ -40,9 +40,17 @@ def test_list_by_job_limit_is_optional_and_bounded(tmp_path) -> None:
     assert len(store.list_by_job("job_doc320")) == 3
 
 
-def test_list_by_jobs_returns_multiple_job_groups_from_one_lookup(tmp_path) -> None:
+def test_list_by_jobs_returns_multiple_job_groups_from_one_lookup(tmp_path, monkeypatch) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     records = []
+    created_at_values = iter(
+        (
+            "2026-01-01T00:00:00.000001Z",
+            "2026-01-01T00:00:00.000002Z",
+            "2026-01-01T00:00:00.000003Z",
+        )
+    )
+    monkeypatch.setattr(outputs_module, "_now_iso", lambda: next(created_at_values))
     for index, job_id in enumerate(("job_batch_a", "job_batch_b", "job_batch_a")):
         records.append(
             store.save_base64_output(
@@ -150,6 +158,14 @@ def test_global_history_cache_reuses_page_and_reindexes_out_of_band_timestamp_ch
     root = tmp_path / "outputs"
     store = V3GeneratedOutputStore(root)
     output_ids = [f"v3_output_{index:020x}" for index in range(3)]
+    created_at_values = iter(
+        (
+            "2026-01-01T00:00:00.000001Z",
+            "2026-01-01T00:00:00.000002Z",
+            "2026-01-01T00:00:00.000003Z",
+        )
+    )
+    monkeypatch.setattr(outputs_module, "_now_iso", lambda: next(created_at_values))
     for output_id in output_ids:
         _save(store, output_id, project_id="project_global_cache")
 
