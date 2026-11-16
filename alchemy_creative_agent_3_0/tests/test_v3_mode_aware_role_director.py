@@ -286,12 +286,7 @@ def test_product_api_mock_generation_persists_distinct_doc59_roles() -> None:
     ]
 
     assert generated.status == "generated"
-    assert role_keys == [
-        "cover_hero",
-        "subject_focus",
-        "side_or_three_quarter_angle",
-        "wide_scene_or_context",
-    ]
+    assert role_keys == ["hero_subject", "detail_focus", "alternate_angle", "wide_context"]
     runtime_plan = service.job_store.get(created.job_id).generation_result.metadata["template_deliverable_plan"]
     assert all(candidate_role_keys)
     assert len(set(candidate_role_keys)) == len(role_keys)

@@ -1,6 +1,7 @@
 import base64
 import json
 from io import BytesIO
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2637,14 +2638,15 @@ def test_product_api_history_batches_partial_recovery_lookup() -> None:
     from alchemy_creative_agent_3_0.app.product_api.contracts import V3JobHistoryItem
 
     service = object.__new__(V3ProductApiService)
+    now = datetime.now(timezone.utc)
     records = [
         SimpleNamespace(
             job_id=f"job_partial_{index}",
             request=SimpleNamespace(metadata={}),
             status="blocked",
             generation_result=None,
-            created_at=f"2026-10-28T00:0{index}:00+00:00",
-            updated_at=f"2026-10-28T00:0{index}:00+00:00",
+            created_at=(now - timedelta(seconds=2 - index)).isoformat(),
+            updated_at=(now - timedelta(seconds=2 - index)).isoformat(),
         )
         for index in range(2)
     ]

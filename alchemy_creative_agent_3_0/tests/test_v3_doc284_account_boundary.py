@@ -19,6 +19,12 @@ from alchemy_creative_agent_3_0.app.project_mode.contracts import (
 )
 from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
 
+@pytest.fixture(autouse=True)
+def _offline_veyra_account_role(monkeypatch):
+    async def account(_user_id):
+        return SimpleNamespace(role="member", status="active")
+    monkeypatch.setattr(main_module, "_veyra_account", account)
+
 
 def _request() -> object:
     return object()

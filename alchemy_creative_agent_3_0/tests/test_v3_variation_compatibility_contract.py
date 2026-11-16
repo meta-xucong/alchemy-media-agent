@@ -494,15 +494,15 @@ def test_brain_payload_defines_shot_axis_materialization_without_local_recipe_le
     payload = json.loads(build_remote_payload(request))
     guidance = payload["variation_execution_contract_instructions"]
     for phrase in (
-        "non-primary row's frozen shot-changing axes",
+        "each row's frozen",
         "override only directly conflicting baseline camera",
         "camera/subject view",
         "visible at a glance",
         "clear three-quarter or side relationship",
-        "body arrangement, weight, torso/head relationship",
+        "different body arrangement, weight, torso/head relationship",
         "visibly different silhouette",
-        "tiny weight shift or detail emphasis alone does not satisfy pose",
-        "presentation changes only and cannot stand in for a shot-changing axis",
+        "A tiny weight shift or detail emphasis alone does not satisfy pose",
+        "Framing, scale, detail, and depth are presentation changes only",
         "materially different shot family",
         "controlled action-compatible variation",
     ):
@@ -513,7 +513,7 @@ def test_brain_payload_defines_shot_axis_materialization_without_local_recipe_le
     finalizer_payload = json.loads(build_remote_payload(_finalizer_request(_general_contract(count=2))))
     finalizer_contract = finalizer_payload["remote_response_contract"]
     assert "variation_execution_suite_direction_authoritative is true" in finalizer_contract
-    assert "non-primary row's frozen shot-changing axes" in finalizer_contract
+    assert "each row's frozen" in finalizer_contract
     assert "camera/subject view" in finalizer_contract
     assert "materially different shot family" in finalizer_contract
 

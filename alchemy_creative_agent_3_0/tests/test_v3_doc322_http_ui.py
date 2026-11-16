@@ -152,7 +152,8 @@ def test_bind_and_unbind_show_spinner_until_the_write_finishes(browser):
         window.bindPromise=window.AlchemyContinuity.bind(window.options,{output_id:'new',job_id:'job'},document.querySelector('#bind'));
       });
     }""")
-    unbind=page.get_by_role('button',name='解绑主图')
+    assert page.get_by_role('button',name='解绑主图').count()==1
+    unbind=page.locator('.v3-continuity-anchor-unbind')
     unbind.click()
     assert unbind.is_disabled()
     assert unbind.locator('.v3-continuity-loading-spinner').count()==1
@@ -179,7 +180,7 @@ def test_bind_and_unbind_show_spinner_until_the_write_finishes(browser):
       document.querySelector('main').appendChild(window.rerenderedBind);
       window.AlchemyContinuity.showPending(window.rerenderedBind,'p','new');
     }""")
-    assert page.locator('main > button').nth(1).is_disabled()
+    assert page.locator('#rerenderedBind').is_disabled()
     assert page.locator('main > button .v3-continuity-loading-spinner').count()==1
     page.evaluate("window.releaseWrite({})")
     page.wait_for_function("typeof window.releaseRefresh==='function'")

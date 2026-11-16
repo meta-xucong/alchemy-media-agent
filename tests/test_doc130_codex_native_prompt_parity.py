@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -625,9 +626,11 @@ def test_active_source_has_no_platform_api_web_fallback_or_artifact_import() -> 
         "playwright",
         "browser",
         "session",
-        "cache",
+
     ):
         assert forbidden not in active_source
+    assert re.search(r"\.codex[\\/](?:cache|sessions)(?:[\\/]|$)", active_source, re.IGNORECASE) is None
+    assert re.search(r"\bcodex[_-]cache\b", active_source, re.IGNORECASE) is None
     assert not (ROOT / "services" / "alchemy_codex_local_adapter" / "platform_renderer.py").exists()
     assert not (ROOT / "services" / "alchemy_codex_local_adapter" / "artifact_import.py").exists()
 

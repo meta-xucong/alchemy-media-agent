@@ -40,6 +40,41 @@ def _request(*, count: int = 2, approved_copy: str | None = None) -> dict:
     }
 
 
+def _attach_test_pixel_review(service: V3ProductApiService, job_id: str) -> None:
+    """Give export tests explicit, output-bound review evidence.
+
+    The default fixture uses a mock image provider and intentionally has no
+    certified real-pixel review. Export mapping tests opt into this test-only
+    receipt so they exercise packaging after the same gate production requires.
+    """
+    record = service.job_store.get(job_id)
+    assert record is not None and record.generation_result is not None
+    result = record.generation_result.model_copy(deep=True)
+    inspections = []
+    for asset in result.asset_pack.assets:
+        metadata = dict(asset.metadata or {})
+        candidate_metadata = metadata.get("candidate_metadata")
+        candidate_metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
+        output_id = str(candidate_metadata.get("output_id") or metadata.get("output_id") or "").strip()
+        assert output_id
+        inspections.append(
+            {
+                "output_id": output_id,
+                "asset_id": str(asset.asset_id),
+                "mode": "vision_model",
+                "status": "pass",
+                "verification_state": "verified",
+                "evidence": {"provider_pixel_result_certified": True},
+            }
+        )
+    result.metadata["post_generation_review_package"] = {
+        "review_evidence_receipt_status": "complete",
+        "inspections": inspections,
+    }
+    record.generation_result = result
+    service.job_store.save(record)
+
+
 def test_ecommerce_manifest_is_active_but_names_remote_brain_not_local_recipe_components() -> None:
     resolution = ScenarioPackRegistry().resolve({"scenario_id": "ecommerce"})
 
@@ -212,6 +247,7 @@ def test_test_only_remote_brain_drives_opaque_outputs_and_provider_native_copy()
     assert len(provider.requests) == 2
     assert provider.requests[-1]["stage"] == "provider_prompt_finalize"
 
+    _attach_test_pixel_review(service, created.job_id)
     exported = service.export_job(created.job_id)
     assert exported.export_package is not None
     assert exported.export_package["naming_pattern"] == "{opaque_output_id}.png"
@@ -309,11 +345,23 @@ def test_ecommerce_exact_count_survives_plan_generation_and_export(count: int) -
     assert len(generated.asset_series) == count
     assert len(generated.candidates) == count
 
+    _attach_test_pixel_review(service, created.job_id)
     exported = service.export_job(created.job_id)
     assert len(exported.export_package["files"]) == count
     assert [item["opaque_output_id"] for item in exported.export_package["files"]] == [
         item["output_id"] for item in created.ecommerce.remote_brain_output_intents
     ]
+
+
+def test_ecommerce_export_withholds_unreviewed_mock_outputs() -> None:
+    service = ecommerce_test_service()
+    created = service.create_job(_request(count=1))
+    service.generate_job(created.job_id, {"quality_mode": "standard"})
+
+    exported = service.export_job(created.job_id)
+
+    assert exported.export_package["files"] == []
+    assert exported.export_package["review_status"] == "attention"
 
 
 def test_ecommerce_declared_capacity_blocks_with_provenance_instead_of_truncating() -> None:

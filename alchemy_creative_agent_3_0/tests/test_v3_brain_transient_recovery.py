@@ -19,13 +19,23 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
 
 
 def _configure_brain(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "deepseek")
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "deepseek-test")
-    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
-    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "brain-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "chat_stream")
     monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "20")
     monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "7")
+    # These cases isolate per-model transport recovery; model-route failover
+    # has separate coverage in the Brain adapter tests.
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    monkeypatch.setattr(
+        brain_providers,
+        "build_v3_model_candidates",
+        lambda _primary, _backup: (("openai", "deepseek-test"),),
+    )
 
 
 def test_transient_upstream_http_failure_retries_same_frozen_request(monkeypatch) -> None:
@@ -265,22 +275,25 @@ def test_failed_serialization_recovery_preserves_bounded_attempt_receipt(monkeyp
             provider.run(BrainRunRequest(user_input="Create one natural portrait.", stage="plan"))
 
     receipt = transport_failure_receipt(failure.value)
-    assert receipt == {
-            "schema_version": "v3_brain_transport_attempt_v1",
-            "stage": "plan",
-            "attempts": 2,
-            "request_acceptance": "dispatched",
-            "request_dispatched": True,
+    expected_receipt = {
+        "schema_version": "v3_brain_transport_attempt_v1",
+        "stage": "plan",
+        "attempts": 2,
+        "request_acceptance": "dispatched",
+        "request_dispatched": True,
         "response_started": True,
         "first_content_observed": True,
         "complete_response_observed": False,
         "json_parse_started": False,
         "json_parse_completed": False,
-            "json_recovery": True,
-            "json_serialization_recovery_attempted": True,
-            "transient_recovery_attempted": False,
-            "protocol_fallback_attempted": False,
-        }
+        "json_recovery": True,
+        "json_serialization_recovery_attempted": True,
+        "transient_recovery_attempted": False,
+        "protocol_fallback_attempted": False,
+    }
+    assert {key: receipt[key] for key in expected_receipt} == expected_receipt
+    assert receipt["fallback_used"] is False
+    assert [item["model"] for item in receipt["model_attempts"]] == ["deepseek-test"]
 
     audit = V3LLMBrainAdapter(provider=provider).provider_failure_audit(failure.value, stage="plan")
     assert audit["remote_brain_request_started"] is True

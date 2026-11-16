@@ -1566,6 +1566,13 @@ def test_work_intensity_uses_backup_llm_when_primary_fails(monkeypatch):
         def __init__(self, **kwargs):
             captured["client_kwargs"].append(kwargs)
             self.responses = FakeResponses()
+            class FakeChatCompletions:
+                async def create(self, **request_kwargs):
+                    response = await FakeResponses().create(**request_kwargs)
+                    return SimpleNamespace(choices=[SimpleNamespace(
+                        message=SimpleNamespace(content=response.output_text)
+                    )])
+            self.chat = SimpleNamespace(completions=FakeChatCompletions())
 
     monkeypatch.setattr(settings, "llm_gateway_api_key", "sk-test-planner")
     monkeypatch.setattr(settings, "llm_gateway_base_url", "https://gateway.example.test/v1")

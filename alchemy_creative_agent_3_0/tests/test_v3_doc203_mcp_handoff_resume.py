@@ -3564,6 +3564,31 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
     assert projected.metadata.get("output_id")
     assert projected.file_path and Path(projected.file_path).is_file()
     assert projected.uri
+    candidate_projection = projected.metadata.get("candidate_metadata")
+    assert isinstance(candidate_projection, dict)
+    assert candidate_projection["mcp_materialization"] == {
+        "handoff_id": pending["handoff_id"],
+        "status": "job_checkpointed",
+        "generation_channel": "mcp",
+        "expected_checkpoint": {
+            "job_id": job_id,
+            "candidate_id": candidate_id,
+            "output_id": projected.metadata["output_id"],
+            "generation_result_id": updated.generation_result.planning_result_id,
+        },
+    }
+    durable_handoff = handoff_store.get(pending["handoff_id"])
+    assert durable_handoff is not None
+    assert durable_handoff["status"] == "job_checkpointed"
+    assert durable_handoff["job_checkpoint"] == {
+        "status": "job_checkpointed",
+        "operation_id": operation_id,
+        "handoff_id": pending["handoff_id"],
+        "job_id": job_id,
+        "candidate_id": candidate_id,
+        "output_id": projected.metadata["output_id"],
+        "generation_result_id": updated.generation_result.planning_result_id,
+    }
     assert len(output_store.list_by_job(job_id)) == 1
     assert not updated.generation_result.metadata.get("post_generation_review_recheck_required")
 
@@ -5085,10 +5110,178 @@ def test_doc228_review_only_resume_rejects_checkpoint_identity_mismatch(
     updated = job_store.get(job_id)
     assert status.status == ProductJobStatusValue.BLOCKED
     assert _NoRuntime.calls == 0
-    assert vision.calls == 1
+    # A mismatched durable checkpoint must fail closed before Vision sees any
+    # output, even when the caller requested review-only continuation.
+    assert vision.calls == 0
     assert updated is not None
     assert updated.request.metadata["mcp_review_status"]["reason_code"] == expected_reason
     assert updated.request.metadata["mcp_materialization"]["status"] == "pending"
+
+
+def _doc228_result_without_mcp_identity_field(result: PlanningResult, field: str) -> PlanningResult:
+    asset = result.asset_pack.assets[0]
+    asset_metadata = dict(asset.metadata or {})
+    candidate_metadata = dict(asset_metadata.get("candidate_metadata") or {})
+    materialization = dict(candidate_metadata.get("mcp_materialization") or {})
+    if field == "handoff_id":
+        materialization.pop("handoff_id", None)
+        candidate_metadata["mcp_materialization"] = materialization
+    elif field == "output_id":
+        candidate_metadata.pop("output_id", None)
+        asset_metadata.pop("output_id", None)
+    elif field == "candidate_id":
+        candidate_metadata.pop("candidate_id", None)
+        asset_metadata.pop("selected_candidate_id", None)
+    else:
+        raise AssertionError(f"unsupported MCP identity field: {field}")
+    asset_metadata["candidate_metadata"] = candidate_metadata
+    updated_asset = asset.model_copy(update={"metadata": asset_metadata})
+    updated_pack = result.asset_pack.model_copy(update={"assets": [updated_asset]})
+    return result.model_copy(update={"asset_pack": updated_pack})
+
+
+@pytest.mark.parametrize("missing_field", ["handoff_id", "output_id", "candidate_id"])
+def test_doc228_review_only_resume_blocks_when_mcp_identity_is_incomplete(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    job_id = f"job_doc228_missing_{missing_field}"
+    output_id = f"v3_output_missing_{missing_field}"
+    candidate_id = f"candidate_missing_{missing_field}"
+    handoff_id = f"mcp_handoff_missing_{missing_field}"
+    operation_id = f"people_doc228:expression_set:expression.laugh:2:round5:{missing_field}"
+    result, record, _timeout_package = _doc228_generated_timeout_record(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+        operation_id=operation_id,
+        handoff_id=handoff_id,
+        request_handoff_status="pending",
+    )
+    result = _doc228_result_without_mcp_identity_field(result, missing_field)
+    record.generation_result = result
+    record.planning_result = result
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    job_store.save(record)
+
+    class _NoRuntime:
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            raise AssertionError("incomplete MCP identity must not regenerate")
+
+    class _Vision:
+        calls = 0
+
+        def inspect(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls += 1
+            raise AssertionError("incomplete MCP identity must block before Vision")
+
+    class _MatchingHandoffStore:
+        calls = 0
+
+        def get(self, requested_handoff_id):  # noqa: ANN001, ANN201
+            self.calls += 1
+            return {
+                "handoff_id": requested_handoff_id,
+                "status": "job_checkpointed",
+                "job_checkpoint": {
+                    "status": "job_checkpointed",
+                    "operation_id": operation_id,
+                    "handoff_id": handoff_id,
+                    "job_id": job_id,
+                    "candidate_id": candidate_id,
+                    "output_id": output_id,
+                    "generation_result_id": result.planning_result_id,
+                },
+            }
+
+    vision = _Vision()
+    handoff_store = _MatchingHandoffStore()
+    service = V3ProductApiService(
+        scenario_runtime=_NoRuntime(),  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+        vision_inspector=vision,  # type: ignore[arg-type]
+        mcp_materialization_store=handoff_store,  # type: ignore[arg-type]
+    )
+
+    status = service._resume_finalizing_generation_review(
+        record,
+        service._coerce_generate_request({}),
+        review_only=True,
+    )
+
+    updated = job_store.get(job_id)
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert vision.calls == 0
+    assert handoff_store.calls == 0
+    assert updated is not None
+    assert updated.request.metadata["mcp_review_status"]["status"] == "pending"
+    assert updated.request.metadata["mcp_review_status"]["reason_code"] == "mcp_materialization_checkpoint_mismatch"
+    assert updated.status == ProductJobStatusValue.BLOCKED
+
+
+def test_doc228_review_identity_uses_later_complete_asset_after_consistent_partial_asset() -> None:
+    job_id = "job_doc228_multi_asset_identity"
+    output_id = "v3_output_doc228_multi_asset"
+    candidate_id = "candidate_doc228_multi_asset"
+    handoff_id = "mcp_handoff_doc228_multi_asset"
+    result, _record, _timeout_package = _doc228_generated_timeout_record(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+        operation_id="people_doc228:expression_set:expression.laugh:2:round5:multi_asset",
+        handoff_id=handoff_id,
+        request_handoff_status="pending",
+    )
+    partial = _doc228_result_without_mcp_identity_field(result, "handoff_id").asset_pack.assets[0]
+    complete = result.asset_pack.assets[0]
+    multi_asset_result = result.model_copy(
+        update={"asset_pack": result.asset_pack.model_copy(update={"assets": [partial, complete]})}
+    )
+    service = object.__new__(V3ProductApiService)
+
+    assert service._mcp_review_resume_checkpoint_identity(multi_asset_result) == (
+        handoff_id,
+        output_id,
+        candidate_id,
+    )
+
+
+def test_doc228_review_identity_rejects_conflicting_complete_assets() -> None:
+    result, _record, _timeout_package = _doc228_generated_timeout_record(
+        job_id="job_doc228_conflicting_asset_identity",
+        output_id="v3_output_doc228_conflict_a",
+        candidate_id="candidate_doc228_conflict_a",
+        operation_id="people_doc228:expression_set:expression.laugh:2:round5:conflict",
+        handoff_id="mcp_handoff_doc228_conflict_a",
+        request_handoff_status="pending",
+    )
+    first = result.asset_pack.assets[0]
+    second_metadata = dict(first.metadata or {})
+    candidate_metadata = dict(second_metadata["candidate_metadata"])
+    materialization = dict(candidate_metadata["mcp_materialization"])
+    candidate_metadata.update(
+        {
+            "output_id": "v3_output_doc228_conflict_b",
+            "candidate_id": "candidate_doc228_conflict_b",
+        }
+    )
+    materialization["handoff_id"] = "mcp_handoff_doc228_conflict_b"
+    candidate_metadata["mcp_materialization"] = materialization
+    second_metadata.update(
+        {
+            "output_id": "v3_output_doc228_conflict_b",
+            "selected_candidate_id": "candidate_doc228_conflict_b",
+            "candidate_metadata": candidate_metadata,
+        }
+    )
+    second = first.model_copy(update={"metadata": second_metadata})
+    multi_asset_result = result.model_copy(
+        update={"asset_pack": result.asset_pack.model_copy(update={"assets": [first, second]})}
+    )
+    service = object.__new__(V3ProductApiService)
+
+    assert service._mcp_review_resume_checkpoint_identity(multi_asset_result) == ("", "", "")
 
 
 def test_doc228_host_keeps_review_timeout_resumable_after_second_timeout() -> None:

@@ -53,6 +53,18 @@ def _handlers(tmp_path: Path, *, provider: EcommerceRemoteBrainTestProvider | No
     )
 
 
+def _override_job_read_snapshot_status(handlers, job_id: str, status, monkeypatch) -> None:
+    """Inject a public job status at the same authority used by output reads."""
+
+    original = handlers.service.get_job_read_snapshot
+
+    def read_snapshot(target_job_id: str, *, output_records=None):
+        current_status, record = original(target_job_id, output_records=output_records)
+        return (status, record) if target_job_id == job_id else (current_status, record)
+
+    monkeypatch.setattr(handlers.service, "get_job_read_snapshot", read_snapshot)
+
+
 def _job_payload(*, count: int, legacy_mode: str | None = None) -> dict:
     metadata = {"requested_image_count": count}
     if legacy_mode:
@@ -211,7 +223,7 @@ def test_doc132_held_shared_delivery_is_not_projected_as_a_final_result(tmp_path
                 "post_generation_review": {
                     "inspections": [
                         {
-                            "output_id": base_status.candidates[0].candidate_id,
+                            "output_id": handlers.service.output_store.list_by_job(job["job_id"])[0].output_id,
                             "mode": "hybrid",
                             "status": "manual_review",
                             "verification_state": "verified",
@@ -232,6 +244,7 @@ def test_doc132_held_shared_delivery_is_not_projected_as_a_final_result(tmp_path
         "get_job",
         lambda job_id: held_status if job_id == job["job_id"] else original_get_job(job_id),
     )
+    _override_job_read_snapshot_status(handlers, job["job_id"], held_status, monkeypatch)
 
     assert handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["items"] == []
 

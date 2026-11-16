@@ -326,6 +326,17 @@ def test_doc263_homepage_carousel_excludes_review_withheld_output_but_project_hi
         return original_get_job(job_id)
 
     monkeypatch.setattr(handlers.service, "get_job", _get_job)
+    original_snapshot = handlers.service.get_job_read_snapshot
+
+    def _get_job_read_snapshot(job_id: str, *, output_records=None):
+        current_status, record = original_snapshot(job_id, output_records=output_records)
+        if job_id == delivered_job["job_id"]:
+            return delivered_status, record
+        if job_id == withheld_job["job_id"]:
+            return withheld_status, record
+        return current_status, record
+
+    monkeypatch.setattr(handlers.service, "get_job_read_snapshot", _get_job_read_snapshot)
 
     history = handlers.get_project_outputs(project_id=project_id, compact=True)
     homepage = handlers.get_projects(limit=10)["projects"]

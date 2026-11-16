@@ -365,11 +365,11 @@ def test_single_hero_retry_rebinds_the_frozen_role_to_the_certified_retry_winner
     assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 1
 
 
-def test_professional_set_retry_provider_failure_keeps_previous_certified_role_winner(monkeypatch, tmp_path) -> None:
+def test_professional_set_retry_provider_failure_preserves_certified_sibling_roles(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     handlers, provider = _handlers_with_recording_production_provider(
         tmp_path,
-        fail_role="session_hero",
+        fail_role="environmental_context",
         fail_role_on_attempt=2,
     )
 
@@ -410,45 +410,132 @@ def test_professional_set_retry_provider_failure_keeps_previous_certified_role_w
         continuation=GenerateContinuation(job_id=root["job_id"], max_visual_retry_attempts=1),
     )
 
-    assert generated["status"] == "generated", generated.get("metadata", {}).get("specialized_execution_summary")
-    assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 3
-    assert len(provider.requests) == 6
-    assert provider.role_attempts["session_hero"] == 2
+    assert generated["status"] == "blocked", generated.get("metadata", {}).get("specialized_execution_summary")
+    assert generated["metadata"]["specialized_execution_summary"]["final_delivery_withheld"] is True
+    assert generated["metadata"]["specialized_execution_summary"]["append_only_history_preserved"] is True
+    assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 2
+    assert len(provider.requests) == 4
+    assert provider.role_attempts["environmental_context"] == 2
     record = handlers.service.get_job_record(root["job_id"])
     assert record is not None
     role_summaries = record.request.metadata["specialized_execution_summary"]["roles"]
     hero = next(item for item in role_summaries if item["role_key"] == "session_hero")
+    detail = next(item for item in role_summaries if item["role_key"] == "detail_or_moment")
     assert hero["candidate_id"] == "candidate_session_hero_1"
     assert hero["status"] == "generated"
     assert hero["certification_state"] == "certified"
     assert hero["review_status"] == "pass"
-    raw_hero = next(
-        item
-        for item in record.generation_result.metadata["specialized_role_execution"]["roles"]
-        if item["role_key"] == "session_hero"
-    )
-    assert raw_hero["status"] == "failed"
-    assert raw_hero["provider_failure"]
-    assert "candidate_session_hero_1" in raw_hero["previous_candidate_ids"]
-    preference = record.generation_result.metadata["reviewed_delivery_preference"]
-    winner_output_ids = set(preference["preferred_output_ids"])
-    hero_inspection = next(
-        item
-        for item in record.generation_result.metadata["post_generation_review_package"]["inspections"]
-        if item.get("candidate_id") == hero["candidate_id"]
-    )
-    assert hero_inspection["status"] == "pass"
-    assert hero_inspection["output_id"] in winner_output_ids
-    assert {
-        item["output_id"] for item in generated["asset_series"] if item.get("output_id")
-    } == winner_output_ids
+    assert detail["candidate_id"] == "candidate_detail_or_moment_3"
+    assert detail["certification_state"] == "certified"
+    retry_record = record.generation_result.metadata["visual_auto_retry"]["records"][0]
+    retry_outcome = retry_record["metadata"]["retry_outcome"]
+    assert retry_record["status"] == "blocked"
+    assert retry_outcome["reason_code"] == "retry_provider_failed_without_pixels"
+    assert retry_outcome["provider_request_started"] is True
+    assert retry_outcome["provider_failure"]["final_failure_code"] == "image_generation_invalid_request_unattributed"
+    assert "must never reach a Project response" not in str(retry_outcome)
+    assert "private.invalid" not in str(retry_outcome)
+    delivered_roles = {
+        item["metadata"]["asset_metadata"]["mode_role_key"]
+        for item in generated["asset_series"]
+        if item.get("output_id") and item.get("metadata", {}).get("asset_metadata", {}).get("mode_role_key")
+    }
+    assert delivered_roles == {"session_hero", "detail_or_moment"}
     project_output_ids = {
         item["output_id"]
         for item in handlers.get_project_outputs(project_id=project["project_id"])["items"]
         if item.get("job_id") == root["job_id"] and item.get("output_id")
     }
-    assert project_output_ids == winner_output_ids
-    assert len(project_output_ids) == 3
+    assert project_output_ids == set()
+
+
+def test_professional_set_failed_targeted_retry_keeps_same_role_receipt_backed_winner(monkeypatch, tmp_path) -> None:
+    """A failed retry must not displace that role's already certified winner."""
+
+    monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
+    handlers, _provider = _handlers_with_recording_production_provider(tmp_path)
+    _project, root = _project_and_root(handlers, require_real_images=True)
+    generated = _generate_project_job(handlers, _project, root)
+
+    assert generated["status"] == "generated"
+    record = handlers.service.get_job_record(root["job_id"])
+    assert record is not None and record.generation_result is not None
+    base_result = record.generation_result
+    _base_final_delivery, base_eligible_output_ids, _base_eligible_asset_ids = (
+        handlers.service._public_final_delivery_projection(base_result)
+    )
+    assert len(base_eligible_output_ids) == 3
+    base_result = base_result.model_copy(
+        update={
+            "metadata": {
+                **deepcopy(base_result.metadata),
+                "reviewed_delivery_preference": {
+                    "preferred_output_ids": sorted(base_eligible_output_ids),
+                },
+            }
+        },
+        deep=True,
+    )
+    base_execution = deepcopy(base_result.metadata["specialized_role_execution"])
+    target = next(role for role in base_execution["roles"] if role["role_key"] == "environmental_context")
+    previous_winner_id = target["candidate_id"]
+    retry_role = {
+        **deepcopy(target),
+        "candidate_id": "candidate_environmental_context_retry_without_pixels",
+        "status": "failed",
+        "provider_failure": {"final_failure_code": "image_generation_invalid_request_unattributed"},
+    }
+    retry_execution = {**base_execution, "roles": [retry_role]}
+    retry_result = base_result.model_copy(
+        update={
+            "metadata": {
+                **deepcopy(base_result.metadata),
+                "specialized_role_execution": retry_execution,
+            }
+        },
+        deep=True,
+    )
+
+    merged_execution = handlers.service._merge_specialized_role_execution(base_result, retry_result)
+    assert merged_execution is not None
+    merged_target = next(role for role in merged_execution["roles"] if role["role_key"] == "environmental_context")
+    assert merged_target["status"] == "failed"
+    assert merged_target["candidate_id"] == retry_role["candidate_id"]
+    assert merged_target["previous_candidate_ids"] == [previous_winner_id]
+    assert merged_target["provider_failure"] == retry_role["provider_failure"]
+
+    merged_result = base_result.model_copy(
+        update={
+            "metadata": {
+                **deepcopy(base_result.metadata),
+                "specialized_role_execution": merged_execution,
+            }
+        },
+        deep=True,
+    )
+    final_delivery, eligible_output_ids, _eligible_asset_ids = handlers.service._public_final_delivery_projection(merged_result)
+    baseline_preferred_ids = set(base_result.metadata["reviewed_delivery_preference"]["preferred_output_ids"])
+    assert eligible_output_ids == baseline_preferred_ids
+    assert final_delivery["final_delivery_output_count"] == len(baseline_preferred_ids) == 3
+    summary = handlers.service._specialized_role_execution_terminal_summary(record, merged_result)
+    assert summary is not None
+    assert summary["status"] == "complete"
+    assert summary["final_delivery_withheld"] is False
+    selected_target = next(role for role in summary["roles"] if role["role_key"] == "environmental_context")
+    assert selected_target["candidate_id"] == previous_winner_id
+    assert selected_target["status"] == "generated"
+    assert selected_target["certification_state"] == "certified"
+    assert selected_target["provider_failure"] == {}
+
+    preferred_ids = baseline_preferred_ids
+    target_inspection = next(
+        inspection
+        for inspection in base_result.metadata["post_generation_review_package"]["inspections"]
+        if inspection.get("candidate_id") == previous_winner_id
+    )
+    assert target_inspection["output_id"] in preferred_ids
+    assert target_inspection["status"] == "pass"
+    assert merged_target["candidate_id"] != selected_target["candidate_id"]
 
 
 def test_professional_set_mixed_retry_winners_keep_role_candidate_and_review_binding(monkeypatch, tmp_path) -> None:
@@ -468,13 +555,6 @@ def test_professional_set_mixed_retry_winners_keep_role_candidate_and_review_bin
                     "scores": {"overall": 0.10},
                 },
                 {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.95}},
-                {
-                    "status": "fail_retryable",
-                    "confidence": 0.98,
-                    "issue_codes": ["visible_text_artifact"],
-                    "scores": {"overall": 0.10},
-                },
-                {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.90}},
                 {"status": "pass", "confidence": 0.98, "issue_codes": [], "scores": {"overall": 0.90}},
             ]
             self.calls = 0
@@ -504,8 +584,8 @@ def test_professional_set_mixed_retry_winners_keep_role_candidate_and_review_bin
         ),
     )
 
-    assert len(provider.requests) == 6
-    assert vision_provider.calls == 6
+    assert len(provider.requests) == 4
+    assert vision_provider.calls == 4
     assert generated["status"] == "generated"
     assert generated["metadata"]["review_certification"]["state"] == "certified"
     assert generated["metadata"]["final_delivery"]["final_delivery_output_count"] == 3
@@ -517,7 +597,7 @@ def test_professional_set_mixed_retry_winners_keep_role_candidate_and_review_bin
     }
     assert role_winners == {
         "session_hero": "candidate_session_hero_1",
-        "environmental_context": "candidate_environmental_context_5",
+        "environmental_context": "candidate_environmental_context_4",
         "detail_or_moment": "candidate_detail_or_moment_3",
     }
     assert all(

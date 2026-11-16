@@ -168,6 +168,7 @@ def test_actual_workflows_install_bridge_before_manifest():
 
 
 @pytest.mark.parametrize('workflow,function', [('candidate','prepare_v2_runtime'), ('activate','prepare_v2_runtime_for_release')])
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell fixture is exercised by Ubuntu CI; Windows cannot execute its fake POSIX commands.")
 def test_guarded_update_executes_neutral_install_before_manifest(tmp_path, workflow, function):
     """Exercise the actual workflow function with no-network command doubles."""
     import os

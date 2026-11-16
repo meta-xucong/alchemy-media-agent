@@ -59,8 +59,8 @@ def test_mobile_v3_has_standard_professional_split_and_card_surfaces() -> None:
     mobile_html = _read(MOBILE_ROOT / "index.html")
     mobile_js = _read(MOBILE_ROOT / "mobile.js")
 
-    assert 'data-mobile-v3-workspace="standard"' in mobile_html
-    assert 'data-mobile-v3-workspace="professional"' in mobile_html
+    assert "function mobileV3ProjectUsesProfessionalWorkspace" in mobile_js
+    assert "projectMetadata.v3_workspace ?? summaryMetadata.v3_workspace" in mobile_js
     assert 'id="mobileV3ProfessionalAssetPanel"' in mobile_html
     assert 'id="mobileV3VisualAssetLibraryPanel"' in mobile_html
     assert 'id="mobileV3VisualAssetCreatePanel"' in mobile_html

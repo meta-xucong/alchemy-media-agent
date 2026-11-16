@@ -65,7 +65,10 @@ RAW_INPUTS = (' \n  Keep two  spaces.\n ', 'Keep\tA\t\tB.', '\r\n"A & B"\r\nSeco
 # Each tuple is (system bytes, user JSON bytes, HTTP body bytes, schema SHA256).
 GATE_A_BASELINE = {
     "general_single": {
-        "plan": (21480, 13039, 38789, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
+        # Later V3 Brain contract additions changed the active planning schema;
+        # retain the original Gate A byte observations but pin the current
+        # schema alongside the existing current finalizer schema pins.
+        "plan": (21480, 13039, 38789, "ecdbd662d76ec05779756a33d5cc9828b5b60b441c37234eb76178d07742bd74"),
         # Doc293 adds the semantic-completeness and compression-receipt fields
         # to the finalizer response schema; Gate A request-body measurements
         # remain the historical comparison baseline.
@@ -74,7 +77,7 @@ GATE_A_BASELINE = {
         "provider_prompt_finalize": (5359, 29721, 50459, "de1887bc72e8d65cbd605724ed6b4d6915c69957f559b9f885acc4acc966a2f8"),
     },
     "general_multi": {
-        "plan": (21480, 14997, 40889, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
+        "plan": (21480, 14997, 40889, "ecdbd662d76ec05779756a33d5cc9828b5b60b441c37234eb76178d07742bd74"),
         # DOC323 remeasured the current per-output variation receipt schema.
         # Later source-projection and variation-contract closures changed the
         # deterministic schema shape; keep the current digest as the Gate A
@@ -83,7 +86,7 @@ GATE_A_BASELINE = {
         "provider_prompt_finalize": (5359, 65281, 88469, "b6f511dfdca41066785c33d8fdc45b2bfd93eb7fc4af362d12189ce3804568d2"),
     },
     "professional_ecommerce": {
-        "plan": (21480, 21210, 47495, "5c485b5493ae3538fe006292cf296adde4e1a3d464fd01d0964c7dab33badd5b"),
+        "plan": (21480, 21210, 47495, "96b5207be20f5091a4b5ee7d07766e66af7ea787eccfe1d027da2627b5adff80"),
         "provider_prompt_finalize": (5359, 82486, 106797, "3e7bab9522cce1770656f1d0c8b6640f0a03e339bd829ff05e484214bcdfa20b"),
     },
 }
@@ -180,9 +183,19 @@ def offline_transport(monkeypatch, tmp_path):
     monkeypatch.setenv("ALCHEMY_V3_JOB_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path / "media"))
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
-    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "deepseek")
-    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "doc290-offline-not-a-key")
-    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://doc290.invalid/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "300")
+    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "520")
+    monkeypatch.setenv("V3_LLM_BRAIN_MAX_TOKENS", "20000")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "doc290-offline-not-a-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://doc290.invalid/v1")
+    # Doc290 measures one fixed transport. Model-route fallback is covered by
+    # the provider routing tests and must not divide this test's retry budget.
+    monkeypatch.setattr(
+        brain_providers,
+        "build_v3_model_candidates",
+        lambda _primary, _backup: (("openai", "deepseek-v4-pro"),),
+    )
 
     from app.config import settings
 

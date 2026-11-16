@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_browser import (
@@ -7,6 +9,11 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_brows
     MOBILE_JS,
     _browser_page,
 )
+
+
+def _launch_chromium(playwright):
+    chrome = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+    return playwright.chromium.launch(executable_path=str(chrome) if chrome.exists() else None)
 
 
 def _project(project_id: str = "mobile-entry-project", *, template_id: str | None = "general_template") -> dict:
@@ -50,7 +57,7 @@ def _ready_mobile_page(browser, project: dict | None = None):
 
 def test_project_list_is_interactive_while_home_preview_request_is_pending() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = _launch_chromium(playwright)
         try:
             page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
             page.evaluate(
@@ -134,7 +141,7 @@ def test_project_list_is_interactive_while_home_preview_request_is_pending() -> 
 
 def test_project_card_copy_opens_detail_and_cover_keeps_gallery_preview() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = _launch_chromium(playwright)
         try:
             page = _ready_mobile_page(browser)
 
@@ -158,17 +165,14 @@ def test_project_card_copy_opens_detail_and_cover_keeps_gallery_preview() -> Non
 
             page.locator("#mobileV3OpenProjectBtn").click()
             assert page.locator("body").get_attribute("data-mobile-active-surface") == "v3-project-detail"
-
-            page.evaluate("closeMobileSurface({ silent: true, fromHistory: true })")
-            page.locator('button[data-mobile-v3-workspace="professional"]').click()
-            assert page.evaluate("mobileV3State.workspaceMode") == "professional"
+            assert page.evaluate("mobileV3State.workspaceMode") == "standard"
         finally:
             browser.close()
 
 
 def test_unknown_template_opens_read_only_detail_and_never_reuses_previous_template() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = _launch_chromium(playwright)
         try:
             page = _ready_mobile_page(browser, _project("mobile-unknown-template", template_id=None))
             page.evaluate(

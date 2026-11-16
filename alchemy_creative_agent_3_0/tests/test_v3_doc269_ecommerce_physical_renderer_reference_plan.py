@@ -864,6 +864,10 @@ def _rehashed_plan(raw_plan: dict) -> dict:
             "reference_image_count",
         )
     }
+    digest_payload["references"] = [
+        PhysicalRendererReferenceEntry.model_validate(item).model_dump(mode="json", exclude_none=True)
+        for item in candidate["references"]
+    ]
     candidate["plan_digest"] = hashlib.sha256(
         json.dumps(
             digest_payload,

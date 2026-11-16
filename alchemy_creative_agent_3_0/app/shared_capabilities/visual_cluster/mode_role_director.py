@@ -787,7 +787,12 @@ def _expanded_recipe_dicts(
                 candidate = dict(source)
                 candidate["role_key"] = f"{source_role_key}_variant_{index}"
                 candidate["label"] = f"{source.get('label') or 'Image'} variation {index}"
-                candidate["variation_axes"] = list(dict.fromkeys([*base_axes, *additions]))
+                # Put the new neutral axes first.  Some canonical recipes
+                # already occupy the six-axis contract limit, so appending
+                # extensions would be truncated during normalization and
+                # could leave batches above four outputs without distinct
+                # frozen variation signatures.
+                candidate["variation_axes"] = list(dict.fromkeys([*additions, *base_axes]))
                 candidate["metadata"] = {
                     **(dict(source.get("metadata") or {})),
                     "variation_base_role_key": source_role_key,

@@ -52,12 +52,25 @@ def test_home_preview_returns_counts_for_all_evaluated_requested_projects() -> N
         list_projects=lambda limit: list(projects),
     )
     service._project_visible_to_owner = lambda _project, _owner: True
-    service._project_output_read_snapshot = lambda *_args, **_kwargs: {
-        "records_by_project": {project.project_id: [] for project in projects},
-        "records_by_job": {},
-        "job_status_by_id": {},
-        "job_record_by_id": {},
-    }
+    from alchemy_creative_agent_3_0.app.browse_protocol import BrowseCheckpoint, BrowseOutputs, BrowseScope
+
+    def read_snapshot_steps(target_projects, **_kwargs):
+        snapshot = {
+            "records_by_project": {project.project_id: [] for project in target_projects},
+            "records_by_job": {},
+            "job_status_by_id": {},
+            "job_record_by_id": {},
+            "project_index_complete": {project.project_id: True for project in target_projects},
+            "home_candidate_job_ids": {project.project_id: [] for project in target_projects},
+            "home_declared_job_scan_complete": {project.project_id: True for project in target_projects},
+            "job_read_failures": set(),
+        }
+        yield BrowseScope(tuple(target_projects))
+        yield BrowseOutputs([])
+        yield BrowseCheckpoint()
+        return snapshot
+
+    service._project_output_read_snapshot_steps = read_snapshot_steps
     service._project_visible_output_count = lambda project, **_kwargs: (
         0 if project.project_id == "count-zero" else 4
     )
@@ -137,7 +150,8 @@ def test_count_helper_reuses_project_delivery_projection() -> None:
 
 def test_desktop_home_count_projection_renders_numeric_count_and_known_zero() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        chrome = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+        browser = playwright.chromium.launch(executable_path=str(chrome) if chrome.exists() else None)
         try:
             page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
             result = page.evaluate(
@@ -190,7 +204,8 @@ def test_desktop_home_count_projection_renders_numeric_count_and_known_zero() ->
 
 def test_mobile_home_count_projection_renders_numeric_count_and_known_zero() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        chrome = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+        browser = playwright.chromium.launch(executable_path=str(chrome) if chrome.exists() else None)
         try:
             page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
             result = page.evaluate(

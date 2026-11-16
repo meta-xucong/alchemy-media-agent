@@ -8538,6 +8538,7 @@ class V3ProjectModeService:
             )
         except ValueError:
             return None
+        no_image_sha = metadata.get("render_bridge_primary_no_image_sha") is True
         current_product_ids = self._ecommerce_product_reference_asset_ids(
             project, [], no_image_sha=no_image_sha
         )

@@ -341,6 +341,11 @@ def test_mobile_home_releases_mask_before_slow_first_page_image_settles() -> Non
                 """
                 async () => {
                   const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+                  let releasePreviewFetch;
+                  let previewFetchStartedResolve;
+                  const previewFetchStarted = new Promise((resolve) => {
+                    previewFetchStartedResolve = resolve;
+                  });
                   const project = {
                     project_id: "mobile-home-bootstrap-project",
                     title: "Mobile home bootstrap project",
@@ -376,7 +381,10 @@ def test_mobile_home_releases_mask_before_slow_first_page_image_settles() -> Non
                       }), { status: 200 });
                     }
                     if (url.includes("/project-outputs?") && url.includes("surface=home_preview")) {
-                      await delay(20);
+                      previewFetchStartedResolve();
+                      await new Promise((resolve) => {
+                        releasePreviewFetch = resolve;
+                      });
                       return new Response(JSON.stringify({ items: [output], review_items: [] }), { status: 200 });
                     }
                     return new Response(JSON.stringify({}), { status: 200 });
@@ -393,11 +401,17 @@ def test_mobile_home_releases_mask_before_slow_first_page_image_settles() -> Non
                   mobileV3State.outputsSurface = "none";
                   mobileV3State.outputError = "";
                   const bootstrap = loadMobileV3Projects({ silent: true, force: true });
-                  await delay(100);
+                  await Promise.race([
+                    previewFetchStarted,
+                    delay(3000).then(() => {
+                      throw new Error("home_preview_fetch_not_started");
+                    }),
+                  ]);
                   const during = {
                     maskHidden: Boolean(document.querySelector("#mobileV3LoadingLayer")?.hidden),
                     imageComplete: Boolean(document.querySelector("img[data-mobile-v3-home-thumb='true']")?.complete),
                   };
+                  releasePreviewFetch();
                   await bootstrap;
                   return {
                     during,

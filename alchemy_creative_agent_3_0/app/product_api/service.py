@@ -3035,6 +3035,7 @@ class V3ProductApiService:
         *,
         source_class: str | None,
         face_reference_output_ids: list[str],
+        no_image_sha: bool = False,
     ) -> list[dict[str, Any]]:
         """Resolve observed Body-owner sources as body-only references.
 
@@ -4381,14 +4382,24 @@ class V3ProductApiService:
         )
         metadata = dict(record.request.metadata or {})
         materialization = metadata.get("mcp_materialization")
-        if not isinstance(materialization, dict) or str(materialization.get("status") or "").strip() != "submitted":
+        if not isinstance(materialization, dict) or str(materialization.get("status") or "").strip() not in {
+            "submitted",
+            "consumed_uncheckpointed",
+            "output_checkpointed",
+            "job_checkpointed",
+        }:
             raise RuntimeError("mcp_materialization_output_projection_missing")
         handoff_id = str(materialization.get("handoff_id") or "").strip()
         operation_id = str(metadata.get("mcp_operation_id") or "").strip()
         if not handoff_id or not operation_id:
             raise RuntimeError("mcp_materialization_output_projection_missing")
         handoff = self.mcp_materialization_store.get(handoff_id)
-        if not isinstance(handoff, dict) or str(handoff.get("status") or "").strip() != "submitted":
+        if not isinstance(handoff, dict) or str(handoff.get("status") or "").strip() not in {
+            "submitted",
+            "consumed_uncheckpointed",
+            "output_checkpointed",
+            "job_checkpointed",
+        }:
             raise RuntimeError("mcp_materialization_output_projection_missing")
         if str(handoff.get("operation_id") or "").strip() != operation_id:
             raise RuntimeError("mcp_materialization_output_projection_missing")
@@ -4625,6 +4636,53 @@ class V3ProductApiService:
         if not output_uri:
             raise RuntimeError("mcp_materialization_output_projection_missing")
 
+        generation_result_id = str(record.generation_result.planning_result_id or "").strip()
+        if not generation_result_id:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        expected_checkpoint = {
+            "job_id": record.job_id,
+            "candidate_id": candidate_id,
+            "output_id": existing.output_id,
+        }
+        try:
+            consumed = self.mcp_materialization_store.consume(
+                handoff_id,
+                expected_checkpoint=expected_checkpoint,
+            )
+            if str(consumed.get("artifact_sha256") or "").strip().lower() != artifact_sha256:
+                raise RuntimeError("mcp_materialization_output_projection_missing")
+            self.mcp_materialization_store.mark_output_checkpoint(
+                handoff_id,
+                job_id=record.job_id,
+                candidate_id=candidate_id,
+                output_id=existing.output_id,
+                artifact_sha256=artifact_sha256,
+            )
+            self.mcp_materialization_store.mark_job_checkpoint(
+                handoff_id,
+                job_id=record.job_id,
+                candidate_id=candidate_id,
+                output_id=existing.output_id,
+                generation_result_id=generation_result_id,
+            )
+        except Exception as exc:
+            raise RuntimeError("mcp_materialization_output_projection_missing") from exc
+
+        mcp_candidate_projection = {
+            **(
+                dict(candidate_metadata.get("mcp_materialization"))
+                if isinstance(candidate_metadata.get("mcp_materialization"), dict)
+                else {}
+            ),
+            "handoff_id": handoff_id,
+            "status": "job_checkpointed",
+            "generation_channel": "mcp",
+            "expected_checkpoint": {
+                **expected_checkpoint,
+                "generation_result_id": generation_result_id,
+            },
+        }
+
         updated_candidate_metadata = {
             **candidate_metadata,
             "candidate_id": candidate_id,
@@ -4632,6 +4690,7 @@ class V3ProductApiService:
             "file_path": existing.file_path,
             "uri": output_uri,
             "planning_only": False,
+            "mcp_materialization": mcp_candidate_projection,
         }
         updated_asset = asset.model_copy(
             update={
@@ -4671,6 +4730,22 @@ class V3ProductApiService:
                 },
             }
         )
+        request_metadata = dict(record.request.metadata or {})
+        request_materialization = (
+            dict(request_metadata.get("mcp_materialization"))
+            if isinstance(request_metadata.get("mcp_materialization"), dict)
+            else {}
+        )
+        request_metadata["mcp_materialization"] = {
+            **request_materialization,
+            "handoff_id": handoff_id,
+            "status": "job_checkpointed",
+            "generation_channel": "mcp",
+            "resume_required": True,
+            **expected_checkpoint,
+            "generation_result_id": generation_result_id,
+        }
+        record.request.metadata = request_metadata
         self.job_store.save(record)
         return True
 
@@ -5346,11 +5421,48 @@ class V3ProductApiService:
         review_recheck_required = bool(
             generation_result.metadata.get("post_generation_review_recheck_required")
         )
+        mcp_timeout_review_pending = self._mcp_review_timeout_pending(
+            record,
+            generation_result,
+            existing_package if isinstance(existing_package, dict) else None,
+        )
+        request_metadata = dict(record.request.metadata or {})
+        mcp_review_resume = (
+            review_only
+            and str(request_metadata.get("generation_channel") or "").strip().lower() == "mcp"
+        )
+        if mcp_review_resume:
+            # A review-only continuation must reconcile the exact durable
+            # handoff/output identity before an early return or a Vision call.
+            # This prevents stale or foreign checkpoints from being accepted
+            # merely because a previous review package is non-retryable.
+            review_pending = (
+                mcp_timeout_review_pending
+                or self._post_generation_review_package_requires_resume(existing_package)
+                if isinstance(existing_package, dict)
+                else mcp_timeout_review_pending
+            )
+            projection_ok = self._sync_mcp_review_resume_projection(
+                record,
+                generation_result,
+                review_pending=review_pending,
+                require_complete_identity=True,
+            )
+            if not projection_ok:
+                record.status = ProductJobStatusValue.BLOCKED
+                record.balance_estimate = self._estimate_for_result(generation_result)
+                record.lifecycle = self._build_lifecycle(record)
+                self.job_store.save(record)
+                return self._status_from_record(record)
         if (
             isinstance(existing_package, dict)
             and not review_recheck_required
+            and not mcp_timeout_review_pending
             and not self._post_generation_review_package_requires_resume(existing_package)
         ):
+            if review_only and str(request_metadata.get("generation_channel") or "").strip().lower() == "mcp":
+                record.lifecycle = self._build_lifecycle(record)
+                self.job_store.save(record)
             return self._status_from_record(record)
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
@@ -5384,12 +5496,16 @@ class V3ProductApiService:
         package = generation_result.metadata.get("post_generation_review_package")
         review_still_pending = (
             isinstance(package, dict)
-            and self._post_generation_review_package_requires_resume(package)
+            and (
+                self._post_generation_review_package_requires_resume(package)
+                or self._mcp_review_timeout_pending(record, generation_result, package)
+            )
         )
         projection_ok = self._sync_mcp_review_resume_projection(
             record,
             generation_result,
             review_pending=review_still_pending,
+            require_complete_identity=mcp_review_resume,
         )
         if review_only and not projection_ok:
             record.status = ProductJobStatusValue.BLOCKED
@@ -5709,9 +5825,23 @@ class V3ProductApiService:
         generation_result: PlanningResult,
         *,
         review_pending: bool,
+        require_complete_identity: bool = False,
     ) -> bool:
         request_metadata = dict(record.request.metadata or {})
         handoff_id, output_id, candidate_id = self._mcp_review_resume_checkpoint_identity(generation_result)
+        if require_complete_identity and not (handoff_id and output_id and candidate_id):
+            review_projection = {
+                "status": "pending",
+                "reason_code": "mcp_materialization_checkpoint_mismatch",
+                "handoff_id": handoff_id,
+                "output_id": output_id,
+                "candidate_id": candidate_id,
+                "review_owner": "v3_shared_visual_cluster",
+            }
+            request_metadata["mcp_review"] = dict(review_projection)
+            request_metadata["mcp_review_status"] = dict(review_projection)
+            record.request.metadata = request_metadata
+            return False
         if handoff_id:
             materialization = self._safe_mcp_materialization_projection(handoff_id)
             materialization_status = (
@@ -5821,6 +5951,7 @@ class V3ProductApiService:
         self,
         generation_result: PlanningResult,
     ) -> tuple[str, str, str]:
+        identities: list[tuple[str, str, str]] = []
         for asset in generation_result.asset_pack.assets:
             metadata = dict(asset.metadata or {})
             candidate_metadata = (
@@ -5840,9 +5971,28 @@ class V3ProductApiService:
                 or metadata.get("selected_candidate_id")
                 or ""
             ).strip()
-            if handoff_id or output_id or candidate_id:
-                return handoff_id, output_id, candidate_id
-        return "", "", ""
+            identity = (handoff_id, output_id, candidate_id)
+            if any(identity):
+                identities.append(identity)
+        if not identities:
+            return "", "", ""
+        complete_identities = {identity for identity in identities if all(identity)}
+        if len(complete_identities) == 1:
+            complete_identity = next(iter(complete_identities))
+            if all(
+                not any(identity)
+                or all(not value or value == complete_identity[index] for index, value in enumerate(identity))
+                for identity in identities
+            ):
+                return complete_identity
+            # A partial identity that contradicts the sole complete tuple makes
+            # the result ambiguous; never select whichever asset came first.
+            return "", "", ""
+        if len(complete_identities) > 1:
+            return "", "", ""
+        # Preserve a partial tuple for a useful pending projection. The caller
+        # that owns review-only MCP continuation will reject it as incomplete.
+        return identities[0]
 
     def _safe_mcp_materialization_projection(self, handoff_id: str) -> dict[str, Any] | None:
         handoff = str(handoff_id or "").strip()
@@ -5940,6 +6090,37 @@ class V3ProductApiService:
             if isinstance(inspection, dict) and normalized_code in V3ProductApiService._review_issue_codes(inspection):
                 return True
         return normalized_code in V3ProductApiService._post_generation_review_package_issue_codes(package)
+
+    def _mcp_review_timeout_pending(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+        package: dict[str, Any] | None,
+    ) -> bool:
+        """Return whether this exact MCP checkpoint has an unverified timeout."""
+
+        request_metadata = dict(record.request.metadata or {})
+        if str(request_metadata.get("generation_channel") or "").strip().lower() != "mcp":
+            return False
+        if not isinstance(package, dict):
+            return False
+        handoff_id, output_id, candidate_id = self._mcp_review_resume_checkpoint_identity(generation_result)
+        if not handoff_id or not output_id or not candidate_id:
+            return False
+        for inspection in package.get("inspections", []):
+            if not isinstance(inspection, dict):
+                continue
+            if str(inspection.get("output_id") or "").strip() != output_id:
+                continue
+            if str(inspection.get("candidate_id") or "").strip() != candidate_id:
+                continue
+            if str(inspection.get("status") or "").strip().lower() != "manual_review":
+                continue
+            if str(inspection.get("verification_state") or "").strip().lower() == "verified":
+                continue
+            if "provider_timeout" in V3ProductApiService._review_issue_codes(inspection):
+                return True
+        return False
 
     @staticmethod
     def _review_issue_codes(payload: dict[str, Any]) -> set[str]:
@@ -12333,6 +12514,53 @@ class V3ProductApiService:
         result = getattr(runtime_result, "generation_result", None)
         metadata = dict(getattr(result, "metadata", {}) or {})
         summary = metadata.get("provider_failure_retry")
+        if not isinstance(summary, dict):
+            # Specialized role execution catches Provider exceptions so the
+            # remaining frozen roles can finish. In that path, the existing
+            # safe failure projection lives on the exact failed role instead
+            # of at the generation-result root. Recover that authority here;
+            # otherwise an actual Provider request is mislabeled as a
+            # pre-provider empty result and the retry audit loses its cause.
+            role_execution = metadata.get("specialized_role_execution")
+            role_rows = role_execution.get("roles") if isinstance(role_execution, dict) else None
+            role_failures: list[dict[str, Any]] = []
+            if isinstance(role_rows, list):
+                for role in role_rows:
+                    if not isinstance(role, dict):
+                        continue
+                    failure = role.get("provider_failure")
+                    if not isinstance(failure, dict):
+                        continue
+                    failure_code = str(failure.get("failure_code") or "").strip().lower()
+                    classification = str(failure.get("classification") or "").strip().lower()
+                    state = str(failure.get("state") or "").strip().lower()
+                    try:
+                        request_count = max(0, int(failure.get("outer_request_count") or 0))
+                    except (TypeError, ValueError):
+                        request_count = 0
+                    if state not in {"blocked", "unknown"} and not failure_code and request_count == 0:
+                        continue
+                    role_failures.append(
+                        {
+                            "state": state,
+                            "classification": classification,
+                            "failure_code": failure_code,
+                            "fresh_upstream_requests": request_count,
+                        }
+                    )
+            if role_failures:
+                failure_codes = {item["failure_code"] for item in role_failures if item["failure_code"]}
+                classifications = {item["classification"] for item in role_failures if item["classification"]}
+                summary = {
+                    "fresh_upstream_requests": sum(item["fresh_upstream_requests"] for item in role_failures),
+                    "final_status": "failed" if any(item["state"] == "blocked" for item in role_failures) else "unknown",
+                    "final_classification": next(iter(classifications)) if len(classifications) == 1 else (
+                        "unknown_retryable_failure" if classifications else None
+                    ),
+                    "final_failure_code": next(iter(failure_codes)) if len(failure_codes) == 1 else (
+                        "provider_failure_unattributed" if failure_codes else None
+                    ),
+                }
         safe_provider_failure = (
             {
                 key: summary.get(key)

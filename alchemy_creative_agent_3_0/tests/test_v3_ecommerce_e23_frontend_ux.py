@@ -131,9 +131,9 @@ def test_e23_result_board_hydrates_same_job_project_delivery_when_job_snapshot_h
     current_items = _section(script, "function v3CurrentJobImageItems", "function v3ReviewCertification")
     stored_items = _section(script, "function v3StoredProjectOutputItems", "function v3StoredProjectReviewOutputItems")
 
-    assert "const persistedItems = v3ProjectOutputsForJob(job?.job_id);" in board
+    assert "const persistedItems = finalizationWithheld ? [] : v3ProjectOutputsForJob(job?.job_id);" in board
     assert "const hasPersistedDelivery = persistedItems.some((item) => v3OutputVisibleInProject(item));" in board
-    assert "!v3JobDeliverySettled(job) && !hasPersistedDelivery" in board
+    assert "if ((!v3JobDeliverySettled(job) || finalizationWithheld) && !hasPersistedDelivery)" in board
     assert "const persisted = v3ProjectOutputsForJob(job?.job_id);" in current_items
     assert "item?.metadata?.project_id" in stored_items
 
@@ -168,7 +168,8 @@ def test_e23_v3_progress_surface_hides_empty_notice_and_uses_compact_stages() ->
 
 def test_e23_v3_progress_surface_projects_live_dom_state_without_empty_bar() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        chrome = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+        browser = playwright.chromium.launch(executable_path=str(chrome) if chrome.exists() else None)
         try:
             page = browser.new_page()
             page.set_content(_inline_shell(INDEX_HTML))

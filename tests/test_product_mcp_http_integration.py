@@ -45,11 +45,16 @@ def native(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "v3_route_handlers", handlers)
     monkeypatch.setattr(main, "v3_output_store", service.output_store)
     monkeypatch.setattr(settings, "veyra_auth_enabled", True)
+    monkeypatch.setattr(settings, "veyra_internal_token", "test-only-session-secret")
+    monkeypatch.setattr(settings, "veyra_sub2api_base_url", "https://sub2api.test.invalid")
     def verify(token):
         if token not in {"session-a", "session-b"}:
             raise HTTPException(401, detail={"code": "session_invalid"})
         return 101 if token == "session-a" else 202
     monkeypatch.setattr(main, "verify_session_token", verify)
+    async def load_test_account(user_id):
+        return SimpleNamespace(user_id=user_id, role="member", status="active")
+    monkeypatch.setattr(main, "_veyra_account", load_test_account)
     pending = []
     # Queue boundary is observed, never dispatched to a real worker/provider.
     monkeypatch.setattr(main, "_start_v3_project_planning_background", lambda *args: pending.append(args) or True)
@@ -119,10 +124,11 @@ def test_list_and_selection_keep_native_review_facts_and_exact_binding(native, m
             "metadata": {"review_status": "manual_review", "quality_failure": False}}],
         "project_output_counts": {project_id: 1}, "project_review_counts": {project_id: 1}}
     calls = []
-    def list_outputs(limit, owner_id, compact, selected_project, surface, ids):
-        assert owner_id == 101 and selected_project == project_id
+    async def list_outputs(project_service, compute, **kwargs):
+        assert kwargs["owner_user_id"] == 101 and kwargs["project_id"] == project_id
         return rows
-    monkeypatch.setattr(native.handlers, "get_project_outputs", list_outputs)
+    monkeypatch.setattr(native.main, "_v3_browse_compute", object())
+    monkeypatch.setattr(native.main, "run_output_browse", list_outputs)
     listed = native.tools.call("alchemy_list_outputs", {"project_id": project_id})
     assert listed["items"] == rows["items"]
     assert listed["review_items"] == rows["review_items"]
