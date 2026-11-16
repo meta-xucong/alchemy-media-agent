@@ -695,7 +695,13 @@ _primary_job_locks = WeakValueDictionary()
 _primary_job_locks_guard = threading.Lock()
 
 
-async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest, *, edit: bool) -> GenerationJob:
+async def _run_image_request(
+    job: GenerationJob,
+    request: ImageGenerationRequest,
+    *,
+    edit: bool,
+    allow_terminal_bridge_reconciliation: bool = False,
+) -> GenerationJob:
     # Serialise product checkpoint/billing/ACK, including simultaneous GET polls.
     with _primary_job_locks_guard:
         lock = _primary_job_locks.setdefault(job.id, threading.Lock())
@@ -706,16 +712,35 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
             await asyncio.sleep(0.05)
     try:
         current = repository.get_job(job.id)
-        if current and current.status in TERMINAL_IMAGE_STATUSES:
+        reconciliation_task_ids = {}
+        if allow_terminal_bridge_reconciliation and current:
+            from app.services.primary_image_transport import overdue_bridge_task_ids
+            reconciliation_task_ids = overdue_bridge_task_ids(current)
+        terminal_bridge_reconciliation = bool(reconciliation_task_ids)
+        original_terminal_error = current.error if terminal_bridge_reconciliation else None
+        if (current and current.status in TERMINAL_IMAGE_STATUSES
+                and not terminal_bridge_reconciliation):
             return current
         try:
-            return await _run_image_request_owned(current or job, request, edit=edit)
+            return await _run_image_request_owned(
+                current or job,
+                request,
+                edit=edit,
+                existing_task_ids=reconciliation_task_ids or None,
+            )
         except Exception:
             interrupted = repository.get_job(job.id)
             if not interrupted or not interrupted.raw_response_summary.get("primary_image_transport"):
                 raise
             if interrupted.status in TERMINAL_IMAGE_STATUSES:
                 return interrupted
+            if terminal_bridge_reconciliation:
+                # A failed status-only read must leave the original terminal
+                # state visible; it must not turn into a new generation run.
+                interrupted.status = JobStatus.failed
+                interrupted.error = original_terminal_error
+                interrupted.updated_at = now_iso()
+                return repository.save_job(interrupted)
             # A crash after pixels or debit is a checkpoint recovery, not a new execution.
             interrupted.status = JobStatus.generating
             interrupted.error = ProviderError(code="primary_reconciliation_required", message="Resume the original image task.", retryable=False)
@@ -724,7 +749,13 @@ async def _run_image_request(job: GenerationJob, request: ImageGenerationRequest
         lock.release()
 
 
-async def _run_image_request_owned(job: GenerationJob, request: ImageGenerationRequest, *, edit: bool) -> GenerationJob:
+async def _run_image_request_owned(
+    job: GenerationJob,
+    request: ImageGenerationRequest,
+    *,
+    edit: bool,
+    existing_task_ids: dict[str, str] | None = None,
+) -> GenerationJob:
     job.status = JobStatus.generating
     job.updated_at = now_iso()
     requested_provider = request.provider_preference or settings.default_image_provider
@@ -749,7 +780,7 @@ async def _run_image_request_owned(job: GenerationJob, request: ImageGenerationR
         job.status = JobStatus.generating if job.raw_response_summary.get("primary_image_transport") else JobStatus.failed
         job.error = _billing_provider_error(exc)
         job.updated_at = now_iso()
-        saved = repository.save_job(job)
+        saved = repository.save_job(job, primary_reconciliation_task_ids=existing_task_ids)
         _emit_image_events(saved)
         return saved
 
@@ -758,13 +789,24 @@ async def _run_image_request_owned(job: GenerationJob, request: ImageGenerationR
         return current
     from app.services.primary_image_transport import run_primary, finish_primary
     try:
-        primary_handled = await run_primary(job, request, edit=edit)
+        primary_handled = await run_primary(
+            job,
+            request,
+            edit=edit,
+            existing_task_ids=existing_task_ids,
+        )
     except Exception:
         if not job.raw_response_summary.get("primary_image_transport"):
             raise
         latest = repository.get_job(job.id)
         if latest and latest.status in TERMINAL_IMAGE_STATUSES:
             return latest
+        if existing_task_ids is not None:
+            # A failed exact-task read stays failed; it cannot enter normal
+            # execution or API fallback on a later poll.
+            job.status = JobStatus.failed
+            job.updated_at = now_iso()
+            return repository.save_job(job, primary_reconciliation_task_ids=existing_task_ids)
         # Uncertain transport or checkpoint failures never enter API fallback.
         logger.exception("Primary image transport needs reconciliation: %s", job.id)
         job.status = JobStatus.generating
@@ -825,11 +867,11 @@ async def _run_image_request_owned(job: GenerationJob, request: ImageGenerationR
                 job.outputs = []
             job.error = _billing_provider_error(exc)
             job.updated_at = now_iso()
-            saved = repository.save_job(job)
+            saved = repository.save_job(job, primary_reconciliation_task_ids=existing_task_ids)
             _emit_image_events(saved)
             return saved
     job.updated_at = now_iso()
-    saved = repository.save_job(job)
+    saved = repository.save_job(job, primary_reconciliation_task_ids=existing_task_ids)
     if saved.status == JobStatus.ready:
         if billing_result:
             record_veyra_usage(

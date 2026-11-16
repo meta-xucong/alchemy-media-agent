@@ -555,8 +555,20 @@ class PrimaryTransport:
     def _supported(request, caps, profile):
         return PrimaryTransport._safe_support_rejection(request, caps, profile) is None
 
-    async def resolve(self, request):
+    async def resolve(self, request, *, existing_only=False, expected_task_id=None):
         row=self._read(request)
+        if existing_only:
+            if row is None:
+                raise PrimaryError('bridge_task_binding_missing')
+            saved=json.loads(row['data'])
+            if (saved.get('route') != 'bridge' or not isinstance(expected_task_id, str)
+                    or not expected_task_id or saved.get('task_id') != expected_task_id):
+                raise PrimaryError('bridge_task_identity_mismatch')
+            # A preflight row has not durably crossed the Bridge submission
+            # boundary. It cannot prove an existing task and must never enter
+            # the normal API-fallback/create path during status-only recovery.
+            if row['state'] == 'preflight' or saved.get('state') == 'preflight':
+                raise PrimaryError('bridge_task_binding_missing')
         if row is None and not self.settings.enabled:
             return PrimaryResult('api','api_ready','bridge_disabled','rb_'+request.key,'api_'+request.key)
         row=row or self._start(request)
@@ -635,6 +647,8 @@ class PrimaryTransport:
         if task.get('origin_key')!=data['origin_key'] or task.get('request')!=data.get('payload'):
             raise PrimaryError('bridge_task_identity_mismatch')
         if not task.get('remote_task_id'): raise PrimaryError('invalid_bridge_task')
+        if existing_only and task['remote_task_id'] != expected_task_id:
+            raise PrimaryError('bridge_task_identity_mismatch')
         attention = task.get('action_required_detail')
         attention_code = attention.get('code') if isinstance(attention, dict) else None
         if not isinstance(attention_code, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', attention_code):

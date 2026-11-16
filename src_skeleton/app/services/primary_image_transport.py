@@ -39,6 +39,26 @@ def frozen_request(job):
     return ImageGenerationRequest.model_validate(value) if value else None
 
 
+def overdue_bridge_task_ids(job):
+    """Return the frozen Bridge task IDs eligible for status-only reconciliation."""
+    if (job.status not in {JobStatus.failed, JobStatus.generating}
+            or getattr(job.error, "code", None) != "bridge_execution_reconciliation_overdue"):
+        return {}
+    primary = job.raw_response_summary.get(KEY)
+    units = primary.get("units") if isinstance(primary, dict) else None
+    if not isinstance(units, dict):
+        return {}
+    return {
+        str(index): unit["task_id"]
+        for index, unit in units.items()
+        if isinstance(unit, dict)
+        and unit.get("route") == "bridge"
+        and unit.get("state") == "execution_unknown"
+        and isinstance(unit.get("task_id"), str)
+        and unit["task_id"].strip()
+    }
+
+
 def _legacy_primary_request(job, request, index, *, edit=False):
     from render_bridge_primary import PrimaryRequest, Reference
     from app.providers.openai_image import OpenAIGPTImageProvider
@@ -174,7 +194,7 @@ def primary_request(job, request, index, *, edit=False):
     return replace(unit, parameters=wire, hard_requirements=hard, references=refs)
 
 
-async def run_primary(job, request, *, edit=False):
+async def run_primary(job, request, *, edit=False, existing_task_ids=None):
     """Return False only for excluded legacy paths; otherwise mutate product job."""
     existing = job.raw_response_summary.get(KEY)
     if not existing and (request.provider_preference or settings.default_image_provider) == "mock_image":
@@ -182,12 +202,26 @@ async def run_primary(job, request, *, edit=False):
     if not existing and not primary_enabled(product_for(job)):
         return False
     async with transport_for(product_for(job)) as transport:
-        return await _run_owned(job, request, edit=edit, transport=transport, existing=existing)
+        return await _run_owned(job, request, edit=edit, transport=transport, existing=existing,
+                                existing_task_ids=existing_task_ids)
 
 
-async def _run_owned(job, request, *, edit, transport, existing):
+async def _run_owned(job, request, *, edit, transport, existing, existing_task_ids=None):
     from app.services import image_service
     from app.providers.registry import registry
+    existing_task_indices = None
+    if existing_task_ids is not None:
+        from render_bridge_primary import PrimaryError
+        existing_task_indices = {}
+        for raw_index, task_id in existing_task_ids.items():
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                raise PrimaryError("bridge_task_identity_mismatch") from None
+            if (str(index) != str(raw_index) or index < 0 or index >= request.prompt_plan.count
+                    or not isinstance(task_id, str) or not task_id.strip()):
+                raise PrimaryError("bridge_task_identity_mismatch")
+            existing_task_indices[index] = task_id
     if existing:
         request = frozen_request(job)
         edit = bool(existing.get("edit"))
@@ -203,13 +237,22 @@ async def _run_owned(job, request, *, edit, transport, existing):
         output_id = "out_" + hashlib.sha256(f"{job.id}:primary:{index}".encode()).hexdigest()[:32]
         if any(output.id == output_id for output in outputs):
             continue
-        result = await transport.resolve(unit)
+        expected_task_id = existing_task_indices.get(index) if existing_task_indices is not None else None
+        if (existing_task_indices is not None and expected_task_id is None
+                and any(saved_index >= index for saved_index in existing_task_indices)):
+            from render_bridge_primary import PrimaryError
+            raise PrimaryError("bridge_task_binding_missing")
+        result = await transport.resolve(
+            unit,
+            existing_only=expected_task_id is not None,
+            expected_task_id=expected_task_id,
+        )
         current = repository.get_job(job.id)
         if current and current.status == JobStatus.canceled:
             job.status = JobStatus.canceled
             return True
         state["units"][str(index)] = dict(result.provenance)
-        repository.save_job(job)
+        repository.save_job(job, primary_reconciliation_task_ids=existing_task_ids)
         if result.route == "bridge":
             job.provider = result.provenance.get("actual_provider") or "render_bridge"
             job.model = result.provenance.get("actual_model") or "unknown"
@@ -283,7 +326,7 @@ async def _run_owned(job, request, *, edit, transport, existing):
         # materializations only in the private recovery checkpoint.
         state["outputs"] = [output.model_dump(mode="json") for output in outputs]
         job.outputs = []
-        repository.save_job(job)
+        repository.save_job(job, primary_reconciliation_task_ids=existing_task_ids)
     job.outputs = outputs
     job.status, job.error = JobStatus.ready, None
     return True
@@ -350,6 +393,18 @@ async def resume_primary_job(job_id):
         except Exception:
             pass  # ACK is retryable; do not turn a published image into a failure.
         return job
+    overdue_tasks = overdue_bridge_task_ids(job)
+    if overdue_tasks:
+        # A reconciliation-overdue failure is a user-visible stop, but it is
+        # not proof that the Bridge task stopped. Query each exact frozen task
+        # identity first. Once a task returns its image, the original batch may
+        # continue with later, never-submitted units under normal routing rules.
+        return await _run_image_request(
+            job,
+            frozen_request(job),
+            edit=bool(job.raw_response_summary[KEY].get("edit")),
+            allow_terminal_bridge_reconciliation=True,
+        )
     if job.status in {JobStatus.failed, JobStatus.canceled, JobStatus.rejected}:
         return job
     return await _run_image_request(job, frozen_request(job), edit=bool(job.raw_response_summary[KEY].get("edit")))
