@@ -537,6 +537,13 @@ class V3LLMBrainProvider:
         }
 
     def run(self, request: BrainRunRequest) -> dict[str, Any]:
+        budget = _ACTIVE_EXECUTION_BUDGET.get()
+        if budget is not None:
+            # Candidate slices are computed below, so start the shared remote
+            # clock before allocating them.  Starting it only inside the
+            # single-model transport path charges local preparation time
+            # against every candidate's slice.
+            budget.start_remote_clock()
         candidates = list(build_v3_model_candidates(self.model, self.backup_model))
         attempts: list[dict[str, Any]] = []
         last_error: BrainProviderError | None = None
@@ -549,7 +556,6 @@ class V3LLMBrainProvider:
             candidate = copy.copy(self)
             candidate.provider = provider_name
             candidate.model = model_name
-            budget = _ACTIVE_EXECUTION_BUDGET.get()
             candidate_deadline: float | None = None
             if budget is not None:
                 now = time.perf_counter()

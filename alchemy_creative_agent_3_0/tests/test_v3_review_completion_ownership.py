@@ -41,6 +41,7 @@ def test_review_scheduler_bounds_workers_and_preserves_result_order(limit):
         max_concurrent_inspections = limit
         def inspect(self, resolution, *, metadata):
             nonlocal active, maximum
+            index = resolution.index
             with lock:
                 active += 1
                 maximum = max(maximum, active)
@@ -48,11 +49,24 @@ def test_review_scheduler_bounds_workers_and_preserves_result_order(limit):
                     first_two.set()
             if limit > 1:
                 assert first_two.wait(2)
-            time.sleep(0.02 if resolution == 0 else 0.005)
+            time.sleep(0.02 if index == 0 else 0.005)
             with lock:
                 active -= 1
-            return (resolution, metadata["evidence"], metadata["frozen_output_review_contract"])
-    inputs = [(i, {"evidence": i}, {"role": i}) for i in range(4)]
+            return (index, metadata["evidence"], metadata["frozen_output_review_contract"])
+    inputs = [
+        (
+            SimpleNamespace(
+                index=i,
+                output_id=f"output-{i}",
+                asset_id=f"asset-{i}",
+                job_id=f"job-{i}",
+                metadata={},
+            ),
+            {"evidence": i},
+            {"role": i},
+        )
+        for i in range(4)
+    ]
     result = V3ProductApiService._inspect_outputs_in_order(Inspector(), inputs, base_metadata={})
     assert result == [(i, i, {"role": i}) for i in range(4)]
     assert maximum == min(limit, 2)

@@ -9028,6 +9028,10 @@ function renderV3VisualAssetCreateReadiness() {
       els.v3VisualAssetCreateFeedback.hidden = false;
       els.v3VisualAssetCreateFeedback.dataset.tone = "muted";
       els.v3VisualAssetCreateFeedback.textContent = `还需完成：${missing.join("、")}。完成后即可保存人物资产。`;
+    } else if (!missing.length) {
+      els.v3VisualAssetCreateFeedback.hidden = false;
+      els.v3VisualAssetCreateFeedback.dataset.tone = "success";
+      els.v3VisualAssetCreateFeedback.textContent = "资料已完整，可以保存人物资产。";
     } else {
       els.v3VisualAssetCreateFeedback.hidden = true;
       els.v3VisualAssetCreateFeedback.textContent = "";

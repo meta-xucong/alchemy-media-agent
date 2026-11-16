@@ -33,7 +33,7 @@ def test_doc173_library_is_not_a_template_or_generation_mode() -> None:
     assert 'id="v3ProjectVisualAssetPanel"' in index
     assert 'id="v3VisualAssetBindingDialog"' in index
     assert 'data-v3-mode=' not in index
-    assert "function openV3ProfessionalWorkspace()" in source
+    assert "function setV3WorkspaceMode(mode" in source
     assert 'v3_workspace: v3State.workspaceMode === "professional" ? "professional" : "standard"' in source
     assert "professional_mode:" not in _function(source, "createV3Project", "renderV3Projects")
     assert "v3State.professionalMode" not in source[: source.index("async function openV3Project")]
@@ -284,7 +284,7 @@ def test_doc258_visual_asset_library_uses_parallel_asset_cards_not_scroll_pile()
     assert 'data-v3-visual-asset-action="toggle-asset-details"' in source
     assert "v3VisualAssetLibraryCards.hidden = cardOpen" in source
     assert "els.v3CharacterCardWorkspace?.scrollIntoView" not in source
-    home = _function(source, "openV3Home", "openV3ProfessionalWorkspace")
+    home = _function(source, "openV3Home", "selectV3HomeTemplate")
     assert 'updateV3Notice("正在后台同步最近项目。", "info")' in home
     assert "waitForV3HomePreviewImages({ blockPage: false })" in home
     assert 'setV3PageLoading(true, "正在同步最近项目"' not in home

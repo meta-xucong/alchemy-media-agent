@@ -81,12 +81,13 @@ def test_brain_transport_schema_and_provider_defaults_share_finite_budget(monkey
     provider = V3LLMBrainProvider()
 
     assert provider.timeout == 300.0
-    assert provider.execution_budget_seconds == 520.0
+    # Three bounded model-candidate windows plus finalizer handoff reserve.
+    assert provider.execution_budget_seconds == 2200.0
     assert provider.execution_budget_seconds >= provider.timeout + 220.0
     monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "999")
     provider_high_override = V3LLMBrainProvider()
     assert provider_high_override.timeout == 360.0
-    assert provider_high_override.execution_budget_seconds == 580.0
+    assert provider_high_override.execution_budget_seconds == 2200.0
     request = BrainRunRequest(user_input="Plan one image.", transport_timeout_seconds=360.0)
     assert request.transport_timeout_seconds == 360.0
     assert _brain_transport_timeout_seconds({"_brain_transport_timeout_seconds": 999.0}) == 360.0

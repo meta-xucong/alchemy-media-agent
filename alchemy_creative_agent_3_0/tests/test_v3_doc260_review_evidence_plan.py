@@ -107,6 +107,30 @@ class _StaticReadyResolver:
         return resolved
 
 
+class _SequentialReadyResolver:
+    """Return a distinct durable output identity for each retry attempt."""
+
+    def __init__(self, resolutions: list[GeneratedOutputResolution]) -> None:
+        self.resolutions = list(resolutions)
+        self.calls = 0
+
+    def resolve_result(self, result, project_id: str | None = None):  # noqa: ANN001
+        packaged = result.asset_pack.assets[0]
+        index = min(self.calls, len(self.resolutions) - 1)
+        self.calls += 1
+        resolution = self.resolutions[index]
+        return [
+            resolution.model_copy(
+                update={
+                    "project_id": project_id or resolution.project_id,
+                    "job_id": result.creative_job.job_id,
+                    "asset_id": packaged.asset_id,
+                    "candidate_id": packaged.metadata.get("selected_candidate_id"),
+                }
+            )
+        ]
+
+
 def _ready_resolution(tmp_path: Path, *, output_id: str = "output_doc260") -> GeneratedOutputResolution:
     image_path = tmp_path / f"{output_id}.png"
     content = base64.b64decode(_png_base64())
@@ -273,7 +297,12 @@ def test_doc260_no_references_still_reviews_generic_pixels_and_marks_all_optiona
     provider = _StaticVisionProvider({"status": "warning", "confidence": 0.93, "issue_codes": []})
     service = _service(
         tmp_path,
-        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        output_resolver=_SequentialReadyResolver(
+            [
+                _ready_resolution(tmp_path, output_id="output_doc260_initial"),
+                _ready_resolution(tmp_path, output_id="output_doc260_retry"),
+            ]
+        ),
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
@@ -562,7 +591,12 @@ def test_doc260_verified_retryable_visual_defect_still_uses_existing_bounded_ret
     )
     service = _service(
         tmp_path,
-        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        output_resolver=_SequentialReadyResolver(
+            [
+                _ready_resolution(tmp_path, output_id="output_doc260_initial"),
+                _ready_resolution(tmp_path, output_id="output_doc260_retry"),
+            ]
+        ),
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)

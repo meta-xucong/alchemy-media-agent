@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 from types import SimpleNamespace
 
 from alchemy_creative_agent_3_0.app.project_mode import V3ProjectModeService
@@ -66,7 +67,10 @@ def test_doc309_contract_and_frontend_timeouts_are_present() -> None:
 
     assert 'update={"job_ids": list(reversed(candidate_job_ids))}' in service_source
     assert "v3HomePreviewRequestTimeoutMs = 30000" in desktop_source
-    assert "v3RequestWithTimeout(outputRequestPath, v3HomePreviewRequestTimeoutMs)" in desktop_source
+    assert re.search(
+        r"v3RequestWithTimeout\(\s*outputRequestPath\s*,\s*v3HomePreviewRequestTimeoutMs",
+        desktop_source,
+    )
     assert "mobileV3HomePreviewRequestTimeoutMs = 30000" in mobile_source
     assert "mobileV3RequestWithTimeout(" in mobile_source
     assert "mobileV3HomePreviewRequestTimeoutMs" in mobile_source

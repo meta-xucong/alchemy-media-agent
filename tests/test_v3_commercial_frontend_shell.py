@@ -147,7 +147,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "返回项目主页" in index.text
     assert "上传商品图，一键生成套图" not in index.text
     assert "返回 V3 首页" in index.text
-    assert 'id="v3BackHomeBtn" class="button compact ghost" href="/creative-agent-v3" data-v3-route-link' in index.text
+    assert 'id="v3BackHomeBtn" class="button compact ghost" href="/creative-agent-v3?home=1" data-v3-route-link' in index.text
     assert "生成一组图片" in index.text
     assert 'id="v3CountInput"' in index.text
     assert 'id="v3CountValue"' in index.text
@@ -387,7 +387,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "mobileV3ProcessOutputsForProject" in mobile_script.text
     assert "function mobileV3CanonicalFinalDelivery" in mobile_script.text
     assert "function mobileV3DedupeOutputItems" in mobile_script.text
-    assert "return mobileV3DedupeOutputItems(outputs).filter((item) => mobileV3CanonicalFinalDelivery(item));" in mobile_script.text
+    final_outputs_body = mobile_script.text.split("function mobileV3FinalOutputsForProject", 1)[1].split("function mobileV3ExpectedImageCountForJob", 1)[0]
+    assert "return mobileV3DedupeOutputItems(outputs).filter((item) => {" in final_outputs_body
+    assert 'selectionState !== "unselected"' in final_outputs_body
+    assert 'selectionState !== "rejected"' in final_outputs_body
+    assert "mobileV3CanonicalFinalDelivery(item)" in final_outputs_body
     assert "function mobileV3JobDeliveryWithheld" in mobile_script.text
     assert "function mobileV3RecoveryAttemptLimitForServerWatchdog" in mobile_script.text
     assert "recoveryAttemptLimit = Math.max(" in mobile_script.text
@@ -447,7 +451,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
         "async function syncV3ProjectDetailInBackground", 1
     )[1].split("\nfunction renderV3ProjectOpeningState", 1)[0]
     output_call_start = project_detail_sync.index("loadV3ProjectOutputs({")
-    output_call_end = project_detail_sync.index("\n      }),", output_call_start)
+    output_call_end = project_detail_sync.index("visualAssetTask,", output_call_start)
     output_call = project_detail_sync[output_call_start:output_call_end]
     assert "loadV3ProjectOutputs({" in output_call
     assert "silent: true" in output_call

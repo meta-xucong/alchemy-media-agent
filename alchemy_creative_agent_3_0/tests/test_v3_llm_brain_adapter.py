@@ -1781,7 +1781,12 @@ def test_v3_candidate_budget_exhaustion_allows_backup_with_remaining_shared_budg
         return {providers._TRANSPORT_RECEIPT_KEY: {"schema_version": "test"}, "decision": "accepted"}
 
     monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", fake_run_one)
-    budget = _BrainExecutionBudget(total_seconds=520.0, started_at=providers.time.perf_counter() - 100.0)
+    elapsed_remote_start = providers.time.perf_counter() - 100.0
+    budget = _BrainExecutionBudget(
+        total_seconds=520.0,
+        started_at=elapsed_remote_start,
+        remote_started_at=elapsed_remote_start,
+    )
     token = _ACTIVE_EXECUTION_BUDGET.set(budget)
     try:
         result = provider.run(request)

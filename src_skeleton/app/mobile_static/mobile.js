@@ -4702,10 +4702,17 @@ function mobileV3ProjectReviewOutputCountKnown(project) {
 }
 
 function mobileV3ProjectGroupsFromProjects() {
+  const professional = mobileV3State.workspaceMode === "professional";
+  const matchesWorkspace = (project) =>
+    mobileV3ProjectUsesProfessionalWorkspace(project) === professional;
   const outputGroups = mobileV3RecentProjectGroupMap();
   const projects = (mobileV3State.projects || [])
-    .filter((project) => project?.project_id && project.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(project));
-  if (!projects.length) return mobileV3RecentProjectGroups();
+    .filter((project) => project?.project_id
+      && project.status !== "archived"
+      && !mobileV3ExpiredFailureOnlyProject(project)
+      && matchesWorkspace(project));
+  if (!projects.length) return mobileV3RecentProjectGroups()
+    .filter((group) => matchesWorkspace(group.project));
   return projects.map((project) => mobileV3GroupFromProject(project, outputGroups.get(String(project.project_id))));
 }
 
