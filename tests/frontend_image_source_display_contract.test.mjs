@@ -48,6 +48,9 @@ for (const [surface, source] of [["desktop", desktopJs], ["mobile", mobileJs]]) 
     assert.equal(label({ provider_id: "codex-image" }), "RenderBridge");
     assert.equal(label({ metadata: { mock: true } }), "Mock");
     assert.equal(label({ metadata: { requested_provider: "openai_gpt_image" } }), "来源未记录");
+    assert.equal(label({}, { provider_id: "codex-image" }), "来源未记录");
+    assert.equal(label({}, { metadata: { requested_provider: "codex-image" } }), "来源未记录");
+    assert.equal(label({}, { actual_provider: "codex-image" }), "RenderBridge");
   });
 }
 
