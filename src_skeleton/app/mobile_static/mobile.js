@@ -5976,6 +5976,7 @@ async function generateMobileV3Job() {
       );
   try {
     setMobileV3Busy(true);
+    mobileV3State.progressStartedAt = Date.now();
     setMobileV3Progress("uploading", mobileV3State.files.length ? "正在上传参考图" : "正在准备项目上下文");
     const uploadedAssets = await uploadMobileV3Files();
     if (ecommerceSession && !mobileV3EcommerceGenerationSessionOwns(ecommerceSession)) return;
@@ -6085,12 +6086,15 @@ async function generateMobileV3Job() {
 async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1, initialJob = null, recoveryReceipt = null } = {}) {
   if (!jobId) return initialJob || {};
   let lastJob = initialJob || {};
-  let recoveryAttemptLimit = 120;
+  // Preserve the former five-minute foreground observation window with adaptive polling.
+  let recoveryAttemptLimit = 66;
   for (let attempt = 1; attempt <= recoveryAttemptLimit; attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 1200 : 2500));
+    await new Promise((resolve) => window.setTimeout(resolve, mobileV3RecoveryDelayMs(attempt)));
     if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
+    let statusReadFailed = true;
     try {
       lastJob = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
+      statusReadFailed = false;
       if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
       if (mobileV3JobHasTerminalOutcome(lastJob)) {
         if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
@@ -6109,7 +6113,8 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
           recoveryAttemptLimit,
           mobileV3RecoveryAttemptLimitForServerWatchdog(lastJob, attempt),
         );
-        setMobileV3Progress("recovering", `后台正在生成或完成交付收尾，已刷新 ${attempt} 次`);
+        const progress = mobileV3RecoveryProgressPresentation(lastJob, attempt);
+        setMobileV3Progress(progress.stageKey, progress.detail);
         continue;
       }
       mobileV3MergeProjectOutputs(projectId, lastJob?.metadata?.project_outputs || []);
@@ -6129,9 +6134,46 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
       // Keep polling project outputs; the job endpoint can lag behind.
     }
     if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
-    setMobileV3Progress("recovering", `后台正在生成，已刷新 ${attempt} 次`);
+    const progress = mobileV3RecoveryProgressPresentation(lastJob, attempt, { statusReadFailed });
+    setMobileV3Progress(progress.stageKey, progress.detail);
   }
   throw new Error("后台暂时没有返回完整图片，请稍后刷新项目");
+}
+
+function mobileV3RecoveryDelayMs(attempt) {
+  const poll = Math.max(1, Number.parseInt(String(attempt ?? ""), 10) || 1);
+  if (poll === 1) return 1200;
+  if (poll <= 25) return 2500;
+  if (poll <= 61) return 5000;
+  return 10000;
+}
+
+function mobileV3RecoveryProgressPresentation(job, attempt, { statusReadFailed = false } = {}) {
+  const status = String(job?.status || "").trim().toLowerCase();
+  const pollCount = Math.max(0, Number.parseInt(String(attempt ?? ""), 10) || 0);
+  const checked = pollCount ? `后台状态查询已尝试 ${pollCount} 次。` : "";
+  if (statusReadFailed || !status) {
+    return {
+      stageKey: "recovering",
+      detail: `暂时无法读取最新任务状态。${checked}系统没有重复提交任务。`,
+    };
+  }
+  if (mobileV3JobAwaitingFinalDelivery(job)) {
+    return {
+      stageKey: "recovering",
+      detail: `图片已返回，正在完成质量复检和最终交付。${checked}`,
+    };
+  }
+  if (status === "planned") {
+    return { stageKey: "recovering", detail: `任务已提交，后台正在准备生成。${checked}` };
+  }
+  if (status === "queued") {
+    return { stageKey: "recovering", detail: `任务已进入后台队列。${checked}` };
+  }
+  if (status === "generating") {
+    return { stageKey: "recovering", detail: `后台正在生成图片。${checked}` };
+  }
+  return { stageKey: "recovering", detail: `后台任务仍在处理，页面会继续核对结果。${checked}` };
 }
 
 function mobileV3RecoveryAttemptLimitForServerWatchdog(job, completedAttempt) {
@@ -6140,9 +6182,14 @@ function mobileV3RecoveryAttemptLimitForServerWatchdog(job, completedAttempt) {
   const startedAt = Date.parse(String(watchdog?.started_at || ""));
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || !Number.isFinite(startedAt)) return 0;
   const remainingMs = Math.max(0, (startedAt + (timeoutSeconds * 1000)) - Date.now());
-  const pollingIntervalMs = 2500;
   const completionBufferAttempts = 4;
-  return completedAttempt + Math.ceil(remainingMs / pollingIntervalMs) + completionBufferAttempts;
+  let attemptLimit = completedAttempt;
+  let budgetMs = 0;
+  while (budgetMs < remainingMs && attemptLimit - completedAttempt < 100000) {
+    attemptLimit += 1;
+    budgetMs += mobileV3RecoveryDelayMs(attemptLimit);
+  }
+  return attemptLimit + completionBufferAttempts;
 }
 
 function setMobileV3Busy(isBusy) {
@@ -6159,7 +6206,7 @@ const mobileV3ProgressStages = [
   { key: "uploading", percent: 18, label: "准备素材" },
   { key: "planning", percent: 36, label: "理解需求" },
   { key: "generating", percent: 68, label: "生成图片" },
-  { key: "recovering", percent: 86, label: "刷新结果" },
+  { key: "recovering", percent: 86, label: "核对结果" },
   { key: "completed", percent: 100, label: "完成" },
   { key: "review_blocked", percent: 100, label: "未交付" },
   { key: "failed", percent: 100, label: "需重试" },
@@ -6174,7 +6221,8 @@ function setMobileV3Progress(stageKey, detail = "") {
   mobileV3State.progressDetail = detail || stage.label;
   panel.hidden = false;
   setText("#mobileV3ProgressTitle", stage.label);
-  setText("#mobileV3ProgressElapsed", ["completed", "review_blocked", "failed"].includes(stage.key) ? "已结束" : "进行中");
+  const elapsed = progressElapsedLabel(mobileV3State.progressStartedAt);
+  setText("#mobileV3ProgressElapsed", elapsed ? `累计用时 ${elapsed}` : (["completed", "review_blocked", "failed"].includes(stage.key) ? "已结束" : "刚开始"));
   const fill = document.querySelector("#mobileV3ProgressFill");
   if (fill) fill.style.width = `${stage.percent}%`;
   const steps = document.querySelector("#mobileV3ProgressSteps");
@@ -9885,8 +9933,9 @@ function generatedImageRoute(item, fallback = null) {
     if (route === "api") return "api";
     return "unknown";
   }
+  const fallbackMetadata = fallback?.metadata && typeof fallback.metadata === "object" ? fallback.metadata : {};
   const actualProvider = String(
-    metadata.actual_provider || item?.provider_id || item?.provider || fallback?.provider_id || fallback?.provider || "",
+    metadata.actual_provider || item?.provider_id || item?.provider || fallback?.actual_provider || fallbackMetadata.actual_provider || "",
   ).trim().toLowerCase();
   if (metadata.mock === true || actualProvider === "mock_image") return "mock";
   if (actualProvider.includes("render_bridge") || actualProvider === "renderbridge" || ["codex-image", "codex_cli"].includes(actualProvider)) return "bridge";

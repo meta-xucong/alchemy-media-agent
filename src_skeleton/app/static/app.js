@@ -11398,11 +11398,15 @@ async function recoverV3GeneratedJob(
       throw new Error("v3_project_recovery_replaced");
     }
     v3State.recoverPollAttempt = attempt;
-    await v3Delay(attempt === 1 ? 1200 : 2500);
+    await v3Delay(v3RecoveryDelayMs(attempt));
     let outputProjectionChanged = false;
     let outputProjectionSignature = "";
+    let statusReadFailed = true;
+    let latestObservedJob = v3State.currentJob;
     try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+      statusReadFailed = false;
+      latestObservedJob = job;
       if (typeof shouldContinue === "function" && !shouldContinue()) {
         throw new Error("v3_project_recovery_replaced");
       }
@@ -11452,11 +11456,6 @@ async function recoverV3GeneratedJob(
         recoveryAttemptLimit,
         v3RecoveryAttemptLimitForServerWatchdog(job, attempt),
       );
-      if (v3JobProviderRetryActive(job)) {
-        setV3Progress("recovering", "正在换一条线路重试。", "warning", { forceNotice: true });
-      } else if (v3JobAwaitingFinalDelivery(job)) {
-        setV3Progress("reviewing", "图片已返回，正在完成质量检查和最终交付。", "info", { forceNotice: attempt === 1 });
-      }
       v3State.currentJob = job || v3State.currentJob;
       renderV3Job(v3State.currentJob);
     } catch (error) {
@@ -11505,8 +11504,17 @@ async function recoverV3GeneratedJob(
     } catch (error) {
       lastError = error;
     }
-    const waitDetail = `后台正在生成或排队，已刷新 ${attempt} 次。`;
-    setV3Progress("recovering", waitDetail, attempt >= 60 ? "warning" : "info", { forceNotice: attempt === 1 || attempt % 12 === 0 });
+    const waitProgress = v3RecoveryProgressPresentation(
+      latestObservedJob || v3State.currentJob,
+      attempt,
+      { statusReadFailed },
+    );
+    const progressStageKey = v3State.progressStageKey === "reviewing" && waitProgress.stageKey === "recovering"
+      ? "reviewing"
+      : waitProgress.stageKey;
+    setV3Progress(progressStageKey, waitProgress.detail, waitProgress.type, {
+      forceNotice: attempt === 1 || attempt % 12 === 0,
+    });
     if (attempt === 1 || attempt % 5 === 0) {
       renderV3ProjectDetail();
     }
@@ -11537,15 +11545,81 @@ function v3JobAwaitingFinalDelivery(job) {
   return job?.status === "finalizing" || Boolean(job?.metadata?.delivery_settling);
 }
 
+function v3RecoveryDelayMs(attempt) {
+  const poll = Math.max(1, Number.parseInt(String(attempt ?? ""), 10) || 1);
+  if (poll === 1) return 1200;
+  if (poll <= 25) return 2500;
+  if (poll <= 61) return 5000;
+  return 10000;
+}
+
+function v3RecoveryProgressPresentation(job, attempt, { statusReadFailed = false } = {}) {
+  const status = String(job?.status || "").trim().toLowerCase();
+  const pollCount = Math.max(0, Number.parseInt(String(attempt ?? ""), 10) || 0);
+  const checked = pollCount ? `后台状态查询已尝试 ${pollCount} 次。` : "";
+  if (statusReadFailed || !status) {
+    return {
+      stageKey: "recovering",
+      detail: `暂时无法读取最新任务状态。${checked}系统没有重复提交任务。`,
+      type: "warning",
+    };
+  }
+  if (v3JobProviderRetryActive(job)) {
+    return {
+      stageKey: "recovering",
+      detail: `上游正在恢复同一任务。${checked}`,
+      type: "warning",
+    };
+  }
+  if (v3JobAwaitingFinalDelivery(job)) {
+    return {
+      stageKey: "reviewing",
+      detail: `图片已返回，正在完成质量复检和最终交付。${checked}`,
+      type: "info",
+    };
+  }
+  if (status === "queued") {
+    return {
+      stageKey: "recovering",
+      detail: `任务已进入后台队列。${checked}`,
+      type: "info",
+    };
+  }
+  if (status === "planned") {
+    return {
+      stageKey: "recovering",
+      detail: `任务已提交，后台正在准备生成。${checked}`,
+      type: "info",
+    };
+  }
+  if (status === "generating") {
+    return {
+      stageKey: "recovering",
+      detail: `后台正在生成图片。${checked}`,
+      type: "info",
+    };
+  }
+  return {
+    stageKey: "recovering",
+    detail: `后台任务仍在处理，页面会继续核对结果。${checked}`,
+    type: pollCount >= 60 ? "warning" : "info",
+  };
+}
+
 function v3RecoveryAttemptLimitForServerWatchdog(job, completedAttempt) {
   const watchdog = job?.metadata?.background_generation_watchdog;
   const timeoutSeconds = Number(watchdog?.timeout_seconds);
   const startedAt = Date.parse(String(watchdog?.started_at || ""));
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || !Number.isFinite(startedAt)) return 0;
   const remainingMs = Math.max(0, (startedAt + (timeoutSeconds * 1000)) - Date.now());
-  const pollingIntervalMs = 2500;
   const completionBufferAttempts = 4;
-  return completedAttempt + Math.ceil(remainingMs / pollingIntervalMs) + completionBufferAttempts;
+  let attemptLimit = completedAttempt;
+  let budgetMs = 0;
+  while (budgetMs < remainingMs && attemptLimit - completedAttempt < 100000) {
+    attemptLimit += 1;
+    budgetMs += v3RecoveryDelayMs(attemptLimit);
+  }
+  return attemptLimit + completionBufferAttempts;
 }
 
 function v3JobProviderRetrySummary(job) {
@@ -11947,7 +12021,7 @@ const v3ProgressStages = [
   { key: "planning", percent: 38, label: "理解需求" },
   { key: "generating", percent: 68, label: "生成图片" },
   { key: "recovering", percent: 82, label: "核对结果" },
-  { key: "reviewing", percent: 92, label: "整理结果" },
+  { key: "reviewing", percent: 92, label: "复检与交付" },
   { key: "completed", percent: 100, label: "完成" },
   { key: "review_blocked", percent: 100, label: "未交付" },
   { key: "failed", percent: 100, label: "需要处理" },
@@ -11955,7 +12029,8 @@ const v3ProgressStages = [
 
 const v3ProgressByKey = Object.fromEntries(v3ProgressStages.map((stage) => [stage.key, stage]));
 const v3GenerationSoftTimeoutMs = 180000;
-const v3RecoveryMaxAttempts = 240;
+// Preserve the former ten-minute foreground observation window with adaptive polling.
+const v3RecoveryMaxAttempts = 96;
 
 function startV3Progress(stageKey = "queued", detail = "") {
   clearV3ProgressTimer();
@@ -12203,7 +12278,7 @@ function renderV3OutcomeItems(entries) {
         : percent >= 100
           ? "已完成"
           : elapsed
-            ? `已用 ${elapsed}`
+            ? `累计用时 ${elapsed}`
             : v3State.loading
               ? "进行中"
               : "待开始";
@@ -14774,8 +14849,9 @@ function generatedImageRoute(item, fallback = null) {
     if (route === "api") return "api";
     return "unknown";
   }
+  const fallbackMetadata = fallback?.metadata && typeof fallback.metadata === "object" ? fallback.metadata : {};
   const actualProvider = String(
-    metadata.actual_provider || item?.provider_id || item?.provider || fallback?.provider_id || fallback?.provider || "",
+    metadata.actual_provider || item?.provider_id || item?.provider || fallback?.actual_provider || fallbackMetadata.actual_provider || "",
   ).trim().toLowerCase();
   if (metadata.mock === true || actualProvider === "mock_image") return "mock";
   if (actualProvider.includes("render_bridge") || actualProvider === "renderbridge" || ["codex-image", "codex_cli"].includes(actualProvider)) return "bridge";

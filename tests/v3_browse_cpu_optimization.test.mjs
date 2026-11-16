@@ -29,6 +29,14 @@ function extractFunction(name, nextMarker) {
   return source.slice(functionStart, end);
 }
 
+function extractV3RecoveryUnit() {
+  return [
+    extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery"),
+    extractFunction("v3RecoveryDelayMs", "\nfunction v3RecoveryProgressPresentation"),
+    extractFunction("v3RecoveryProgressPresentation", "\nfunction v3RecoveryAttemptLimitForServerWatchdog"),
+  ].join("\n");
+}
+
 test("API/MCP account requests are explicitly prioritized over media fetches", () => {
   assert.match(apiAccessSource, /priority:\s*"high"/);
   assert.match(accountAccessSource, /priority:\s*"high"/);
@@ -67,7 +75,7 @@ test("job output projection signature ignores progress-only changes", () => {
 });
 
 test("recovery does not refresh project projections on unchanged poll ticks", async () => {
-  const recoverySource = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  const recoverySource = extractV3RecoveryUnit();
   let jobReads = 0;
   let projectRefreshes = 0;
   let timelineReads = 0;
@@ -455,7 +463,7 @@ test("V3 deferred image teardown releases disconnected image references and subs
 });
 
 test("output projection retry commits a signature only after successful refresh", async () => {
-  const recoverySource = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  const recoverySource = extractV3RecoveryUnit();
   let now = 0;
   let jobReads = 0;
   let outputReads = 0;
@@ -508,7 +516,7 @@ test("output projection retry commits a signature only after successful refresh"
 });
 
 test("unchanged successful output projection is read once across running polls", async () => {
-  const recoverySource = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  const recoverySource = extractV3RecoveryUnit();
   let now = 0;
   let jobReads = 0;
   let outputReads = 0;
@@ -552,7 +560,7 @@ test("unchanged successful output projection is read once across running polls",
 });
 
 test("output projection retries once after failure then suppresses unchanged successful reads", async () => {
-  const recoverySource = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
+  const recoverySource = extractV3RecoveryUnit();
   let now = 0;
   let jobReads = 0;
   let outputReads = 0;
