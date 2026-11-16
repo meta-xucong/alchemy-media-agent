@@ -109,7 +109,38 @@ class MemoryRepository:
     def get_asset(self, asset_id: str) -> Any | None:
         return self.assets.get(asset_id)
 
-    def save_job(self, job: GenerationJob) -> GenerationJob:
+    @staticmethod
+    def _is_overdue_primary_reconciliation(latest: GenerationJob, incoming: GenerationJob,
+                                          task_ids: dict[str, str] | None) -> bool:
+        if (latest.status != JobStatus.failed
+                or getattr(latest.error, "code", None) != "bridge_execution_reconciliation_overdue"
+                or incoming.status not in {JobStatus.generating, JobStatus.failed}
+                or not isinstance(task_ids, dict) or not task_ids):
+            return False
+        previous = latest.raw_response_summary.get("primary_image_transport")
+        current = incoming.raw_response_summary.get("primary_image_transport")
+        if (not isinstance(previous, dict) or not isinstance(current, dict)
+                or previous.get("request") != current.get("request")
+                or previous.get("edit") != current.get("edit")):
+            return False
+        previous_units = previous.get("units")
+        current_units = current.get("units")
+        if not isinstance(previous_units, dict) or not isinstance(current_units, dict):
+            return False
+        allowed_states = {"execution_unknown", "queued", "running", "awaiting_user", "failed", "expired",
+                          "artifacts_ready", "acked"}
+        for index, task_id in task_ids.items():
+            old = previous_units.get(str(index))
+            new = current_units.get(str(index))
+            if (not isinstance(task_id, str) or not task_id
+                    or not isinstance(old, dict) or old.get("route") != "bridge"
+                    or old.get("state") != "execution_unknown" or old.get("task_id") != task_id
+                    or not isinstance(new, dict) or new.get("route") != "bridge"
+                    or new.get("task_id") != task_id or new.get("state") not in allowed_states):
+                return False
+        return True
+
+    def save_job(self, job: GenerationJob, *, primary_reconciliation_task_ids: dict[str, str] | None = None) -> GenerationJob:
         connection = connect(self.database_path)
         try:
             with connection:
@@ -128,7 +159,11 @@ class MemoryRepository:
                             return latest
                         # A second polling process cannot roll a completed or
                         # canceled primary execution back to an older checkpoint.
-                        if latest.status in {JobStatus.ready, JobStatus.canceled, JobStatus.failed, JobStatus.rejected} and job.status != latest.status:
+                        authorized_primary_reconciliation = self._is_overdue_primary_reconciliation(
+                            latest, job, primary_reconciliation_task_ids
+                        )
+                        if (latest.status in {JobStatus.ready, JobStatus.canceled, JobStatus.failed, JobStatus.rejected}
+                                and job.status != latest.status and not authorized_primary_reconciliation):
                             return latest
                         if incoming:
                             # Private per-unit checkpoints are append-only even

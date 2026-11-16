@@ -2,6 +2,8 @@
 import asyncio
 import base64
 import io
+import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -21,11 +23,13 @@ class Bridge:
         stream = io.BytesIO()
         Image.new('RGB', (7, 11), (20, 60, 80)).save(stream, format='PNG')
         self.content = stream.getvalue()
-        self.tasks = {}; self.creates = 0; self.acks = []; self.cancels = []; self.inputs = []
+        self.tasks = {}; self.creates = 0; self.origin_reads = 0; self.origin_task_id_override = None
+        self.capabilities_calls = 0; self.acks = []; self.cancels = []; self.inputs = []
         self.state = 'artifacts_ready'; self.error = None; self.healthy = True; self.native = True
         self.attention_code = None
 
     async def capabilities(self):
+        self.capabilities_calls += 1
         return {'admission': {'accepting_new_tasks': True},
             'limits': {'max_input_bytes': 16 * 1024 * 1024, 'max_input_image_pixels': 16_777_216},
             'routing_availability_v1': {'profiles': [
@@ -54,8 +58,13 @@ class Bridge:
         return task
 
     async def by_origin(self, origin):
+        self.origin_reads += 1
         task = dict(self.tasks[origin], state=self.state)
+        if self.origin_task_id_override:
+            task['remote_task_id'] = self.origin_task_id_override
         task['receipt_id'] = 'receipt_'+task['remote_task_id'].split('_')[-1] if self.state == 'artifacts_ready' else None
+        task['action_required_detail'] = ({'code': self.attention_code, 'message': 'untrusted detail'}
+                                          if self.attention_code else None)
         self.tasks[origin] = task
         return task
 
@@ -184,6 +193,116 @@ def test_v1_timeout_projects_terminal_curated_error_but_keeps_unknown_task(runti
         assert '名额仍被占用' in job.error.message
         assert '不会自动切换 API' in job.error.message
     assert bridge.creates == 1 and api.calls == 0
+
+
+@pytest.mark.parametrize(
+    'remote_state,expected_error',
+    [
+        ('execution_unknown', 'bridge_execution_reconciliation_overdue'),
+        ('failed', 'bridge_failed'),
+    ],
+)
+def test_v1_overdue_terminal_job_reconciles_same_bridge_task(runtime, tmp_path, remote_state, expected_error):
+    bridge, api = runtime
+    bridge.state = 'execution_unknown'
+    bridge.attention_code = 'execution_reconciliation_overdue'
+    job = asyncio.run(submit())
+
+    assert job.status == JobStatus.failed
+    assert job.error.code == 'bridge_execution_reconciliation_overdue'
+    assert bridge.creates == 1 and bridge.origin_reads == 0
+    # The owner status endpoint may resume only this overdue identity. It must
+    # query the same origin and persist its status without creating another task.
+    bridge.state = remote_state
+    if remote_state == 'failed':
+        bridge.attention_code = None
+    resumed = asyncio.run(primary.resume_primary_job(job.id))
+
+    assert resumed.status == JobStatus.failed
+    assert resumed.error.code == expected_error
+    if remote_state == 'failed':
+        assert 'confirmed this image task failed' in resumed.error.message
+    assert not resumed.outputs
+    assert bridge.creates == 1 and bridge.origin_reads == 1 and api.calls == 0
+
+    with sqlite3.connect(tmp_path / 'v1' / 'primary.sqlite3') as db:
+        states = [row[0] for row in db.execute('SELECT state FROM units')]
+    assert states == [remote_state]
+
+
+def test_v1_overdue_reconciliation_continues_original_batch_after_exact_task_succeeds(runtime):
+    bridge, api = runtime
+    bridge.state = 'execution_unknown'
+    bridge.attention_code = 'execution_reconciliation_overdue'
+    job = asyncio.run(submit(count=2))
+
+    assert job.status == JobStatus.failed
+    assert bridge.creates == 1 and not job.outputs
+
+    bridge.state = 'artifacts_ready'
+    bridge.attention_code = None
+    resumed = asyncio.run(primary.resume_primary_job(job.id))
+
+    assert resumed.status == JobStatus.ready
+    assert len(resumed.outputs) == 2
+    assert len({output.id for output in resumed.outputs}) == 2
+    assert bridge.creates == 2 and bridge.origin_reads == 1 and api.calls == 0
+    assert len(bridge.acks) == 2
+
+
+@pytest.mark.parametrize('ledger_change', ['missing', 'different_task', 'preflight_state'])
+def test_v1_overdue_reconciliation_never_admits_a_replacement_task(runtime, tmp_path, ledger_change):
+    bridge, api = runtime
+    bridge.state = 'execution_unknown'
+    bridge.attention_code = 'execution_reconciliation_overdue'
+    job = asyncio.run(submit())
+    capabilities_before_resume = bridge.capabilities_calls
+    ledger = tmp_path / 'v1' / 'primary.sqlite3'
+    with sqlite3.connect(ledger) as db:
+        if ledger_change == 'missing':
+            db.execute('DELETE FROM units')
+        else:
+            key, raw = db.execute('SELECT key, data FROM units').fetchone()
+            data = json.loads(raw)
+            if ledger_change == 'different_task':
+                data['task_id'] = 'task_different'
+                db.execute('UPDATE units SET data=? WHERE key=?', (json.dumps(data), key))
+            else:
+                data['state'] = 'preflight'
+                db.execute('UPDATE units SET state=?, data=? WHERE key=?',
+                           ('preflight', json.dumps(data), key))
+
+    bridge.state = 'failed'
+    bridge.attention_code = None
+    resumed = asyncio.run(primary.resume_primary_job(job.id))
+
+    assert resumed.status == JobStatus.failed
+    assert resumed.error.code == 'bridge_execution_reconciliation_overdue'
+    assert (bridge.creates == 1 and bridge.origin_reads == 0
+            and bridge.capabilities_calls == capabilities_before_resume and api.calls == 0)
+
+
+def test_v1_overdue_reconciliation_rejects_different_remote_task_id(runtime, tmp_path):
+    bridge, api = runtime
+    bridge.state = 'execution_unknown'
+    bridge.attention_code = 'execution_reconciliation_overdue'
+    job = asyncio.run(submit())
+    capabilities_before_resume = bridge.capabilities_calls
+    bridge.state = 'failed'
+    bridge.attention_code = None
+    bridge.origin_task_id_override = 'task_unrelated'
+
+    resumed = asyncio.run(primary.resume_primary_job(job.id))
+
+    assert resumed.status == JobStatus.failed
+    assert resumed.error.code == 'bridge_execution_reconciliation_overdue'
+    assert not resumed.outputs
+    assert (bridge.creates == 1 and bridge.origin_reads == 1
+            and bridge.capabilities_calls == capabilities_before_resume and api.calls == 0)
+    with sqlite3.connect(tmp_path / 'v1' / 'primary.sqlite3') as db:
+        row = db.execute('SELECT state, data FROM units').fetchone()
+    assert row[0] == 'execution_unknown'
+    assert json.loads(row[1])['task_id'] == 'task_1'
 
 
 @pytest.mark.parametrize('reason', ['queue', 'capability'])
