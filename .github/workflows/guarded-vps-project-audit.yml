@@ -313,6 +313,7 @@ jobs:
                   "planning_failure_diagnostics": _doc277_safe_planning_failure_diagnostics(brain_outcome),
                   "planning_contract_failure": contract_failure,
                   "status": payload.get("status"),
+                  "created_at": payload.get("created_at"),
                   "updated_at": payload.get("updated_at"),
                   "warning_count": len(payload.get("warnings") or []),
                   "has_generation_result": bool(generation_result),
@@ -372,6 +373,18 @@ jobs:
                       "asset_id": payload.get("asset_id"),
                       "provider": payload.get("provider"),
                       "model": payload.get("model"),
+                      "render_bridge_primary": (
+                          {
+                              key: metadata["render_bridge_primary"][key]
+                              for key in (
+                                  "route", "state", "reason", "profile", "bridge_failure_stage",
+                                  "bridge_error_code", "bridge_http_status",
+                              )
+                              if type(metadata["render_bridge_primary"].get(key)) in (str, int)
+                          }
+                          if isinstance(metadata.get("render_bridge_primary"), dict)
+                          else None
+                      ),
                       "dimensions": [payload.get("width"), payload.get("height")],
                       "image_file_count": len(image_files),
                       "delivery_metadata": {
@@ -728,6 +741,69 @@ jobs:
                   rows.append({"at": match[1], "route": match[2], "status": int(match[3])})
           print(json.dumps({"recent_v3_submission_count": count, "recent_v3_submissions": list(rows)}))
           '
+
+          # Read only the exact Bridge capability route window for the known
+          # V3 run. Emit timestamps, HTTP status, and exception class only;
+          # never emit raw request headers, payloads, prompts, or log lines.
+          bridge_container=alchemy-render-bridge-api
+          printf 'GUARDED_BRIDGE_DIAGNOSTIC_WINDOW=2026-11-17T09:45:00Z..2026-11-17T09:52:00Z\n'
+          if docker inspect "$bridge_container" >/dev/null 2>&1; then
+            docker inspect "$bridge_container" --format '{{.State.Status}}|{{.State.StartedAt}}|{{.RestartCount}}' \
+              | python3 -c 'import json,sys; s=sys.stdin.read().strip().split("|"); print(json.dumps({"bridge_container_status":s[0],"started_at":s[1],"restart_count":int(s[2])}))'
+            docker logs --timestamps --since 2026-11-17T09:45:00Z --until 2026-11-17T09:52:00Z "$bridge_container" 2>&1 \
+              | python3 -c '
+          import json, re, sys
+          access = re.compile(r"^(\S+).*\"GET /bridge/v1/capabilities HTTP/[0-9.]+\" ([1-5][0-9]{2})\b")
+          exception_names = {
+              "ConnectTimeout": "connect_timeout",
+              "ConnectError": "connect_error",
+              "ReadTimeout": "read_timeout",
+              "ReadError": "read_error",
+              "RemoteProtocolError": "remote_protocol_error",
+              "ConnectionResetError": "connection_reset",
+              "ConnectionRefusedError": "connection_refused",
+              "BrokenPipeError": "broken_pipe",
+              "TimeoutError": "timeout",
+          }
+          requests = []
+          exceptions = []
+          for line in sys.stdin:
+              match = access.search(line)
+              if match:
+                  requests.append({"at": match[1], "status": int(match[2])})
+              for name, code in exception_names.items():
+                  if name in line:
+                      timestamp = line.split(None, 1)[0] if line[:1].isdigit() else None
+                      exceptions.append({"at": timestamp, "class": code})
+                      break
+          print(json.dumps({"capabilities_requests": requests[-30:], "transport_exception_events": exceptions[-30:]}))
+          '
+          else
+            printf 'GUARDED_BRIDGE_DIAGNOSTIC_CONTAINER=unavailable\n'
+          fi
+
+          # A single GET verifies current reachability without creating a task.
+          docker exec -i "$v1_container" python - <<'PY'
+          import asyncio
+          import json
+          import app.config
+          from render_bridge_primary import PrimarySettings, PrimaryTransport
+          from render_bridge_primary.http import BridgeError
+
+          async def main():
+              transport = PrimaryTransport(PrimarySettings.from_env(product="v3"))
+              try:
+                  capabilities = await transport.client.capabilities()
+                  profiles = capabilities.get("profiles") or []
+                  print(json.dumps({"current_capability_probe": "ok", "profile_count": len(profiles)}))
+              except BridgeError as error:
+                  print(json.dumps({"current_capability_probe": "error", "error_code": error.code,
+                                    "http_status": error.status}))
+              finally:
+                  await transport.close()
+
+          asyncio.run(main())
+          PY
 
           printf 'GUARDED_PROJECT_AUDIT_RESULT=pass\n'
           printf 'GUARDED_PROJECT_AUDIT_PROJECT_ID=%s\n' "$project_id"
