@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 from datetime import datetime, timezone
 import hashlib
 import httpx
@@ -250,6 +251,10 @@ _v3_background_planning_operations_lock = threading.Lock()
 _v3_background_generation_jobs: dict[str, str] = {}
 _v3_background_generation_watchdogs: dict[str, threading.Timer] = {}
 _v3_background_generation_jobs_lock = threading.Lock()
+_v3_background_generation_live_attempts: dict[str, str] = {}
+_v3_background_generation_owner_by_job: dict[str, str] = {}
+_v3_background_generation_owner_active: dict[str, str] = {}
+_v3_background_generation_pending_by_owner: dict[str, deque[tuple]] = {}
 _v3_background_generation_runtime_id = uuid4().hex
 _V3_BACKGROUND_CONTINUATION_METADATA_FIELDS = frozenset(
     {
@@ -1212,12 +1217,23 @@ def _run_v3_project_generation_background(
             )
         logger.exception("V3 background project generation failed for project=%s job=%s", project_id, job_id)
     finally:
+        next_task = None
+        owner_id = None
         with _v3_background_generation_jobs_lock:
             if _v3_background_generation_jobs.get(key) == background_attempt_id:
                 _v3_background_generation_jobs.pop(key, None)
                 watchdog = _v3_background_generation_watchdogs.pop(key, None)
                 if watchdog is not None:
                     watchdog.cancel()
+            if _v3_background_generation_live_attempts.get(key) == background_attempt_id:
+                _v3_background_generation_live_attempts.pop(key, None)
+            if _v3_background_generation_owner_by_job.get(key):
+                owner_id = _v3_background_generation_owner_by_job.pop(key, None)
+                if _v3_background_generation_owner_active.get(owner_id) == key:
+                    _v3_background_generation_owner_active.pop(owner_id, None)
+                    next_task = _reserve_next_v3_background_owner_job_locked(owner_id)
+        if owner_id and next_task is not None:
+            _submit_v3_background_generation_task(next_task, owner_id)
 
 
 def _v3_bounded_background_output_count(payload: dict | None) -> int:
@@ -1434,8 +1450,107 @@ def _start_v3_project_generation_watchdog(
         watchdog.start()
 
 
+def _reserve_next_v3_background_owner_job_locked(owner_id: str) -> tuple | None:
+    pending = _v3_background_generation_pending_by_owner.get(owner_id)
+    while pending:
+        task = pending.popleft()
+        project_id, job_id, _, attempt_id, *_ = task
+        key = f"{project_id}:{job_id}"
+        if (
+            _v3_background_generation_jobs.get(key) != attempt_id
+            or _v3_background_generation_live_attempts.get(key) != attempt_id
+        ):
+            continue
+        _v3_background_generation_owner_active[owner_id] = key
+        return task
+    _v3_background_generation_pending_by_owner.pop(owner_id, None)
+    return None
+
+
+def _fail_v3_background_submission(task: tuple, owner_id: str) -> tuple | None:
+    project_id, job_id, _, attempt_id, _, timeout_seconds, timeout_owner = task
+    key = f"{project_id}:{job_id}"
+    try:
+        # Submission failed before a worker could claim the job. Use the
+        # existing terminal worker-failure contract, but first persist the
+        # claim so the attempt remains auditable.
+        _run_v3_handler(
+            v3_route_handlers.mark_project_job_generating,
+            project_id,
+            job_id,
+            background_attempt_id=attempt_id,
+            background_timeout_seconds=timeout_seconds,
+            background_timeout_owner=timeout_owner,
+            background_runtime_id=_v3_background_generation_runtime_id,
+        )
+        _run_v3_handler(
+            v3_route_handlers.mark_project_job_generation_worker_failed,
+            project_id,
+            job_id,
+            background_attempt_id=attempt_id,
+            failure_code="background_generation_worker_error",
+        )
+    except Exception:
+        logger.exception(
+            "V3 background generation submission failure could not be persisted for project=%s job=%s",
+            project_id,
+            job_id,
+        )
+
+    with _v3_background_generation_jobs_lock:
+        if _v3_background_generation_jobs.get(key) == attempt_id:
+            _v3_background_generation_jobs.pop(key, None)
+        if _v3_background_generation_live_attempts.get(key) == attempt_id:
+            _v3_background_generation_live_attempts.pop(key, None)
+        _v3_background_generation_owner_by_job.pop(key, None)
+        if _v3_background_generation_owner_active.get(owner_id) == key:
+            _v3_background_generation_owner_active.pop(owner_id, None)
+            return _reserve_next_v3_background_owner_job_locked(owner_id)
+    return None
+
+
+def _submit_v3_background_generation_task(
+    task: tuple,
+    owner_id: str,
+    *,
+    raise_on_initial_failure: bool = False,
+) -> None:
+    current = task
+    initial_failure: Exception | None = None
+    while current is not None:
+        project_id, job_id, worker_payload, attempt_id, continuation, timeout_seconds, timeout_owner = current
+        try:
+            _v3_generation_executor.submit(
+                _run_v3_project_generation_background,
+                project_id,
+                job_id,
+                worker_payload,
+                attempt_id,
+                continuation,
+                timeout_seconds,
+                timeout_owner,
+            )
+        except Exception as exc:
+            logger.exception(
+                "V3 background generation could not be submitted for project=%s job=%s",
+                project_id,
+                job_id,
+            )
+            if initial_failure is None:
+                initial_failure = exc
+            current = _fail_v3_background_submission(current, owner_id)
+            continue
+        if initial_failure is not None and raise_on_initial_failure:
+            raise initial_failure
+        return
+    if initial_failure is not None and raise_on_initial_failure:
+        raise initial_failure
+
+
 def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
     key = f"{project_id}:{job_id}"
+    metadata = dict((payload or {}).get("metadata") or {})
+    owner_id = str(metadata.get("veyra_user_id") or "").strip() or "__anonymous__"
     background_attempt_id = uuid4().hex
     worker_payload, continuation = _v3_background_generation_payload_and_continuation(
         payload,
@@ -1443,59 +1558,26 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
         background_attempt_id=background_attempt_id,
     )
     timeout_seconds, timeout_owner = _v3_background_generation_timeout_plan(job_id, payload)
+    task = (
+        project_id,
+        job_id,
+        worker_payload,
+        background_attempt_id,
+        continuation,
+        timeout_seconds,
+        timeout_owner,
+    )
     with _v3_background_generation_jobs_lock:
-        if key in _v3_background_generation_jobs:
+        if key in _v3_background_generation_jobs or key in _v3_background_generation_live_attempts:
             return False
         _v3_background_generation_jobs[key] = background_attempt_id
-    try:
-        _v3_generation_executor.submit(
-            _run_v3_project_generation_background,
-            project_id,
-            job_id,
-            worker_payload,
-            background_attempt_id,
-            continuation,
-            timeout_seconds,
-            timeout_owner,
-        )
-    except Exception:
-        with _v3_background_generation_jobs_lock:
-            attempt_is_current = _v3_background_generation_jobs.get(key) == background_attempt_id
-            if attempt_is_current:
-                _v3_background_generation_jobs.pop(key, None)
-                registered_watchdog = _v3_background_generation_watchdogs.pop(key, None)
-            else:
-                registered_watchdog = None
-        if registered_watchdog is not None:
-            registered_watchdog.cancel()
-        if attempt_is_current:
-            try:
-                # Submission failed before a worker could claim the job. Use
-                # the existing terminal worker-failure contract, but first
-                # persist the claim so the attempt remains auditable.
-                _run_v3_handler(
-                    v3_route_handlers.mark_project_job_generating,
-                    project_id,
-                    job_id,
-                    background_attempt_id=background_attempt_id,
-                    background_timeout_seconds=timeout_seconds,
-                    background_timeout_owner=timeout_owner,
-                    background_runtime_id=_v3_background_generation_runtime_id,
-                )
-                _run_v3_handler(
-                    v3_route_handlers.mark_project_job_generation_worker_failed,
-                    project_id,
-                    job_id,
-                    background_attempt_id=background_attempt_id,
-                    failure_code="background_generation_worker_error",
-                )
-            except Exception:
-                logger.exception(
-                    "V3 background generation submission failure could not be persisted for project=%s job=%s",
-                    project_id,
-                    job_id,
-                )
-        raise
+        _v3_background_generation_live_attempts[key] = background_attempt_id
+        _v3_background_generation_owner_by_job[key] = owner_id
+        if owner_id in _v3_background_generation_owner_active:
+            _v3_background_generation_pending_by_owner.setdefault(owner_id, deque()).append(task)
+            return True
+        _v3_background_generation_owner_active[owner_id] = key
+    _submit_v3_background_generation_task(task, owner_id, raise_on_initial_failure=True)
     return True
 
 

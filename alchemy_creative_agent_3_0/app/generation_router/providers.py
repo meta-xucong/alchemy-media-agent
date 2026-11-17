@@ -1071,7 +1071,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
             output_store = V3GeneratedOutputStore()
         self.output_store = output_store
+        self._provider_failure_retry_local = threading.local()
         self._last_provider_failure_retry_summary: dict[str, Any] = {}
+
+    @property
+    def _last_provider_failure_retry_summary(self) -> dict[str, Any]:
+        return getattr(self._provider_failure_retry_local, "summary", {})
+
+    @_last_provider_failure_retry_summary.setter
+    def _last_provider_failure_retry_summary(self, value: dict[str, Any]) -> None:
+        self._provider_failure_retry_local.summary = dict(value or {})
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextvars import ContextVar
 import inspect
 import json
 import math
@@ -46,7 +47,26 @@ class _CrossLoopAsyncLock:
         return False
 
 
-_openai_image_generation_lock = _CrossLoopAsyncLock()
+class _CrossLoopAsyncSemaphore:
+    """A cancellation-safe semaphore shared by asyncio loops in this process."""
+
+    def __init__(self, value: int) -> None:
+        self._semaphore = threading.BoundedSemaphore(max(1, int(value)))
+
+    async def __aenter__(self):
+        while not self._semaphore.acquire(blocking=False):
+            await asyncio.sleep(0.05)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self._semaphore.release()
+        return False
+
+
+_OPENAI_IMAGE_MAX_CONCURRENT_REQUESTS = 5
+_openai_image_generation_semaphore = _CrossLoopAsyncSemaphore(
+    _OPENAI_IMAGE_MAX_CONCURRENT_REQUESTS
+)
 _GATEWAY_MANAGED_FAILOVER_MINIMUM_TIMEOUT_SECONDS = 660.0
 _TRANSPORT_RETRY_SCHEMA_VERSION = "v3_provider_transport_retry_v1"
 _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS = 3
@@ -209,8 +229,52 @@ class OpenAIGPTImageProvider:
 
     def __init__(self, model: str | None = None):
         self.model = model
-        self._transport_attempt_history: list[dict[str, object]] = []
-        self._transport_max_attempts = _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
+        self._transport_attempt_context: ContextVar[dict[str, object] | None] = ContextVar(
+            f"openai_transport_attempt_state_{id(self)}",
+            default=None,
+        )
+        self._transport_attempt_history_fallback: list[dict[str, object]] = []
+        self._transport_max_attempts_fallback = _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
+
+    @property
+    def _transport_attempt_history(self) -> list[dict[str, object]]:
+        state = self._transport_attempt_context.get()
+        if isinstance(state, dict):
+            return state.setdefault("history", [])
+        return self._transport_attempt_history_fallback
+
+    @_transport_attempt_history.setter
+    def _transport_attempt_history(self, value: list[dict[str, object]]) -> None:
+        state = self._transport_attempt_context.get()
+        if isinstance(state, dict):
+            state["history"] = value
+        else:
+            self._transport_attempt_history_fallback = value
+
+    @property
+    def _transport_max_attempts(self) -> int:
+        state = self._transport_attempt_context.get()
+        if isinstance(state, dict):
+            return int(state.get("max_attempts") or _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS)
+        return self._transport_max_attempts_fallback
+
+    @_transport_max_attempts.setter
+    def _transport_max_attempts(self, value: int) -> None:
+        state = self._transport_attempt_context.get()
+        if isinstance(state, dict):
+            state["max_attempts"] = int(value)
+        else:
+            self._transport_max_attempts_fallback = int(value)
+
+    def _begin_transport_attempt_tracking(self) -> None:
+        self._transport_attempt_context.set(
+            {
+                "history": [],
+                "max_attempts": (
+                    1 if self._uses_gateway_managed_failover() else _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
+                ),
+            }
+        )
 
     async def capabilities(self) -> ProviderCapabilities:
         configured = bool(settings.openai_api_key)
@@ -351,15 +415,11 @@ class OpenAIGPTImageProvider:
                 http_client=transport_client,
             )
         )
-        # The upstream image gateway may enforce account-level concurrency. Keep
-        # image requests serialized in this process so the UI waits in a local
-        # queue instead of immediately tripping a provider-side 429.
-        self._transport_attempt_history = []
-        self._transport_max_attempts = (
-            1 if self._uses_gateway_managed_failover() else _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
-        )
+        # Keep retry diagnostics local to this async request so concurrent
+        # users cannot overwrite one another's transport audit.
+        self._begin_transport_attempt_tracking()
         try:
-            async with _openai_image_generation_lock:
+            async with _openai_image_generation_semaphore:
                 for index in range(output_count):
                     if reference_paths:
                         outputs.extend(
@@ -1114,12 +1174,9 @@ class OpenAIGPTImageProvider:
             )
         )
         prompt = self._render_prompt(plan)
-        self._transport_attempt_history = []
-        self._transport_max_attempts = (
-            1 if self._uses_gateway_managed_failover() else _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
-        )
+        self._begin_transport_attempt_tracking()
         try:
-            async with _openai_image_generation_lock:
+            async with _openai_image_generation_semaphore:
                 outputs = await self._generate_one_with_references(client, prompt, plan, [source_path], index=0)
         finally:
             await self._close_async_client(client, transport_client=transport_client)
