@@ -25,7 +25,12 @@ from .contracts import (
     BrainRunRequest,
 )
 from .model_routing_receipts import sanitize_model_attempts
-from .prompts import build_remote_payload, system_prompt_for_stage
+from .prompts import (
+    build_anthropic_structured_output,
+    build_remote_payload,
+    restore_anthropic_structured_output,
+    system_prompt_for_stage,
+)
 from .stage_trace import record_stage_event
 
 
@@ -223,6 +228,7 @@ def _safe_brain_stage(stage: Any) -> str:
 
 _SAFE_JSON_FAILURE_KINDS = {
     "empty_json",
+    "invalid_wire_json_value",
     "malformed_json",
     "missing_complete_marker",
     "non_object_json",
@@ -1245,16 +1251,27 @@ class V3LLMBrainProvider:
                 headers["anthropic-version"] = "2023-06-01"
                 headers["authorization"] = f"Bearer {api_key}"
             url = _anthropic_messages_url(base_url)
+            structured_output = (
+                build_anthropic_structured_output(request)
+                if _is_claude_sonnet_55(self.model)
+                else None
+            )
+            message_content = structured_output[0] if structured_output else build_remote_payload(request)
             payload = {
                 "model": self.model,
                 "max_tokens": self.max_tokens,
                 "system": _system_prompt(request.stage, json_recovery=json_recovery),
-                "messages": [{"role": "user", "content": build_remote_payload(request)}],
+                "messages": [{"role": "user", "content": message_content}],
             }
             if _is_claude_sonnet_55(self.model):
                 effort = getattr(self, "reasoning_effort", None)
+                output_config: dict[str, object] = {}
                 if effort in {"low", "medium", "high", "xhigh", "max"}:
-                    payload["output_config"] = {"effort": effort}
+                    output_config["effort"] = effort
+                if structured_output:
+                    output_config["format"] = structured_output[1]
+                if output_config:
+                    payload["output_config"] = output_config
             _mark_transport_event("client_constructing")
             with httpx.Client(timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds))) as client:
                 client_registration = _register_transport_close(client)
@@ -1275,7 +1292,19 @@ class V3LLMBrainProvider:
                 raise BrainPolicyRefusalError("remote Brain policy refusal")
             if _response_ended_at_output_limit(response_json):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-            parsed = _loads_json_object(_anthropic_text(response_json))
+            response_text = _anthropic_text(response_json)
+            if structured_output:
+                response_text = _unwrap_anthropic_json_markdown_fence(response_text)
+            parsed = _loads_json_object(response_text)
+            if structured_output:
+                try:
+                    restore_anthropic_structured_output(parsed, structured_output[2])
+                except ValueError as exc:
+                    raise BrainInvalidJsonResponse(
+                        "remote brain returned an invalid structured-output wire value",
+                        stage=request.stage,
+                        json_failure_kind="invalid_wire_json_value",
+                    ) from exc
             _mark_transport_event("json_parse_completed")
             return parsed
         except BrainPolicyRefusalError:
@@ -2626,6 +2655,28 @@ def _loads_json_object(text: str) -> dict[str, Any]:
             json_failure_kind="non_object_json",
         )
     return parsed
+
+
+def _unwrap_anthropic_json_markdown_fence(text: str) -> str:
+    """Remove only a complete JSON Markdown fence emitted by the Claude gateway.
+
+    Some gateway responses wrap an otherwise schema-valid JSON object in a
+    single ```json fence. This transport-only normalization accepts that exact
+    wrapper; prose, partial fences, and other Markdown remain invalid and are
+    still rejected by the strict JSON parser and Brain contract validators.
+    """
+
+    raw = str(text or "").strip()
+    lines = raw.splitlines()
+    if (
+        len(lines) >= 3
+        and lines[0].strip().casefold() == "```json"
+        and lines[-1].strip() == "```"
+    ):
+        candidate = "\n".join(lines[1:-1]).strip()
+        if candidate:
+            return candidate
+    return raw
 
 
 def _response_ended_at_output_limit(response: Any, *, choice: Any | None = None) -> bool:
