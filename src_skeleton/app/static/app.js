@@ -14856,7 +14856,7 @@ function generatedImageRoute(item, fallback = null) {
   }
   const fallbackMetadata = fallback?.metadata && typeof fallback.metadata === "object" ? fallback.metadata : {};
   const actualProvider = String(
-    metadata.actual_provider || item?.provider_id || item?.provider || fallback?.actual_provider || fallbackMetadata.actual_provider || "",
+    metadata.actual_provider || metadata.provider || item?.provider_id || item?.provider || fallback?.actual_provider || fallbackMetadata.actual_provider || "",
   ).trim().toLowerCase();
   if (metadata.mock === true || actualProvider === "mock_image") return "mock";
   if (actualProvider.includes("render_bridge") || actualProvider === "renderbridge" || ["codex-image", "codex_cli"].includes(actualProvider)) return "bridge";
