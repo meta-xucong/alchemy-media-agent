@@ -59,6 +59,110 @@ def test_loss_restart_404_never_fallback(tmp_path):
     assert c.calls == 1
 
 
+def test_capabilities_retries_one_transient_get_then_uses_bridge(tmp_path):
+    class FlakyCapabilities(Client):
+        capability_attempts = 0
+
+        async def capabilities(self):
+            self.capability_attempts += 1
+            if self.capability_attempts == 1:
+                raise BridgeError("bridge_unreachable", status=None, transport_error_class="ConnectError")
+            return await super().capabilities()
+
+    client = FlakyCapabilities()
+    result = asyncio.run(PrimaryTransport(settings(tmp_path), client=client).resolve(request()))
+
+    assert result.route == "bridge"
+    assert result.state == "queued"
+    assert client.capability_attempts == 2
+    assert client.calls == 1
+
+
+def test_capabilities_snapshot_is_consumed_between_distinct_units(tmp_path):
+    class CountingCapabilities(Client):
+        capability_attempts = 0
+
+        async def capabilities(self):
+            self.capability_attempts += 1
+            return await super().capabilities()
+
+    client = CountingCapabilities()
+    transport = PrimaryTransport(settings(tmp_path), client=client)
+    first = asyncio.run(transport.resolve(request()))
+    second = asyncio.run(transport.resolve(replace(request(), unit_id="job:1")))
+
+    assert first.route == second.route == "bridge"
+    assert client.capability_attempts == 2
+    assert client.calls == 2
+
+
+def test_capabilities_retry_exhaustion_preserves_transport_diagnostics_and_api_fallback(tmp_path):
+    class OfflineCapabilities(Client):
+        capability_attempts = 0
+
+        async def capabilities(self):
+            self.capability_attempts += 1
+            raise BridgeError("bridge_unreachable", status=None, transport_error_class="ConnectError")
+
+    client = OfflineCapabilities()
+    transport = PrimaryTransport(settings(tmp_path), client=client)
+    unit = replace(request(), product="v3")
+
+    async def probe_then_resolve():
+        with pytest.raises(BridgeError):
+            await transport.capabilities()
+        return await transport.resolve(unit)
+
+    result = asyncio.run(probe_then_resolve())
+
+    assert result.route == "api" and result.reason == "bridge_capabilities_unavailable"
+    assert result.provenance["bridge_failure_stage"] == "capabilities"
+    assert result.provenance["bridge_error_code"] == "bridge_unreachable"
+    assert result.provenance["bridge_transport_error_class"] == "ConnectError"
+    assert "bridge_http_status" not in result.provenance
+    assert client.capability_attempts == 2
+    assert client.calls == 0
+
+
+def test_invalid_capabilities_fall_back_without_synthetic_http_status(tmp_path):
+    class InvalidCapabilities(Client):
+        capability_attempts = 0
+
+        async def capabilities(self):
+            self.capability_attempts += 1
+            raise BridgeError("invalid_bridge_response", retryable=False)
+
+    client = InvalidCapabilities()
+    result = asyncio.run(PrimaryTransport(settings(tmp_path), client=client).resolve(
+        replace(request(), product="v3")))
+
+    assert result.route == "api" and result.reason == "bridge_capabilities_unavailable"
+    assert result.provenance["bridge_error_code"] == "invalid_bridge_response"
+    assert "bridge_http_status" not in result.provenance
+    assert client.capability_attempts == 1
+    assert client.calls == 0
+
+
+def test_capabilities_respects_unexpired_retry_after_without_waiting(tmp_path):
+    import time
+
+    class BusyCapabilities(Client):
+        capability_attempts = 0
+
+        async def capabilities(self):
+            self.capability_attempts += 1
+            raise BridgeError("bridge_busy", status=503, retry_not_before=time.time() + 30)
+
+    client = BusyCapabilities()
+    result = asyncio.run(PrimaryTransport(settings(tmp_path), client=client).resolve(
+        replace(request(), product="v3")))
+
+    assert result.route == "api"
+    assert result.provenance["bridge_http_status"] == 503
+    assert client.capability_attempts == 1
+    assert client.calls == 0
+
+
 @pytest.mark.parametrize('product', ['v1', 'v2', 'v3'])
 def test_failed_status_poll_is_transient_and_preserves_task_authority(tmp_path, product):
     class PollClient(Client):

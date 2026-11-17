@@ -33,12 +33,14 @@ class Client:
         self.state = 'artifacts_ready'
         self.error = None
         self.capability_error = None
+        self.capability_attempts = 0
         self.input_error = None
         self.transparent_supported = True
         self.state = 'artifacts_ready'
         self.action_required_code = None
 
     async def capabilities(self):
+        self.capability_attempts += 1
         if self.capability_error:
             raise self.capability_error
         result = {'admission': {'accepting_new_tasks': True},
@@ -182,6 +184,26 @@ def test_capabilities_fallback_keeps_api_and_exposes_safe_bridge_failure(rig):
     assert rig.client.calls == 0
 
 
+def test_capabilities_transport_failure_does_not_claim_http_502_in_v3_output(rig):
+    rig.request.metadata['provider_image_options'] = {
+        'quality': 'auto', 'transparent_background': True,
+    }
+    rig.client.capability_error = BridgeError(
+        "bridge_unreachable", status=None, transport_error_class="ConnectError")
+
+    result = rig.provider.generate(rig.request)
+
+    provenance = result.candidates[0].metadata[adapter.PROVENANCE]
+    assert provenance["route"] == "api"
+    assert provenance["bridge_failure_stage"] == "capabilities"
+    assert provenance["bridge_error_code"] == "bridge_unreachable"
+    assert provenance["bridge_transport_error_class"] == "ConnectError"
+    assert "bridge_http_status" not in provenance
+    assert rig.client.capability_attempts == 2
+    assert rig.client.calls == 0
+    assert len(rig.api_calls) == 1
+
+
 @pytest.mark.parametrize('optional_controls', [
     {'quality': 'medium'}, {'quality': 'high'},
     {'quality': 'auto', 'background': 'transparent'},
@@ -212,6 +234,7 @@ def test_unsupported_transparency_uses_native_default_and_keeps_bridge(rig):
     response = rig.provider.generate(rig.request)
     assert response.candidates[0].provider == 'render_bridge'
     assert rig.client.calls == 1 and not rig.api_calls
+    assert rig.client.capability_attempts == 1
     assert rig.client.payload['parameters'] == {'codex_adapter': 'codex_cli_imagegen_v1'}
 
 

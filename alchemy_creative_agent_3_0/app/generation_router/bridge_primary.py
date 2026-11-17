@@ -348,6 +348,10 @@ def _projection(result):
     bridge_http_status = result.provenance.get("bridge_http_status")
     if type(bridge_http_status) is int and 100 <= bridge_http_status <= 599:
         projection["bridge_http_status"] = bridge_http_status
+    from render_bridge_primary.http import SAFE_TRANSPORT_ERROR_CLASSES
+    transport_error_class = result.provenance.get("bridge_transport_error_class")
+    if transport_error_class in SAFE_TRANSPORT_ERROR_CLASSES:
+        projection["bridge_transport_error_class"] = transport_error_class
     attention_code = result.provenance.get("attention_code")
     if isinstance(attention_code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", attention_code):
         projection["attention_code"] = attention_code
@@ -427,7 +431,7 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
             options.get("background") == "transparent" or plan.background == "transparent")
         if transparency_requested:
             try:
-                capabilities = await transport.client.capabilities()
+                capabilities = await transport.capabilities()
             except BridgeError:
                 # Capability uncertainty means use the CLI's native default;
                 # the normal resolve call remains authoritative for availability.

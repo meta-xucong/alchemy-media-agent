@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from PIL import Image
-from .http import BridgeClient, BridgeError
+from .http import BridgeClient, BridgeError, SAFE_TRANSPORT_ERROR_CLASSES
 from .limits import MAX_REFERENCE_INPUT_BYTES, MAX_REFERENCE_INPUT_PIXELS
 
 
@@ -30,6 +30,7 @@ def _hash(value: bytes):
 
 
 _ROOT = Path(__file__).resolve().parent.parent / '.render_bridge_primary'
+_CAPABILITIES_UNSET = object()
 _SAFE_CAPABILITY_FIELDS = frozenset({
     'width', 'height', 'seed', 'quality', 'output_format', 'transparent_background',
     'exact_dimensions', 'reference_fusion', 'reference_semantics', 'mask',
@@ -182,6 +183,8 @@ class PrimaryTransport:
         self.client = client or BridgeClient(settings.base_url, settings.token)
         self.path = Path(settings.state_dir) / 'primary.sqlite3'
         self._resolved_keys = {}
+        self._capabilities_snapshot = _CAPABILITIES_UNSET
+        self._capabilities_error = None
 
     def _db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +323,8 @@ class PrimaryTransport:
         if row['image'] is not None and not data.get('cancel_requested'):
             meta=data['image']; image=OriginalImage(bytes(row['image']),meta['mime_type'],meta['width'],meta['height'])
         provenance={k:v for k,v in data.items() if k in {'product','profile','route','state','reason','origin_key','execution_key','task_id','receipt_id','attempt_id','image','queue_active_count','queue_limit','queue_observed_at','capability_rejection'}}
-        for field in ('bridge_failure_stage', 'bridge_error_code', 'bridge_http_status'):
+        for field in ('bridge_failure_stage', 'bridge_error_code', 'bridge_http_status',
+                      'bridge_transport_error_class'):
             if field in data:
                 provenance[field] = data[field]
         deadline = (data.get('payload') or {}).get('deadline')
@@ -358,6 +362,38 @@ class PrimaryTransport:
 
     has_unit = has_binding
 
+    async def _capabilities_with_one_retry(self):
+        """Retry only the idempotent preflight GET, at most once."""
+        try:
+            return await self.client.capabilities()
+        except BridgeError as error:
+            if not error.retryable:
+                raise
+            if error.retry_not_before is not None and error.retry_not_before > time.time():
+                raise
+        return await self.client.capabilities()
+
+    async def capabilities(self):
+        """Share one bounded capability probe across preflight consumers."""
+        if self._capabilities_snapshot is not _CAPABILITIES_UNSET:
+            return self._capabilities_snapshot
+        if self._capabilities_error is not None:
+            raise self._capabilities_error
+        try:
+            self._capabilities_snapshot = await self._capabilities_with_one_retry()
+        except BridgeError as error:
+            self._capabilities_error = error
+            raise
+        return self._capabilities_snapshot
+
+    async def _take_capabilities(self):
+        """Consume the preflight snapshot once, then refresh for the next unit."""
+        try:
+            return await self.capabilities()
+        finally:
+            self._capabilities_snapshot = _CAPABILITIES_UNSET
+            self._capabilities_error = None
+
     def _api(self, request, data, reason, *, first_create=False, failure_stage=None, error=None):
         data.update(route='api',state='api_ready',reason=reason)
         if request.product == 'v3' and failure_stage:
@@ -368,6 +404,9 @@ class PrimaryTransport:
             status = getattr(error, 'status', None)
             if type(status) is int and 100 <= status <= 599:
                 data['bridge_http_status'] = status
+            transport_error_class = getattr(error, 'transport_error_class', None)
+            if transport_error_class in SAFE_TRANSPORT_ERROR_CLASSES:
+                data['bridge_transport_error_class'] = transport_error_class
         expected = 'bridge_submission_unknown' if first_create else 'preflight'
         key = self._key(request)
         with self._db() as db:
@@ -581,7 +620,7 @@ class PrimaryTransport:
             if not self.settings.base_url or not self.settings.token:
                 reason = 'bridge_configuration_unavailable' if request.product == 'v3' else 'bridge_unavailable'
                 return self._api(request,data,reason,failure_stage='configuration')
-            try: caps=await self.client.capabilities()
+            try: caps=await self._take_capabilities()
             except BridgeError as error:
                 reason = 'bridge_capabilities_unavailable' if request.product == 'v3' else 'bridge_unavailable'
                 return self._api(request,data,reason,failure_stage='capabilities',error=error)

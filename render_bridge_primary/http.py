@@ -10,12 +10,25 @@ from urllib.parse import quote
 import httpx
 
 
+SAFE_TRANSPORT_ERROR_CLASSES = frozenset({
+    "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
+    "RemoteProtocolError", "LocalProtocolError", "ProxyError", "ReadError", "WriteError",
+    "CloseError", "UnsupportedProtocol", "TimeoutException", "NetworkError",
+    "ProtocolError", "HTTPError", "OSError",
+})
+
+
 class BridgeError(Exception):
-    def __init__(self, code: str, *, status: int = 502, retryable: bool = True,
-                 retry_not_before: float | None = None):
+    def __init__(self, code: str, *, status: int | None = None, retryable: bool = True,
+                 retry_not_before: float | None = None,
+                 transport_error_class: str | None = None):
         super().__init__(code)
         self.code, self.status, self.retryable = code, status, retryable
         self.retry_not_before = retry_not_before
+        self.transport_error_class = (
+            transport_error_class
+            if transport_error_class in SAFE_TRANSPORT_ERROR_CLASSES else None
+        )
 
 
 def retry_after_deadline(value: str | None) -> float | None:
@@ -72,9 +85,29 @@ class BridgeClient:
                                       retry_not_before=(retry_after_deadline(response.headers.get("Retry-After"))
                                                         if response.status_code in {429, 503} else None))
                 return bytes(body), response.headers
-        except (httpx.HTTPError, OSError):
+        except (httpx.HTTPError, OSError) as error:
             # Never expose credentials, upstream URLs, paths, or response bodies.
-            raise BridgeError("bridge_unreachable") from None
+            error_class = type(error).__name__
+            if error_class not in SAFE_TRANSPORT_ERROR_CLASSES:
+                if isinstance(error, httpx.TimeoutException):
+                    error_class = "TimeoutException"
+                elif isinstance(error, httpx.NetworkError):
+                    error_class = "NetworkError"
+                elif isinstance(error, httpx.ProtocolError):
+                    error_class = "ProtocolError"
+                elif isinstance(error, httpx.HTTPError):
+                    error_class = "HTTPError"
+                else:
+                    error_class = "OSError"
+            retryable = isinstance(
+                error,
+                (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError,
+                 httpx.ProxyError, OSError),
+            )
+            raise BridgeError(
+                "bridge_unreachable", status=None, retryable=retryable,
+                transport_error_class=error_class,
+            ) from None
 
     async def _json(self, method, path, **kwargs):
         import json
