@@ -386,6 +386,14 @@ class PrimaryTransport:
             raise
         return self._capabilities_snapshot
 
+    async def _take_capabilities(self):
+        """Consume the preflight snapshot once, then refresh for the next unit."""
+        try:
+            return await self.capabilities()
+        finally:
+            self._capabilities_snapshot = _CAPABILITIES_UNSET
+            self._capabilities_error = None
+
     def _api(self, request, data, reason, *, first_create=False, failure_stage=None, error=None):
         data.update(route='api',state='api_ready',reason=reason)
         if request.product == 'v3' and failure_stage:
@@ -612,7 +620,7 @@ class PrimaryTransport:
             if not self.settings.base_url or not self.settings.token:
                 reason = 'bridge_configuration_unavailable' if request.product == 'v3' else 'bridge_unavailable'
                 return self._api(request,data,reason,failure_stage='configuration')
-            try: caps=await self.capabilities()
+            try: caps=await self._take_capabilities()
             except BridgeError as error:
                 reason = 'bridge_capabilities_unavailable' if request.product == 'v3' else 'bridge_unavailable'
                 return self._api(request,data,reason,failure_stage='capabilities',error=error)

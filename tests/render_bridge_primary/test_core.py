@@ -78,6 +78,24 @@ def test_capabilities_retries_one_transient_get_then_uses_bridge(tmp_path):
     assert client.calls == 1
 
 
+def test_capabilities_snapshot_is_consumed_between_distinct_units(tmp_path):
+    class CountingCapabilities(Client):
+        capability_attempts = 0
+
+        async def capabilities(self):
+            self.capability_attempts += 1
+            return await super().capabilities()
+
+    client = CountingCapabilities()
+    transport = PrimaryTransport(settings(tmp_path), client=client)
+    first = asyncio.run(transport.resolve(request()))
+    second = asyncio.run(transport.resolve(replace(request(), unit_id="job:1")))
+
+    assert first.route == second.route == "bridge"
+    assert client.capability_attempts == 2
+    assert client.calls == 2
+
+
 def test_capabilities_retry_exhaustion_preserves_transport_diagnostics_and_api_fallback(tmp_path):
     class OfflineCapabilities(Client):
         capability_attempts = 0
