@@ -5,7 +5,7 @@ import httpx
 from unittest.mock import Mock
 
 from render_bridge_primary import PrimaryTransport
-from render_bridge_primary.http import BridgeClient
+from render_bridge_primary.http import BridgeClient, BridgeError
 from test_core import request, settings, Client
 
 
@@ -75,4 +75,65 @@ def test_unstructured_429_is_not_nonadmission(tmp_path):
         async with PrimaryTransport(settings(tmp_path),client=client) as transport:
             result=await transport.resolve(request())
             assert result.route=='bridge' and result.state=='bridge_submission_unknown'
+    asyncio.run(run())
+
+
+def test_transport_failure_has_no_synthetic_http_status_and_safe_class():
+    async def handler(request):
+        raise httpx.ConnectError("private host and credential must not escape", request=request)
+
+    async def run():
+        client = BridgeClient("http://bridge.invalid", "fixture", transport=httpx.MockTransport(handler))
+        try:
+            await client.capabilities()
+        except BridgeError as error:
+            assert error.code == "bridge_unreachable"
+            assert error.status is None
+            assert error.transport_error_class == "ConnectError"
+            assert "private host" not in str(error)
+        else:
+            raise AssertionError("expected a transport failure")
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_http_response_failure_keeps_actual_status_without_transport_class():
+    async def handler(request):
+        return httpx.Response(502, json={"error": {"code": "upstream_bad_gateway"}})
+
+    async def run():
+        client = BridgeClient("http://bridge.invalid", "fixture", transport=httpx.MockTransport(handler))
+        try:
+            await client.capabilities()
+        except BridgeError as error:
+            assert error.code == "upstream_bad_gateway"
+            assert error.status == 502
+            assert error.transport_error_class is None
+        else:
+            raise AssertionError("expected an HTTP failure")
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_invalid_json_response_does_not_invent_http_status():
+    async def handler(request):
+        return httpx.Response(200, text="not-json")
+
+    async def run():
+        client = BridgeClient("http://bridge.invalid", "fixture", transport=httpx.MockTransport(handler))
+        try:
+            await client.capabilities()
+        except BridgeError as error:
+            assert error.code == "invalid_bridge_response"
+            assert error.status is None
+            assert error.transport_error_class is None
+        else:
+            raise AssertionError("expected an invalid response")
+        finally:
+            await client.close()
+
     asyncio.run(run())
