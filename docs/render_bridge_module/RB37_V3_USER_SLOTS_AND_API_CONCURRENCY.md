@@ -58,6 +58,12 @@ reservation through the existing failure path. A watchdog timeout alone does
 not release the owner slot while its worker may still be executing. Duplicate
 submission of the same job remains idempotent.
 
+This slot covers the normal Project Mode background endpoint and its automatic
+generation handoff. Explicit `sync_wait`/`force_sync` requests and the legacy
+standalone `/api/v3/creative-agent/jobs/{job_id}/generate` route keep their
+existing synchronous path; they do not consume a V3 owner slot, but their API
+image requests still use the shared five-request cap.
+
 The owner slot is process-local, matching the existing single-process V3
 executor. This change does not add a distributed queue or change restart
 recovery.
