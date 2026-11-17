@@ -18,7 +18,11 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainProtocolMismatchError,
     V3LLMBrainProvider,
 )
-from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
+    build_anthropic_structured_output,
+    build_remote_payload,
+    restore_anthropic_structured_output,
+)
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
@@ -2263,6 +2267,347 @@ def test_anthropic_brain_sends_version_auth_path_and_message_body(monkeypatch) -
     assert calls[0]["json"]["messages"] == [
         {"role": "user", "content": brain_providers.build_remote_payload(request)}
     ]
+
+
+def test_anthropic_plan_uses_closed_json_schema_and_round_trips_open_values() -> None:
+    request = BrainRunRequest(
+        user_input="Create one real-camera portrait of a person.",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+
+    prepared = build_anthropic_structured_output(request)
+
+    assert prepared is not None
+    wire_payload, output_schema, wire_value_paths = prepared
+    payload = json.loads(wire_payload)
+    schema = output_schema["schema"]
+    profile_schema = schema["properties"]["visual_task_profile"]
+    entity_schema = profile_schema["properties"]["subject_entities"]["items"]
+    evidence_schema = profile_schema["properties"]["evidence"]["items"]
+    assert output_schema["type"] == "json_schema"
+    assert schema["additionalProperties"] is False
+    assert entity_schema["properties"]["attributes"]["type"] == "string"
+    assert evidence_schema["properties"]["value"]["type"] == "string"
+    assert evidence_schema["properties"]["metadata"]["type"] == "string"
+    assert payload["return_schema"]["visual_task_profile"]["subject_entities"][0]["attributes"] == (
+        "JSON-encoded object string; serialize the complete object as JSON inside this string."
+    )
+    assert "wire response encodes" in payload["remote_response_contract"]
+
+    result = {
+        "visual_task_profile": {
+            "subject_entities": [{"attributes": '{"face_visible": true, "custom": [1, "x"]}'}],
+            "evidence": [{"value": '{"source": "prompt"}', "metadata": '{"kind": "user_request"}'}],
+        }
+    }
+    restore_anthropic_structured_output(result, wire_value_paths)
+    assert result["visual_task_profile"]["subject_entities"][0]["attributes"] == {
+        "face_visible": True,
+        "custom": [1, "x"],
+    }
+    assert result["visual_task_profile"]["evidence"][0] == {
+        "value": {"source": "prompt"},
+        "metadata": {"kind": "user_request"},
+    }
+
+
+def _anthropic_finalizer_context_with_all_dynamic_receipts(user_input: str) -> dict[str, object]:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.mode_role_director import (
+        ModeAwareRoleDirector,
+    )
+
+    director = ModeAwareRoleDirector()
+    role_plan = director.build(
+        project_id="project_anthropic_schema",
+        job_id="job_anthropic_schema",
+        user_input=user_input,
+        mode="creative_exploration",
+        requested_image_count=2,
+        subject_type="generic",
+        scenario_id="general_creative",
+        template_id="general_template",
+        has_identity_anchor=False,
+    )
+    variation_contract = director.build_variation_execution_contract(
+        role_plan=role_plan,
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+    assert variation_contract is not None
+    binding = {
+        "activation_plan_id": "plan",
+        "execution_envelope_id": "envelope",
+        "constraint_ledger_id": "ledger",
+    }
+    return {
+        "final_prompt_semantic_preflight": {"required": True},
+        "human_naturalness_decision": {
+            "required": True,
+            "contract_version": "v3_human_naturalness_decision_v1",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": binding,
+        },
+        "reference_channel_ownership_decision": {
+            "required": True,
+            "contract_version": "v3_reference_channel_ownership_decision_v1",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": binding,
+        },
+        "human_developmental_age_decision": {
+            "required": True,
+            "contract_version": "v3_human_developmental_age_decision_v2",
+            "age_fidelity": "follow_explicit_prompt",
+            "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+            "developmental_age_coherence": "whole_person_requested_stage",
+            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": binding,
+        },
+        "human_developmental_presence_decision": {
+            "required": True,
+            "contract_version": "v3_human_developmental_presence_decision_v2",
+            "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+            "resolution_mode": "holistic_person_and_situation_resolution",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": binding,
+        },
+        "professional_anchor_view_decision": {
+            "required": True,
+            "contract_version": "v3_professional_anchor_view_decision_v1",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": binding,
+            "target_view_role": "standard_front",
+        },
+        "provider_admission_decision": {
+            "required": True,
+            "contract_version": "v3_provider_admission_decision_v1",
+            "provider_admission_status": "admitted",
+            "prompt_language_mode": "concise_positive_renderer_direction",
+            "safety_sensitive_prompt_normalized": "applied",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": binding,
+        },
+        "reference_led_slot_delta_decision": {
+            "required": True,
+            "contract_version": "v3_reference_led_slot_delta_decision_v1",
+            "materialization_mode": "reference_led_slot_delta",
+            "stable_identity_source": "approved_character_card_reference",
+            "prompt_scope": "slot_delta_only",
+            "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+            "slot_delta_type": "view_angle",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": binding,
+        },
+        "variation_execution_contract": variation_contract.model_dump(mode="json"),
+        "variation_execution_contract_required": True,
+        "variation_execution_semantic_evidence_required": True,
+        "frozen_binding": {
+            "variation_execution_contract": {
+                "contract_version": variation_contract.contract_version,
+                "contract_digest": variation_contract.contract_digest,
+            }
+        },
+        "brain_source_projection": {"source_digest": "a" * 64},
+    }
+
+
+def test_anthropic_prompt_finalizer_schema_uses_all_dynamic_receipts() -> None:
+    user_input = "Create a complete natural landscape photograph with detailed camera direction."
+    request = BrainRunRequest(
+        user_input=user_input,
+        scenario_id="general_creative",
+        template_id="general_template",
+        stage="provider_prompt_finalize",
+        requested_image_count=2,
+        metadata={
+            "canonical_prompt_context": _anthropic_finalizer_context_with_all_dynamic_receipts(user_input),
+            "require_lossless_user_direction": True,
+            "variation_execution_semantic_evidence_required": True,
+            "brain_source_projection_required": True,
+        },
+    )
+
+    prepared = build_anthropic_structured_output(request)
+
+    assert prepared is not None
+    wire_payload, output_schema, wire_value_paths = prepared
+    payload = json.loads(wire_payload)
+    prompt_shape = payload["return_schema"]["canonical_provider_prompts"][0]
+    item_schema = output_schema["schema"]["properties"]["canonical_provider_prompts"]["items"]
+    direction_schema = item_schema["properties"]["user_direction_integrity"]
+    dynamic_receipts = {
+        "human_developmental_age_decision",
+        "human_developmental_presence_decision",
+        "human_naturalness_decision",
+        "professional_anchor_view_decision",
+        "provider_admission_decision",
+        "reference_channel_ownership_decision",
+        "reference_led_slot_delta_decision",
+        "source_projection_receipt",
+        "variation_execution_receipt",
+        "user_direction_integrity",
+    }
+    assert wire_value_paths == ()
+    assert item_schema["properties"]["output_index"]["type"] == "integer"
+    assert item_schema["properties"]["prompt"]["type"] == "string"
+    assert dynamic_receipts <= set(prompt_shape)
+    assert dynamic_receipts <= set(item_schema["properties"])
+    assert dynamic_receipts <= set(item_schema["required"])
+    assert item_schema["properties"]["compression_decision"]["enum"] == [
+        "none",
+        "brain_semantic_once",
+    ]
+    assert "compression_receipt" in item_schema["properties"]
+    assert "compression_receipt" not in item_schema["required"]
+    assert direction_schema["additionalProperties"] is False
+    assert direction_schema["required"] == ["contract_version", "status", "owner"]
+    assert direction_schema["properties"]["status"]["enum"] == ["preserved", "rewritten"]
+    assert "user_direction_integrity" in item_schema["required"]
+    assert "required_only_when" not in prompt_shape["compression_receipt"]
+    assert "required only when compression_decision" in payload["remote_response_contract"]
+
+
+def test_anthropic_structured_output_does_not_expand_to_specialized_resign_stages() -> None:
+    request = BrainRunRequest(
+        user_input="Create a natural portrait with soft window light and a calm expression.",
+        stage="provider_prompt_human_naturalness_resign",
+        requested_image_count=1,
+        metadata={
+            "canonical_prompt_context": {
+                "human_naturalness_decision": {
+                    "required": True,
+                    "contract_version": "v3_human_naturalness_decision_v1",
+                    "owner": "remote_v3_llm_brain",
+                    "frozen_binding": {"activation_plan_id": "plan"},
+                }
+            },
+            "candidate_canonical_provider_prompts": [
+                {
+                    "output_index": 1,
+                    "prompt": "A complete natural portrait with soft window light and a calm expression.",
+                }
+            ]
+        },
+    )
+
+    assert build_anthropic_structured_output(request) is None
+
+
+def test_claude_real_image_plan_sends_native_schema_and_restores_wire_values(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls: list[dict[str, object]] = []
+    response_data = {
+        "visual_task_profile": {
+            "subject_entities": [{"attributes": '{"face_visible": true}'}],
+            "evidence": [{"value": '"user request"', "metadata": "{}"}],
+        }
+    }
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"```json\n{json.dumps(response_data)}\n```",
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, _url, *, headers, json):
+            calls.append(json)
+            return FakeResponse()
+
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "unified-test-key")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
+    monkeypatch.setattr(brain_providers, "_is_claude_sonnet_55", lambda _model: True)
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    request = BrainRunRequest(
+        user_input="Create one real-camera portrait of a person.",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+
+    result = V3LLMBrainProvider()._run_anthropic_compatible(request)  # noqa: SLF001 - outbound contract
+
+    output_config = calls[0]["output_config"]
+    assert output_config["format"]["type"] == "json_schema"
+    assert output_config["format"]["schema"]["additionalProperties"] is False
+    assert result["visual_task_profile"]["subject_entities"][0]["attributes"] == {"face_visible": True}
+    assert result["visual_task_profile"]["evidence"][0] == {
+        "value": "user request",
+        "metadata": {},
+    }
+
+
+def test_claude_json_fence_unwrap_rejects_prose_and_partial_wrappers() -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    wrapped = '```json\n{"ok": true}\n```'
+    assert brain_providers._unwrap_anthropic_json_markdown_fence(wrapped) == '{"ok": true}'  # noqa: SLF001
+    invalid_wrappers = (
+        'Here is the JSON:\n' + wrapped,
+        '```json\n{"ok": true}',
+    )
+    for invalid in invalid_wrappers:
+        unchanged = brain_providers._unwrap_anthropic_json_markdown_fence(invalid)  # noqa: SLF001
+        assert unchanged == invalid
+        with pytest.raises(BrainInvalidJsonResponse, match="malformed JSON"):
+            brain_providers._loads_json_object(unchanged)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("encoded", "target"),
+    [
+        ('{"x":1,"x":2}', "attributes"),
+        ('{"nested":{"x":1,"x":2}}', "metadata"),
+        ("NaN", "value"),
+        ("Infinity", "value"),
+        ("-Infinity", "value"),
+    ],
+)
+def test_anthropic_wire_restoration_rejects_non_strict_json(encoded, target) -> None:
+    paths = {
+        "attributes": (("visual_task_profile", "subject_entities", "[]", "attributes"), "object"),
+        "metadata": (("visual_task_profile", "evidence", "[]", "metadata"), "object"),
+        "value": (("visual_task_profile", "evidence", "[]", "value"), "any"),
+    }
+    path, field_expected = paths[target]
+    response = {
+        "visual_task_profile": {
+            "subject_entities": [{"attributes": "{}"}],
+            "evidence": [{"value": "null", "metadata": "{}"}],
+        }
+    }
+    if target == "attributes":
+        response["visual_task_profile"]["subject_entities"][0]["attributes"] = encoded
+    else:
+        response["visual_task_profile"]["evidence"][0][target] = encoded
+
+    with pytest.raises(ValueError, match="valid serialized JSON"):
+        restore_anthropic_structured_output(response, ((path, field_expected),))
 
 
 def test_anthropic_refusal_block_stops_before_gpt_backup(monkeypatch) -> None:

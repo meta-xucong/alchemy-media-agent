@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from .context_digest import compact_brand_visual_context
-
+import copy
 import hashlib
 import json
 from typing import NoReturn
 
-from .contracts import BrainRunRequest
+from .context_digest import compact_brand_visual_context
+from .contracts import (
+    BrainCanonicalProviderPrompt,
+    BrainImageSetPlan,
+    BrainPromptGuidance,
+    BrainRunRequest,
+)
 from .prompt_policy import (
     V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
     V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
@@ -19,7 +24,11 @@ from .prompt_policy import (
     build_brain_source_projection_receipt,
 )
 from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
-from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
+from ..shared_capabilities.activation import (
+    CapabilityActivationIntent,
+    REFERENCE_CHANNEL_IDS,
+    VisualTaskProfile,
+)
 from ..shared_capabilities.visual_cluster.expression_review import LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
 from ..shared_capabilities.visual_cluster.contracts import (
     GENERAL_FORMAT_LAYOUT_AXIS_RENDER_SPECS,
@@ -1256,6 +1265,435 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload["return_schema"].pop("visual_task_profile", None)
         payload["return_schema"].pop("capability_activation_intent", None)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+_ANTHROPIC_PLAN_JSON_VALUE_PATHS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("visual_task_profile", "subject_entities", "[]", "attributes"), "object"),
+    (("visual_task_profile", "evidence", "[]", "value"), "any"),
+    (("visual_task_profile", "evidence", "[]", "metadata"), "object"),
+)
+_ANTHROPIC_CONDITIONAL_OUTPUT_FIELDS = frozenset({"compression_receipt"})
+
+
+def build_anthropic_structured_output(
+    request: BrainRunRequest,
+) -> tuple[str, dict[str, object], tuple[tuple[tuple[str, ...], str], ...]] | None:
+    """Prepare Claude-only structured output without changing the Brain contract.
+
+    The prompt payload remains the semantic source. This adds a provider wire
+    schema for the two observed V3 image stages where their response model is
+    typed. Dynamic JSON-valued plan fields are encoded as strings only on this
+    wire path and are restored before the existing semantic validator runs.
+    """
+
+    payload_text = build_remote_payload(request)
+    try:
+        payload = json.loads(payload_text)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    response_shape = payload.get("return_schema")
+    if not isinstance(response_shape, dict):
+        return None
+
+    task = payload.get("task")
+    wire_value_paths: tuple[tuple[tuple[str, ...], str], ...] = ()
+    if task == "prepare_pre_generation_image_reasoning":
+        model_by_section = {
+            "visual_task_profile": VisualTaskProfile,
+            "capability_activation_intent": CapabilityActivationIntent,
+            "image_set_plan": BrainImageSetPlan,
+            "prompt_guidance": BrainPromptGuidance,
+        }
+        if not _requires_remote_creative_contract(request):
+            return None
+        if set(response_shape) != set(model_by_section):
+            raise ValueError("Claude real-image planning schema does not match its typed response contract")
+        _rewrite_plan_open_values_for_anthropic(payload)
+        response_shape = payload.get("return_schema")
+        wire_value_paths = _ANTHROPIC_PLAN_JSON_VALUE_PATHS
+        properties = {
+            section: _anthropic_typed_schema_for_shape(
+                model_by_section[section].model_json_schema(),
+                shape,
+                path=(section,),
+            )
+            for section, shape in response_shape.items()
+        }
+    elif (
+        task == "finalize_canonical_image_provider_prompts"
+        and request.stage == "provider_prompt_finalize"
+    ):
+        if set(response_shape) != {"canonical_provider_prompts"}:
+            raise ValueError("Claude prompt-finalizer schema does not match its typed response contract")
+        _remove_finalizer_schema_guidance_fields(payload)
+        response_shape = payload["return_schema"]
+        prompt_schema = response_shape["canonical_provider_prompts"][0]
+        properties = {
+            "canonical_provider_prompts": {
+                "type": "array",
+                "items": _anthropic_typed_schema_for_shape(
+                    BrainCanonicalProviderPrompt.model_json_schema(),
+                    prompt_schema,
+                    path=("canonical_provider_prompts", "[]"),
+                ),
+            }
+        }
+    else:
+        return None
+
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+    # Anthropic Structured Outputs documents limits of 24 optional properties
+    # and 16 union-typed properties. Known V3 contracts must stay within them;
+    # never silently fall back to the prompt-only path on a limit regression.
+    if _anthropic_schema_optional_property_count(schema) > 24:
+        raise ValueError("Claude response schema exceeds Anthropic's optional-property limit")
+    if _anthropic_schema_union_count(schema) > 16:
+        raise ValueError("Claude response schema exceeds Anthropic's union-property limit")
+    return (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        {"type": "json_schema", "schema": schema},
+        wire_value_paths,
+    )
+
+
+def restore_anthropic_structured_output(
+    response: dict[str, object],
+    wire_value_paths: tuple[tuple[tuple[str, ...], str], ...],
+) -> None:
+    """Restore Claude's reversible wire encoding before semantic validation."""
+
+    for path, expected in wire_value_paths:
+        _restore_anthropic_json_value(response, path, expected)
+
+
+def _rewrite_plan_open_values_for_anthropic(payload: dict[str, object]) -> None:
+    response_shape = payload.get("return_schema")
+    if not isinstance(response_shape, dict):
+        return
+    profile = response_shape.get("visual_task_profile")
+    if not isinstance(profile, dict):
+        return
+    entities = profile.get("subject_entities")
+    if isinstance(entities, list) and entities and isinstance(entities[0], dict):
+        entities[0]["attributes"] = (
+            "JSON-encoded object string; serialize the complete object as JSON inside this string."
+        )
+    evidence = profile.get("evidence")
+    if isinstance(evidence, list) and evidence and isinstance(evidence[0], dict):
+        evidence[0]["value"] = (
+            "JSON-encoded JSON value string; serialize the complete value as JSON inside this string."
+        )
+        evidence[0]["metadata"] = (
+            "JSON-encoded object string; serialize the complete object as JSON inside this string."
+        )
+    payload["remote_response_contract"] = (
+        f"{payload.get('remote_response_contract', '')} Claude's structured-output wire response encodes "
+        "visual_task_profile.subject_entities[].attributes and visual_task_profile.evidence[].metadata as "
+        "JSON object strings, and visual_task_profile.evidence[].value as a JSON value string. The server "
+        "restores these values to their original JSON types before validation; do not omit or summarize them."
+    )
+
+
+def _remove_finalizer_schema_guidance_fields(payload: dict[str, object]) -> None:
+    response_shape = payload.get("return_schema")
+    if not isinstance(response_shape, dict):
+        return
+
+    def remove_guidance(value: object) -> None:
+        if isinstance(value, dict):
+            value.pop("required_only_when", None)
+            for item in value.values():
+                remove_guidance(item)
+        elif isinstance(value, list):
+            for item in value:
+                remove_guidance(item)
+
+    remove_guidance(response_shape)
+    payload["remote_response_contract"] = (
+        f"{payload.get('remote_response_contract', '')} compression_receipt is an optional response field and "
+        "is required only when compression_decision is brain_semantic_once; required_only_when is guidance, "
+        "not a response field."
+    )
+
+
+def _anthropic_typed_schema_for_shape(
+    model_schema: dict[str, object],
+    response_shape: object,
+    *,
+    path: tuple[str, ...],
+) -> dict[str, object]:
+    definitions = model_schema.get("$defs")
+    definitions = definitions if isinstance(definitions, dict) else {}
+    root = {key: value for key, value in model_schema.items() if key != "$defs"}
+    return _anthropic_schema_for_shape(root, response_shape, path=path, definitions=definitions)
+
+
+def _anthropic_schema_for_shape(
+    model_schema: object,
+    response_shape: object,
+    *,
+    path: tuple[str, ...],
+    definitions: dict[str, object],
+) -> dict[str, object]:
+    schema = _resolve_anthropic_schema_refs(model_schema, definitions)
+    if path in {candidate for candidate, _expected in _ANTHROPIC_PLAN_JSON_VALUE_PATHS}:
+        return {"type": "string"}
+
+    if isinstance(response_shape, dict):
+        object_schema = _select_anthropic_object_schema(schema)
+        properties_schema = object_schema.get("properties")
+        if not isinstance(properties_schema, dict):
+            raise ValueError(f"No typed Claude response object is defined at {'.'.join(path)}")
+        properties: dict[str, object] = {}
+        for key, child_shape in response_shape.items():
+            if key == "required_only_when":
+                continue
+            if (
+                path == ("canonical_provider_prompts", "[]")
+                and key == "user_direction_integrity"
+            ):
+                properties[key] = _anthropic_user_direction_integrity_schema(child_shape)
+                continue
+            child_schema = properties_schema.get(key)
+            if not isinstance(child_schema, dict):
+                raise ValueError(f"No typed Claude response field is defined at {'.'.join((*path, key))}")
+            child_path = (*path, key)
+            if isinstance(child_shape, list):
+                child_path = (*path, key)
+            properties[key] = _anthropic_schema_for_shape(
+                child_schema,
+                child_shape,
+                path=child_path,
+                definitions=definitions,
+            )
+        required = [key for key in properties if not _anthropic_output_field_is_conditional(path, key)]
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        }
+
+    if isinstance(response_shape, list):
+        items_schema = schema.get("items") if isinstance(schema, dict) else None
+        if not isinstance(items_schema, dict):
+            raise ValueError(f"No typed Claude response array is defined at {'.'.join(path)}")
+        if response_shape:
+            item_shape = response_shape[0]
+            item_path = (*path, "[]")
+            return {
+                "type": "array",
+                "items": _anthropic_schema_for_shape(
+                    items_schema,
+                    item_shape,
+                    path=item_path,
+                    definitions=definitions,
+                ),
+            }
+        sanitized_items = _sanitize_anthropic_schema(items_schema, definitions)
+        return {"type": "array", "items": sanitized_items}
+
+    sanitized = _sanitize_anthropic_schema(schema, definitions)
+    if isinstance(response_shape, str) and "null" not in response_shape.casefold():
+        sanitized = _remove_anthropic_null_alternative(sanitized)
+    if not sanitized:
+        raise ValueError(f"No typed Claude response value is defined at {'.'.join(path)}")
+    return sanitized
+
+
+def _anthropic_user_direction_integrity_schema(response_shape: object) -> dict[str, object]:
+    expected = {
+        "contract_version": "v3_user_direction_integrity_v1",
+        "status": "preserved|rewritten",
+        "owner": "remote_v3_llm_brain",
+    }
+    if response_shape != expected:
+        raise ValueError("Claude user-direction receipt does not match its declared response contract")
+    return {
+        "type": "object",
+        "properties": {
+            "contract_version": {"type": "string", "enum": ["v3_user_direction_integrity_v1"]},
+            "status": {"type": "string", "enum": ["preserved", "rewritten"]},
+            "owner": {"type": "string", "enum": ["remote_v3_llm_brain"]},
+        },
+        "required": ["contract_version", "status", "owner"],
+        "additionalProperties": False,
+    }
+
+
+def _resolve_anthropic_schema_refs(
+    schema: object,
+    definitions: dict[str, object],
+    *,
+    seen: frozenset[str] = frozenset(),
+) -> dict[str, object]:
+    if not isinstance(schema, dict):
+        return {}
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        name = ref.rsplit("/", 1)[-1].replace("~1", "/").replace("~0", "~")
+        if name in seen or name not in definitions:
+            raise ValueError("Recursive or unresolved Claude response schema reference")
+        resolved = _resolve_anthropic_schema_refs(
+            definitions[name],
+            definitions,
+            seen=seen | {name},
+        )
+        siblings = {key: value for key, value in schema.items() if key != "$ref"}
+        return {**resolved, **_sanitize_anthropic_schema(siblings, definitions)} if siblings else resolved
+    return _sanitize_anthropic_schema(schema, definitions)
+
+
+def _sanitize_anthropic_schema(schema: object, definitions: dict[str, object]) -> dict[str, object]:
+    if not isinstance(schema, dict):
+        return {}
+    if "$ref" in schema:
+        return _resolve_anthropic_schema_refs(schema, definitions)
+    clean: dict[str, object] = {}
+    for key, value in schema.items():
+        if key in {"title", "description", "default", "examples", "$defs"}:
+            continue
+        if key in {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "minItems", "maxItems"}:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            clean[key] = {
+                name: _sanitize_anthropic_schema(fragment, definitions)
+                for name, fragment in value.items()
+            }
+        elif key == "items":
+            clean[key] = _sanitize_anthropic_schema(value, definitions)
+        elif key in {"anyOf", "oneOf", "allOf"} and isinstance(value, list):
+            clean[key] = [_sanitize_anthropic_schema(fragment, definitions) for fragment in value]
+        elif key == "required" and isinstance(value, list):
+            clean[key] = [item for item in value if isinstance(item, str)]
+        elif key in {"type", "enum", "const", "pattern", "format"}:
+            clean[key] = copy.deepcopy(value)
+    if clean.get("type") == "object" or "properties" in clean:
+        clean["additionalProperties"] = False
+    return clean
+
+
+def _select_anthropic_object_schema(schema: dict[str, object]) -> dict[str, object]:
+    if schema.get("type") == "object" or isinstance(schema.get("properties"), dict):
+        return schema
+    for key in ("anyOf", "oneOf", "allOf"):
+        variants = schema.get(key)
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict):
+                    selected = _select_anthropic_object_schema(variant)
+                    if selected.get("type") == "object" or isinstance(selected.get("properties"), dict):
+                        return selected
+    return {}
+
+
+def _remove_anthropic_null_alternative(schema: dict[str, object]) -> dict[str, object]:
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list) and "null" in schema_type:
+        remaining_types = [item for item in schema_type if item != "null"]
+        if len(remaining_types) == 1:
+            return {**schema, "type": remaining_types[0]}
+        return {**schema, "type": remaining_types}
+    alternatives = schema.get("anyOf")
+    if isinstance(alternatives, list):
+        non_null = [item for item in alternatives if not (isinstance(item, dict) and item.get("type") == "null")]
+        if len(non_null) == 1 and isinstance(non_null[0], dict):
+            return non_null[0]
+        if len(non_null) != len(alternatives):
+            return {**schema, "anyOf": non_null}
+    return schema
+
+
+def _anthropic_output_field_is_conditional(path: tuple[str, ...], field_name: str) -> bool:
+    return field_name in _ANTHROPIC_CONDITIONAL_OUTPUT_FIELDS and path == (
+        "canonical_provider_prompts",
+        "[]",
+    )
+
+
+def _anthropic_schema_optional_property_count(schema: object) -> int:
+    if isinstance(schema, list):
+        return sum(_anthropic_schema_optional_property_count(item) for item in schema)
+    if not isinstance(schema, dict):
+        return 0
+    total = 0
+    properties = schema.get("properties")
+    required = set(schema.get("required", [])) if isinstance(schema.get("required"), list) else set()
+    if isinstance(properties, dict):
+        total += sum(1 for key in properties if key not in required)
+        total += sum(_anthropic_schema_optional_property_count(value) for value in properties.values())
+    return total + sum(
+        _anthropic_schema_optional_property_count(value)
+        for key, value in schema.items()
+        if key != "properties"
+    )
+
+
+def _anthropic_schema_union_count(schema: object) -> int:
+    if isinstance(schema, list):
+        return sum(_anthropic_schema_union_count(item) for item in schema)
+    if not isinstance(schema, dict):
+        return 0
+    total = sum(1 for key in ("anyOf", "oneOf") if isinstance(schema.get(key), list))
+    if isinstance(schema.get("type"), list):
+        total += 1
+    return total + sum(_anthropic_schema_union_count(value) for value in schema.values())
+
+
+def _restore_anthropic_json_value(
+    current: object,
+    path: tuple[str, ...],
+    expected: str,
+) -> object:
+    if not path or current is None:
+        return current
+    key = path[0]
+    if key == "[]":
+        if not isinstance(current, list):
+            raise ValueError("Claude JSON wire value expected an array")
+        for index, item in enumerate(current):
+            current[index] = _restore_anthropic_json_value(item, path[1:], expected)
+        return current
+    if not isinstance(current, dict) or key not in current:
+        return current
+    if len(path) == 1:
+        encoded = current[key]
+        if not isinstance(encoded, str):
+            raise ValueError("Claude JSON wire value must be encoded as a string")
+        try:
+            decoded = json.loads(
+                encoded,
+                object_pairs_hook=_reject_duplicate_json_object_keys,
+                parse_constant=_reject_non_json_constant,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("Claude JSON wire value is not valid serialized JSON") from exc
+        if expected == "object" and not isinstance(decoded, dict):
+            raise ValueError("Claude JSON wire value must decode to an object")
+        current[key] = decoded
+        return current
+    current[key] = _restore_anthropic_json_value(current[key], path[1:], expected)
+    return current
+
+
+def _reject_duplicate_json_object_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate object key")
+        result[key] = value
+    return result
+
+
+def _reject_non_json_constant(value: str) -> NoReturn:
+    raise ValueError(f"non-JSON constant: {value}")
 
 
 def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) -> dict[str, object]:
