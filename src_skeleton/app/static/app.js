@@ -11284,7 +11284,7 @@ async function completeV3GeneratedJob(
     failedWithoutPartialDelivery || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
   renderV3Job(generated);
-  await refreshV3CurrentProject({
+  const projectRefreshed = await refreshV3CurrentProject({
     silent: true,
     shouldContinue,
     sessionReceipt,
@@ -11294,6 +11294,11 @@ async function completeV3GeneratedJob(
   if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   if (syncV3CurrentJobFromProjectOutputs({ preferLatest: false })) {
     renderV3Job(v3State.currentJob);
+  } else if (projectRefreshed) {
+    // The first render runs before the project endpoint returns review-only
+    // images. Reproject the result board after the review cache is refreshed;
+    // review cards stay outside the formal delivery set.
+    renderV3ResultBoard(v3State.currentJob);
   }
   await maybePersistV3UploadedReferences(uploadedAssets);
   if (typeof shouldContinue === "function" && !shouldContinue()) return null;

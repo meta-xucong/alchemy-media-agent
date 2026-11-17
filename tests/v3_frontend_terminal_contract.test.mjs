@@ -20,12 +20,13 @@ const recoveryEnd = source.indexOf("\nasync function createV3Job", recoveryStart
 assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, "planned job recovery function must be present");
 const plannedJobRecoverySource = source.slice(recoveryStart, recoveryEnd);
 
-async function completeWith(job, expectedCount = null) {
+async function completeWith(job, expectedCount = null, { reviewItems = [] } = {}) {
   const progress = [];
   const notices = [];
   const partialExpectedCounts = [];
+  const resultBoardSnapshots = [];
   const context = {
-    v3State: { selectedScenario: "general_creative" },
+    v3State: { selectedScenario: "general_creative", projectOutputs: [], projectReviewOutputs: [] },
     els: { v3ProjectSubpage: { hidden: true } },
     v3ScenarioWorkspaceCopy: () => ({ generatedNotice: "生成成功" }),
     v3SettleEcommerceTerminalReceipt: () => {},
@@ -42,8 +43,16 @@ async function completeWith(job, expectedCount = null) {
     ),
     v3JobFinalDeliveryNotice: () => "审查拦截",
     setV3Progress: (...args) => progress.push(args),
-    renderV3Job: () => {},
-    refreshV3CurrentProject: async () => {},
+    renderV3Job: (value) => {
+      resultBoardSnapshots.push(context.v3State.projectReviewOutputs.map((item) => item.output_id));
+    },
+    renderV3ResultBoard: (value) => {
+      resultBoardSnapshots.push(context.v3State.projectReviewOutputs.map((item) => item.output_id));
+    },
+    refreshV3CurrentProject: async () => {
+      context.v3State.projectReviewOutputs = reviewItems;
+      return true;
+    },
     loadV3ProjectOutputs: async () => {},
     syncV3CurrentJobFromProjectOutputs: () => false,
     maybePersistV3UploadedReferences: async () => {},
@@ -63,7 +72,13 @@ async function completeWith(job, expectedCount = null) {
     { generatedNotice: "生成成功" },
     { expectedCount },
   );
-  return { progress, notices, partialExpectedCounts };
+  return {
+    progress,
+    notices,
+    partialExpectedCounts,
+    resultBoardSnapshots,
+    formalOutputCount: context.v3State.projectOutputs.length,
+  };
 }
 
 test("failed and not_found jobs with no deliverable never show success", async () => {
@@ -108,6 +123,24 @@ test("partial recovery and review-held delivery stay distinct from full success"
   assert.equal(withheld.progress[0][0], "review_blocked");
   assert.equal(withheld.progress[0][2], "warning");
   assert.equal(withheld.notices[0][1], "warning");
+});
+
+test("review-only images render after project refresh without becoming formal delivery", async () => {
+  const result = await completeWith(
+    {
+      job_id: "job-review-held",
+      status: "generated",
+      hasExpectedDelivery: false,
+      deliveryWithheld: true,
+    },
+    null,
+    {
+      reviewItems: [{ job_id: "job-review-held", output_id: "review-output-1", review_only: true }],
+    },
+  );
+
+  assert.deepEqual(result.resultBoardSnapshots, [[], ["review-output-1"]]);
+  assert.equal(result.formalOutputCount, 0);
 });
 
 test("formal partial delivery from the backend remains visible as a partial outcome", async () => {

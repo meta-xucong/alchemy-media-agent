@@ -11815,13 +11815,51 @@ class V3ProductApiService:
         max_attempts: int,
     ) -> PlanningResult:
         summary = self._visual_auto_retry_summary(records, max_attempts)
-        asset_pack = result.asset_pack.model_copy(
-            update={
-                "manifest": {**dict(result.asset_pack.manifest), "visual_auto_retry": summary},
-                "metadata": {**dict(result.asset_pack.metadata), "visual_auto_retry": summary},
-            }
+        metadata = dict(result.metadata or {})
+        manual_confirmation_skipped = any(
+            item.get("status") == "skipped"
+            and item.get("blocked_reason") == "human_realism_manual_confirmation"
+            for item in records
+            if isinstance(item, dict)
         )
-        return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**dict(result.metadata), "visual_auto_retry": summary}})
+        review_package = metadata.get("post_generation_review_package")
+        if manual_confirmation_skipped:
+            if isinstance(review_package, dict):
+                review_package = {
+                    **review_package,
+                    "user_visible_summary": [
+                        "V3 checked the generated images.",
+                        "Some images need manual confirmation; automatic retry was skipped.",
+                    ],
+                }
+                metadata["post_generation_review_package"] = review_package
+                metadata["post_generation_review_summary"] = list(review_package["user_visible_summary"])
+                cluster = metadata.get("visual_cluster")
+                if isinstance(cluster, dict):
+                    metadata["visual_cluster"] = {**cluster, "post_generation_review_package": review_package}
+                shared_capabilities = metadata.get("shared_capabilities")
+                if isinstance(shared_capabilities, dict):
+                    cluster = shared_capabilities.get("visual_cluster")
+                    if isinstance(cluster, dict):
+                        metadata["shared_capabilities"] = {
+                            **shared_capabilities,
+                            "visual_cluster": {**cluster, "post_generation_review_package": review_package},
+                        }
+                public_review = metadata.get("post_generation_review")
+                if isinstance(public_review, dict):
+                    metadata["post_generation_review"] = {
+                        **public_review,
+                        "user_visible_summary": list(review_package["user_visible_summary"]),
+                    }
+        manifest = {**dict(result.asset_pack.manifest), "visual_auto_retry": summary}
+        asset_metadata = {**dict(result.asset_pack.metadata), "visual_auto_retry": summary}
+        if manual_confirmation_skipped and isinstance(review_package, dict):
+            manifest["post_generation_review_package"] = review_package
+            asset_metadata["post_generation_review_package"] = review_package
+        asset_pack = result.asset_pack.model_copy(
+            update={"manifest": manifest, "metadata": asset_metadata}
+        )
+        return result.model_copy(update={"asset_pack": asset_pack, "metadata": {**metadata, "visual_auto_retry": summary}})
 
     def _apply_reviewed_delivery_preference(self, result: PlanningResult) -> PlanningResult:
         package = result.metadata.get("post_generation_review_package")

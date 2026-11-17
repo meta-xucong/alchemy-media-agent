@@ -1475,6 +1475,43 @@ def test_product_api_low_confidence_doc55_signal_does_not_retry(tmp_path) -> Non
     assert not any(candidate.metadata.get("visual_auto_retry_output") for candidate in generated.candidates)
 
 
+def test_human_realism_retry_skip_does_not_claim_a_retry_is_ready(tmp_path) -> None:
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(
+            vision_provider=_StaticVisionProvider(
+                {
+                    "status": "fail_retryable",
+                    "confidence": 0.92,
+                    "issue_codes": ["human_skin_or_retouch"],
+                }
+            )
+        ),
+    )
+    created = _create_general_job(service)
+
+    generated = service.generate_job_with_continuation(
+        created.job_id,
+        {"quality_mode": "standard"},
+        continuation=GenerateContinuation(
+            job_id=created.job_id,
+            vision_inspection_mode="hybrid",
+            max_visual_retry_attempts=1,
+        ),
+    )
+
+    retry = generated.metadata["visual_auto_retry"]
+    review = generated.metadata["post_generation_review"]
+    internal_retry = _internal_generation_metadata(service, created.job_id)["visual_auto_retry"]
+
+    assert retry["executed_count"] == 0
+    assert retry["records"][0]["status"] == "skipped"
+    assert internal_retry["records"][0]["blocked_reason"] == "human_realism_manual_confirmation"
+    assert any("manual confirmation" in line.lower() for line in review["user_visible_summary"])
+    assert not any("retry is ready" in line.lower() for line in review["user_visible_summary"])
+
+
 def test_doc118_verified_manual_review_withholds_final_delivery_and_replaces_planning_hint(tmp_path) -> None:
     provider = _StaticVisionProvider(
         {
