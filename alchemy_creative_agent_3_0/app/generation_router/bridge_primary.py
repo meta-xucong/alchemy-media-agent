@@ -20,6 +20,37 @@ PROVENANCE = "render_bridge_primary"
 POLL_SECONDS = 1.0
 # Default for direct adapter callers that do not supply a provider budget.
 POLL_BUDGET_SECONDS = 285.0
+FINAL_STATUS_CHECK_SECONDS = 15.0
+_BRIDGE_WAIT_STATES = {
+    "queued", "running", "bridge_submission_unknown", "execution_unknown", "awaiting_user", "artifacts_ready",
+}
+_BRIDGE_STOP_ATTENTION = {
+    "codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue",
+}
+
+
+def bridge_wait_enabled():
+    from render_bridge_primary import PrimaryError, PrimarySettings, pending_count
+
+    try:
+        config = PrimarySettings.from_env(product="v3")
+        return config.enabled or pending_count(config.state_dir) > 0
+    except (PrimaryError, OSError, ValueError, sqlite3.Error):
+        return False
+
+
+def bridge_provider_timeout_seconds(client_timeout, *, gateway_managed):
+    margin = 5.0 if gateway_managed else 15.0
+    return max(720.0, client_timeout + margin) + FINAL_STATUS_CHECK_SECONDS
+
+
+def _bridge_waiting(result):
+    return (
+        result.route == "bridge"
+        and result.image is None
+        and result.state in _BRIDGE_WAIT_STATES
+        and result.provenance.get("attention_code") not in _BRIDGE_STOP_ATTENTION
+    )
 
 
 
@@ -445,16 +476,27 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
             result = None if use_legacy else await transport.resolve(request)
         if use_legacy:
             return await legacy_generate(app_request)
-        while result.route == "bridge" and result.image is None and result.state in {
-            "queued", "running", "bridge_submission_unknown", "execution_unknown", "awaiting_user",
-            "artifacts_ready",
-        } and time.monotonic() < deadline:
-            await asyncio.sleep(POLL_SECONDS)
-            result = await transport.resolve(request)
+        while _bridge_waiting(result):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(POLL_SECONDS, remaining))
+            try:
+                async with asyncio.timeout(deadline - time.monotonic()):
+                    result = await transport.resolve(
+                        request, existing_only=bool(result.task_id), expected_task_id=result.task_id,
+                    )
+            except TimeoutError:
+                break
+        if _bridge_waiting(result) and result.task_id:
+            # Spend the reserved window on the original task and receipt only.
+            try:
+                async with asyncio.timeout(FINAL_STATUS_CHECK_SECONDS):
+                    result = await transport.resolve(request, existing_only=True, expected_task_id=result.task_id)
+            except TimeoutError:
+                pass
         provenance = _projection(result)
-        if (result.route == "bridge" and provenance.get("attention_code") in {
-                    "codex_turn_timed_out", "codex_turn_timeout_unconfirmed", "execution_reconciliation_overdue",
-                }):
+        if result.route == "bridge" and provenance.get("attention_code") in _BRIDGE_STOP_ATTENTION:
             from app.integrations.render_bridge.attention import MESSAGES
 
             attention_code = provenance["attention_code"]
@@ -470,10 +512,7 @@ async def generate(app_request, legacy_generate, output_store, *, poll_budget_se
                     raise _error("bridge_checkpoint_original_unavailable", provenance)
             return _cached_result(existing, provenance)
         if result.route == "bridge" and result.image is None:
-            if result.state in {
-                "queued", "running", "bridge_submission_unknown", "execution_unknown", "awaiting_user",
-                "artifacts_ready",
-            }:
+            if result.state in _BRIDGE_WAIT_STATES:
                 raise _error("bridge_wait_budget_exhausted", provenance)
             raise _error(result.state, provenance)
         if result.route == "api":

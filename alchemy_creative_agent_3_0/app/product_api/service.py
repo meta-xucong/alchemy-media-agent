@@ -6915,6 +6915,8 @@ class V3ProductApiService:
             prefix = "V3 candidate generation failed"
         failure_code = cls._provider_failure_closed_code(provider_failure_retry)
         classification = cls._provider_failure_closed_classification(provider_failure_retry)
+        if failure_code == "bridge_wait_budget_exhausted":
+            return "Render Bridge 未能在等待时限内确认出图结果。原任务已保留，请勿重复提交。"
         if classification == "non_retryable_input_contract_failure":
             if failure_code == "ecommerce_product_truth_pool_mismatch":
                 return (
