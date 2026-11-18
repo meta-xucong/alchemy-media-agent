@@ -1498,6 +1498,8 @@ def test_human_realism_retry_skip_does_not_claim_a_retry_is_ready(tmp_path) -> N
             job_id=created.job_id,
             vision_inspection_mode="hybrid",
             max_visual_retry_attempts=1,
+            # The static image is not a certified input to automatic retry.
+            force_visual_retry_issue_codes=("human_skin_or_retouch",),
         ),
     )
 
