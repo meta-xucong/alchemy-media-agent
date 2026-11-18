@@ -217,19 +217,99 @@ test("planned job recovery reads only the job bound to its operation id", async 
   assert.ok(!calls.some((url) => url.endsWith("/jobs/job_previous_one_image")));
 });
 
-test("planned job recovery never returns a different operation on timeout", async () => {
+test("planned job recovery continues beyond 240 reads and never follows a different operation", async () => {
+  const delays = [];
+  let reads = 0;
   const context = {
     v3ApiBase: "/api/v3/creative-agent",
     v3State: { currentProject: { job_ids: ["job_previous_one_image"] } },
-    window: { setTimeout: (resolve) => resolve() },
-    v3GenerationSessionOwns: () => true,
-    request: async () => ({ operation_id: "op_other", state: "planning" }),
+    window: { setTimeout: (resolve, delay) => { delays.push(delay); resolve(); } },
+    v3GenerationSessionOwns: (owns) => owns(),
+    request: async (url, options) => {
+      assert.equal(options?.method ?? "GET", "GET");
+      if (url.endsWith("/jobs/job_current")) return { job_id: "job_current", status: "finalizing" };
+      assert.ok(url.endsWith("/planning-operations/op_current"));
+      reads += 1;
+      if (reads === 241) throw new Error("temporary read failure");
+      if (reads > 245) return { operation_id: "op_current", state: "completed", job_id: "job_current" };
+      return { operation_id: "op_other", state: "completed", job_id: "job_previous_one_image" };
+    },
     setV3Progress: () => {},
   };
   vm.runInNewContext(plannedJobRecoverySource, context);
 
-  const result = await context.recoverV3PlannedJob("project_1", "op_current");
+  const result = await context.recoverV3PlannedJob("project_1", "op_current", {
+    shouldContinue: () => delays.length < 280,
+  });
 
   assert.equal(result.operation, null);
-  assert.equal(result.job, null);
+  assert.equal(result.job?.job_id, "job_current");
+  assert.equal(reads, 246);
+  assert.ok(delays.at(-1) > delays[1]);
+});
+
+test("desktop submits once and follows long planning and review through to the original delivery", async () => {
+  const create = source.slice(recoveryEnd, start);
+  const followStart = source.indexOf("async function recoverV3GeneratedJob(");
+  const followEnd = source.indexOf("\nfunction v3JobAwaitingFinalDelivery", followStart);
+  const follow = source.slice(followStart, followEnd);
+  const v3State = { currentProject: { project_id: "p1" }, files: [], projectDetailEpoch: 1 };
+  const job = {
+    job_id: "job_exact", status: "generated", asset_series: [{ output_id: "image_final" }],
+    metadata: { post_generation_review: { inspections: [{ status: "pass" }] } },
+  };
+  const requests = [];
+  let checks = 0;
+  let planning = 0;
+  let reviewing = 0;
+  let delivered;
+  const context = {
+    v3State, v3ApiBase: "/v3", window: { setTimeout: (resolve) => resolve() },
+    v3ScenarioWorkspaceCopy: () => ({}),
+    setV3Busy: (busy) => { v3State.loading = busy; },
+    startV3Progress() {}, setV3Progress() {}, updateV3Notice() {},
+    uploadV3Files: async () => [], buildV3JobPayload: () => ({ metadata: {} }),
+    v3CurrentGenerationSettings: () => ({ count: 1 }),
+    syncV3ProjectOutputsFromPayload() {}, renderV3Job() {}, renderV3ProjectDetail() {},
+    refreshV3CurrentProject: async () => true,
+    v3GenerationSessionOwns: (owns) => owns(), v3IsTerminalJob: () => false,
+    clearV3RecoverPolling() {}, clearV3ProgressTimer() {},
+    v3Delay: async () => {}, v3RecoveryDelayMs: () => 1, v3RecoveryMaxAttempts: 96,
+    v3RecoveryAttemptLimitForServerWatchdog: () => 0,
+    v3JobOutputProjectionSignature: () => "", v3SettleEcommerceTerminalReceipt() {},
+    v3JobHasTerminalOutcome: (result) => result.status === "generated",
+    v3JobHasExpectedVisibleImages: () => true, v3JobHasRecoverablePartialDelivery: () => false,
+    v3RecoveredJobFromProjectOutputs: () => null,
+    v3RecoveryProgressPresentation: () => ({ stageKey: "reviewing" }),
+    friendlyError: (error) => String(error),
+    completeV3GeneratedJob: async (result) => { delivered = result; },
+    request: async (url, options = {}) => {
+      requests.push([url, options.method || "GET"]);
+      if (++checks > 390) {
+        v3State.followingGeneration = null;
+        throw new Error("test read ceiling");
+      }
+      if (url.endsWith("/projects/p1/jobs")) {
+        await context.createV3Job(); // Duplicate click while the original POST is in flight.
+        return { status: "planning", metadata: { current_operation: { operation_id: "op_exact" } } };
+      }
+      if (url.endsWith("/planning-operations/op_exact")) {
+        return ++planning > 245
+          ? { state: "completed", operation_id: "op_exact", job_id: "job_exact" }
+          : { state: "planning", operation_id: "op_exact" };
+      }
+      if (url.endsWith("/jobs/job_exact")) {
+        return ++reviewing > 105 ? job : { ...job, status: "finalizing" };
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  };
+  vm.runInNewContext(`${plannedJobRecoverySource}\n${create}\n${follow}`, context);
+  await context.createV3Job();
+
+  assert.deepEqual(requests.filter(([, method]) => method !== "GET"), [["/v3/projects/p1/jobs", "POST"]]);
+  assert.equal(planning, 246);
+  assert.equal(reviewing, 106);
+  assert.equal(delivered, job);
+  assert.equal(v3State.loading, false);
 });

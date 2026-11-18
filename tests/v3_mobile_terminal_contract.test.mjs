@@ -98,21 +98,18 @@ test("mobile planned job recovery reads only the job bound to its operation id",
 
 test("mobile cancelled planning recovery does not write a stale project after refresh", async () => {
   let ownsSession = true;
-  let ownershipChecks = 0;
   const previousProject = { project_id: "project_1", marker: "previous" };
   const context = {
     mobileV3State: { currentProject: previousProject },
     window: { setTimeout: (resolve) => resolve() },
-    mobileV3GenerationSessionOwns: () => {
-      ownershipChecks += 1;
-      if (ownershipChecks >= 3) ownsSession = false;
-      return ownsSession;
+    mobileV3GenerationSessionOwns: () => ownsSession,
+    mobileV3Request: async (url) => {
+      if (url.endsWith("/planning-operations/op_current")) {
+        return { operation_id: "op_current", state: "planning_failed" };
+      }
+      ownsSession = false;
+      return { project: { project_id: "project_1", marker: "stale_refresh" } };
     },
-    mobileV3Request: async (url) => (
-      url.endsWith("/planning-operations/op_current")
-        ? { operation_id: "op_current", state: "planning_failed" }
-        : { project: { project_id: "project_1", marker: "stale_refresh" } }
-    ),
   };
   vm.runInNewContext(plannedRecoverySource, context);
 
@@ -121,4 +118,95 @@ test("mobile cancelled planning recovery does not write a stale project after re
   assert.equal(result.operation, null);
   assert.equal(result.job, null);
   assert.equal(context.mobileV3State.currentProject.marker, "previous");
+});
+
+test("mobile keeps following the original planning operation beyond the old polling limit", async () => {
+  let reads = 0;
+  let ticks = 0;
+  const context = {
+    window: { setTimeout: (resolve) => { ticks += 1; resolve(); } },
+    mobileV3GenerationSessionOwns: (owns) => owns(),
+    setMobileV3Progress: () => {},
+    mobileV3Request: async (url, options) => {
+      assert.equal(options?.method ?? "GET", "GET");
+      if (url.endsWith("/jobs/job_current")) return { job_id: "job_current", status: "finalizing" };
+      assert.ok(url.endsWith("/planning-operations/op_current"));
+      reads += 1;
+      if (reads === 241) throw new Error("temporary read failure");
+      return reads > 245
+        ? { operation_id: "op_current", state: "completed", job_id: "job_current" }
+        : { operation_id: "op_current", state: "planning" };
+    },
+  };
+  vm.runInNewContext(plannedRecoverySource, context);
+
+  const result = await context.recoverMobileV3PlannedJob("project_1", "op_current", {
+    shouldContinue: () => ticks < 280,
+  });
+
+  assert.equal(result.job?.job_id, "job_current");
+  assert.equal(reads, 246);
+});
+
+test("mobile submission stays locked until the bound job finishes review", async () => {
+  const followEnd = source.indexOf("\nfunction mobileV3RecoveryDelayMs", plannedRecoveryEnd);
+  const projectStart = source.indexOf("function mobileV3ProjectWithResponseMetadata(");
+  const projectEnd = source.indexOf("\nfunction applyMobileV3GenerationPreferences", projectStart);
+  const mobileV3State = { currentProject: { project_id: "p1", primary_template_id: "general" }, files: [], generationCount: 1 };
+  const job = {
+    job_id: "job_exact", status: "generated",
+    metadata: { post_generation_review: { inspections: [{ status: "pass" }] } },
+  };
+  const requests = [];
+  const progress = [];
+  let reviewing = 0;
+  let displayed;
+  const context = {
+    mobileV3State, window: { setTimeout: (resolve) => resolve() },
+    mobileV3ScenarioForTemplate: () => "general_creative", mobileV3BoundedCount: () => 1,
+    setMobileV3Busy: (busy) => { mobileV3State.busy = busy; },
+    uploadMobileV3Files: async () => [], buildMobileV3JobPayload: () => ({}),
+    mobileV3GenerationSessionOwns: (owns) => owns(),
+    mobileV3JobNeedsProductInputReview: () => false, mobileV3IsTerminalJob: () => false,
+    setMobileV3Progress: (stage) => progress.push(stage), updateMobileV3Status() {},
+    renderMobileV3ProjectOutputs: () => { displayed = mobileV3State.currentJob; },
+    renderMobileV3ProjectCurrentOperation() {},
+    mobileV3MergeProjectOutputs: (_projectId, outputs) => { mobileV3State.outputs = outputs; },
+    mobileV3RecoveryDelayMs: () => 1, mobileV3RecoveryAttemptLimitForServerWatchdog: () => 0,
+    mobileV3RecoveryProgressPresentation: () => ({}),
+    mobileV3JobHasTerminalOutcome: (result) => result.status === "generated",
+    loadMobileV3ProjectOutputs: async () => { mobileV3State.outputs = [{ output_id: "image_final" }]; },
+    mobileV3SettleEcommerceTerminalReceipt() {},
+    refreshMobileV3ProjectDetail: async () => { throw new Error("auxiliary project read temporarily failed"); },
+    mobileV3JobDeliveryWithheld: () => false, mobileV3FormalPartialDeliveryNotice: () => "",
+    friendlyError: (error) => String(error),
+    mobileV3Request: async (url, options = {}) => {
+      requests.push([url, options.method || "GET"]);
+      if (requests.length > 130) {
+        mobileV3State.followingGeneration = null;
+        throw new Error("test read ceiling");
+      }
+      if (url === "/projects/p1/jobs") {
+        await context.generateMobileV3Job();
+        return { status: "planning", metadata: { current_operation: { operation_id: "op_exact", state: "planning" } } };
+      }
+      if (url.endsWith("/planning-operations/op_exact")) {
+        return { state: "completed", operation_id: "op_exact", job_id: "job_exact" };
+      }
+      if (url === "/jobs/job_exact") {
+        return ++reviewing > 75 ? job : { ...job, status: "finalizing" };
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  };
+  vm.runInNewContext(source.slice(projectStart, projectEnd) + source.slice(plannedRecoveryStart, followEnd), context);
+  await context.generateMobileV3Job();
+
+  assert.deepEqual(requests.filter(([, method]) => method !== "GET"), [["/projects/p1/jobs", "POST"]]);
+  assert.equal(reviewing, 76);
+  assert.equal(displayed, job);
+  assert.deepEqual(mobileV3State.outputs, [{ output_id: "image_final" }]);
+  assert.equal(progress.at(-1), "completed");
+  assert.equal(mobileV3State.currentProject.metadata.current_operation, undefined);
+  assert.equal(mobileV3State.busy, false);
 });
