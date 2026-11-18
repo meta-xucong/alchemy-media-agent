@@ -3,6 +3,7 @@ import hashlib
 from io import BytesIO
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from alchemy_creative_agent_3_0.app.project_mode.store import InMemoryProjectStore, PersistentProjectStore
@@ -1278,6 +1279,7 @@ def test_v3_planned_auto_generation_handoff_recovers_on_project_poll(tmp_path, m
 
 
 def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(monkeypatch) -> None:
+    monkeypatch.setattr(app_main, "bridge_wait_enabled", lambda: False)
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", True)
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
     monkeypatch.setattr(app_main.settings, "v3_llm_brain_execution_budget_seconds", 2200.0)
@@ -1301,6 +1303,7 @@ def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(mo
 
 
 def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(monkeypatch) -> None:
+    monkeypatch.setattr(app_main, "bridge_wait_enabled", lambda: False)
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", False)
     monkeypatch.setattr(app_main.settings, "default_image_provider", "openai_gpt_image")
     monkeypatch.setattr(app_main.settings, "openai_image_request_timeout_seconds", 240.0)
@@ -1351,6 +1354,24 @@ def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(mo
             },
         },
     ) == (2500.0, "direct_provider")
+
+
+@pytest.mark.parametrize("gateway_managed, outer_per_render", [(False, 930.0), (True, 920.0)])
+def test_v3_bridge_watchdog_covers_final_status_check_for_each_render(monkeypatch, gateway_managed, outer_per_render):
+    monkeypatch.setattr(app_main, "bridge_wait_enabled", lambda: True)
+    monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", gateway_managed)
+    monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
+    monkeypatch.setattr(app_main.settings, "default_image_provider", "openai_gpt_image")
+    monkeypatch.setattr(app_main.settings, "openai_image_request_timeout_seconds", 240.0)
+    monkeypatch.setattr(app_main.settings, "openai_image_edit_request_timeout_seconds", 420.0)
+    monkeypatch.setattr(app_main.settings, "openai_image_high_resolution_timeout_seconds", 900.0)
+    monkeypatch.setattr(app_main.settings, "v3_llm_brain_execution_budget_seconds", 60.0)
+    payload = {"metadata": {"require_real_images": True, "requested_image_count": 2, "disable_visual_auto_retry": True}}
+
+    timeout, owner = app_main._v3_background_generation_timeout_plan(None, payload)
+
+    assert timeout == 60.0 + 2 * outer_per_render + 15.0
+    assert owner == ("gateway" if gateway_managed else "direct_provider")
 
 
 def test_v3_direct_provider_background_queue_does_not_start_watchdog_before_worker(tmp_path, monkeypatch) -> None:

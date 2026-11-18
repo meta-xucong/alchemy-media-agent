@@ -28,6 +28,10 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from alchemy_creative_agent_3_0.app.app_shell.routes import API_NAMESPACE
+from alchemy_creative_agent_3_0.app.generation_router.bridge_primary import (
+    bridge_provider_timeout_seconds,
+    bridge_wait_enabled,
+)
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
 from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
@@ -1287,6 +1291,8 @@ def _v3_gateway_managed_background_timeout_seconds(payload: dict | None = None) 
     retry_count = _v3_bounded_background_visual_retry_count(payload)
     provider_request_budget = render_count * (1 + retry_count)
     provider_timeout = float(settings.openai_image_gateway_managed_failover_timeout_seconds)
+    if bridge_wait_enabled():
+        provider_timeout = _v3_bridge_background_render_timeout(gateway_managed=True)
     brain_budget = _v3_background_brain_budget_seconds(payload)
     # This watchdog is only a recovery boundary when the lower transport never
     # returns.  Keep a small one-time conversion margin rather than shortening
@@ -1370,6 +1376,20 @@ def _v3_background_request_has_reference_conditioning(job_id: str | None, payloa
     )
 
 
+def _v3_bridge_background_render_timeout(*, gateway_managed: bool) -> float:
+    # The frozen plan may choose high resolution or reference conditioning after
+    # the worker is claimed. Size the outer watchdog for either case.
+    ordinary_timeout = (
+        max(660.0, settings.openai_image_gateway_managed_failover_timeout_seconds)
+        if gateway_managed
+        else max(settings.openai_image_request_timeout_seconds, settings.openai_image_edit_request_timeout_seconds)
+    )
+    return bridge_provider_timeout_seconds(
+        max(ordinary_timeout, settings.openai_image_high_resolution_timeout_seconds),
+        gateway_managed=gateway_managed,
+    )
+
+
 def _v3_background_generation_timeout_plan(
     job_id: str | None,
     payload: dict | None = None,
@@ -1387,14 +1407,14 @@ def _v3_background_generation_timeout_plan(
 
     render_count = _v3_bounded_background_output_count(payload)
     retry_count = _v3_bounded_background_visual_retry_count(payload)
-    if _v3_background_request_is_high_resolution(payload):
+    if bridge_wait_enabled():
+        provider_timeout = _v3_bridge_background_render_timeout(gateway_managed=False)
+    elif _v3_background_request_is_high_resolution(payload):
         provider_timeout = float(settings.openai_image_high_resolution_timeout_seconds)
     elif _v3_background_request_has_reference_conditioning(job_id, payload):
         provider_timeout = float(settings.openai_image_edit_request_timeout_seconds)
     else:
         provider_timeout = float(settings.openai_image_request_timeout_seconds)
-    # Bridge-primary uses a bounded 285-second task wait plus the existing
-    # 15-second provider finalization margin.
     provider_timeout = max(provider_timeout, 285.0)
     provider_request_budget = render_count * (1 + retry_count)
     brain_budget = _v3_background_brain_budget_seconds(payload)

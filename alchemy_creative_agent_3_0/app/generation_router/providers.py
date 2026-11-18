@@ -7775,14 +7775,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return f"{width}x{height}"
 
     def _app_provider_timeout_seconds(self, reference_assets: list[dict[str, Any]], *, app_request=None) -> float:
-        bridge_enabled = False
-        try:
-            from render_bridge_primary import PrimarySettings, pending_count
+        from .bridge_primary import bridge_provider_timeout_seconds, bridge_wait_enabled
 
-            bridge_config = PrimarySettings.from_env(product="v3")
-            bridge_enabled = bridge_config.enabled or pending_count(bridge_config.state_dir) > 0
-        except Exception:
-            pass
+        gateway_managed = False
         try:
             from app.config import settings as app_settings
             from app.providers.openai_image import OpenAIGPTImageProvider
@@ -7792,27 +7787,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 image_edit=bool(reference_assets),
                 plan=plan,
             )
-            if bool(getattr(app_settings, "openai_image_gateway_managed_failover", False)):
-                # This is V3's end-to-end client deadline. It includes a
-                # finalization margin beyond the gateway's own image budget,
-                # so V3 records the gateway terminal result instead of
-                # canceling a final line switch prematurely. Keep this outer
-                # guard slightly later than the provider's HTTP deadline so
-                # the provider can convert its terminal timeout into a normal
-                # failed job rather than leaving a canceled request behind.
-                return max(max(660.0, float(value)) + 5.0, 720.0 if bridge_enabled else 0.0)
+            gateway_managed = bool(getattr(app_settings, "openai_image_gateway_managed_failover", False))
         except Exception:
             value = 240.0
-        if bridge_enabled:
-            # The Bridge owns a Codex turn for up to 600 seconds. Keep the
-            # outer V3 call alive long enough to read its terminal timeout
-            # state and persist the public error on the same request.
-            return max(720.0, float(value) + 15.0)
+        if gateway_managed:
+            value = max(660.0, float(value))
+        if bridge_wait_enabled():
+            return bridge_provider_timeout_seconds(float(value), gateway_managed=gateway_managed)
+        if gateway_managed:
+            return value + 5.0
         # Keep fifteen seconds after the provider response budget to record
         # and materialize the terminal image result.
         return max(300.0, float(value) + 15.0)
 
     def _app_provider_poll_budget_seconds(self, app_request) -> float:
+        from .bridge_primary import FINAL_STATUS_CHECK_SECONDS, bridge_wait_enabled
+
         plan = getattr(app_request, "prompt_plan", None)
         variables = getattr(plan, "variables", None) or {}
         asset_plan = getattr(app_request, "asset_plan", None) or variables.get("asset_plan") or {}
@@ -7826,6 +7816,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ) else 15.0
         except Exception:
             finalization_margin = 15.0
+        if bridge_wait_enabled():
+            finalization_margin += FINAL_STATUS_CHECK_SECONDS
         return max(0.0, outer_timeout - finalization_margin)
 
     def _app_provider_max_attempts(self) -> int:

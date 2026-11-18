@@ -314,19 +314,37 @@ def test_create_loss_restart_and_unknown_never_legacy(rig):
     assert response.candidates and rig.client.calls == 1
 
 
-def test_wait_budget_expiry_keeps_same_bridge_task_for_recovery(rig):
+def test_wait_budget_expiry_keeps_same_bridge_task_for_recovery(rig, monkeypatch):
     rig.client.state = 'running'
+    queries = []
+    original_by_origin = rig.client.by_origin
+
+    async def by_origin(origin):
+        queries.append(origin)
+        return await original_by_origin(origin)
+
+    monkeypatch.setattr(rig.client, 'by_origin', by_origin)
     with pytest.raises(ProviderRuntimeError) as caught:
         rig.provider.generate(rig.request)
     assert caught.value.detail['transport_retry_terminal'] is True
     assert caught.value.detail['failure_code'] == 'bridge_wait_budget_exhausted'
     assert caught.value.provider_failure_retry['final_status'] == 'pending'
+    assert queries == [rig.client.payload['origin_key']]
     assert rig.client.calls == 1 and not rig.api_calls
 
     from alchemy_creative_agent_3_0.app.product_api.service import (
         ProductJobStatusValue,
         V3ProductApiService,
     )
+
+    summary = caught.value.provider_failure_retry
+    warning = V3ProductApiService._safe_generation_failure_message(
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        provider_failure_retry=summary,
+        fallback_code='provider_failure',
+    )
+    warnings = V3ProductApiService._public_job_warnings([warning], {'provider_failure_retry': summary})
+    assert any('原任务已保留' in warning for warning in warnings)
 
     service, blocked_record = _cancel_service(rig)
     blocked_record.status = ProductJobStatusValue.BLOCKED
@@ -340,6 +358,63 @@ def test_wait_budget_expiry_keeps_same_bridge_task_for_recovery(rig):
     rig.client.state = 'artifacts_ready'
     response = rig.provider.generate(rig.request)
     assert response.candidates[0].provider == 'render_bridge'
+    assert rig.client.calls == 1 and not rig.api_calls
+
+
+@pytest.mark.parametrize('gateway_managed', [False, True])
+def test_wait_expiry_reads_late_result_for_bound_task_in_one_provider_attempt(rig, monkeypatch, gateway_managed):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, 'openai_image_gateway_managed_failover', gateway_managed)
+    rig.client.state = 'running'
+    status_queries = []
+    original_by_origin = rig.client.by_origin
+
+    async def by_origin(origin):
+        status_queries.append(origin)
+        rig.client.state = 'artifacts_ready'
+        return await original_by_origin(origin)
+
+    monkeypatch.setattr(rig.client, 'by_origin', by_origin)
+    result = rig.provider.generate(rig.request)
+
+    candidate = result.candidates[0]
+    assert candidate.provider == 'render_bridge'
+    assert candidate.metadata[adapter.PROVENANCE]['task_id'] == 'task_1'
+    assert status_queries == [rig.client.payload['origin_key']]
+    assert rig.client.calls == 1 and not rig.api_calls
+    assert result.provider_metadata['provider_failure_retry']['fresh_upstream_requests'] == 1
+
+
+def test_wait_expiry_rejects_another_remote_task_id(rig, monkeypatch):
+    rig.client.state = 'running'
+    original_by_origin = rig.client.by_origin
+
+    async def by_origin(origin):
+        return {**await original_by_origin(origin), 'remote_task_id': 'another_task'}
+
+    monkeypatch.setattr(rig.client, 'by_origin', by_origin)
+    with pytest.raises(ProviderRuntimeError) as caught:
+        rig.provider.generate(rig.request)
+    assert caught.value.detail['failure_code'] == 'bridge_task_identity_mismatch'
+    assert rig.client.calls == 1 and not rig.api_calls
+
+
+def test_wait_expiry_bounds_an_unresponsive_final_status_check(rig, monkeypatch):
+    rig.client.state = 'running'
+    queries = []
+    monkeypatch.setattr(adapter, 'FINAL_STATUS_CHECK_SECONDS', 0.02)
+
+    async def by_origin(origin):
+        queries.append(origin)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(rig.client, 'by_origin', by_origin)
+    with pytest.raises(ProviderRuntimeError) as caught:
+        rig.provider.generate(rig.request)
+    assert caught.value.detail['failure_code'] == 'bridge_wait_budget_exhausted'
+    assert caught.value.detail[adapter.PROVENANCE]['task_id'] == 'task_1'
+    assert queries == [rig.client.payload['origin_key']]
     assert rig.client.calls == 1 and not rig.api_calls
 
 
