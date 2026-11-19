@@ -26,6 +26,7 @@ from ..creative_core.doc281_output_plan_binding import (
     validate_doc73_binding,
 )
 from ..creative_core.rules import stable_id
+from ..llm_brain.prompts import delivered_anchor_shot_key
 from ..product_api import V3ProductApiService
 from ..product_api.contracts import (
     GenerateContinuation,
@@ -11126,6 +11127,11 @@ class V3ProjectModeService:
             template_id=effective_template_id,
             continuation_instruction=continuation_instruction,
             metadata=context_generation_metadata,
+            anchor_output_id=(
+                selected_refs_for_context[0].output_id
+                if generation_scope and len(selected_refs_for_context) == 1
+                else None
+            ),
         )
         batch_identity_diversity_review = self._project_batch_identity_diversity_review(
             project=project,
@@ -11629,6 +11635,7 @@ class V3ProjectModeService:
         template_id: str,
         continuation_instruction: str | None,
         metadata: dict[str, Any],
+        anchor_output_id: str | None = None,
     ) -> dict[str, Any]:
         if template_id != GENERAL_TEMPLATE_ID:
             return {}
@@ -11643,9 +11650,10 @@ class V3ProjectModeService:
             ).get("effective_variation_mode")
             or "delivery_suite"
         )
-        completed_role_keys = self._project_completed_general_suite_role_keys(
+        completed_role_keys, used_anchor_shots = self._project_general_suite_delivery_history(
             project=project,
             mode=mode,
+            anchor_output_id=anchor_output_id if mode == "delivery_suite" else None,
         )
         has_generated_reference_anchor = bool(project.selected_output_refs)
         roles = self._suite_roles_for_mode(mode, requested_count, has_anchor=bool(project.selected_output_refs))
@@ -11677,21 +11685,24 @@ class V3ProjectModeService:
                 "role_count": len(roles),
                 "completed_role_keys": completed_role_keys,
                 "has_generated_reference_anchor": has_generated_reference_anchor,
+                **({"delivery_suite_used_anchor_shots": used_anchor_shots} if used_anchor_shots else {}),
             },
         }
 
-    def _project_completed_general_suite_role_keys(
+    def _project_general_suite_delivery_history(
         self,
         *,
         project: ProjectRecord,
         mode: str,
-    ) -> list[str]:
-        """Read already delivered General routes from canonical project Jobs."""
+        anchor_output_id: str | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Read delivered General roles and recognized first shots from canonical project Jobs."""
 
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None:
-            return []
+            return [], []
         completed: list[str] = []
+        used_anchor_shots: list[str] = []
         seen_outputs: set[str] = set()
         seen_roles: set[str] = set()
         for job_id in dict.fromkeys(project.job_ids):
@@ -11750,11 +11761,23 @@ class V3ProjectModeService:
                     or job_mode
                 ).strip()
                 role_key = str(role_recipe.get("role_key") or "").strip()
-                if recipe_mode != mode or not role_key or role_key in seen_roles:
+                if recipe_mode != mode or not role_key:
                     continue
-                seen_roles.add(role_key)
-                completed.append(role_key)
-        return completed
+                if role_key not in seen_roles:
+                    seen_roles.add(role_key)
+                    completed.append(role_key)
+                output_index = record_metadata.get("output_index") or role_recipe.get("index")
+                if mode == "delivery_suite" and anchor_output_id and output_index == 1:
+                    shot_key = delivered_anchor_shot_key(record_metadata.get("final_provider_prompt"))
+                    if shot_key and shot_key not in used_anchor_shots:
+                        source_job = self.product_service.job_store.get(job_id)
+                        if source_job is None:
+                            continue
+                        context = source_job.request.metadata.get("project_context_snapshot") or {}
+                        anchor_refs = context.get("selected_output_assets") or []
+                        if [ref.get("output_id") for ref in anchor_refs] == [anchor_output_id]:
+                            used_anchor_shots.append(shot_key)
+        return completed, used_anchor_shots
 
     def _project_batch_identity_diversity_review(
         self,
@@ -16084,6 +16107,7 @@ class V3ProjectModeService:
             "provider_negative_rules", "llm_brain", "file_path", "source_integrity_id",
             "canonical_output_binding", "v3_owned_output", "retry_patch", "retry_patches",
             "prompt_additions", "negative_additions", "reasoning", "provider_payload", "provider_request",
+            "delivery_suite_used_anchor_shots",
         }
         if isinstance(value, dict):
             return {

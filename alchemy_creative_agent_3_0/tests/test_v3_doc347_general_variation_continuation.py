@@ -3,7 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
-from alchemy_creative_agent_3_0.app.llm_brain.prompts import GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
+    GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS,
+    _first_suite_anchor_shot_instruction,
+    delivered_anchor_shot_key,
+)
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.general_suite_director import GeneralSuiteDirector
@@ -13,6 +17,75 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts
 
 def _role_recipe(role_key: str, mode: str) -> dict:
     return {"role_key": role_key, "metadata": {"mode": mode}}
+
+
+def test_same_anchor_suite_history_rotates_only_formally_delivered_first_shots() -> None:
+    context = {"delivery_suite_generated_anchor": True}
+    axes = ("viewpoint", "pose")
+    original = _first_suite_anchor_shot_instruction(context, axes)
+    original_key = delivered_anchor_shot_key(original)
+    next_shot = _first_suite_anchor_shot_instruction(
+        {**context, "delivery_suite_used_anchor_shots": [original_key]}, axes
+    )
+    next_key = delivered_anchor_shot_key(next_shot)
+    assert original_key and next_key and original_key != next_key
+
+    def output(output_id, prompt, index):
+        return SimpleNamespace(
+            output_id=output_id,
+            created_at="1",
+            preview_url=f"/api/v3/creative-agent/outputs/{output_id}/preview",
+            metadata={
+                "output_index": index,
+                "final_provider_prompt": f"{prompt} Keep the subject and style.",
+                "mode_role_recipe": _role_recipe(output_id, "delivery_suite"),
+            },
+        )
+
+    records = {
+        "job_first": [output("first", original, 1), output("second", next_shot, 2)],
+        "job_other_anchor": [output("other", next_shot, 1)],
+        "job_process_only": [output("process", next_shot, 1)],
+    }
+    final_ids = {"job_first": ["first", "second"], "job_other_anchor": ["other"], "job_process_only": []}
+
+    def saved_job(job_id):
+        anchor = "different-anchor" if job_id == "job_other_anchor" else "anchor"
+        return SimpleNamespace(
+            request=SimpleNamespace(metadata={
+                "project_context_snapshot": {"selected_output_assets": [{"output_id": anchor}]}
+            })
+        )
+
+    service = V3ProjectModeService.__new__(V3ProjectModeService)
+    service.product_service = SimpleNamespace(
+        output_store=SimpleNamespace(list_by_job=lambda job_id: records[job_id]),
+        job_store=SimpleNamespace(get=saved_job),
+        get_job=lambda job_id: SimpleNamespace(
+            status="generated",
+            metadata={
+                "final_delivery": {"delivery_gate_applies": True, "automatic_delivery_available": True},
+                "post_generation_review": {"recommended_output_ids": final_ids[job_id]},
+            },
+        ),
+    )
+    project = SimpleNamespace(job_ids=list(records))
+    roles, used = service._project_general_suite_delivery_history(
+        project=project, mode="delivery_suite", anchor_output_id="anchor"
+    )
+    assert roles == ["first", "second", "other"]
+    assert used == [original_key]
+    assert _first_suite_anchor_shot_instruction({**context, "delivery_suite_used_anchor_shots": used}, axes) == next_shot
+
+    records["job_repeat"] = [output("repeat", next_shot, 1)]
+    final_ids["job_repeat"] = ["repeat"]
+    project.job_ids.append("job_repeat")
+    _, used = service._project_general_suite_delivery_history(
+        project=project, mode="delivery_suite", anchor_output_id="anchor"
+    )
+    assert used == [original_key, next_key]
+    third_shot = _first_suite_anchor_shot_instruction({**context, "delivery_suite_used_anchor_shots": used}, axes)
+    assert delivered_anchor_shot_key(third_shot) not in (None, *used)
 
 
 def test_project_route_history_uses_all_jobs_and_only_final_deliveries() -> None:
@@ -69,7 +142,7 @@ def test_project_route_history_uses_all_jobs_and_only_final_deliveries() -> None
         user_goal="Continue the same image set",
     )
 
-    completed = V3ProjectModeService._project_completed_general_suite_role_keys(  # noqa: SLF001
+    completed, _ = V3ProjectModeService._project_general_suite_delivery_history(  # noqa: SLF001
         service,
         project=project,
         mode="delivery_suite",
@@ -126,7 +199,7 @@ def test_legacy_route_mode_comes_from_source_job_before_delivery_projection() ->
     }
     project = SimpleNamespace(job_ids=["job_legacy_route"], selected_output_refs=[])
 
-    completed = V3ProjectModeService._project_completed_general_suite_role_keys(  # noqa: SLF001
+    completed, _ = V3ProjectModeService._project_general_suite_delivery_history(  # noqa: SLF001
         service,
         project=project,
         mode="delivery_suite",

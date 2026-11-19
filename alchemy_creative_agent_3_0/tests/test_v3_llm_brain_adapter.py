@@ -82,10 +82,24 @@ def _write_reference(path: Path) -> Path:
         ),
         pytest.param(
             "anchor_pose",
-            "Give the subject a visibly different pose from the selected continuation reference, changing the main support or contact with the scene and the subject's silhouette.",
-            "Give the subject a visibly different pose from the selected continuation reference, changing the main support or contact with the scene and the subject's silhouette. Keep the silver glasses and rainy alley.",
+            "Turn the subject itself by a visible quarter turn from the anchor pose while keeping the anchor's camera position.",
+            "Turn the subject itself by a visible quarter turn from the anchor pose while keeping the anchor's camera position. Keep the silver glasses and rainy alley.",
             True,
             id="accept-changed-contact-and-silhouette",
+        ),
+        pytest.param(
+            "anchor_raised",
+            "Keep the anchor's camera side but raise the camera well above the subject and aim down at a clear oblique angle.",
+            "Keep the anchor's camera side but raise the camera well above the subject and aim down at a clear oblique angle. Keep the silver glasses and rainy alley.",
+            True,
+            id="accept-unused-camera-position",
+        ),
+        pytest.param(
+            "anchor_raised",
+            "Move the camera to the other side of the subject relative to the selected continuation reference, making the previously far side the near side of the new shot.",
+            "Move the camera to the other side of the subject relative to the selected continuation reference, making the previously far side the near side of the new shot. Keep the rainy alley.",
+            False,
+            id="reject-already-delivered-camera-position",
         ),
     ],
 )
@@ -99,7 +113,7 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
         VariationExecutionOutput,
     )
 
-    anchored = scope in ("anchor_viewpoint", "anchor_pose")
+    anchored = scope in ("anchor_viewpoint", "anchor_pose", "anchor_raised")
     contract = VariationExecutionContract.model_construct(
         contract_version="v3_general_variation_execution_v1",
         contract_digest="a" * 64,
@@ -111,7 +125,7 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
             VariationExecutionOutput(
                 output_index=1,
                 output_purpose="primary_presentation",
-                variation_axes=["viewpoint"] if scope == "anchor_viewpoint" else ["pose"],
+                variation_axes=["viewpoint"] if scope in ("anchor_viewpoint", "anchor_raised") else ["pose"],
             ),
             VariationExecutionOutput(output_index=2, output_purpose="detail_focus", variation_axes=["framing"]),
         ],
@@ -153,6 +167,7 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
             "canonical_prompt_context": {
                 "delivery_suite_continuation": bool(scope),
                 "delivery_suite_generated_anchor": anchored,
+                "delivery_suite_used_anchor_shots": ["opposite_side"] if scope == "anchor_raised" else [],
             },
             "require_lossless_user_direction": True,
         },

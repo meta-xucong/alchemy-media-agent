@@ -1733,18 +1733,69 @@ def _first_suite_continuation_shot_axes(
     )
 
 
+_ANCHOR_VIEWPOINT_SHOTS = (
+    (
+        "opposite_side",
+        (
+            "Move the camera to the other side of the subject relative to the selected continuation reference, "
+            "making the previously far side the near side of the new shot."
+        ),
+    ),
+    (
+        "raised_same_side",
+        "Keep the anchor's camera side but raise the camera well above the subject and aim down at a clear oblique angle.",
+    ),
+    (
+        "lowered_same_side",
+        "Keep the anchor's camera side but lower the camera well below the subject and aim upward at a clear oblique angle.",
+    ),
+    (
+        "raised_opposite_side",
+        "Move the camera to the far side of the subject as seen in the anchor and shoot down from a distinctly elevated position.",
+    ),
+    (
+        "lowered_opposite_side",
+        "Move the camera to the far side of the subject as seen in the anchor and shoot upward from a distinctly low position.",
+    ),
+)
+
+_ANCHOR_POSE_SHOTS = (
+    (
+        "quarter_turn",
+        "Turn the subject itself by a visible quarter turn from the anchor pose while keeping the anchor's camera position.",
+    ),
+    (
+        "changed_support",
+        "Change the subject's main support from the anchor pose so its weight rests on a different point and the silhouette changes.",
+    ),
+    (
+        "changed_contact",
+        "Move the scene contact shown in the anchor to the subject's other side, visibly changing the pose and silhouette.",
+    ),
+)
+
+
+def delivered_anchor_shot_key(prompt: object) -> str | None:
+    if not isinstance(prompt, str):
+        return None
+    opening = " ".join(prompt.split())
+    return next(
+        (key for key, direction in (*_ANCHOR_VIEWPOINT_SHOTS, *_ANCHOR_POSE_SHOTS) if opening.startswith(direction)),
+        None,
+    )
+
+
 def _first_suite_anchor_shot_instruction(context: object, axes: tuple[str, ...]) -> str:
     if not axes or not isinstance(context, dict) or context.get("delivery_suite_generated_anchor") is not True:
         return ""
-    if "viewpoint" in axes:
-        return (
-            "Move the camera to the other side of the subject relative to the selected continuation reference, "
-            "making the previously far side the near side of the new shot."
-        )
-    return (
-        "Give the subject a visibly different pose from the selected continuation reference, "
-        "changing the main support or contact with the scene and the subject's silhouette."
-    )
+    used = context.get("delivery_suite_used_anchor_shots") or []
+    candidates = _ANCHOR_VIEWPOINT_SHOTS if "viewpoint" in axes else _ANCHOR_POSE_SHOTS
+    for key, direction in candidates:
+        if key not in used:
+            return direction
+    from .providers import BrainPromptRequestContractInvalid
+
+    raise BrainPromptRequestContractInvalid("No unused first-shot direction remains for this anchor and the assigned axes.")
 
 
 def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) -> dict[str, object]:
@@ -1758,6 +1809,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     variation_execution_contract = _validated_general_variation_contract_for_finalizer(request, context)
     continuation_shot_axes = _first_suite_continuation_shot_axes(context, variation_execution_contract)
     anchor_shot_instruction = _first_suite_anchor_shot_instruction(context, continuation_shot_axes)
+    context.pop("delivery_suite_used_anchor_shots", None)
     is_human_naturalness_resign = request.stage == "provider_prompt_human_naturalness_resign"
     is_developmental_presence_verify = (
         request.stage == "provider_prompt_developmental_presence_verify"
@@ -2290,7 +2342,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             f"Use this exact English opening sentence in output 1's complete prompt: {anchor_shot_instruction} "
             "Treat that physical change as the shot direction, not as a comparison note. Any additional camera, "
             "pose, framing or scene-contact language must support that change and must not reconstruct the old "
-            "shot, even in paraphrase. For a viewpoint change, describe the newly visible side and changed "
+            "shot, even in paraphrase. For a viewpoint change, describe the newly visible surfaces and changed "
             "camera-to-scene relationships; do not horizontally mirror the reference. For a pose or gesture "
             "change, describe the new arrangement and contact points concretely. Keep the requested identity, "
             "scene, style, and other non-conflicting choices."

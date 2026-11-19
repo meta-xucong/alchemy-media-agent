@@ -3666,6 +3666,11 @@ class ScenarioRuntime:
                     context["delivery_suite_continuation"] = True
                     if role_metadata.get("has_generated_reference_anchor") is True:
                         context["delivery_suite_generated_anchor"] = True
+                        project_context = request.metadata.get("project_context_snapshot") or {}
+                        suite_plan = project_context.get("general_suite_role_plan") or {}
+                        used_anchor_shots = (suite_plan.get("metadata") or {}).get("delivery_suite_used_anchor_shots")
+                        if used_anchor_shots:
+                            context["delivery_suite_used_anchor_shots"] = used_anchor_shots
         raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
         if request.metadata.get("ecommerce_creative_context_server_owned") is True:
             try:
@@ -4938,7 +4943,15 @@ class ScenarioRuntime:
                             template_id=template_id,
                             role_plan=role_plan_for_binding,
                         )
-                        project_context["general_suite_role_plan"] = suite_plan.model_dump(mode="json")
+                        suite_payload = suite_plan.model_dump(mode="json")
+                        used_anchor_shots = (
+                            project_suite_metadata.get("delivery_suite_used_anchor_shots")
+                            if isinstance(project_suite_metadata, dict)
+                            else None
+                        )
+                        if used_anchor_shots:
+                            suite_payload["metadata"]["delivery_suite_used_anchor_shots"] = used_anchor_shots
+                        project_context["general_suite_role_plan"] = suite_payload
                         metadata["project_context_snapshot"] = project_context
         role_binding = self._resolved_general_variation_role_binding(request)
         if role_binding["source"] == "runtime_typed_reference_facts":
