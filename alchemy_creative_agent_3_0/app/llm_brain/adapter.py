@@ -46,7 +46,11 @@ from .prompt_policy import (
     validate_unified_prompt_record,
 )
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
-from .prompts import _compact_required_remote_creative_schema, _first_suite_continuation_shot_axes
+from .prompts import (
+    _compact_required_remote_creative_schema,
+    _first_suite_anchor_shot_instruction,
+    _first_suite_continuation_shot_axes,
+)
 from .finalizer_lifecycle import (
     REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
     REMOTE_BRAIN_FINALIZER_STAGE,
@@ -999,22 +1003,26 @@ class V3LLMBrainAdapter:
                 "Remote Brain did not return the required General variation execution receipts."
             )
         first_continuation_direction = None
-        if _first_suite_continuation_shot_axes(
-            request.metadata.get("canonical_prompt_context"), variation_execution_contract
-        ):
+        finalizer_context = request.metadata.get("canonical_prompt_context")
+        continuation_axes = _first_suite_continuation_shot_axes(finalizer_context, variation_execution_contract)
+        if continuation_axes:
+            anchor_instruction = _first_suite_anchor_shot_instruction(finalizer_context, continuation_axes)
             shot = data.get("first_continuation_shot")
             baseline = shot.get("baseline") if isinstance(shot, dict) else None
             direction = shot.get("direction") if isinstance(shot, dict) else None
             sentence_endings = ".!?。！？"
-            shot_text = " ".join(direction.split()) if isinstance(direction, str) else ""
+            shot_text = anchor_instruction or (" ".join(direction.split()) if isinstance(direction, str) else "")
+            baseline_text = (
+                " ".join(baseline.casefold().split()).rstrip(sentence_endings)
+                if isinstance(baseline, str) else ""
+            )
             first_line = " ".join(prompts_raw[0]["prompt"].strip().splitlines()[0].split())
             remainder = first_line[len(shot_text):]
             if (
-                not isinstance(baseline, str)
-                or not baseline.strip()
-                or not shot_text
-                or shot_text.casefold().rstrip(sentence_endings)
-                == " ".join(baseline.casefold().split()).rstrip(sentence_endings)
+                not shot_text
+                or (not anchor_instruction and (
+                    not baseline_text or shot_text.casefold().rstrip(sentence_endings) == baseline_text
+                ))
                 or not first_line.startswith(shot_text)
                 or (
                     remainder

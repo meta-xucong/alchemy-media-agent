@@ -1733,6 +1733,20 @@ def _first_suite_continuation_shot_axes(
     )
 
 
+def _first_suite_anchor_shot_instruction(context: object, axes: tuple[str, ...]) -> str:
+    if not axes or not isinstance(context, dict) or context.get("delivery_suite_generated_anchor") is not True:
+        return ""
+    if "viewpoint" in axes:
+        return (
+            "Move the camera to the other side of the subject relative to the selected continuation reference, "
+            "making the previously far side the near side of the new shot."
+        )
+    return (
+        "Give the subject a visibly different pose from the selected continuation reference, "
+        "changing the main support or contact with the scene and the subject's silhouette."
+    )
+
+
 def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) -> dict[str, object]:
     """Make the Brain's post-validation sign-off a small, distinct contract."""
 
@@ -1743,6 +1757,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         context["brand_visual_context"] = brand_context
     variation_execution_contract = _validated_general_variation_contract_for_finalizer(request, context)
     continuation_shot_axes = _first_suite_continuation_shot_axes(context, variation_execution_contract)
+    anchor_shot_instruction = _first_suite_anchor_shot_instruction(context, continuation_shot_axes)
     is_human_naturalness_resign = request.stage == "provider_prompt_human_naturalness_resign"
     is_developmental_presence_verify = (
         request.stage == "provider_prompt_developmental_presence_verify"
@@ -2269,7 +2284,18 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "do not summarize, rename, reorder, or invent them. These are schema-only audit fields and must "
                 "never be inserted into the renderer prompt."
             )
-    if continuation_shot_axes:
+    if anchor_shot_instruction:
+        response_contract += (
+            " Output 1 must execute a physically different shot from its selected continuation reference. "
+            f"Use this exact English opening sentence in output 1's complete prompt: {anchor_shot_instruction} "
+            "Treat that physical change as the shot direction, not as a comparison note. Any additional camera, "
+            "pose, framing or scene-contact language must support that change and must not reconstruct the old "
+            "shot, even in paraphrase. For a viewpoint change, describe the newly visible side and changed "
+            "camera-to-scene relationships; do not horizontally mirror the reference. For a pose or gesture "
+            "change, describe the new arrangement and contact points concretely. Keep the requested identity, "
+            "scene, style, and other non-conflicting choices."
+        )
+    elif continuation_shot_axes:
         response_contract += (
             " Output 1 is a new shot in a continuing General delivery suite, not a replay of the anchor. "
             f"Its assigned shot changes are {', '.join(continuation_shot_axes)}. In first_continuation_shot.baseline, "
@@ -2639,7 +2665,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     }
     if source_projection_required:
         payload["source_projection_receipt_digest_by_output_index"] = source_projection_receipt_digests
-    if continuation_shot_axes:
+    if continuation_shot_axes and not anchor_shot_instruction:
         payload["return_schema"]["first_continuation_shot"] = {
             "baseline": "concrete preceding camera or body arrangement, not renderer text",
             "direction": "new renderer-ready shot sentence; exact opening sentence of output 1's prompt",

@@ -66,6 +66,27 @@ def _write_reference(path: Path) -> Path:
         (True, "正面から撮り、片手をポールに添える。", "正面から撮り、片手をポールに添える。銀縁眼鏡と雨の路地はそのまま。", True),
         (True, "Show her from the front", "Show her from the front only as an inset; the main image preserves the old side shot.", False),
         (False, None, "Photograph her leaning against the pole from the side.", True),
+        pytest.param(
+            "anchor_viewpoint",
+            "Three-quarter side view of the woman leaning against the metal pole, her torso turned left while her head swivels back toward camera with chin lowered, gazing up through her silver rectangular glasses.",
+            "Three-quarter side view of the woman leaning against the metal pole, her torso turned left while her head swivels back toward camera with chin lowered, gazing up through her silver rectangular glasses.",
+            False,
+            id="reject-live-anchor-paraphrase",
+        ),
+        pytest.param(
+            "anchor_viewpoint",
+            "Move the camera to the other side of the subject relative to the selected continuation reference, making the previously far side the near side of the new shot.",
+            "Move the camera to the other side of the subject relative to the selected continuation reference, making the previously far side the near side of the new shot. Keep the silver glasses and rainy alley.",
+            True,
+            id="accept-opposite-view-in-signed-prompt",
+        ),
+        pytest.param(
+            "anchor_pose",
+            "Give the subject a visibly different pose from the selected continuation reference, changing the main support or contact with the scene and the subject's silhouette.",
+            "Give the subject a visibly different pose from the selected continuation reference, changing the main support or contact with the scene and the subject's silhouette. Keep the silver glasses and rainy alley.",
+            True,
+            id="accept-changed-contact-and-silhouette",
+        ),
     ],
 )
 def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
@@ -78,6 +99,7 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
         VariationExecutionOutput,
     )
 
+    anchored = scope in ("anchor_viewpoint", "anchor_pose")
     contract = VariationExecutionContract.model_construct(
         contract_version="v3_general_variation_execution_v1",
         contract_digest="a" * 64,
@@ -86,7 +108,11 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
         preserve_subject=True,
         preserve_style=True,
         outputs=[
-            VariationExecutionOutput(output_index=1, output_purpose="primary_presentation", variation_axes=["pose"]),
+            VariationExecutionOutput(
+                output_index=1,
+                output_purpose="primary_presentation",
+                variation_axes=["viewpoint"] if scope == "anchor_viewpoint" else ["pose"],
+            ),
             VariationExecutionOutput(output_index=2, output_purpose="detail_focus", variation_axes=["framing"]),
         ],
     )
@@ -112,7 +138,7 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
             for index, prompt in enumerate((first_prompt, "Frame a detail of her silver glasses and rain droplets."), 1)
         ],
     }
-    if new_shot is not None:
+    if new_shot is not None and (not anchored or not accepted):
         response["first_continuation_shot"] = {
             "baseline": "Use the same side view with her back against the pole.",
             "direction": new_shot,
@@ -124,7 +150,10 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
         template_id="general_template",
         requested_image_count=2,
         metadata={
-            "canonical_prompt_context": {"delivery_suite_continuation": scope},
+            "canonical_prompt_context": {
+                "delivery_suite_continuation": bool(scope),
+                "delivery_suite_generated_anchor": anchored,
+            },
             "require_lossless_user_direction": True,
         },
     )
@@ -151,9 +180,11 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
     monkeypatch.setattr(brain_prompts, "_validated_general_variation_contract_for_finalizer", lambda *_: contract)
     body, structured, _ = build_anthropic_structured_output(request)
     payload = json.loads(body)
-    assert ("first_continuation_shot" in payload["return_schema"]) is scope
-    assert ("first_continuation_shot" in structured["schema"]["required"]) is scope
-    assert ("supersede the conflicting baseline" in payload["user_direction_contract"]) is scope
+    assert ("first_continuation_shot" in payload["return_schema"]) is (bool(scope) and not anchored)
+    assert ("first_continuation_shot" in structured["schema"]["required"]) is (bool(scope) and not anchored)
+    assert ("supersede the conflicting baseline" in payload["user_direction_contract"]) is bool(scope)
+    if anchored:
+        assert new_shot in payload["remote_response_contract"]
 
 
 def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:

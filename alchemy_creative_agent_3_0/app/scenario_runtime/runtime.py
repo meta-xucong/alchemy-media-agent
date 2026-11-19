@@ -3664,6 +3664,8 @@ class ScenarioRuntime:
                 role_metadata = role_plan.get("metadata") or {}
                 if role_metadata.get("completed_role_keys") or role_metadata.get("has_generated_reference_anchor"):
                     context["delivery_suite_continuation"] = True
+                    if role_metadata.get("has_generated_reference_anchor") is True:
+                        context["delivery_suite_generated_anchor"] = True
         raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
         if request.metadata.get("ecommerce_creative_context_server_owned") is True:
             try:
