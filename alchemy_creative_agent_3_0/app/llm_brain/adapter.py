@@ -1005,19 +1005,27 @@ class V3LLMBrainAdapter:
             shot = data.get("first_continuation_shot")
             baseline = shot.get("baseline") if isinstance(shot, dict) else None
             direction = shot.get("direction") if isinstance(shot, dict) else None
+            sentence_endings = ".!?。！？"
+            shot_text = " ".join(direction.split()) if isinstance(direction, str) else ""
+            first_line = " ".join(prompts_raw[0]["prompt"].strip().splitlines()[0].split())
+            remainder = first_line[len(shot_text):]
             if (
                 not isinstance(baseline, str)
                 or not baseline.strip()
-                or not isinstance(direction, str)
-                or not direction.strip()
-                or " ".join(direction.casefold().split()).rstrip(".!?。！？")
-                == " ".join(baseline.casefold().split()).rstrip(".!?。！？")
-                or direction.strip() != prompts_raw[0]["prompt"].strip().splitlines()[0]
+                or not shot_text
+                or shot_text.casefold().rstrip(sentence_endings)
+                == " ".join(baseline.casefold().split()).rstrip(sentence_endings)
+                or not first_line.startswith(shot_text)
+                or (
+                    remainder
+                    and shot_text[-1] not in sentence_endings
+                    and remainder[0] not in sentence_endings
+                )
             ):
-                raise BrainPromptContractInvalid(
+                raise _BrainContinuationShotInvalid(
                     "Remote Brain did not write the new continuation shot into output 1's prompt."
                 )
-            first_continuation_direction = direction.strip()
+            first_continuation_direction = shot_text
         if request.metadata.get("require_lossless_user_direction") is True:
             if any(
                 not isinstance(item.get("user_direction_integrity"), dict)
@@ -2357,9 +2365,15 @@ def _attach_remote_brain_finalizer_lifecycle(
         setattr(exc, "_remote_brain_finalizer_lifecycle", lifecycle)
 
 
+class _BrainContinuationShotInvalid(BrainPromptContractInvalid):
+    pass
+
+
 def _remote_brain_finalizer_failure_code(exc: Exception) -> str:
     if isinstance(exc, BrainPromptRequestContractInvalid):
         return "request_contract_invalid"
+    if isinstance(exc, _BrainContinuationShotInvalid):
+        return "continuation_shot_invalid"
     if isinstance(exc, BrainProviderUnavailable):
         return "provider_unavailable"
     if isinstance(

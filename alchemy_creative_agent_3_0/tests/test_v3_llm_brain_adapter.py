@@ -62,6 +62,9 @@ def _write_reference(path: Path) -> Path:
         (True, "Use the same side view with her back against the pole.", "Use the same side view with her back against the pole.\nRainy alley.", False),
         (True, "Photograph her from the front, with one hand on the pole.", "Photograph her leaning against the pole from the side.", False),
         (True, "Photograph her from the front, with one hand on the pole.", "Photograph her from the front, with one hand on the pole.\nKeep the silver glasses and rainy alley.", True),
+        (True, "Photograph her from the front, with one hand on the pole.", "Photograph her from the front, with one hand on the pole. Keep the silver glasses and rainy alley.", True),
+        (True, "正面から撮り、片手をポールに添える。", "正面から撮り、片手をポールに添える。銀縁眼鏡と雨の路地はそのまま。", True),
+        (True, "Show her from the front", "Show her from the front only as an inset; the main image preserves the old side shot.", False),
         (False, None, "Photograph her leaning against the pole from the side.", True),
     ],
 )
@@ -93,6 +96,11 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
                 "output_index": index,
                 "prompt": prompt,
                 "review_status": "approved",
+                "user_direction_integrity": {
+                    "contract_version": "v3_user_direction_integrity_v1",
+                    "status": "rewritten",
+                    "owner": "remote_v3_llm_brain",
+                },
                 "variation_execution_receipt": {
                     "contract_version": contract.contract_version,
                     "contract_digest": contract.contract_digest,
@@ -110,12 +118,15 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
             "direction": new_shot,
         }
     request = BrainRunRequest(
-        user_input="Keep the woman with silver glasses and the rainy alley.",
+        user_input="Keep the silver glasses and rainy alley. Photograph her sideways with her back against the pole.",
         stage="provider_prompt_finalize",
         scenario_id="general_creative",
         template_id="general_template",
         requested_image_count=2,
-        metadata={"canonical_prompt_context": {"delivery_suite_continuation": scope}},
+        metadata={
+            "canonical_prompt_context": {"delivery_suite_continuation": scope},
+            "require_lossless_user_direction": True,
+        },
     )
     monkeypatch.setattr(brain_adapter, "_enabled", lambda: True)
     monkeypatch.setattr(V3LLMBrainAdapter, "_activation_scope_enabled", lambda self, request: True)
@@ -129,16 +140,20 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
     )
     adapter = V3LLMBrainAdapter(provider=provider)
     if not accepted:
-        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="continuation shot"):
+        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="continuation shot") as failure:
             adapter.finalize_canonical_provider_prompts(request)
+        audit = adapter.provider_failure_audit(failure.value, stage=request.stage)
+        assert audit["remote_brain_finalizer_lifecycle"]["failure_code"] == "continuation_shot_invalid"
         return
     signed, audit = adapter.finalize_canonical_provider_prompts(request)
     assert signed[0].prompt == first_prompt
     assert audit.get("first_continuation_shot_direction") == new_shot
     monkeypatch.setattr(brain_prompts, "_validated_general_variation_contract_for_finalizer", lambda *_: contract)
     body, structured, _ = build_anthropic_structured_output(request)
-    assert ("first_continuation_shot" in json.loads(body)["return_schema"]) is scope
+    payload = json.loads(body)
+    assert ("first_continuation_shot" in payload["return_schema"]) is scope
     assert ("first_continuation_shot" in structured["schema"]["required"]) is scope
+    assert ("supersede the conflicting baseline" in payload["user_direction_contract"]) is scope
 
 
 def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:

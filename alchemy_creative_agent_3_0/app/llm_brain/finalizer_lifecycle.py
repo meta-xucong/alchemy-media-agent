@@ -18,6 +18,7 @@ REMOTE_BRAIN_FINALIZER_FAILURE_FAMILY = "remote_brain_signoff"
 REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES = {
     "canceled",
     "content_policy",
+    "continuation_shot_invalid",
     "execution_budget_exhausted",
     "invalid_response",
     "provider_error",

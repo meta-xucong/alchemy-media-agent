@@ -2277,8 +2277,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "request. In first_continuation_shot.direction, write one plain renderer-ready sentence specifying "
             "the visibly different camera or body arrangement that executes those axes. A paraphrase, crop-only "
             "change, or a promise to vary the shot is not a new direction. Replace any old first-shot draft "
-            "that repeats the baseline. Begin output 1's complete prompt with the exact direction sentence, "
-            "alone on the first line, then continue on the next line with the rest of the approved prompt. "
+            "that repeats the baseline. Use the exact direction as the opening sentence of output 1's complete "
+            "prompt. Keep the rest of the prompt in natural prose; no line break is required. "
             "Never copy the baseline as an instruction, or contradict the new blocking later in the prompt. "
             "Keep identity, scene, style, and the other non-conflicting choices, even if the baseline prompt "
             "spells out a different pose or camera. Do not put field names or comparison notes in the renderer text."
@@ -2642,21 +2642,34 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     if continuation_shot_axes:
         payload["return_schema"]["first_continuation_shot"] = {
             "baseline": "concrete preceding camera or body arrangement, not renderer text",
-            "direction": "new renderer-ready shot sentence; exact first line of output 1's prompt",
+            "direction": "new renderer-ready shot sentence; exact opening sentence of output 1's prompt",
         }
     if request.metadata.get("require_lossless_user_direction") is True:
+        protected_direction_rule = (
+            "Preserve every non-conflicting user choice. Output 1's assigned shot axes supersede the "
+            "conflicting baseline camera, framing, or pose; do not restore that baseline merely to preserve wording."
+            if continuation_shot_axes
+            else (
+                "Do not summarize it into a short generic description, omit a material user-owned scene, "
+                "subject, styling, composition, camera, mood, or format choice, or replace it with a different direction."
+            )
+        )
         payload["protected_user_direction"] = request.user_input
         payload["user_direction_contract"] = (
             "The protected_user_direction is the complete user-owned semantic source. Reconcile it with the frozen "
-            "contracts as one complete renderer direction. Do not summarize it into a short generic description, "
-            "omit a material user-owned scene, subject, styling, composition, camera, mood, or format choice, or "
-            "replace it with a different direction. Return one complete natural-language prompt and the required "
+            f"contracts as one complete renderer direction. {protected_direction_rule} "
+            "Return one complete natural-language prompt and the required "
             "user_direction_integrity receipt; do not return a diff or local repair suffix. The receipt is a Brain "
             "semantic decision, not a keyword or phrase-matching claim."
         )
+        direction_receipt_rule = (
+            f"{protected_direction_rule} Every item must include "
+            if continuation_shot_axes
+            else "Every canonical prompt must preserve its complete meaning, and every item must include "
+        )
         payload["remote_response_contract"] = (
             f"{payload['remote_response_contract']} The protected_user_direction is an immutable user-owned "
-            "semantic source. Every canonical prompt must preserve its complete meaning, and every item must include "
+            f"semantic source. {direction_receipt_rule}"
             "user_direction_integrity with contract_version v3_user_direction_integrity_v1, owner "
             "remote_v3_llm_brain, and status preserved or rewritten."
         )
