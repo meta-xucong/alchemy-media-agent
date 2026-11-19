@@ -161,6 +161,7 @@ def test_write_transport_uses_same_web_request_and_never_touches_billing_in_adap
 def test_controlled_native_job_review_outputs_and_selection_flow(native, monkeypatch):
     from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter, MockGenerationProvider
     from alchemy_creative_agent_3_0.app.llm_brain.adapter import V3LLMBrainAdapter
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import claude_planning_operation_id
     from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
     provider = MockGenerationProvider()
     calls = []
@@ -196,8 +197,18 @@ def test_controlled_native_job_review_outputs_and_selection_flow(native, monkeyp
     project_id = native.tools.call("alchemy_create_project", {"user_goal": "A neutral product photograph, no people"})["project"]["project_id"]
     created = native.tools.call("alchemy_create_generation", {"project_id": project_id,
         "user_input": "A neutral product photograph, no people", "requested_image_count": 1})
-    assert created["metadata"]["current_operation"]["operation_id"]
+    operation_id = created["metadata"]["current_operation"]["operation_id"]
+    planned_operations = []
+    post_project_job = native.main.v3_route_handlers.post_project_job
+
+    def observe_planning_operation(project_id, payload):
+        planned_operations.append(claude_planning_operation_id.get())
+        return post_project_job(project_id, payload)
+
+    monkeypatch.setattr(native.main.v3_route_handlers, "post_project_job", observe_planning_operation)
     native.main._run_v3_project_planning_background(*native.pending.pop())
+    assert planned_operations == [operation_id]
+    assert claude_planning_operation_id.get() is None
     project = native.tools.call("alchemy_get_generation", {"project_id": project_id})
     job_id = project["project"]["job_ids"][-1]
     job = native.tools.call("alchemy_get_generation", {"job_id": job_id})
