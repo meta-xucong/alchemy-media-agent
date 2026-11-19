@@ -2562,6 +2562,105 @@ def test_claude_real_image_plan_sends_native_schema_and_restores_wire_values(mon
     }
 
 
+@pytest.mark.parametrize(
+    ("termination", "stop_reason", "response_text", "failure_kind", "field_path"),
+    [
+        ({"stop_reason": "max_tokens"}, "max_tokens", "private-response-marker", "output_truncated", "$"),
+        ({"finish_reason": "length"}, "length", "", "output_truncated", "$"),
+        ({"incomplete_details": {"reason": "max_output_tokens"}}, "max_output_tokens", "", "output_truncated", "$"),
+        ({"stop_reason": "end_turn"}, "end_turn", '{"data":"private-response-marker"', "malformed_json", "$"),
+        ({"stop_reason": "end_turn"}, "end_turn", "", "empty_json", "$"),
+        ({"stop_reason": "end_turn"}, "end_turn", "[]", "non_object_json", "$"),
+        (
+            {"stop_reason": "end_turn", "content": {"private-answer-key": "private-response-marker"}},
+            "end_turn",
+            "",
+            "invalid_response_envelope",
+            "content",
+        ),
+        (
+            {"stop_reason": "private-stop-marker"},
+            "other",
+            '{"visual_task_profile":{"evidence":[{"metadata":"private-response-marker"}]}}',
+            "invalid_wire_json_value",
+            "visual_task_profile.evidence[].metadata",
+        ),
+    ],
+)
+def test_claude_diagnostics_record_each_attempt_without_content(
+    monkeypatch, caplog, termination, stop_reason, response_text, failure_kind, field_path,
+) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+    import httpx
+
+    responses = iter(
+        [
+            {"content": [{"type": "text", "text": response_text}], **termination},
+            {
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": '{"private-answer-key":"private-response-marker"}'}],
+            },
+        ]
+    )
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return next(responses)
+
+    class FakeClient:
+        def __init__(self, *, timeout) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            pass
+
+        def post(self, _url, *, headers, json):
+            return FakeResponse()
+
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "private-api-key-marker")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://gateway.example.test/v1")
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    caplog.set_level("INFO", logger="uvicorn.error")
+    request = BrainRunRequest(
+        user_input="private-prompt-marker",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+    operation_id = "doc277_project_planning_123456abcd"
+    operation_context = brain_providers.claude_planning_operation_id
+    token = operation_context.set(operation_id)
+    try:
+        result = V3LLMBrainProvider().run(request)
+    finally:
+        operation_context.reset(token)
+
+    assert result["private-answer-key"] == "private-response-marker"
+    marker = "V3_CLAUDE_ATTEMPT "
+    attempts = [json.loads(entry.message.removeprefix(marker)) for entry in caplog.records if entry.message.startswith(marker)]
+    assert len(attempts) == 2
+    assert [item["operation_id"] for item in attempts] == [operation_id, operation_id]
+    assert [item["stage"] for item in attempts] == ["plan", "plan"]
+    assert [item["retry_kind"] for item in attempts] == ["initial", "serialization_retry"]
+    assert attempts[0]["stop_reason"] == stop_reason
+    assert attempts[0]["failure_kind"] == failure_kind
+    assert attempts[0]["field_path"] == field_path
+    assert attempts[1]["stop_reason"] == "end_turn"
+    assert attempts[1]["failure_kind"] is None
+    assert attempts[1]["field_path"] is None
+    assert "private-" not in caplog.text
+    assert "gateway.example.test" not in caplog.text
+
+
 def test_claude_json_fence_unwrap_rejects_prose_and_partial_wrappers() -> None:
     from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
 

@@ -1363,6 +1363,14 @@ def build_anthropic_structured_output(
     )
 
 
+class AnthropicWireValueError(ValueError):
+    """A field from the server-owned Claude wire schema could not be restored."""
+
+    def __init__(self, message: str, path: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.field_path = ".".join(path).replace(".[]", "[]")
+
+
 def restore_anthropic_structured_output(
     response: dict[str, object],
     wire_value_paths: tuple[tuple[tuple[str, ...], str], ...],
@@ -1651,22 +1659,24 @@ def _restore_anthropic_json_value(
     current: object,
     path: tuple[str, ...],
     expected: str,
+    prefix: tuple[str, ...] = (),
 ) -> object:
     if not path or current is None:
         return current
     key = path[0]
     if key == "[]":
         if not isinstance(current, list):
-            raise ValueError("Claude JSON wire value expected an array")
+            raise AnthropicWireValueError("Claude JSON wire value expected an array", prefix)
         for index, item in enumerate(current):
-            current[index] = _restore_anthropic_json_value(item, path[1:], expected)
+            current[index] = _restore_anthropic_json_value(item, path[1:], expected, (*prefix, key))
         return current
     if not isinstance(current, dict) or key not in current:
         return current
     if len(path) == 1:
+        field_path = (*prefix, key)
         encoded = current[key]
         if not isinstance(encoded, str):
-            raise ValueError("Claude JSON wire value must be encoded as a string")
+            raise AnthropicWireValueError("Claude JSON wire value must be encoded as a string", field_path)
         try:
             decoded = json.loads(
                 encoded,
@@ -1674,12 +1684,12 @@ def _restore_anthropic_json_value(
                 parse_constant=_reject_non_json_constant,
             )
         except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError("Claude JSON wire value is not valid serialized JSON") from exc
+            raise AnthropicWireValueError("Claude JSON wire value is not valid serialized JSON", field_path) from exc
         if expected == "object" and not isinstance(decoded, dict):
-            raise ValueError("Claude JSON wire value must decode to an object")
+            raise AnthropicWireValueError("Claude JSON wire value must decode to an object", field_path)
         current[key] = decoded
         return current
-    current[key] = _restore_anthropic_json_value(current[key], path[1:], expected)
+    current[key] = _restore_anthropic_json_value(current[key], path[1:], expected, (*prefix, key))
     return current
 
 

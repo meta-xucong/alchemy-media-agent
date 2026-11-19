@@ -7,6 +7,7 @@ from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import copy
 import json
+import logging
 import math
 import os
 import re
@@ -26,12 +27,25 @@ from .contracts import (
 )
 from .model_routing_receipts import sanitize_model_attempts
 from .prompts import (
+    AnthropicWireValueError,
     build_anthropic_structured_output,
     build_remote_payload,
     restore_anthropic_structured_output,
     system_prompt_for_stage,
 )
 from .stage_trace import record_stage_event
+
+
+claude_planning_operation_id: ContextVar[str | None] = ContextVar(
+    "v3_claude_planning_operation_id", default=None
+)
+# Uvicorn sends this logger to the production container logs.
+_claude_attempt_logger = logging.getLogger("uvicorn.error")
+_CLAUDE_STOP_REASONS = frozenset({
+    "end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal",
+    "model_context_window_exceeded", "length", "max_output_tokens",
+    "output_token_limit", "output_tokens_limit",
+})
 
 
 class BrainProviderUnavailable(RuntimeError):
@@ -764,7 +778,9 @@ class V3LLMBrainProvider:
                 )
                 raise
             try:
-                recovered = self._run_remote_attempt(runner, request, json_recovery=False)
+                recovered = self._run_remote_attempt(
+                    runner, request, json_recovery=False, transient_recovery=True
+                )
             except (BrainExecutionBudgetExceeded, BrainCandidateBudgetExceeded) as budget_error:
                 budget = _ACTIVE_EXECUTION_BUDGET.get()
                 if (
@@ -805,10 +821,19 @@ class V3LLMBrainProvider:
                 execution_budget=self.execution_budget_receipt(),
             )
 
-    def _run_remote_attempt(self, runner: Any, request: BrainRunRequest, *, json_recovery: bool) -> dict[str, Any]:
+    def _run_remote_attempt(
+        self,
+        runner: Any,
+        request: BrainRunRequest,
+        *,
+        json_recovery: bool,
+        transient_recovery: bool = False,
+    ) -> dict[str, Any]:
         timeout_seconds, maximum_deadline = self._effective_timeout_and_deadline(request)
         trace = _new_transport_trace(stage=request.stage, json_recovery=json_recovery)
         token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+        started = time.perf_counter()
+        failure = None
         try:
             value = _call_with_timeout(
                 lambda: runner(request, json_recovery=json_recovery),
@@ -838,6 +863,7 @@ class V3LLMBrainProvider:
                 return result
             return value
         except BaseException as exc:
+            failure = exc
             # Keep only a closed transport trace on the exception.  The
             # adapter can aggregate it across a bounded recovery chain while
             # prompt, URL, headers, body, and provider response text remain
@@ -847,6 +873,14 @@ class V3LLMBrainProvider:
             raise
         finally:
             _ACTIVE_TRANSPORT_TRACE.reset(token)
+            if trace.get("claude_request_entered"):
+                _log_claude_attempt(
+                    request,
+                    trace,
+                    failure,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    transient_recovery=transient_recovery,
+                )
 
     def _ensure_budget_available(self) -> None:
         budget = _ACTIVE_EXECUTION_BUDGET.get()
@@ -1279,6 +1313,9 @@ class V3LLMBrainProvider:
                     _mark_transport_event("client_constructed")
                     _mark_transport_event("complete_response_call_entered")
                     _mark_transport_event("request_call_entered")
+                    trace = _ACTIVE_TRANSPORT_TRACE.get()
+                    if trace is not None:
+                        trace["claude_request_entered"] = model_protocol(self.model) == "anthropic"
                     response = client.post(url, headers=headers, json=payload)
                     _mark_transport_event("request_dispatched")
                     _mark_transport_event("complete_response_started")
@@ -1287,11 +1324,31 @@ class V3LLMBrainProvider:
                 finally:
                     _unregister_transport_close(client_registration)
             _mark_transport_event("json_parse_started")
-            response_json = response.json()
+            try:
+                response_json = response.json()
+            except ValueError:
+                if trace is not None:
+                    trace["claude_invalid_envelope_path"] = "$"
+                raise
+            if trace is not None and isinstance(response_json, dict):
+                incomplete_details = response_json.get("incomplete_details")
+                reason = (
+                    response_json.get("stop_reason")
+                    or response_json.get("finish_reason")
+                    or (incomplete_details.get("reason") if isinstance(incomplete_details, dict) else None)
+                )
+                if isinstance(reason, str) and reason.strip():
+                    normalized_reason = reason.strip().lower()
+                    trace["claude_stop_reason"] = normalized_reason if normalized_reason in _CLAUDE_STOP_REASONS else "other"
             if _anthropic_response_has_policy_refusal(response_json):
                 raise BrainPolicyRefusalError("remote Brain policy refusal")
             if _response_ended_at_output_limit(response_json):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
+            if trace is not None:
+                if not isinstance(response_json, dict):
+                    trace["claude_invalid_envelope_path"] = "$"
+                elif not isinstance(response_json.get("content"), list):
+                    trace["claude_invalid_envelope_path"] = "content"
             response_text = _anthropic_text(response_json)
             if structured_output:
                 response_text = _unwrap_anthropic_json_markdown_fence(response_text)
@@ -1300,6 +1357,8 @@ class V3LLMBrainProvider:
                 try:
                     restore_anthropic_structured_output(parsed, structured_output[2])
                 except ValueError as exc:
+                    if trace is not None and isinstance(exc, AnthropicWireValueError):
+                        trace["claude_field_path"] = exc.field_path
                     raise BrainInvalidJsonResponse(
                         "remote brain returned an invalid structured-output wire value",
                         stage=request.stage,
@@ -1598,6 +1657,43 @@ def _call_with_timeout(
     if not isinstance(value, dict):
         raise BrainProviderError("remote brain provider returned an invalid payload")
     return value
+
+
+def _log_claude_attempt(
+    request: BrainRunRequest,
+    trace: dict[str, Any],
+    failure: BaseException | None,
+    *,
+    elapsed_ms: int,
+    transient_recovery: bool,
+) -> None:
+    operation_id = claude_planning_operation_id.get() or ""
+    safe_operation_id = operation_id if re.fullmatch(r"doc277_project_planning_[0-9a-f]{10}", operation_id) else None
+    failure_kind = None
+    field_path = None
+    if trace.get("claude_invalid_envelope_path"):
+        failure_kind = "invalid_response_envelope"
+        field_path = trace["claude_invalid_envelope_path"]
+    elif isinstance(failure, BrainInvalidJsonResponse):
+        failure_kind = "output_truncated" if isinstance(failure, BrainOutputTruncated) else failure.json_failure_kind
+        field_path = trace.get("claude_field_path") or "$"
+    retry_kind = (
+        "serialization_retry" if trace["json_recovery"]
+        else "transient_retry" if transient_recovery
+        else "initial"
+    )
+    # Only closed codes and server-owned identifiers/field paths enter this record.
+    _claude_attempt_logger.info("V3_CLAUDE_ATTEMPT %s", json.dumps({
+        "operation_id": safe_operation_id,
+        "stage": _safe_brain_stage(request.stage),
+        "semantic_recovery": bool(request.metadata.get("remote_semantic_contract_recovery")),
+        "retry_kind": retry_kind,
+        "stop_reason": trace.get("claude_stop_reason"),
+        "failure_kind": failure_kind,
+        "field_path": field_path,
+        "outcome": _safe_failure_class(failure) if failure is not None else "accepted",
+        "elapsed_ms": elapsed_ms,
+    }))
 
 
 def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:

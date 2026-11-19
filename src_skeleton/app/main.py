@@ -32,6 +32,7 @@ from alchemy_creative_agent_3_0.app.generation_router.bridge_primary import (
     bridge_provider_timeout_seconds,
     bridge_wait_enabled,
 )
+from alchemy_creative_agent_3_0.app.llm_brain.providers import claude_planning_operation_id
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
 from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.contracts import GenerateContinuation
@@ -992,6 +993,7 @@ def _run_v3_project_planning_background(
 ) -> None:
     key = f"{project_id}:{operation_id}"
     job_id = ""
+    diagnostic_token = claude_planning_operation_id.set(operation_id)
     try:
         response = _run_v3_handler(v3_route_handlers.post_project_job, project_id, planning_payload)
         job_id = str(response.get("job_id") or "").strip() if isinstance(response, dict) else ""
@@ -1038,6 +1040,7 @@ def _run_v3_project_planning_background(
             operation_id,
         )
     finally:
+        claude_planning_operation_id.reset(diagnostic_token)
         with _v3_background_planning_operations_lock:
             _v3_background_planning_operations.pop(key, None)
 
