@@ -46,7 +46,7 @@ from .prompt_policy import (
     validate_unified_prompt_record,
 )
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
-from .prompts import _compact_required_remote_creative_schema
+from .prompts import _compact_required_remote_creative_schema, _first_suite_continuation_shot_axes
 from .finalizer_lifecycle import (
     REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
     REMOTE_BRAIN_FINALIZER_STAGE,
@@ -998,6 +998,26 @@ class V3LLMBrainAdapter:
             raise BrainPromptContractInvalid(
                 "Remote Brain did not return the required General variation execution receipts."
             )
+        first_continuation_direction = None
+        if _first_suite_continuation_shot_axes(
+            request.metadata.get("canonical_prompt_context"), variation_execution_contract
+        ):
+            shot = data.get("first_continuation_shot")
+            baseline = shot.get("baseline") if isinstance(shot, dict) else None
+            direction = shot.get("direction") if isinstance(shot, dict) else None
+            if (
+                not isinstance(baseline, str)
+                or not baseline.strip()
+                or not isinstance(direction, str)
+                or not direction.strip()
+                or " ".join(direction.casefold().split()).rstrip(".!?。！？")
+                == " ".join(baseline.casefold().split()).rstrip(".!?。！？")
+                or direction.strip() != prompts_raw[0]["prompt"].strip().splitlines()[0]
+            ):
+                raise BrainPromptContractInvalid(
+                    "Remote Brain did not write the new continuation shot into output 1's prompt."
+                )
+            first_continuation_direction = direction.strip()
         if request.metadata.get("require_lossless_user_direction") is True:
             if any(
                 not isinstance(item.get("user_direction_integrity"), dict)
@@ -1174,6 +1194,10 @@ class V3LLMBrainAdapter:
                     else None
                 ),
                 "variation_execution_receipts_signed": variation_execution_contract is not None,
+                **(
+                    {"first_continuation_shot_direction": first_continuation_direction}
+                    if first_continuation_direction is not None else {}
+                ),
                 "variation_execution_semantic_evidence_required": (
                     request.metadata.get("variation_execution_semantic_evidence_required") is True
                     or (

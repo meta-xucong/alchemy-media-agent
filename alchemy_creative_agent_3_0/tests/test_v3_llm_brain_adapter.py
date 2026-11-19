@@ -55,6 +55,92 @@ def _write_reference(path: Path) -> Path:
     return path
 
 
+@pytest.mark.parametrize(
+    ("scope", "new_shot", "first_prompt", "accepted"),
+    [
+        (True, None, "Photograph her leaning against the pole from the side.", False),
+        (True, "Use the same side view with her back against the pole.", "Use the same side view with her back against the pole.\nRainy alley.", False),
+        (True, "Photograph her from the front, with one hand on the pole.", "Photograph her leaning against the pole from the side.", False),
+        (True, "Photograph her from the front, with one hand on the pole.", "Photograph her from the front, with one hand on the pole.\nKeep the silver glasses and rainy alley.", True),
+        (False, None, "Photograph her leaning against the pole from the side.", True),
+    ],
+)
+def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
+    monkeypatch, scope, new_shot, first_prompt, accepted
+) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import adapter as brain_adapter
+    from alchemy_creative_agent_3_0.app.llm_brain import prompts as brain_prompts
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import (
+        VariationExecutionContract,
+        VariationExecutionOutput,
+    )
+
+    contract = VariationExecutionContract.model_construct(
+        contract_version="v3_general_variation_execution_v1",
+        contract_digest="a" * 64,
+        mode="delivery_suite",
+        requested_image_count=2,
+        preserve_subject=True,
+        preserve_style=True,
+        outputs=[
+            VariationExecutionOutput(output_index=1, output_purpose="primary_presentation", variation_axes=["pose"]),
+            VariationExecutionOutput(output_index=2, output_purpose="detail_focus", variation_axes=["framing"]),
+        ],
+    )
+    response = {
+        "canonical_provider_prompts": [
+            {
+                "output_index": index,
+                "prompt": prompt,
+                "review_status": "approved",
+                "variation_execution_receipt": {
+                    "contract_version": contract.contract_version,
+                    "contract_digest": contract.contract_digest,
+                    "output_index": index,
+                    "status": "approved",
+                    "owner": "remote_v3_llm_brain",
+                },
+            }
+            for index, prompt in enumerate((first_prompt, "Frame a detail of her silver glasses and rain droplets."), 1)
+        ],
+    }
+    if new_shot is not None:
+        response["first_continuation_shot"] = {
+            "baseline": "Use the same side view with her back against the pole.",
+            "direction": new_shot,
+        }
+    request = BrainRunRequest(
+        user_input="Keep the woman with silver glasses and the rainy alley.",
+        stage="provider_prompt_finalize",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=2,
+        metadata={"canonical_prompt_context": {"delivery_suite_continuation": scope}},
+    )
+    monkeypatch.setattr(brain_adapter, "_enabled", lambda: True)
+    monkeypatch.setattr(V3LLMBrainAdapter, "_activation_scope_enabled", lambda self, request: True)
+    monkeypatch.setattr(brain_adapter, "_validate_finalizer_request_contract", lambda request: None)
+    monkeypatch.setattr(brain_adapter, "_general_variation_execution_contract_for_request", lambda request: contract)
+    provider = SimpleNamespace(
+        provider="anthropic",
+        model="test",
+        availability=lambda **kwargs: {"available": True},
+        run=lambda request: response,
+    )
+    adapter = V3LLMBrainAdapter(provider=provider)
+    if not accepted:
+        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="continuation shot"):
+            adapter.finalize_canonical_provider_prompts(request)
+        return
+    signed, audit = adapter.finalize_canonical_provider_prompts(request)
+    assert signed[0].prompt == first_prompt
+    assert audit.get("first_continuation_shot_direction") == new_shot
+    monkeypatch.setattr(brain_prompts, "_validated_general_variation_contract_for_finalizer", lambda *_: contract)
+    body, structured, _ = build_anthropic_structured_output(request)
+    assert ("first_continuation_shot" in json.loads(body)["return_schema"]) is scope
+    assert ("first_continuation_shot" in structured["schema"]["required"]) is scope
+
+
 def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:
     """Create the closure receipt required before a result becomes a reference."""
 

@@ -3276,8 +3276,15 @@ class ScenarioRuntime:
         execution_budget = self.llm_brain_adapter.execution_budget_receipt()
         if execution_budget is not None:
             audit["remote_brain_execution_budget"] = execution_budget
+        first_continuation_direction = audit.pop("first_continuation_shot_direction", None)
+        image_set_plan = brain_result.image_set_plan
+        if first_continuation_direction is not None:
+            image_set_plan = image_set_plan.model_copy(
+                update={"shot_plan": [first_continuation_direction, *image_set_plan.shot_plan[1:]]}
+            )
         return brain_result.model_copy(
             update={
+                "image_set_plan": image_set_plan,
                 "canonical_provider_prompts": prompts,
                 "audit": {
                     **dict(brain_result.audit or {}),
@@ -3652,6 +3659,11 @@ class ScenarioRuntime:
             # role or recipe language.
             context["variation_execution_contract"] = variation_execution_contract
             context["variation_execution_semantic_evidence_required"] = True
+            if variation_execution_contract.get("mode") == "delivery_suite":
+                role_plan = request.metadata.get("variation_execution_role_plan") or {}
+                role_metadata = role_plan.get("metadata") or {}
+                if role_metadata.get("completed_role_keys") or role_metadata.get("has_generated_reference_anchor"):
+                    context["delivery_suite_continuation"] = True
         raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
         if request.metadata.get("ecommerce_creative_context_server_owned") is True:
             try:

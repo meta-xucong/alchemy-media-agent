@@ -59,7 +59,8 @@ GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS = (
     "When a row contains gesture, change the meaningful hand/arm/action relationship; when it contains context, "
     "change the subject/environment relationship or scene duty while preserving the requested visual world. "
     "Framing, scale, detail, and depth are presentation changes only and cannot stand in for a shot-changing axis. "
-    "For a multi-output delivery suite, every non-primary row carrying a shot-changing axis must be reflected as a "
+    "For a multi-output delivery suite, every non-primary row and every continuation first row carrying a "
+    "shot-changing axis must be reflected as a "
     "materially different shot family in both image_set_plan.shot_plan and its complete canonical prompt; state the "
     "decisive shot change first instead of describing the row as the same pose with a closer crop. "
     "Use a controlled action-compatible variation when the user fixes a core action; do not erase protected user "
@@ -1325,7 +1326,10 @@ def build_anthropic_structured_output(
         task == "finalize_canonical_image_provider_prompts"
         and request.stage == "provider_prompt_finalize"
     ):
-        if set(response_shape) != {"canonical_provider_prompts"}:
+        if set(response_shape) not in (
+            {"canonical_provider_prompts"},
+            {"canonical_provider_prompts", "first_continuation_shot"},
+        ):
             raise ValueError("Claude prompt-finalizer schema does not match its typed response contract")
         _remove_finalizer_schema_guidance_fields(payload)
         response_shape = payload["return_schema"]
@@ -1340,6 +1344,13 @@ def build_anthropic_structured_output(
                 ),
             }
         }
+        if "first_continuation_shot" in response_shape:
+            properties["first_continuation_shot"] = {
+                "type": "object",
+                "properties": {"baseline": {"type": "string"}, "direction": {"type": "string"}},
+                "required": ["baseline", "direction"],
+                "additionalProperties": False,
+            }
     else:
         return None
 
@@ -1706,6 +1717,22 @@ def _reject_non_json_constant(value: str) -> NoReturn:
     raise ValueError(f"non-JSON constant: {value}")
 
 
+def _first_suite_continuation_shot_axes(
+    context: object, contract: VariationExecutionContract | None
+) -> tuple[str, ...]:
+    if (
+        not isinstance(context, dict)
+        or context.get("delivery_suite_continuation") is not True
+        or contract is None
+        or contract.mode != "delivery_suite"
+    ):
+        return ()
+    return tuple(
+        axis for axis in contract.outputs[0].variation_axes
+        if axis in {"viewpoint", "pose", "gesture", "context"}
+    )
+
+
 def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) -> dict[str, object]:
     """Make the Brain's post-validation sign-off a small, distinct contract."""
 
@@ -1715,6 +1742,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     if brand_context:
         context["brand_visual_context"] = brand_context
     variation_execution_contract = _validated_general_variation_contract_for_finalizer(request, context)
+    continuation_shot_axes = _first_suite_continuation_shot_axes(context, variation_execution_contract)
     is_human_naturalness_resign = request.stage == "provider_prompt_human_naturalness_resign"
     is_developmental_presence_verify = (
         request.stage == "provider_prompt_developmental_presence_verify"
@@ -2241,6 +2269,20 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "do not summarize, rename, reorder, or invent them. These are schema-only audit fields and must "
                 "never be inserted into the renderer prompt."
             )
+    if continuation_shot_axes:
+        response_contract += (
+            " Output 1 is a new shot in a continuing General delivery suite, not a replay of the anchor. "
+            f"Its assigned shot changes are {', '.join(continuation_shot_axes)}. In first_continuation_shot.baseline, "
+            "describe the concrete blocking or camera relationship from the bound anchor or the original "
+            "request. In first_continuation_shot.direction, write one plain renderer-ready sentence specifying "
+            "the visibly different camera or body arrangement that executes those axes. A paraphrase, crop-only "
+            "change, or a promise to vary the shot is not a new direction. Replace any old first-shot draft "
+            "that repeats the baseline. Begin output 1's complete prompt with the exact direction sentence, "
+            "alone on the first line, then continue on the next line with the rest of the approved prompt. "
+            "Never copy the baseline as an instruction, or contradict the new blocking later in the prompt. "
+            "Keep identity, scene, style, and the other non-conflicting choices, even if the baseline prompt "
+            "spells out a different pose or camera. Do not put field names or comparison notes in the renderer text."
+        )
     if preflight_required:
         response_contract += (
             " Before writing each canonical prompt, author one complete scene-aware human photographic direction "
@@ -2597,6 +2639,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     }
     if source_projection_required:
         payload["source_projection_receipt_digest_by_output_index"] = source_projection_receipt_digests
+    if continuation_shot_axes:
+        payload["return_schema"]["first_continuation_shot"] = {
+            "baseline": "concrete preceding camera or body arrangement, not renderer text",
+            "direction": "new renderer-ready shot sentence; exact first line of output 1's prompt",
+        }
     if request.metadata.get("require_lossless_user_direction") is True:
         payload["protected_user_direction"] = request.user_input
         payload["user_direction_contract"] = (
