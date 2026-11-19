@@ -47,9 +47,11 @@ from .prompt_policy import (
 )
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .prompts import (
+    CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS,
     _compact_required_remote_creative_schema,
     _first_suite_anchor_shot_instruction,
     _first_suite_continuation_shot_axes,
+    creative_exploration_history,
 )
 from .finalizer_lifecycle import (
     REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
@@ -1004,6 +1006,16 @@ class V3LLMBrainAdapter:
             )
         first_continuation_direction = None
         finalizer_context = request.metadata.get("canonical_prompt_context")
+        delivered_concepts = creative_exploration_history(request)
+        creative_directions = None
+        if delivered_concepts:
+            creative_directions = _creative_exploration_contrast_directions(
+                data.get("creative_exploration_contrasts"), prompts_raw, delivered_concepts
+            )
+            if creative_directions is None:
+                raise BrainPromptContractInvalid(
+                    "Remote Brain did not bind each creative exploration prompt to a new treatment of delivered work."
+                )
         continuation_axes = _first_suite_continuation_shot_axes(finalizer_context, variation_execution_contract)
         if continuation_axes:
             anchor_instruction = _first_suite_anchor_shot_instruction(finalizer_context, continuation_axes)
@@ -1210,6 +1222,7 @@ class V3LLMBrainAdapter:
                     else None
                 ),
                 "variation_execution_receipts_signed": variation_execution_contract is not None,
+                **({"creative_exploration_directions": creative_directions} if creative_directions else {}),
                 **(
                     {"first_continuation_shot_direction": first_continuation_direction}
                     if first_continuation_direction is not None else {}
@@ -3199,6 +3212,41 @@ def _general_variation_execution_contract_for_request(
             "General variation execution contract frozen binding does not match."
         )
     return contract
+
+
+def _creative_exploration_contrast_directions(
+    contrasts: Any, prompts: list[dict[str, Any]], history: dict[str, str],
+) -> list[str] | None:
+    if not isinstance(contrasts, list) or len(contrasts) != len(prompts):
+        return None
+    delivered = {output_id: " ".join(prompt.casefold().split()) for output_id, prompt in history.items()}
+    used_directions: set[str] = set()
+    directions: list[str] = []
+    for index, (contrast, prompt) in enumerate(zip(contrasts, prompts), start=1):
+        if not isinstance(contrast, dict) or not _receipt_output_index_matches(contrast, index):
+            return None
+        output_id = contrast.get("delivered_output_id")
+        excerpt = contrast.get("delivered_excerpt")
+        direction = contrast.get("new_direction")
+        if not all(isinstance(value, str) and value.strip() for value in (output_id, excerpt, direction)):
+            return None
+        new_direction = " ".join(direction.split())
+        direction_key = new_direction.casefold().rstrip(".!?。！？")
+        signed_prompt = " ".join(prompt["prompt"].split())
+        if (
+            contrast.get("changed_dimension") not in CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS
+            or output_id not in delivered
+            or " ".join(excerpt.casefold().split()) not in delivered[output_id]
+            or not direction_key
+            or direction_key in used_directions
+            or any(direction_key in prior_prompt for prior_prompt in delivered.values())
+            or not signed_prompt.startswith(new_direction)
+            or (signed_prompt != new_direction and new_direction[-1] not in ".!?。！？")
+        ):
+            return None
+        used_directions.add(direction_key)
+        directions.append(new_direction)
+    return directions
 
 
 def _matches_variation_execution_receipts(

@@ -202,6 +202,107 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
         assert new_shot in payload["remote_response_contract"]
 
 
+@pytest.mark.parametrize(
+    ("mismatch", "count"),
+    [(None, 1), (None, 2), ("missing", 2), ("old_treatment", 2), ("wrong_quote", 2),
+     ("receipt_only", 2), ("same_batch", 2), ("role_only", 2)],
+)
+def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypatch, mismatch, count) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import adapter as brain_adapter
+    from alchemy_creative_agent_3_0.app.llm_brain import prompts as brain_prompts
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import (
+        VariationExecutionContract,
+        VariationExecutionOutput,
+    )
+
+    contract = VariationExecutionContract.model_construct(
+        contract_version="v3_general_variation_execution_v1",
+        contract_digest="a" * 64,
+        mode="creative_exploration",
+        requested_image_count=2,
+        outputs=[
+            VariationExecutionOutput(output_index=1, output_purpose="creative_direction", variation_axes=["palette"]),
+            VariationExecutionOutput(output_index=2, output_purpose="creative_direction", variation_axes=["context"]),
+        ],
+    )
+    history = {
+        "delivered_editorial": "Use a red studio background and an editorial cut-paper layout.",
+        "delivered_night": "Place the subject in a shadowy alley with stark backlighting.",
+    }
+    directions = [
+        "Render the scene as a bright cyanotype with white botanical silhouettes.",
+        "Stage the subject inside a miniature paper theatre with layered painted scenery.",
+    ][:count]
+    request = BrainRunRequest(
+        user_input="Explore some new visual concepts around the same subject.",
+        stage="provider_prompt_finalize", scenario_id="general_creative", template_id="general_template",
+        requested_image_count=count, metadata={"canonical_prompt_context": {"creative_exploration_history": history}},
+    )
+    response = {
+        "canonical_provider_prompts": [
+            {
+                "output_index": index,
+                "prompt": f"{direction} Keep the subject recognizable.",
+                "review_status": "approved",
+                "variation_execution_receipt": {
+                    "contract_version": contract.contract_version, "contract_digest": contract.contract_digest,
+                    "output_index": index, "status": "approved", "owner": "remote_v3_llm_brain",
+                },
+            }
+            for index, direction in enumerate(directions, 1)
+        ],
+        "creative_exploration_contrasts": [
+            {
+                "output_index": index, "delivered_output_id": output_id,
+                "delivered_excerpt": history[output_id], "changed_dimension": "visual_style",
+                "new_direction": direction,
+            }
+            for index, (output_id, direction) in enumerate(zip(history, directions), 1)
+        ],
+    }
+    contrasts = response["creative_exploration_contrasts"]
+    if mismatch == "missing":
+        response.pop("creative_exploration_contrasts")
+    elif mismatch == "old_treatment":
+        contrasts[0]["new_direction"] = history["delivered_night"]
+        response["canonical_provider_prompts"][0]["prompt"] = history["delivered_night"]
+    elif mismatch == "wrong_quote":
+        contrasts[0]["delivered_excerpt"] = history["delivered_night"]
+    elif mismatch == "receipt_only":
+        response["canonical_provider_prompts"][0]["prompt"] = history["delivered_editorial"]
+    elif mismatch == "same_batch":
+        contrasts[1]["new_direction"] = directions[0]
+        response["canonical_provider_prompts"][1]["prompt"] = directions[0]
+    elif mismatch == "role_only":
+        contrasts[0]["changed_dimension"] = "role"
+
+    if count == 1:
+        response["canonical_provider_prompts"][0].pop("variation_execution_receipt")
+    frozen_contract = contract if count > 1 else None
+    monkeypatch.setattr(brain_adapter, "_enabled", lambda: True)
+    monkeypatch.setattr(V3LLMBrainAdapter, "_activation_scope_enabled", lambda self, request: True)
+    monkeypatch.setattr(brain_adapter, "_validate_finalizer_request_contract", lambda request: None)
+    monkeypatch.setattr(brain_adapter, "_general_variation_execution_contract_for_request", lambda request: frozen_contract)
+    adapter = V3LLMBrainAdapter(provider=SimpleNamespace(
+        provider="anthropic", model="test", availability=lambda **_: {"available": True},
+        run=lambda request: response,
+    ))
+    if mismatch:
+        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="creative exploration"):
+            adapter.finalize_canonical_provider_prompts(request)
+        return
+
+    signed, audit = adapter.finalize_canonical_provider_prompts(request)
+    assert audit["creative_exploration_directions"] == directions
+    assert all(prompt.prompt.startswith(direction) for prompt, direction in zip(signed, directions))
+    monkeypatch.setattr(brain_prompts, "_validated_general_variation_contract_for_finalizer", lambda *_: frozen_contract)
+    body, structured, _ = build_anthropic_structured_output(request)
+    payload = json.loads(body)
+    assert payload["frozen_render_context"]["creative_exploration_history"] == history
+    assert "creative_exploration_contrasts" in structured["schema"]["required"]
+    assert "Do not require a camera-side change." in payload["remote_response_contract"]
+
+
 def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:
     """Create the closure receipt required before a result becomes a reference."""
 

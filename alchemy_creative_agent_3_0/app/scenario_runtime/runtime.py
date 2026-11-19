@@ -3277,11 +3277,14 @@ class ScenarioRuntime:
         if execution_budget is not None:
             audit["remote_brain_execution_budget"] = execution_budget
         first_continuation_direction = audit.pop("first_continuation_shot_direction", None)
+        creative_directions = audit.pop("creative_exploration_directions", None)
         image_set_plan = brain_result.image_set_plan
         if first_continuation_direction is not None:
             image_set_plan = image_set_plan.model_copy(
                 update={"shot_plan": [first_continuation_direction, *image_set_plan.shot_plan[1:]]}
             )
+        elif creative_directions:
+            image_set_plan = image_set_plan.model_copy(update={"shot_plan": creative_directions})
         return brain_result.model_copy(
             update={
                 "image_set_plan": image_set_plan,
@@ -3671,6 +3674,16 @@ class ScenarioRuntime:
                         used_anchor_shots = (suite_plan.get("metadata") or {}).get("delivery_suite_used_anchor_shots")
                         if used_anchor_shots:
                             context["delivery_suite_used_anchor_shots"] = used_anchor_shots
+        if (
+            projection.get("scenario_id") == "general_creative"
+            and projection.get("template_id") == "general_template"
+            and request.metadata.get("effective_variation_mode") == "creative_exploration"
+        ):
+            project_context = request.metadata.get("project_context_snapshot") or {}
+            suite_plan = project_context.get("general_suite_role_plan") or {}
+            creative_history = (suite_plan.get("metadata") or {}).get("creative_exploration_history")
+            if suite_plan.get("variation_mode") == "creative_exploration" and creative_history:
+                context["creative_exploration_history"] = creative_history
         raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
         if request.metadata.get("ecommerce_creative_context_server_owned") is True:
             try:
@@ -4951,6 +4964,10 @@ class ScenarioRuntime:
                         )
                         if used_anchor_shots:
                             suite_payload["metadata"]["delivery_suite_used_anchor_shots"] = used_anchor_shots
+                        if isinstance(project_suite_metadata, dict) and project_suite_metadata.get("creative_exploration_history"):
+                            suite_payload["metadata"]["creative_exploration_history"] = project_suite_metadata[
+                                "creative_exploration_history"
+                            ]
                         project_context["general_suite_role_plan"] = suite_payload
                         metadata["project_context_snapshot"] = project_context
         role_binding = self._resolved_general_variation_role_binding(request)

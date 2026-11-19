@@ -70,7 +70,7 @@ def test_same_anchor_suite_history_rotates_only_formally_delivered_first_shots()
         ),
     )
     project = SimpleNamespace(job_ids=list(records))
-    roles, used = service._project_general_suite_delivery_history(
+    roles, used, _ = service._project_general_suite_delivery_history(
         project=project, mode="delivery_suite", anchor_output_id="anchor"
     )
     assert roles == ["first", "second", "other"]
@@ -80,12 +80,52 @@ def test_same_anchor_suite_history_rotates_only_formally_delivered_first_shots()
     records["job_repeat"] = [output("repeat", next_shot, 1)]
     final_ids["job_repeat"] = ["repeat"]
     project.job_ids.append("job_repeat")
-    _, used = service._project_general_suite_delivery_history(
+    _, used, _ = service._project_general_suite_delivery_history(
         project=project, mode="delivery_suite", anchor_output_id="anchor"
     )
     assert used == [original_key, next_key]
     third_shot = _first_suite_anchor_shot_instruction({**context, "delivery_suite_used_anchor_shots": used}, axes)
     assert delivered_anchor_shot_key(third_shot) not in (None, *used)
+
+
+def test_creative_exploration_history_uses_formally_delivered_prompts_not_role_names() -> None:
+    def output(output_id, mode, prompt):
+        return SimpleNamespace(
+            output_id=output_id, created_at="1", preview_url=f"/images/{output_id}",
+            metadata={"mode_role_recipe": _role_recipe("same-role", mode), "final_provider_prompt": prompt},
+        )
+
+    outputs = {
+        "job_one": [
+            output("first", "creative_exploration", "An editorial frame with a red backdrop."),
+            output("unreviewed", "creative_exploration", "An unaccepted alternate."),
+        ],
+        "job_two": [
+            output("second", "creative_exploration", "A monochrome silhouette in a shadowy alley."),
+            output("suite", "delivery_suite", "A shot from another mode."),
+        ],
+    }
+    approved = {"job_one": ["first"], "job_two": ["second", "suite"]}
+    service = V3ProjectModeService.__new__(V3ProjectModeService)
+    service.product_service = SimpleNamespace(
+        output_store=SimpleNamespace(list_by_job=lambda job_id: outputs[job_id]),
+        get_job=lambda job_id: SimpleNamespace(
+            status="generated",
+            metadata={
+                "final_delivery": {"delivery_gate_applies": True, "automatic_delivery_available": True},
+                "post_generation_review": {"recommended_output_ids": approved[job_id]},
+            },
+        ),
+    )
+    roles, anchor_shots, history = service._project_general_suite_delivery_history(
+        project=SimpleNamespace(job_ids=list(outputs)), mode="creative_exploration", include_creative_history=True,
+    )
+    assert roles == ["same-role"]
+    assert anchor_shots == []
+    assert history == {
+        "first": "An editorial frame with a red backdrop.",
+        "second": "A monochrome silhouette in a shadowy alley.",
+    }
 
 
 def test_project_route_history_uses_all_jobs_and_only_final_deliveries() -> None:
@@ -142,7 +182,7 @@ def test_project_route_history_uses_all_jobs_and_only_final_deliveries() -> None
         user_goal="Continue the same image set",
     )
 
-    completed, _ = V3ProjectModeService._project_general_suite_delivery_history(  # noqa: SLF001
+    completed, _, _ = V3ProjectModeService._project_general_suite_delivery_history(  # noqa: SLF001
         service,
         project=project,
         mode="delivery_suite",
@@ -199,7 +239,7 @@ def test_legacy_route_mode_comes_from_source_job_before_delivery_projection() ->
     }
     project = SimpleNamespace(job_ids=["job_legacy_route"], selected_output_refs=[])
 
-    completed, _ = V3ProjectModeService._project_general_suite_delivery_history(  # noqa: SLF001
+    completed, _, _ = V3ProjectModeService._project_general_suite_delivery_history(  # noqa: SLF001
         service,
         project=project,
         mode="delivery_suite",
