@@ -32,7 +32,11 @@ def _png_base64(width: int = 96, height: int = 72) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def test_doc59_mode_role_director_makes_four_modes_distinct() -> None:
+def test_doc59_mode_role_director_makes_four_modes_distinct(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import mode_role_director
+
+    monkeypatch.setattr(mode_role_director, "stable_id", lambda prefix, *parts: prefix)
+    monkeypatch.setattr(mode_role_director.VariationExecutionContract, "bind_digest", lambda contract: contract)
     director = ModeAwareRoleDirector()
     expected = {
         "selection_candidates": ("near_neighbor_candidates", "candidate_best_frame"),
@@ -59,16 +63,49 @@ def test_doc59_mode_role_director_makes_four_modes_distinct() -> None:
         assert plan.role_recipes[0].role_key == first_role
         assert len({recipe.role_key for recipe in plan.role_recipes}) == 4
         assert all(recipe.prompt_pressure for recipe in plan.role_recipes)
+        contract = director.build_variation_execution_contract(
+            role_plan=plan,
+            scenario_id="general_creative",
+            template_id="general_template",
+        )
+        assert contract is not None
+        assert contract.preserve_subject
+        assert contract.preserve_style is (mode != "creative_exploration")
         if mode == "creative_exploration":
-            contract = director.build_variation_execution_contract(
-                role_plan=plan,
-                scenario_id="general_creative",
-                template_id="general_template",
-            )
-            assert contract is not None
-            assert {"viewpoint", "framing", "depth", "placement"}.issubset(
-                contract.outputs[0].variation_axes
-            )
+            assert contract.outputs[0].variation_axes == ("palette",)
+            assert all("style_direction" not in row.must_keep for row in contract.outputs)
+
+    previous = director.build(
+        project_id="project_doc59",
+        job_id="job_doc59_previous",
+        user_input="A cool rain-soaked alley portrait leaning against a metal pole.",
+        mode="creative_exploration",
+        requested_image_count=8,
+        subject_type="generic",
+        scenario_id="general_creative",
+        template_id="general_template",
+    )
+    continuation = director.build(
+        project_id="project_doc59",
+        job_id="job_doc59_continuation",
+        user_input="A cool rain-soaked alley portrait leaning against a metal pole.",
+        mode="creative_exploration",
+        requested_image_count=16,
+        subject_type="generic",
+        scenario_id="general_creative",
+        template_id="general_template",
+        has_generated_reference_anchor=True,
+        completed_role_keys=[row.role_key for row in previous.role_recipes],
+    )
+    contract = director.build_variation_execution_contract(
+        role_plan=continuation, scenario_id="general_creative", template_id="general_template",
+    )
+    assert contract is not None and len(contract.outputs) == 16
+    assert all(
+        set(row.variation_axes) <= {"palette", "mood", "context", "concept", "composition"}
+        and "style_direction" not in row.must_keep
+        for row in contract.outputs
+    )
 
 
 def test_selection_review_does_not_use_an_unreachable_distance_predicate() -> None:

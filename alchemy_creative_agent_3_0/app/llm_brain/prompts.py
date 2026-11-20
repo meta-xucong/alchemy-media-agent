@@ -939,10 +939,15 @@ def _compact_remote_creative_payload(
     variation_contract = _compact_general_variation_execution_contract(request)
     if variation_contract:
         payload["variation_execution_contract"] = variation_contract
+        make_output_distinct = (
+            "Honor its preservation flags and change a substantive concept axis, not just the shot. Make"
+            if variation_contract.get("mode") == "creative_exploration"
+            else "Preserve its subject/style and anti-drift meaning, make"
+        )
         payload["variation_execution_contract_instructions"] = (
             f"{GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} "
-            "Use this typed contract as neutral per-output semantic guidance. Preserve its subject/style and "
-            "anti-drift meaning, make each output serve its own purpose and variation axes, and author the "
+            f"Use this typed contract as neutral per-output semantic guidance. {make_output_distinct}"
+            " each output serve its own purpose and variation axes, and author the "
             "complete Brain-owned direction for each output. If a row contains format_vertical, format_square, "
             "format_horizontal, or format_tight, make that output respectively a tall portrait 2:3 layout, a "
             "balanced square 1:1 layout, a wide horizontal 3:2 layout, or a tight/detail framing on the frozen "
@@ -1562,13 +1567,15 @@ def _anthropic_user_direction_integrity_schema(response_shape: object) -> dict[s
         "status": "preserved|rewritten",
         "owner": "remote_v3_llm_brain",
     }
+    if isinstance(response_shape, dict) and response_shape.get("status") == "rewritten":
+        expected["status"] = "rewritten"
     if response_shape != expected:
         raise ValueError("Claude user-direction receipt does not match its declared response contract")
     return {
         "type": "object",
         "properties": {
             "contract_version": {"type": "string", "enum": ["v3_user_direction_integrity_v1"]},
-            "status": {"type": "string", "enum": ["preserved", "rewritten"]},
+            "status": {"type": "string", "enum": expected["status"].split("|")},
             "owner": {"type": "string", "enum": ["remote_v3_llm_brain"]},
         },
         "required": ["contract_version", "status", "owner"],
@@ -1827,7 +1834,14 @@ def _first_suite_anchor_shot_instruction(context: object, axes: tuple[str, ...])
     raise BrainPromptRequestContractInvalid("No unused first-shot direction remains for this anchor and the assigned axes.")
 
 
-CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS = ("visual_style", "scene_story", "lighting_palette", "visual_hierarchy")
+CREATIVE_EXPLORATION_DIMENSION_BY_AXIS = {
+    "concept": "visual_style",
+    "context": "scene_story",
+    "mood": "lighting_palette",
+    "palette": "lighting_palette",
+    "composition": "visual_hierarchy",
+}
+CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS = tuple(dict.fromkeys(CREATIVE_EXPLORATION_DIMENSION_BY_AXIS.values()))
 
 
 def creative_exploration_history(request: BrainRunRequest) -> dict[str, str]:
@@ -2173,7 +2187,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     if request.metadata.get("require_lossless_user_direction") is True:
         prompt_schema["user_direction_integrity"] = {
             "contract_version": "v3_user_direction_integrity_v1",
-            "status": "preserved|rewritten",
+            "status": "rewritten" if delivered_concepts else "preserved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
     if preflight_required:
@@ -2406,6 +2420,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "treatment elsewhere in the prompt. Do not approve if the concept is still materially "
             "the same as any delivered concept or another output in this batch."
         )
+        if variation_execution_contract is not None:
+            axis_mapping = ", ".join(
+                f"{axis} means {dimension}" for axis, dimension in CREATIVE_EXPLORATION_DIMENSION_BY_AXIS.items()
+            )
+            response_contract += (
+                f" Each changed_dimension must be authorized by that output's frozen axes: {axis_mapping}. "
+                "The authorized change overrides conflicting inherited treatment in the project brief or its "
+                "protected constraint projection, not current facts or explicit locks. Other axes are supporting "
+                "only and cannot qualify as the new concept."
+            )
     if anchor_shot_instruction:
         response_contract += (
             " Output 1 must execute a physically different shot from its selected continuation reference. "
@@ -2831,11 +2855,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             if continuation_shot_axes or delivered_concepts
             else "Every canonical prompt must preserve its complete meaning, and every item must include "
         )
+        integrity_status = "rewritten" if delivered_concepts else "preserved or rewritten"
         payload["remote_response_contract"] = (
             f"{payload['remote_response_contract']} The protected_user_direction is an immutable user-owned "
             f"semantic source. {direction_receipt_rule}"
             "user_direction_integrity with contract_version v3_user_direction_integrity_v1, owner "
-            "remote_v3_llm_brain, and status preserved or rewritten."
+            f"remote_v3_llm_brain, and status {integrity_status}."
         )
     signoff_recovery = request.metadata.get("canonical_prompt_signoff_recovery")
     if isinstance(signoff_recovery, dict):

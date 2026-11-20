@@ -252,8 +252,11 @@ def test_real_brain_planning_uses_delivered_concepts_only_for_creative_explorati
 
 @pytest.mark.parametrize(
     ("mismatch", "count"),
-    [(None, 1), (None, 2), ("missing", 2), ("old_treatment", 2), ("wrong_output", 2),
-     ("same_batch", 2), ("role_only", 2)],
+    [
+        (None, 1), (None, 2), ("missing", 2), ("old_treatment", 2), ("wrong_output", 2),
+        ("same_batch", 2), ("role_only", 2), ("wrong_concept_axis", 2),
+        ("camera_only_receipt", 2), ("preserved_old_treatment", 2),
+    ],
 )
 def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypatch, mismatch, count) -> None:
     from alchemy_creative_agent_3_0.app.llm_brain import adapter as brain_adapter
@@ -268,8 +271,9 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         contract_digest="a" * 64,
         mode="creative_exploration",
         requested_image_count=2,
+        preserve_style=False,
         outputs=[
-            VariationExecutionOutput(output_index=1, output_purpose="creative_direction", variation_axes=["palette"]),
+            VariationExecutionOutput(output_index=1, output_purpose="creative_direction", variation_axes=["concept", "palette"]),
             VariationExecutionOutput(output_index=2, output_purpose="creative_direction", variation_axes=["context"]),
         ],
     )
@@ -318,7 +322,7 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         "creative_exploration_contrasts": [
             {
                 "output_index": index, "delivered_output_id": output_id,
-                "changed_dimension": "visual_style",
+                "changed_dimension": ("visual_style", "scene_story")[index - 1],
             }
             for index, output_id in enumerate(list(history)[:count], 1)
         ],
@@ -334,6 +338,19 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         response["canonical_provider_prompts"][1]["prompt"] = response["canonical_provider_prompts"][0]["prompt"]
     elif mismatch == "role_only":
         contrasts[0]["changed_dimension"] = "role"
+    elif mismatch == "wrong_concept_axis":
+        contrasts[1]["changed_dimension"] = "lighting_palette"
+    elif mismatch == "camera_only_receipt":
+        contract = contract.model_copy(update={"outputs": [
+            contract.outputs[0].model_copy(update={"variation_axes": ("viewpoint", "pose")}),
+            contract.outputs[1],
+        ]})
+    elif mismatch == "preserved_old_treatment":
+        response["canonical_provider_prompts"][0]["prompt"] = (
+            "A woman in silver glasses remains leaning against a metal pole in the same cold, rain-soaked alley "
+            "at night, but now she raises her arm and turns toward a new camera angle."
+        )
+        response["canonical_provider_prompts"][0]["user_direction_integrity"]["status"] = "preserved"
 
     if count == 1:
         response["canonical_provider_prompts"][0].pop("variation_execution_receipt")
@@ -347,7 +364,7 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         run=lambda request: response,
     ))
     if mismatch:
-        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="creative exploration"):
+        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="creative exploration|user-direction integrity"):
             adapter.finalize_canonical_provider_prompts(request)
         return
 
@@ -373,6 +390,15 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
     assert "inherited treatment as a baseline, not a lock" in payload["user_direction_contract"]
     assert "Every item must include user_direction_integrity" in payload["remote_response_contract"]
     assert "Do not require a camera-side change." in payload["remote_response_contract"]
+    assert structured["schema"]["properties"]["canonical_provider_prompts"]["items"]["properties"][
+        "user_direction_integrity"
+    ]["properties"]["status"]["enum"] == ["rewritten"]
+    ordinary = request.model_copy(update={"metadata": {"require_lossless_user_direction": True}})
+    _, ordinary_structured, _ = build_anthropic_structured_output(ordinary)
+    ordinary_item = ordinary_structured["schema"]["properties"]["canonical_provider_prompts"]["items"]
+    assert ordinary_item["properties"]["user_direction_integrity"]["properties"]["status"]["enum"] == [
+        "preserved", "rewritten",
+    ]
 
 
 def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:

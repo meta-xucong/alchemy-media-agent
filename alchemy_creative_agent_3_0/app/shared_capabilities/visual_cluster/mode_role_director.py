@@ -136,6 +136,7 @@ _GENERAL_VARIATION_EXTENSION_AXES = (
     "camera distance",
     "subject scale",
 )
+_CREATIVE_EXPLORATION_EXTENSION_AXES = ("scene", "light", "palette", "art direction", "shape")
 
 # A delivery suite needs at least one semantic lane that can change the shot
 # itself.  Detail/framing/scale alone can still produce the same camera setup
@@ -181,6 +182,10 @@ class ModeAwareRoleDirector:
                 scenario_id=scenario_id,
             ),
             candidate_count,
+            preferred_axes=(
+                _CREATIVE_EXPLORATION_EXTENSION_AXES if normalized_mode == "creative_exploration"
+                else ()
+            ),
         )
         if completed_keys:
             completed_key_set = set(completed_keys)
@@ -320,7 +325,7 @@ class ModeAwareRoleDirector:
                 mode=role_plan.mode,
                 requested_image_count=requested_count,
                 preserve_subject=True,
-                preserve_style=True,
+                preserve_style=role_plan.mode != "creative_exploration",
                 outputs=outputs,
             )
             return contract.bind_digest()
@@ -589,7 +594,7 @@ class ModeAwareRoleDirector:
                 "anchor_strength": "medium_unless_locked",
                 "scene_change_allowed": True,
                 "role_strategy": "concept_lanes",
-                "role_difference_requirement": "different concept, mood, palette, scene, or lens",
+                "role_difference_requirement": "different visual concept, scene story, lighting or palette, or visual hierarchy",
                 "review_priority": "keep core subject while avoiding near-identical ideas",
                 "user_visible_label": "Explore ideas",
             },
@@ -760,6 +765,8 @@ def _ensure_delivery_suite_minimum_diversity(
 def _expanded_recipe_dicts(
     recipes: list[dict[str, Any]],
     requested_count: int,
+    *,
+    preferred_axes: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     """Extend the neutral role catalog without adding scenario-specific rules.
 
@@ -775,34 +782,39 @@ def _expanded_recipe_dicts(
     expanded = [dict(recipe) for recipe in base[:requested_count]]
     if len(expanded) >= requested_count:
         return expanded
+    extension_axes = tuple(dict.fromkeys((*preferred_axes, *_GENERAL_VARIATION_EXTENSION_AXES)))
+    extension_pairs = [
+        (first_axis, second_axis)
+        for first_axis in extension_axes
+        for second_axis in (None, *extension_axes)
+    ]
+    if preferred_axes:
+        extension_pairs.sort(key=lambda pair: pair[0] not in preferred_axes or pair[1] not in (None, *preferred_axes))
     signatures = {_variation_signature(recipe) for recipe in expanded}
     for index in range(len(expanded) + 1, requested_count + 1):
         source = dict(base[(index - 1) % len(base)])
         source_role_key = str(source.get("role_key") or "variation")
         base_axes = _string_list(source.get("variation_axes"))
         chosen: dict[str, Any] | None = None
-        for first_axis in _GENERAL_VARIATION_EXTENSION_AXES:
-            for second_axis in (None, *_GENERAL_VARIATION_EXTENSION_AXES):
-                additions = [first_axis] if second_axis is None else [first_axis, second_axis]
-                candidate = dict(source)
-                candidate["role_key"] = f"{source_role_key}_variant_{index}"
-                candidate["label"] = f"{source.get('label') or 'Image'} variation {index}"
-                # Put the new neutral axes first.  Some canonical recipes
-                # already occupy the six-axis contract limit, so appending
-                # extensions would be truncated during normalization and
-                # could leave batches above four outputs without distinct
-                # frozen variation signatures.
-                candidate["variation_axes"] = list(dict.fromkeys([*additions, *base_axes]))
-                candidate["metadata"] = {
-                    **(dict(source.get("metadata") or {})),
-                    "variation_base_role_key": source_role_key,
-                }
-                signature = _variation_signature(candidate)
-                if signature not in signatures and signature[1]:
-                    chosen = candidate
-                    signatures.add(signature)
-                    break
-            if chosen is not None:
+        for first_axis, second_axis in extension_pairs:
+            additions = [first_axis] if second_axis is None else [first_axis, second_axis]
+            candidate = dict(source)
+            candidate["role_key"] = f"{source_role_key}_variant_{index}"
+            candidate["label"] = f"{source.get('label') or 'Image'} variation {index}"
+            # Put the new neutral axes first.  Some canonical recipes
+            # already occupy the six-axis contract limit, so appending
+            # extensions would be truncated during normalization and
+            # could leave batches above four outputs without distinct
+            # frozen variation signatures.
+            candidate["variation_axes"] = list(dict.fromkeys([*additions, *base_axes]))
+            candidate["metadata"] = {
+                **(dict(source.get("metadata") or {})),
+                "variation_base_role_key": source_role_key,
+            }
+            signature = _variation_signature(candidate)
+            if signature not in signatures and signature[1]:
+                chosen = candidate
+                signatures.add(signature)
                 break
         if chosen is None:
             raise ValueError("general variation role catalog cannot cover requested image count")
@@ -1008,12 +1020,12 @@ def _generic_delivery_recipes() -> list[dict[str, Any]]:
 
 
 def _creative_exploration_recipes(subject_type: str) -> list[dict[str, Any]]:
-    keep = _base_keep(subject_type)[:2]
+    keep = [rule for rule in _base_keep(subject_type) if _NEUTRAL_MUST_KEEP_MAP.get(rule) == "subject_identity"]
     return [
-        _recipe("concept_clean_bright", "Clean bright idea", "Clear approachable direction", "clean concept", "medium", "simple clear angle", "balanced crop", "bright simple scene", ["angle", "camera distance", "scene depth", "placement", "mood", "palette"], keep, "Explore a clean, bright, high-clarity direction."),
-        _recipe("concept_editorial", "Editorial idea", "More styled direction", "editorial concept", "medium", "styled magazine angle", "designed crop", "styled set", ["styling", "art direction"], keep, "Explore a more editorial, magazine-like direction."),
-        _recipe("concept_cinematic", "Cinematic idea", "Atmospheric direction", "cinematic concept", "medium-wide", "dramatic lens angle", "deeper crop", "atmospheric scene", ["light", "depth", "scene"], keep, "Explore a more cinematic direction with stronger depth and atmosphere."),
-        _recipe("concept_minimal_or_graphic", "Minimal idea", "Shape/layout direction", "minimal concept", "medium", "graphic angle", "layout-forward crop", "minimal scene", ["shape", "negative space"], keep, "Explore a simpler, more graphic composition with stronger shape and spacing."),
+        _recipe("concept_clean_bright", "Clean bright idea", "Clear approachable direction", "clean concept", "medium", "simple clear angle", "balanced crop", "bright simple scene", ["palette"], keep, "Explore a clean, bright, high-clarity direction."),
+        _recipe("concept_editorial", "Editorial idea", "More styled direction", "editorial concept", "medium", "styled magazine angle", "designed crop", "styled set", ["art direction"], keep, "Explore a more editorial, magazine-like direction."),
+        _recipe("concept_cinematic", "Cinematic idea", "Atmospheric direction", "cinematic concept", "medium-wide", "dramatic lens angle", "deeper crop", "atmospheric scene", ["light", "scene"], keep, "Explore a more cinematic direction with stronger depth and atmosphere."),
+        _recipe("concept_minimal_or_graphic", "Minimal idea", "Shape/layout direction", "minimal concept", "medium", "graphic angle", "layout-forward crop", "minimal scene", ["shape", "art direction"], keep, "Explore a simpler, more graphic composition with stronger shape and spacing."),
     ]
 
 

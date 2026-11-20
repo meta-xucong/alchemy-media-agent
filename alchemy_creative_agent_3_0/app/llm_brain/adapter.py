@@ -48,6 +48,7 @@ from .prompt_policy import (
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .prompts import (
     CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS,
+    CREATIVE_EXPLORATION_DIMENSION_BY_AXIS,
     _compact_required_remote_creative_schema,
     _first_suite_anchor_shot_instruction,
     _first_suite_continuation_shot_axes,
@@ -1008,7 +1009,7 @@ class V3LLMBrainAdapter:
         finalizer_context = request.metadata.get("canonical_prompt_context")
         delivered_concepts = creative_exploration_history(request)
         if delivered_concepts and not _creative_exploration_contrasts_valid(
-            data.get("creative_exploration_contrasts"), prompts_raw, delivered_concepts
+            data.get("creative_exploration_contrasts"), prompts_raw, delivered_concepts, variation_execution_contract,
         ):
             raise BrainPromptContractInvalid(
                 "Remote Brain did not bind each creative exploration prompt to a new treatment of delivered work."
@@ -1044,12 +1045,13 @@ class V3LLMBrainAdapter:
                 )
             first_continuation_direction = shot_text
         if request.metadata.get("require_lossless_user_direction") is True:
+            integrity_statuses = {"rewritten"} if delivered_concepts else {"preserved", "rewritten"}
             if any(
                 not isinstance(item.get("user_direction_integrity"), dict)
                 or item["user_direction_integrity"].get("contract_version")
                 != "v3_user_direction_integrity_v1"
                 or item["user_direction_integrity"].get("owner") != "remote_v3_llm_brain"
-                or item["user_direction_integrity"].get("status") not in {"preserved", "rewritten"}
+                or item["user_direction_integrity"].get("status") not in integrity_statuses
                 for item in prompts_raw
                 if isinstance(item, dict)
             ):
@@ -3213,6 +3215,7 @@ def _general_variation_execution_contract_for_request(
 
 def _creative_exploration_contrasts_valid(
     contrasts: Any, prompts: list[dict[str, Any]], history: dict[str, str],
+    contract: VariationExecutionContract | None,
 ) -> bool:
     if not isinstance(contrasts, list) or len(contrasts) != len(prompts):
         return False
@@ -3225,6 +3228,13 @@ def _creative_exploration_contrasts_valid(
             or not isinstance(contrast.get("delivered_output_id"), str)
             or contrast["delivered_output_id"] not in history
             or contrast.get("changed_dimension") not in CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS
+            or (
+                contract is not None
+                and contrast["changed_dimension"] not in {
+                    CREATIVE_EXPLORATION_DIMENSION_BY_AXIS.get(axis)
+                    for axis in contract.outputs[index - 1].variation_axes
+                }
+            )
             or signed_prompt in used_prompts
         ):
             return False
