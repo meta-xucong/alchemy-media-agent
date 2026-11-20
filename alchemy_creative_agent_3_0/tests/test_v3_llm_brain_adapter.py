@@ -319,13 +319,13 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
             }
             for index, direction in enumerate(directions, 1)
         ],
-        "creative_exploration_contrasts": [
-            {
-                "output_index": index, "delivered_output_id": output_id,
+        "creative_exploration_contrasts": {
+            str(index): {
+                "delivered_output_id": output_id,
                 "changed_dimension": ("visual_style", "scene_story")[index - 1],
             }
             for index, output_id in enumerate(list(history)[:count], 1)
-        ],
+        },
     }
     contrasts = response["creative_exploration_contrasts"]
     if mismatch == "missing":
@@ -333,13 +333,13 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
     elif mismatch == "old_treatment":
         response["canonical_provider_prompts"][0]["prompt"] = history["delivered_night"].upper()
     elif mismatch == "wrong_output":
-        contrasts[0]["delivered_output_id"] = "not_formally_delivered"
+        contrasts["1"]["delivered_output_id"] = "not_formally_delivered"
     elif mismatch == "same_batch":
         response["canonical_provider_prompts"][1]["prompt"] = response["canonical_provider_prompts"][0]["prompt"]
     elif mismatch == "role_only":
-        contrasts[0]["changed_dimension"] = "role"
+        contrasts["1"]["changed_dimension"] = "role"
     elif mismatch == "wrong_concept_axis":
-        contrasts[1]["changed_dimension"] = "lighting_palette"
+        contrasts["2"]["changed_dimension"] = "lighting_palette"
     elif mismatch == "camera_only_receipt":
         contract = contract.model_copy(update={"outputs": [
             contract.outputs[0].model_copy(update={"variation_axes": ("viewpoint", "pose")}),
@@ -364,8 +364,12 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         run=lambda request: response,
     ))
     if mismatch:
-        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="creative exploration|user-direction integrity"):
+        with pytest.raises(brain_adapter.BrainPromptContractInvalid, match="creative exploration") as rejected:
             adapter.finalize_canonical_provider_prompts(request)
+        if mismatch == "wrong_concept_axis":
+            assert rejected.value.feedback == {"output_index": 2, "reason": "dimension_not_allowed"}
+        if mismatch == "preserved_old_treatment":
+            assert rejected.value.feedback == {"output_index": 1, "reason": "treatment_not_rewritten"}
         return
 
     signed, audit = adapter.finalize_canonical_provider_prompts(request)
@@ -382,9 +386,15 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
     assert [item["direction"] for item in payload["frozen_render_context"]["brain_draft_directions"]] == directions
     assert "matching brain_draft_directions entry" in payload["remote_response_contract"]
     assert "creative_exploration_contrasts" in structured["schema"]["required"]
-    assert set(structured["schema"]["properties"]["creative_exploration_contrasts"]["items"]["required"]) == {
-        "output_index", "delivered_output_id", "changed_dimension",
-    }
+    contrast_schema = structured["schema"]["properties"]["creative_exploration_contrasts"]
+    assert contrast_schema["required"] == [str(index) for index in range(1, count + 1)]
+    assert contrast_schema["additionalProperties"] is False
+    for output_key, output_schema in contrast_schema["properties"].items():
+        assert set(output_schema["required"]) == {"delivered_output_id", "changed_dimension"}
+        assert output_schema["properties"]["changed_dimension"]["enum"] == (
+            ["visual_style", "scene_story", "lighting_palette", "visual_hierarchy"] if count == 1
+            else ["visual_style", "lighting_palette"] if output_key == "1" else ["scene_story"]
+        )
     assert payload["protected_user_direction"] == request.user_input
     assert "Preserve fixed facts" in payload["user_direction_contract"]
     assert "inherited treatment as a baseline, not a lock" in payload["user_direction_contract"]
@@ -399,6 +409,59 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
     assert ordinary_item["properties"]["user_direction_integrity"]["properties"]["status"]["enum"] == [
         "preserved", "rewritten",
     ]
+
+
+def test_creative_exploration_signoff_retry_carries_first_rejected_output(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain.contracts import (
+        BrainCanonicalProviderPrompt, BrainImageSetPlan, BrainRunResult,
+    )
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainCreativeExplorationSignoffInvalid
+    from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import general_capability_policy
+
+    history = {"delivered": "A portrait in a cool rainy alley leaning against a metal pole."}
+    frozen_context = {"creative_exploration_history": history}
+    attempts = []
+
+    def finalize(request):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise BrainCreativeExplorationSignoffInvalid("dimension_not_allowed", output_index=1)
+        return [BrainCanonicalProviderPrompt(
+            output_index=1, prompt="Design a warm shop-window reflection scene with the same person.",
+            review_status="approved",
+        )], {"creative_exploration_contrasts_signed": True}
+
+    runtime = ScenarioRuntime(llm_brain_adapter=SimpleNamespace(
+        finalize_canonical_provider_prompts=finalize, execution_budget_receipt=lambda: None,
+    ))
+    monkeypatch.setattr(runtime, "_canonical_prompt_context", lambda *_: frozen_context)
+    monkeypatch.setattr(runtime, "_runtime_job_id", lambda *_: "job_creative_retry")
+    monkeypatch.setattr(runtime, "_template_id", lambda *_: "general_template")
+    result = runtime._finalize_canonical_provider_prompts(
+        ScenarioRuntimeRequest(
+            user_input="Explore a new concept with the same subject.",
+            metadata={"requested_image_count": 1, "require_real_images": True},
+        ),
+        SimpleNamespace(manifest=SimpleNamespace(scenario_id="general_creative")),
+        general_capability_policy(),
+        BrainRunResult.model_construct(audit={}, image_set_plan=BrainImageSetPlan.model_construct(shot_plan=[])),
+        SimpleNamespace(dependency_order=[], plan_id="activation"),
+        SimpleNamespace(envelope_id="envelope"),
+        SimpleNamespace(provider_projection={}, ledger_id="ledger"),
+    )
+
+    assert len(attempts) == 2
+    assert attempts[0].metadata["canonical_prompt_context"] == attempts[1].metadata["canonical_prompt_context"]
+    feedback = {"output_index": 1, "reason": "dimension_not_allowed"}
+    assert attempts[1].metadata["canonical_prompt_signoff_recovery"]["creative_exploration_rejection"] == feedback
+    provider_request = attempts[1].model_copy(update={"metadata": {
+        **attempts[1].metadata, "brain_source_projection_required": False,
+    }})
+    assert json.loads(build_remote_payload(provider_request))["canonical_prompt_signoff_recovery"][
+        "creative_exploration_rejection"
+    ] == feedback
+    assert result.audit["canonical_prompt_signoff_recovery_succeeded"] is True
 
 
 def _mark_output_formally_delivered(handlers, *, project_id: str, output) -> None:

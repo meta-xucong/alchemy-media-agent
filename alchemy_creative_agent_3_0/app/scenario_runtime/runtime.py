@@ -35,6 +35,7 @@ from ..llm_brain.prompt_policy import (
     build_brain_source_projection,
 )
 from ..llm_brain.providers import (
+    BrainCreativeExplorationSignoffInvalid,
     BrainDevelopmentalPresenceDecisionMissing,
     BrainExecutionBudgetExceeded,
     BrainHumanNaturalnessDecisionMissing,
@@ -3032,6 +3033,11 @@ class ScenarioRuntime:
                                 "contract_version": "v3_canonical_prompt_signoff_recovery_v1",
                                 "attempt": 1,
                                 "same_frozen_context": True,
+                                **(
+                                    {"creative_exploration_rejection": first_exc.feedback}
+                                    if isinstance(first_exc, BrainCreativeExplorationSignoffInvalid)
+                                    else {}
+                                ),
                             },
                         }
                     },

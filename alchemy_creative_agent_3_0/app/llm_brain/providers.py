@@ -139,6 +139,12 @@ class BrainPromptContractInvalid(BrainProviderError):
     """The remote Brain returned a malformed canonical provider-prompt contract."""
 
 
+class BrainCreativeExplorationSignoffInvalid(BrainPromptContractInvalid):
+    def __init__(self, reason: str, *, output_index: int | None = None) -> None:
+        super().__init__("Remote Brain returned an invalid creative exploration sign-off.")
+        self.feedback = {"reason": reason, "output_index": output_index}
+
+
 class BrainPromptRequestContractInvalid(BrainPromptContractInvalid):
     """The local frozen request contract is invalid before a Brain call."""
 

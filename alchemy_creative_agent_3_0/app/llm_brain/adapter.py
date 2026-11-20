@@ -9,6 +9,7 @@ from .context_digest import compact_brand_visual_context
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
+import logging
 import os
 import re
 import time
@@ -47,11 +48,10 @@ from .prompt_policy import (
 )
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .prompts import (
-    CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS,
-    CREATIVE_EXPLORATION_DIMENSION_BY_AXIS,
     _compact_required_remote_creative_schema,
     _first_suite_anchor_shot_instruction,
     _first_suite_continuation_shot_axes,
+    creative_exploration_dimensions,
     creative_exploration_history,
 )
 from .finalizer_lifecycle import (
@@ -61,6 +61,7 @@ from .finalizer_lifecycle import (
     safe_remote_brain_finalizer_lifecycle,
 )
 from .providers import (
+    BrainCreativeExplorationSignoffInvalid,
     BrainDevelopmentalAgeDecisionMissing,
     BrainDevelopmentalPresenceDecisionMissing,
     BrainExecutionBudgetExceeded,
@@ -573,6 +574,11 @@ class V3LLMBrainAdapter:
             return self._finalize_canonical_provider_prompts_impl(request)
         except (BrainProviderError, BrainProviderUnavailable) as exc:
             call_state = _ACTIVE_FINALIZER_CALL_STATE.get()
+            if isinstance(exc, BrainCreativeExplorationSignoffInvalid):
+                logging.getLogger(__name__).warning(
+                    "V3 creative exploration sign-off rejected: job=%s output=%s reason=%s",
+                    request.job_id, exc.feedback["output_index"], exc.feedback["reason"],
+                )
             response_received = call_state in {"response_received", "response_validation"}
             if _is_finalizer_response_contract_failure(exc) and response_received:
                 _attach_finalizer_transport_receipt(
@@ -1008,11 +1014,9 @@ class V3LLMBrainAdapter:
         first_continuation_direction = None
         finalizer_context = request.metadata.get("canonical_prompt_context")
         delivered_concepts = creative_exploration_history(request)
-        if delivered_concepts and not _creative_exploration_contrasts_valid(
-            data.get("creative_exploration_contrasts"), prompts_raw, delivered_concepts, variation_execution_contract,
-        ):
-            raise BrainPromptContractInvalid(
-                "Remote Brain did not bind each creative exploration prompt to a new treatment of delivered work."
+        if delivered_concepts:
+            _validate_creative_exploration_contrasts(
+                data.get("creative_exploration_contrasts"), prompts_raw, delivered_concepts, variation_execution_contract,
             )
         continuation_axes = _first_suite_continuation_shot_axes(finalizer_context, variation_execution_contract)
         if continuation_axes:
@@ -1046,15 +1050,19 @@ class V3LLMBrainAdapter:
             first_continuation_direction = shot_text
         if request.metadata.get("require_lossless_user_direction") is True:
             integrity_statuses = {"rewritten"} if delivered_concepts else {"preserved", "rewritten"}
-            if any(
-                not isinstance(item.get("user_direction_integrity"), dict)
-                or item["user_direction_integrity"].get("contract_version")
-                != "v3_user_direction_integrity_v1"
-                or item["user_direction_integrity"].get("owner") != "remote_v3_llm_brain"
-                or item["user_direction_integrity"].get("status") not in integrity_statuses
-                for item in prompts_raw
-                if isinstance(item, dict)
-            ):
+            for index, item in enumerate(prompts_raw, start=1):
+                integrity = item.get("user_direction_integrity")
+                if (
+                    isinstance(integrity, dict)
+                    and integrity.get("contract_version") == "v3_user_direction_integrity_v1"
+                    and integrity.get("owner") == "remote_v3_llm_brain"
+                ):
+                    if integrity.get("status") in integrity_statuses:
+                        continue
+                    if delivered_concepts:
+                        raise BrainCreativeExplorationSignoffInvalid("treatment_not_rewritten", output_index=index)
+                if delivered_concepts:
+                    raise BrainCreativeExplorationSignoffInvalid("invalid_direction_integrity", output_index=index)
                 raise BrainPromptContractInvalid(
                     "Remote Brain did not return the required user-direction integrity decision."
                 )
@@ -3213,33 +3221,28 @@ def _general_variation_execution_contract_for_request(
     return contract
 
 
-def _creative_exploration_contrasts_valid(
+def _validate_creative_exploration_contrasts(
     contrasts: Any, prompts: list[dict[str, Any]], history: dict[str, str],
     contract: VariationExecutionContract | None,
-) -> bool:
-    if not isinstance(contrasts, list) or len(contrasts) != len(prompts):
-        return False
+) -> None:
+    if not isinstance(contrasts, dict):
+        raise BrainCreativeExplorationSignoffInvalid("missing_contrasts")
     used_prompts = {" ".join(prompt.casefold().split()) for prompt in history.values()}
-    for index, (contrast, prompt) in enumerate(zip(contrasts, prompts), start=1):
+    for index, prompt in enumerate(prompts, start=1):
+        contrast = contrasts.get(str(index))
+        if not isinstance(contrast, dict) or set(contrast) != {"delivered_output_id", "changed_dimension"}:
+            raise BrainCreativeExplorationSignoffInvalid("invalid_output_contrast", output_index=index)
+        delivered_id = contrast["delivered_output_id"]
+        if not isinstance(delivered_id, str) or delivered_id not in history:
+            raise BrainCreativeExplorationSignoffInvalid("unknown_delivered_output", output_index=index)
+        if contrast["changed_dimension"] not in creative_exploration_dimensions(contract, index):
+            raise BrainCreativeExplorationSignoffInvalid("dimension_not_allowed", output_index=index)
         signed_prompt = " ".join(prompt["prompt"].casefold().split())
-        if (
-            not isinstance(contrast, dict)
-            or not _receipt_output_index_matches(contrast, index)
-            or not isinstance(contrast.get("delivered_output_id"), str)
-            or contrast["delivered_output_id"] not in history
-            or contrast.get("changed_dimension") not in CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS
-            or (
-                contract is not None
-                and contrast["changed_dimension"] not in {
-                    CREATIVE_EXPLORATION_DIMENSION_BY_AXIS.get(axis)
-                    for axis in contract.outputs[index - 1].variation_axes
-                }
-            )
-            or signed_prompt in used_prompts
-        ):
-            return False
+        if signed_prompt in used_prompts:
+            raise BrainCreativeExplorationSignoffInvalid("duplicate_prompt_text", output_index=index)
         used_prompts.add(signed_prompt)
-    return True
+    if len(contrasts) != len(prompts):
+        raise BrainCreativeExplorationSignoffInvalid("unexpected_output_contrast")
 
 
 def _matches_variation_execution_receipts(

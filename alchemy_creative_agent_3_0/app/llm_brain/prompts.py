@@ -1370,20 +1370,23 @@ def build_anthropic_structured_output(
                 "additionalProperties": False,
             }
         if "creative_exploration_contrasts" in response_shape:
+            contrast_rows = response_shape["creative_exploration_contrasts"]
             properties["creative_exploration_contrasts"] = {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "output_index": {"type": "integer"},
-                        "delivered_output_id": {"type": "string"},
-                        "changed_dimension": {"type": "string", "enum": list(CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS)},
-                    },
-                    "required": [
-                        "output_index", "delivered_output_id", "changed_dimension"
-                    ],
-                    "additionalProperties": False,
+                "type": "object",
+                "properties": {
+                    output_key: {
+                        "type": "object",
+                        "properties": {
+                            "delivered_output_id": {"type": "string"},
+                            "changed_dimension": {"type": "string", "enum": row["changed_dimension"].split("|")},
+                        },
+                        "required": ["delivered_output_id", "changed_dimension"],
+                        "additionalProperties": False,
+                    }
+                    for output_key, row in contrast_rows.items()
                 },
+                "required": list(contrast_rows),
+                "additionalProperties": False,
             }
     else:
         return None
@@ -1842,6 +1845,18 @@ CREATIVE_EXPLORATION_DIMENSION_BY_AXIS = {
     "composition": "visual_hierarchy",
 }
 CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS = tuple(dict.fromkeys(CREATIVE_EXPLORATION_DIMENSION_BY_AXIS.values()))
+
+
+def creative_exploration_dimensions(
+    contract: VariationExecutionContract | None, output_index: int,
+) -> tuple[str, ...]:
+    if contract is None:
+        return CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS
+    assigned = {
+        CREATIVE_EXPLORATION_DIMENSION_BY_AXIS.get(axis)
+        for axis in contract.outputs[output_index - 1].variation_axes
+    }
+    return tuple(dimension for dimension in CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS if dimension in assigned)
 
 
 def creative_exploration_history(request: BrainRunRequest) -> dict[str, str]:
@@ -2411,7 +2426,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "version of the same concept, a different role label, and changes only to crop, angle, expression "
             "or pose. Keep the subject and fixed user facts, but create a materially new visual treatment, scene "
             "story, lighting/palette treatment, or visual hierarchy. Do not require a camera-side change. "
-            "For each output in order, return a creative_exploration_contrasts entry with the closest delivered "
+            "For each output, key its creative_exploration_contrasts entry by the output index shown in the schema. "
+            "Return the closest delivered "
             "output ID and the substantive changed dimension. Use the matching brain_draft_directions entry "
             "as the planned concept. Check that it is distinct from delivered work and the other outputs, then "
             "write its distinguishing treatment directly into the complete canonical provider prompt for that output. "
@@ -2817,11 +2833,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "direction": "new renderer-ready shot sentence; exact opening sentence of output 1's prompt",
         }
     if delivered_concepts:
-        payload["return_schema"]["creative_exploration_contrasts"] = [{
-            "output_index": "same index as the approved prompt",
-            "delivered_output_id": "closest delivered output ID from creative_exploration_history",
-            "changed_dimension": "|".join(CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS),
-        }]
+        contrast_rows = {}
+        for output_index in range(1, request.requested_image_count + 1):
+            dimensions = creative_exploration_dimensions(variation_execution_contract, output_index)
+            if not dimensions:
+                raise ValueError("Creative exploration output has no authorized concept dimension.")
+            contrast_rows[str(output_index)] = {
+                "delivered_output_id": "closest delivered output ID from creative_exploration_history",
+                "changed_dimension": "|".join(dimensions),
+            }
+        payload["return_schema"]["creative_exploration_contrasts"] = contrast_rows
     if request.metadata.get("require_lossless_user_direction") is True:
         if delivered_concepts:
             protected_direction_rule = (
@@ -2874,6 +2895,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "context after the previous response failed schema validation. Return the exact full JSON schema again; "
             "do not return a patch, explanation, fallback direction, or local repair text."
         )
+        rejection = signoff_recovery.get("creative_exploration_rejection")
+        if delivered_concepts and isinstance(rejection, dict):
+            payload["canonical_prompt_signoff_recovery"]["creative_exploration_rejection"] = rejection
+            payload["remote_response_contract"] += (
+                " Address the creative_exploration_rejection for the indicated output using its allowed values. "
+                "Do not relabel an unchanged concept just to repair a receipt."
+            )
     if body_slot_delta_finalization:
         payload["professional_body_silhouette_source_contract"] = body_source_contract or {
             "contract_version": "professional_body_silhouette_source_contract_v1",
