@@ -20,6 +20,7 @@ from app.services.claude_orchestrator import orchestrate_creative_request
 from app.services.asset_binding import apply_orchestrator_task_intent, build_asset_context, provider_input_images_from_context
 from app.services.generation import create_image_job, create_running_image_job
 from app.services.ids import new_id
+from app.services.poster_layout import poster_layout_requirements
 from app.services.prompting import compose_prompt_plan, summarize_intent, summaries_from_cases
 from app.services.safety import run_safety_check
 from app.services import task_queue
@@ -199,7 +200,9 @@ class CreativeManagerRuntime:
         created = created_at or utc_now()
         run_id = run_id or new_id("run")
         trace_id = trace_id or new_id("trace")
-        fallback_mode = request.mode_hint or ("template_customize" if request.template_case_id else "smart_enhance")
+        template_case = get_prompt_case(request.template_case_id) if request.template_case_id else None
+        template_locked = template_case is not None
+        fallback_mode = "template_customize" if template_locked else request.mode_hint or "smart_enhance"
         progress_events: list[dict[str, Any]] = []
         progress_summary: dict[str, Any] = {}
         self._save_run_stage(
@@ -235,12 +238,15 @@ class CreativeManagerRuntime:
             case_retrieval_plan=fallback_retrieval_plan,
             next_actions=["Matching local provider cases and preparing uploaded assets."],
         )
-        template_case = get_prompt_case(request.template_case_id) if request.template_case_id else None
-        template_locked = template_case is not None
-        candidate_summaries = self._retrieve_candidate_summaries(fallback_retrieval_plan, limit=max(4, fallback_retrieval_plan.limit))
+        poster_layout = frozenset() if request.template_case_id else poster_layout_requirements(request.user_prompt)
+        candidate_summaries = self._retrieve_candidate_summaries(
+            fallback_retrieval_plan, limit=max(4, fallback_retrieval_plan.limit), poster_layout=poster_layout,
+        )
         if not candidate_summaries:
             for relaxed_plan in self._relaxed_retrieval_plans(fallback_retrieval_plan, asset_context=asset_context):
-                relaxed_summaries = self._retrieve_candidate_summaries(relaxed_plan, limit=max(4, relaxed_plan.limit))
+                relaxed_summaries = self._retrieve_candidate_summaries(
+                    relaxed_plan, limit=max(4, relaxed_plan.limit), poster_layout=poster_layout,
+                )
                 if relaxed_summaries:
                     fallback_retrieval_plan = relaxed_plan
                     candidate_summaries = relaxed_summaries
@@ -313,6 +319,8 @@ class CreativeManagerRuntime:
                 progress_events=progress_events,
                 progress_summary=progress_summary,
             )
+        if template_locked and orchestrator_decision.mode != "template_customize":
+            orchestrator_decision = orchestrator_decision.model_copy(update={"mode": "template_customize"})
         asset_context = apply_orchestrator_task_intent(asset_context, orchestrator_decision.task_intent) or asset_context
         mode = orchestrator_decision.mode
         retrieval_plan = orchestrator_decision.case_retrieval_plan
@@ -335,14 +343,14 @@ class CreativeManagerRuntime:
                 or not orchestrator_decision.selected_case_ids
             )
             if should_expand_with_local_search:
-                search_response = self._search_cases(retrieval_plan)
+                search_response = self._search_cases(retrieval_plan, poster_layout=poster_layout)
                 for summary in search_response.cases:
                     case = get_prompt_case(summary.case_id)
                     if case and case.case_id not in full_case_ids:
                         full_cases.append(case)
                         full_case_ids.add(case.case_id)
         if not full_cases:
-            search_response = self._search_cases(retrieval_plan)
+            search_response = self._search_cases(retrieval_plan, poster_layout=poster_layout)
             for summary in search_response.cases:
                 case = get_prompt_case(summary.case_id)
                 if case and case.case_id not in {item.case_id for item in full_cases}:
@@ -576,8 +584,10 @@ class CreativeManagerRuntime:
             diversity_level="medium",
         )
 
-    def _retrieve_candidate_summaries(self, retrieval_plan: CaseRetrievalPlan, *, limit: int):
-        response = self._search_cases(retrieval_plan.model_copy(update={"limit": limit}))
+    def _retrieve_candidate_summaries(
+        self, retrieval_plan: CaseRetrievalPlan, *, limit: int, poster_layout: frozenset[str],
+    ):
+        response = self._search_cases(retrieval_plan.model_copy(update={"limit": limit}), poster_layout=poster_layout)
         return response.cases
 
     def _relaxed_retrieval_plans(
@@ -681,7 +691,7 @@ class CreativeManagerRuntime:
                 cases.append(case)
         return cases
 
-    def _search_cases(self, retrieval_plan: CaseRetrievalPlan):
+    def _search_cases(self, retrieval_plan: CaseRetrievalPlan, *, poster_layout: frozenset[str] = frozenset()):
         return search_prompt_cases(
             SearchPromptCasesRequest(
                 query_text=retrieval_plan.query_text,
@@ -691,7 +701,8 @@ class CreativeManagerRuntime:
                 risk_filters=retrieval_plan.risk_filters,
                 limit=retrieval_plan.limit,
                 diversity_level=retrieval_plan.diversity_level,
-            )
+            ),
+            poster_layout=poster_layout,
         )
 
 

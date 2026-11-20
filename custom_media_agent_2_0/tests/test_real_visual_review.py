@@ -44,6 +44,37 @@ def reply(verdict=None):
         verdict or {'decision': 'pass', 'references_match': True, 'notes': ['Visible result meets the request.'], 'issues': []})}}]})
 
 
+def test_text_only_poster_checks_layout_and_retains_reviewed_image(job, monkeypatch):
+    from app.services.reference_delivery import build_reference_delivery_contract
+
+    brief = 'Poster for a dessert course. Show the headline and price exactly, use a two-column list, and reserve a blank white QR code area.'
+    contract = build_reference_delivery_contract({'user_prompt': brief, 'uploaded_assets': []})
+    assert contract['information_dense']
+    assert contract['acceptance']['requires_source_text_evidence'] is False
+    job.prompt_plan.user_variables = {'user_prompt': brief, 'reference_delivery': contract}
+    requests = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        return reply({'decision': 'needs_review', 'references_match': True, 'notes': [],
+                      'issues': ['The reserved QR area is missing.']})
+
+    install_response(monkeypatch, handler)
+    reviewed = asyncio.run(vision.review_generated_job(review_image_job(job)))
+    parts = requests[0]['messages'][0]['content']
+    assert parts[1]['image_url']['url'].startswith('data:image/png;base64,')
+    review_prompt = parts[0]['text']
+    assert brief in review_prompt
+    assert all(requirement in review_prompt for requirement in ('information hierarchy', 'whitespace', 'QR area'))
+    assert reviewed.status == 'completed'
+    assert reviewed.outputs[0].url == job.outputs[0].url
+    assert reviewed.outputs[0].review.analysis_mode == 'vision_model'
+    assert reviewed.outputs[0].review.decision == 'needs_review'
+    assert 'source_text_evidence_missing' not in reviewed.outputs[0].review.detected_risks
+    assert 'The reserved QR area is missing.' in reviewed.outputs[0].review.revision_directives
+
+
 def test_review_follows_brain_queue_gpt_last_and_reuses_valid_needs_review(job, monkeypatch):
     from app.services.model_routing import visual_review_models
     monkeypatch.setattr(vision, 'settings', replace(vision.settings,
