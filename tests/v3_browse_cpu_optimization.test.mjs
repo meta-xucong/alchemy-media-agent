@@ -607,6 +607,130 @@ test("output projection retries once after failure then suppresses unchanged suc
   assert.equal(outputReads, 2, "failed read followed by one successful retry");
 });
 
+test("V3 landing opens only a project explicitly named by the route", () => {
+  const startup = extractFunction("restoreInitialModuleRoute", "\nasync function initV3Shell");
+  const routeProject = extractFunction("v3ProjectIdFromRoute", "\nfunction v3ProjectUsesProfessionalWorkspace");
+  const tabSwitch = extractFunction("switchTab", "\nfunction updateHeroCopy");
+  for (const [search, expected] of [
+    ["", ["home"]],
+    ["?project_id=shared", ["shared"]],
+    ["?project=legacy", ["legacy"]],
+    ["?home=1&project_id=stale", ["home"]],
+  ]) {
+    const destinations = [];
+    const context = {
+      URLSearchParams,
+      window: { location: { search }, sessionStorage: { removeItem() {} } },
+      document: { body: { classList: { toggle() {} }, dataset: {} } },
+      els: { tabs: [], panels: [] },
+      activeTabName: "image",
+      initialModuleRoute: () => "v3",
+      initialV3ScenarioFromPath: () => "",
+      pendingModuleRouteStorageKey: "pending",
+      v3State: { projects: [{ project_id: "recent" }] },
+      v2State: {},
+      initV3Shell: async () => {},
+      updateHeroCopy() {},
+      renderV3HeroHistory() {},
+      setV3WorkspaceMode() {},
+      openV3Home: () => destinations.push("home"),
+      openV3Project: (id) => destinations.push(id),
+    };
+    vm.runInNewContext(`${startup}\n${routeProject}\n${tabSwitch}`, context);
+    context.restoreInitialModuleRoute();
+    assert.deepEqual(destinations, expected);
+  }
+  assert.match(source, /if \(tabName === "v3"\) \{\s*event\.preventDefault\(\);\s*switchTab\("v3"\);\s*openV3Home\(/);
+});
+
+test("desktop V3 project cards can be opened during preview loading", async () => {
+  const bootstrap = extractFunction("initV3Shell", "\nfunction clearV3PendingUploads");
+  const click = extractFunction("handleV3ProjectClick", "\nfunction handleV3HistoryClick");
+  const requested = [];
+  let completePreview;
+  const previews = new Promise((resolve) => { completePreview = resolve; });
+  const context = {
+    v3State: { view: "home", projects: [], loading: false },
+    v3ApiBase: "/api/v3",
+    v3ProjectFetchLimit: 24,
+    v3ProjectHomePageSize: 6,
+    readV3LocalProjects: () => [],
+    mergeV3ProjectItems: (primary) => primary,
+    waitForV3Paint: async () => {},
+    request: async () => ({ projects: [{ project_id: "picked" }] }),
+    loadV3ProjectOutputs: () => previews,
+    waitForV3HomePreviewImages: async () => {},
+    openV3Project: (id) => {
+      requested.push(id);
+      context.v3State.loading = true;
+      context.v3State.view = "workspace";
+    },
+    setV3PageLoading: (visible) => assert.equal(visible, false, "home previews cannot cover project cards"),
+  };
+  for (const name of [
+    "writeV3LocalProjects", "updateV3Notice", "renderV3ViewState", "renderV3ScenarioState",
+    "renderV3HomeTemplateChooser", "renderV3Projects", "renderV3History", "renderV3HeroHistory",
+    "renderV3ProjectDetail", "renderV3Job",
+  ]) context[name] = () => {};
+  vm.runInNewContext(`${bootstrap}\n${click}`, context);
+  const loading = context.initV3Shell();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.v3State.projects[0].project_id, "picked");
+  assert.equal(context.v3State.loading, false, "list bootstrap remains independent of generation");
+  const card = { dataset: { v3ProjectAction: "open_project", v3ProjectId: "picked" } };
+  context.handleV3ProjectClick({
+    target: { closest: () => card }, preventDefault() {}, stopPropagation() {},
+  });
+  assert.deepEqual(requested, ["picked"]);
+  completePreview([]);
+  await loading;
+  assert.equal(context.v3State.loading, true, "late home preview cannot unlock project actions");
+  assert.equal(context.v3State.projectsLoading, false);
+});
+
+test("a V3 home preview response cannot replace the open project's results", async () => {
+  const load = extractFunction("loadV3ProjectOutputs", "\nfunction mergeV3HomePreviewItems");
+  for (const failure of [false, true]) {
+    const result = { output_id: "project-result" };
+    const review = { output_id: "project-review" };
+    const context = {
+      v3State: {
+        currentProject: { project_id: "opened" },
+        projectOutputs: [result],
+        projectReviewOutputs: [review],
+        projectOutputsSurface: "full",
+      },
+      els: {},
+      v3ApiBase: "/api/v3",
+      v3HomePreviewRequestTimeoutMs: 4000,
+      v3RequestWithTimeout: async (url) => {
+        assert.match(url, /surface=home_preview&project_ids=listed/);
+        assert.doesNotMatch(url, /[?&]project_id=/);
+        if (failure) throw new Error("preview unavailable");
+        return { items: [], review_items: [{ output_id: "home-review" }] };
+      },
+      v3ProjectDetailRequestIsCurrent: () => true,
+      v3HistoryModalRequestIsCurrent: () => true,
+      v3ProjectDetailSignal: () => undefined,
+      friendlyError: (error) => error.message,
+      syncV3ProjectOutputsFromList: () => assert.fail("home preview cannot populate project detail"),
+    };
+    for (const name of [
+      "syncV3HomeProjectProjection", "markV3HomePreviewStale", "renderV3History",
+      "renderV3HeroHistory", "renderV3ProjectOutputBoard", "renderV3ProjectSnapshot",
+      "renderV3StepCards", "renderV3ProjectNextActions",
+    ]) context[name] = () => {};
+    vm.runInNewContext(load, context);
+    await context.loadV3ProjectOutputs({
+      surface: "home_preview", projectIds: ["listed"], force: true, silent: true,
+      throwOnError: !failure,
+    });
+    assert.deepEqual(context.v3State.projectOutputs, [result]);
+    assert.deepEqual(context.v3State.projectReviewOutputs, [review]);
+    assert.equal(context.v3State.projectOutputsSurface, "full");
+  }
+});
+
 test("returning home releases an opening project and permits a later project after stale success or abort", async () => {
   const invalidate = extractFunction("invalidateV3ProjectDetail", "\nfunction v3ProjectDetailIsCurrent");
   const isCurrent = extractFunction("v3ProjectDetailIsCurrent", "\nfunction v3ProjectDetailRequestIsCurrent");
