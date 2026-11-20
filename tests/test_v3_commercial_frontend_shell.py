@@ -489,8 +489,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "localItems.filter((item) => serverProjectIds.has(String(item?.project_id || \"\")))" in script.text
     assert "els.v3ProjectDeleteBtn.hidden = !project?.project_id;" in script.text
     assert "waitForV3FirstHomePreviewImage" in script.text
-    assert "await waitForV3HomePreviewImages({ blockPage: true });" in shell_body
-    assert "void waitForV3HomePreviewImages({ blockPage: false });" not in shell_body
+    assert "void waitForV3HomePreviewImages();" in shell_body
+    assert "setV3PageLoading(true" not in shell_body
     assert "function v3ReviewCertification" in script.text
     assert "function v3JobDeliveryWithheld" in script.text
     assert "manual_confirmation_required" in script.text

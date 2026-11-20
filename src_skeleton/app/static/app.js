@@ -326,7 +326,6 @@ const v3State = {
   projectsLoadError: "",
   projectRenderLimit: v3ProjectHomePageSize,
   currentProject: null,
-  explicitHome: false,
   projectCreationPending: false,
   projectDetailEpoch: 0,
   projectDetailProjectId: "",
@@ -1395,7 +1394,7 @@ function bindControls() {
       if (tabName === "v3") {
         event.preventDefault();
         switchTab("v3");
-        if (!v3State.currentProject) setV3WorkspaceMode("standard");
+        openV3Home({ silent: true });
         setLabNavOpen(false);
         return;
       }
@@ -1900,7 +1899,6 @@ function switchTab(tabName) {
     loadLabHistory({ silent: true }).catch((error) => updateLabNotice(`Lab 历史加载失败：${friendlyError(error)}`, "warning"));
   } else if (tabName === "v3") {
     initV3Shell()
-      .then(() => openV3RecentProjectIfNeeded())
       .catch((error) => updateV3Notice(`V3 场景加载失败：${friendlyError(error)}`, "warning"));
     renderV3HeroHistory();
   } else if (tabName === "account") {
@@ -2183,18 +2181,6 @@ function v3ProjectIdFromRoute() {
   return String(params.get("project_id") || params.get("project") || "").trim();
 }
 
-function openV3RecentProjectIfNeeded() {
-  if (
-    v3State.currentProject?.project_id
-    || v3State.projectOpening
-    || v3State.projectCreationPending
-    || v3State.explicitHome
-    || new URLSearchParams(window.location.search).get("home") === "1"
-  ) return;
-  const projectId = v3ProjectIdFromRoute() || String(v3State.projects[0]?.project_id || "").trim();
-  if (projectId) void openV3Project(projectId);
-}
-
 function v3ProjectUsesProfessionalWorkspace(project) {
   return v3ProjectWorkspace(project) === "professional";
 }
@@ -2217,8 +2203,9 @@ function syncV3WorkspaceRoute() {
   if (v3State.currentProject?.project_id) {
     url.searchParams.set("project_id", v3State.currentProject.project_id);
     url.searchParams.delete("home");
-  } else if (v3State.explicitHome) {
+  } else {
     url.searchParams.delete("project_id");
+    url.searchParams.delete("project");
     url.searchParams.set("home", "1");
   }
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
@@ -2289,18 +2276,15 @@ function restoreInitialModuleRoute() {
   }
   if (route === "v3") {
     switchTab("v3");
-    setV3WorkspaceMode("standard", { updateRoute: false });
     const scenarioFromPath = initialV3ScenarioFromPath();
-    const explicitHome = new URLSearchParams(window.location.search).get("home") === "1"
-      || !v3ProjectIdFromRoute()
-      || Boolean(scenarioFromPath);
-    if (scenarioFromPath) {
-      openV3Home({ silent: true, explicit: true, updateRoute: false });
-      if (scenarioFromPath !== "general_creative") {
-        updateV3Notice("这个模板入口已经并入项目页，请先打开或新建一个 V3 项目。", "info");
-      }
-    } else {
-      openV3Home({ silent: true, explicit: explicitHome, updateRoute: true });
+    const projectId = v3ProjectIdFromRoute();
+    if (projectId && !scenarioFromPath && new URLSearchParams(window.location.search).get("home") !== "1") {
+      void openV3Project(projectId);
+      return;
+    }
+    openV3Home({ silent: true, updateRoute: !scenarioFromPath });
+    if (scenarioFromPath && scenarioFromPath !== "general_creative") {
+      updateV3Notice("这个模板入口已经并入项目页，请先打开或新建一个 V3 项目。", "info");
     }
     return;
   }
@@ -2310,20 +2294,18 @@ function restoreInitialModuleRoute() {
 }
 
 async function initV3Shell({ force = false } = {}) {
-  if (v3State.loading || (v3State.loaded && !force)) {
+  if (v3State.projectsLoading || (v3State.loaded && !force)) {
     renderV3ViewState();
     renderV3ScenarioState();
     renderV3HomeTemplateChooser();
     renderV3Projects();
     renderV3History();
     renderV3Job(v3State.currentJob);
-    if (!v3State.loading && activeTabName === "v3") openV3RecentProjectIfNeeded();
     return;
   }
-  v3State.loading = true;
+  v3State.projectsLoading = true;
   v3State.templateCatalogStatus = "loading";
   v3State.templateCatalogError = "";
-  setV3PageLoading(true, "正在同步最近项目", "先显示项目框架，再读取最新图片。");
   renderV3ViewState();
   const localProjects = readV3LocalProjects();
   if (localProjects.length) {
@@ -2332,7 +2314,9 @@ async function initV3Shell({ force = false } = {}) {
     renderV3Projects();
     renderV3History();
   }
-  updateV3Notice("正在读取 V3 项目。", "info");
+  if (v3State.view === "home" && !v3State.projectOpening) {
+    updateV3Notice("正在读取 V3 项目。", "info");
+  }
   try {
     await waitForV3Paint();
     const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}&view=summary`);
@@ -2363,12 +2347,10 @@ async function initV3Shell({ force = false } = {}) {
     renderV3HeroHistory();
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
-    updateV3Notice("V3 项目工作台已就绪。", "success");
-    // The project catalog establishes the first-page data contract, but the
-    // home surface is not visually ready until its bounded delivery preview
-    // has rendered and every first-page thumbnail has settled. Keep this
-    // request on the initial mask path so slow images cannot be mistaken for
-    // missing projects.
+    if (v3State.view === "home" && !v3State.projectOpening) {
+      updateV3Notice("V3 项目工作台已就绪。", "success");
+    }
+    // The catalog makes cards navigable while their previews load.
     const firstPageProjectIds = v3State.projects
       .slice(0, v3ProjectHomePageSize)
       .map((project) => String(project?.project_id || "").trim())
@@ -2391,7 +2373,7 @@ async function initV3Shell({ force = false } = {}) {
     renderV3HeroHistory();
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
-    await waitForV3HomePreviewImages({ blockPage: true });
+    if (v3State.view === "home") void waitForV3HomePreviewImages();
   } catch (error) {
     v3State.templates = [];
     v3State.templateCatalogStatus = "failed";
@@ -2408,14 +2390,15 @@ async function initV3Shell({ force = false } = {}) {
     renderV3HomeTemplateChooser();
     renderV3Projects();
     renderV3History();
-    updateV3Notice(`V3 项目加载失败：${friendlyError(error)}`, "warning");
+    if (v3State.view === "home" && !v3State.projectOpening) {
+      updateV3Notice(`V3 项目加载失败：${friendlyError(error)}`, "warning");
+    }
   } finally {
-    v3State.loading = false;
+    v3State.projectsLoading = false;
     // The initial catalog render deliberately shows a loading placeholder.
     // Re-render after the request settles so a refresh cannot leave the
     // available template catalog permanently hidden behind that placeholder.
     renderV3HomeTemplateChooser();
-    if (!v3State.projectOpening) setV3PageLoading(false);
     renderV3ScenarioState();
   }
 }
@@ -2439,21 +2422,18 @@ function handleV3ScenarioClick(button) {
   openV3ScenarioWorkspace(scenarioId);
 }
 
-function openV3Home({ silent = false, explicit = true, updateRoute = true } = {}) {
+function openV3Home({ silent = false, updateRoute = true } = {}) {
   window.AlchemyBridgeTrial?.close();
-  v3State.explicitHome = Boolean(explicit);
   const cancelledProjectOpening = Boolean(v3State.projectOpening);
   invalidateV3ProjectDetail("");
   if (v3State.followingGeneration) {
     v3State.followingGeneration = null;
     clearV3Progress();
-    setV3Busy(false);
   }
   if (cancelledProjectOpening) {
     v3State.projectOpening = false;
     if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
     setV3PageLoading(false);
-    setV3Busy(false);
   }
   v3State.workspaceMode = "standard";
   v3State.view = "home";
@@ -2466,6 +2446,7 @@ function openV3Home({ silent = false, explicit = true, updateRoute = true } = {}
   v3State.pendingNegativeFeedbackOutputId = "";
   v3State.projectTimeline = [];
   v3State.activeProjectStep = "compose";
+  if (v3State.loading && !v3State.projectCreationPending) setV3Busy(false);
   clearV3PendingUploads();
   renderV3ViewState();
   renderV3ScenarioState();
@@ -2488,8 +2469,9 @@ function openV3Home({ silent = false, explicit = true, updateRoute = true } = {}
         }));
       }
       Promise.allSettled(loadTasks)
-        .then(() => waitForV3HomePreviewImages({ blockPage: false }))
-        .finally(() => setV3PageLoading(false));
+        .then(() => {
+          if (v3State.view === "home") void waitForV3HomePreviewImages();
+        });
     }, 40);
   }
 }
@@ -3606,9 +3588,10 @@ async function loadV3ProjectOutputs({
   throwOnError = false,
   preserveOnError = false,
 } = {}) {
-  const scopedProjectId = projectId || v3State.currentProject?.project_id || "";
   const requestOwner = sessionReceipt || null;
   const normalizedSurface = String(surface || "").trim().toLowerCase();
+  const homePreview = normalizedSurface === "home_preview";
+  const scopedProjectId = homePreview ? "" : projectId || v3State.currentProject?.project_id || "";
   const minimumLimit = normalizedSurface === "home_preview" ? 1 : 12;
   const boundedLimit = Math.max(minimumLimit, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
   const requestedHomeProjectIds = normalizedSurface === "home_preview" && Array.isArray(projectIds)
@@ -3688,7 +3671,7 @@ async function loadV3ProjectOutputs({
       v3State.imageHistory = appendPreviewItems
         ? mergeV3HomePreviewItems(v3State.imageHistory, displayItems)
         : displayItems;
-      v3State.projectReviewOutputs = reviewItems;
+      if (!homePreview) v3State.projectReviewOutputs = reviewItems;
       v3State.imageHistorySurface = normalizedSurface || "full";
       v3State.imageHistoryLoaded = normalizedSurface !== "home_preview";
       if (normalizedSurface === "home_preview") {
@@ -3724,10 +3707,12 @@ async function loadV3ProjectOutputs({
         markV3HomePreviewStale(requestedHomeProjectIds);
       }
       v3State.imageHistoryError = friendlyError(error);
-      v3State.projectOutputs = [];
-      v3State.projectOutputsSurface = "none";
-      v3State.projectOutputItems = [];
-      v3State.projectReviewOutputs = [];
+      if (!homePreview) {
+        v3State.projectOutputs = [];
+        v3State.projectOutputsSurface = "none";
+        v3State.projectOutputItems = [];
+        v3State.projectReviewOutputs = [];
+      }
       renderV3History();
       renderV3HeroHistory();
       renderV3ProjectOutputBoard();
@@ -4372,7 +4357,6 @@ async function createV3Project() {
       },
     });
     v3State.currentProject = v3ProjectWithResponsePreferences(payload.project || null, payload);
-    v3State.explicitHome = false;
     syncV3WorkspaceRoute();
     applyV3GenerationPreferences(v3State.currentProject);
     syncV3ProjectOutputsFromPayload(payload);
@@ -10116,7 +10100,6 @@ async function openV3Project(projectId) {
     closeV3ProjectSubpage({ silent: true });
     renderV3ViewState();
     renderV3ProjectOpeningState(requestedProjectId);
-    v3State.explicitHome = false;
     applyV3GenerationPreferences(v3State.currentProject);
     if (!detailIsCurrent()) return;
     setV3WorkspaceMode(
@@ -10206,7 +10189,7 @@ async function openV3Project(projectId) {
         updateV3Notice(`项目打开失败，已保留当前项目：${friendlyError(error)}`, "error");
         void syncV3ProjectDetailInBackground(preservedProjectId, restoredDetailEpoch);
       } else {
-        openV3Home({ silent: true, explicit: true, updateRoute: true });
+        openV3Home({ silent: true });
         updateV3Notice(`项目打开失败，已返回项目列表：${friendlyError(error)}`, "error");
       }
     }
@@ -12000,14 +11983,13 @@ function waitForV3FirstHomePreviewImage({ timeoutMs = 12000 } = {}) {
   });
 }
 
-function waitForV3HomePreviewImages({ blockPage = true } = {}) {
+function waitForV3HomePreviewImages() {
   const images = v3HomePreviewImages();
   if (!images.length) return Promise.resolve();
   images.forEach((image) => {
     if (image.complete && image.naturalWidth === 0) markV3HomePreviewImageFailed(image);
   });
   if (images.every(v3ImageSettled)) return Promise.resolve();
-  if (blockPage) setV3PageLoading(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
   return new Promise((resolve) => {
     const cleanup = [];
     const timeout = window.setTimeout(() => {

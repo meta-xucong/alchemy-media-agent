@@ -337,6 +337,52 @@ def test_host_real_project_render_hook_closes_old_trial(browser: Browser) -> Non
         assert fixture.creates == []
 
 
+def test_host_v3_tab_returns_home_and_project_opens_with_preview_pending(browser: Browser) -> None:
+    with trial_page(browser, host=True) as (page, fixture):
+        seed_host(page)
+        project = {"project_id": PROJECT_B, "title": "Selected project", "status": "active",
+                   "primary_template_id": "general_template", "job_ids": [], "metadata": {}}
+        templates = [{"template_id": "general_template", "project_can_create_jobs": True}]
+        held_previews: list[Route] = []
+        opened: list[str] = []
+        prefix = "/api/v3/creative-agent"
+
+        def browsing_route(route: Route) -> None:
+            url = urlsplit(route.request.url)
+            path = url.path.removeprefix(prefix)
+            if route.request.method == "GET" and path == "/projects":
+                route.fulfill(json={"projects": [project], "templates": templates, "total": 1})
+            elif route.request.method == "GET" and path == f"/projects/{PROJECT_B}":
+                opened.append(PROJECT_B)
+                route.fulfill(json={"project": project, "templates": templates})
+            elif route.request.method == "GET" and path == "/project-outputs":
+                if parse_qs(url.query).get("surface") == ["home_preview"]:
+                    held_previews.append(route)
+                else:
+                    route.fulfill(json={"items": []})
+            elif route.request.method == "GET" and path == f"/projects/{PROJECT_B}/timeline":
+                route.fulfill(json={"items": []})
+            else:
+                route.fallback()
+
+        page.route(ORIGIN + prefix + "/**", browsing_route)
+        with page.expect_request(lambda request: "surface=home_preview" in request.url):
+            page.get_by_role("tab", name="生图 V3.0 creative OS").click()
+        expect(page.locator("#v3HomeView")).to_be_visible()
+        expect(page.locator("#v3WorkspaceView")).to_be_hidden()
+        assert len(held_previews) == 1
+        assert opened == []
+
+        page.locator(f'#v3HistoryList button[data-v3-history-project="{PROJECT_B}"]').click(timeout=2000)
+        expect(page.locator("#v3WorkspaceView")).to_be_visible()
+        expect(page.locator("#v3ProjectTitle")).to_have_text("Selected project")
+        held_previews.pop().fulfill(status=503, json={})
+        page.wait_for_function("!v3State.projectsLoading && !v3State.projectOpening && !v3State.loading")
+        expect(page.locator("#v3ProjectTitle")).to_have_text("Selected project")
+        assert opened == [PROJECT_B]
+        assert fixture.creates == []
+
+
 @pytest.mark.parametrize("change", [
     {"view": "home"}, {"status": "archived"},
     {"template": "ecommerce_template"}, {"workspace": "professional"}, {"missing": True},
