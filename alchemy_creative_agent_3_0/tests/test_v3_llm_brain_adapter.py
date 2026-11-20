@@ -204,8 +204,8 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
 
 @pytest.mark.parametrize(
     ("mismatch", "count"),
-    [(None, 1), (None, 2), ("missing", 2), ("old_treatment", 2), ("wrong_quote", 2),
-     ("receipt_only", 2), ("same_batch", 2), ("role_only", 2)],
+    [(None, 1), (None, 2), ("missing", 2), ("old_treatment", 2), ("wrong_output", 2),
+     ("same_batch", 2), ("role_only", 2)],
 )
 def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypatch, mismatch, count) -> None:
     from alchemy_creative_agent_3_0.app.llm_brain import adapter as brain_adapter
@@ -234,16 +234,26 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         "Stage the subject inside a miniature paper theatre with layered painted scenery.",
     ][:count]
     request = BrainRunRequest(
-        user_input="Explore some new visual concepts around the same subject.",
+        user_input=(
+            "Keep the same adult subject and silver-rimmed glasses. The previous portrait is a vertical "
+            "photograph in a cool rainy alley, leaning against a pole with hard white light."
+        ),
         stage="provider_prompt_finalize", scenario_id="general_creative", template_id="general_template",
-        requested_image_count=count, metadata={"canonical_prompt_context": {"creative_exploration_history": history}},
+        requested_image_count=count, metadata={
+            "canonical_prompt_context": {"creative_exploration_history": history},
+            "require_lossless_user_direction": True,
+        },
     )
     response = {
         "canonical_provider_prompts": [
             {
                 "output_index": index,
-                "prompt": f"{direction} Keep the subject recognizable.",
+                "prompt": f"Keep the same recognizable adult subject and silver-rimmed glasses. {direction}",
                 "review_status": "approved",
+                "user_direction_integrity": {
+                    "contract_version": "v3_user_direction_integrity_v1",
+                    "status": "rewritten", "owner": "remote_v3_llm_brain",
+                },
                 "variation_execution_receipt": {
                     "contract_version": contract.contract_version, "contract_digest": contract.contract_digest,
                     "output_index": index, "status": "approved", "owner": "remote_v3_llm_brain",
@@ -254,25 +264,20 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         "creative_exploration_contrasts": [
             {
                 "output_index": index, "delivered_output_id": output_id,
-                "delivered_excerpt": history[output_id], "changed_dimension": "visual_style",
-                "new_direction": direction,
+                "changed_dimension": "visual_style",
             }
-            for index, (output_id, direction) in enumerate(zip(history, directions), 1)
+            for index, output_id in enumerate(list(history)[:count], 1)
         ],
     }
     contrasts = response["creative_exploration_contrasts"]
     if mismatch == "missing":
         response.pop("creative_exploration_contrasts")
     elif mismatch == "old_treatment":
-        contrasts[0]["new_direction"] = history["delivered_night"]
-        response["canonical_provider_prompts"][0]["prompt"] = history["delivered_night"]
-    elif mismatch == "wrong_quote":
-        contrasts[0]["delivered_excerpt"] = history["delivered_night"]
-    elif mismatch == "receipt_only":
-        response["canonical_provider_prompts"][0]["prompt"] = history["delivered_editorial"]
+        response["canonical_provider_prompts"][0]["prompt"] = history["delivered_night"].upper()
+    elif mismatch == "wrong_output":
+        contrasts[0]["delivered_output_id"] = "not_formally_delivered"
     elif mismatch == "same_batch":
-        contrasts[1]["new_direction"] = directions[0]
-        response["canonical_provider_prompts"][1]["prompt"] = directions[0]
+        response["canonical_provider_prompts"][1]["prompt"] = response["canonical_provider_prompts"][0]["prompt"]
     elif mismatch == "role_only":
         contrasts[0]["changed_dimension"] = "role"
 
@@ -293,13 +298,24 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         return
 
     signed, audit = adapter.finalize_canonical_provider_prompts(request)
-    assert audit["creative_exploration_directions"] == directions
-    assert all(prompt.prompt.startswith(direction) for prompt, direction in zip(signed, directions))
+    assert audit["creative_exploration_contrasts_signed"] is True
+    assert [prompt.prompt for prompt in signed] == [row["prompt"] for row in response["canonical_provider_prompts"]]
+    assert all(
+        direction in prompt.prompt and not prompt.prompt.startswith(direction)
+        for prompt, direction in zip(signed, directions)
+    )
     monkeypatch.setattr(brain_prompts, "_validated_general_variation_contract_for_finalizer", lambda *_: frozen_contract)
     body, structured, _ = build_anthropic_structured_output(request)
     payload = json.loads(body)
     assert payload["frozen_render_context"]["creative_exploration_history"] == history
     assert "creative_exploration_contrasts" in structured["schema"]["required"]
+    assert set(structured["schema"]["properties"]["creative_exploration_contrasts"]["items"]["required"]) == {
+        "output_index", "delivered_output_id", "changed_dimension",
+    }
+    assert payload["protected_user_direction"] == request.user_input
+    assert "Preserve fixed facts" in payload["user_direction_contract"]
+    assert "inherited treatment as a baseline, not a lock" in payload["user_direction_contract"]
+    assert "Every item must include user_direction_integrity" in payload["remote_response_contract"]
     assert "Do not require a camera-side change." in payload["remote_response_contract"]
 
 

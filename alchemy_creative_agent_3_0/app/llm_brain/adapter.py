@@ -1007,15 +1007,12 @@ class V3LLMBrainAdapter:
         first_continuation_direction = None
         finalizer_context = request.metadata.get("canonical_prompt_context")
         delivered_concepts = creative_exploration_history(request)
-        creative_directions = None
-        if delivered_concepts:
-            creative_directions = _creative_exploration_contrast_directions(
-                data.get("creative_exploration_contrasts"), prompts_raw, delivered_concepts
+        if delivered_concepts and not _creative_exploration_contrasts_valid(
+            data.get("creative_exploration_contrasts"), prompts_raw, delivered_concepts
+        ):
+            raise BrainPromptContractInvalid(
+                "Remote Brain did not bind each creative exploration prompt to a new treatment of delivered work."
             )
-            if creative_directions is None:
-                raise BrainPromptContractInvalid(
-                    "Remote Brain did not bind each creative exploration prompt to a new treatment of delivered work."
-                )
         continuation_axes = _first_suite_continuation_shot_axes(finalizer_context, variation_execution_contract)
         if continuation_axes:
             anchor_instruction = _first_suite_anchor_shot_instruction(finalizer_context, continuation_axes)
@@ -1222,7 +1219,7 @@ class V3LLMBrainAdapter:
                     else None
                 ),
                 "variation_execution_receipts_signed": variation_execution_contract is not None,
-                **({"creative_exploration_directions": creative_directions} if creative_directions else {}),
+                **({"creative_exploration_contrasts_signed": True} if delivered_concepts else {}),
                 **(
                     {"first_continuation_shot_direction": first_continuation_direction}
                     if first_continuation_direction is not None else {}
@@ -3214,39 +3211,25 @@ def _general_variation_execution_contract_for_request(
     return contract
 
 
-def _creative_exploration_contrast_directions(
+def _creative_exploration_contrasts_valid(
     contrasts: Any, prompts: list[dict[str, Any]], history: dict[str, str],
-) -> list[str] | None:
+) -> bool:
     if not isinstance(contrasts, list) or len(contrasts) != len(prompts):
-        return None
-    delivered = {output_id: " ".join(prompt.casefold().split()) for output_id, prompt in history.items()}
-    used_directions: set[str] = set()
-    directions: list[str] = []
+        return False
+    used_prompts = {" ".join(prompt.casefold().split()) for prompt in history.values()}
     for index, (contrast, prompt) in enumerate(zip(contrasts, prompts), start=1):
-        if not isinstance(contrast, dict) or not _receipt_output_index_matches(contrast, index):
-            return None
-        output_id = contrast.get("delivered_output_id")
-        excerpt = contrast.get("delivered_excerpt")
-        direction = contrast.get("new_direction")
-        if not all(isinstance(value, str) and value.strip() for value in (output_id, excerpt, direction)):
-            return None
-        new_direction = " ".join(direction.split())
-        direction_key = new_direction.casefold().rstrip(".!?。！？")
-        signed_prompt = " ".join(prompt["prompt"].split())
+        signed_prompt = " ".join(prompt["prompt"].casefold().split())
         if (
-            contrast.get("changed_dimension") not in CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS
-            or output_id not in delivered
-            or " ".join(excerpt.casefold().split()) not in delivered[output_id]
-            or not direction_key
-            or direction_key in used_directions
-            or any(direction_key in prior_prompt for prior_prompt in delivered.values())
-            or not signed_prompt.startswith(new_direction)
-            or (signed_prompt != new_direction and new_direction[-1] not in ".!?。！？")
+            not isinstance(contrast, dict)
+            or not _receipt_output_index_matches(contrast, index)
+            or not isinstance(contrast.get("delivered_output_id"), str)
+            or contrast["delivered_output_id"] not in history
+            or contrast.get("changed_dimension") not in CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS
+            or signed_prompt in used_prompts
         ):
-            return None
-        used_directions.add(direction_key)
-        directions.append(new_direction)
-    return directions
+            return False
+        used_prompts.add(signed_prompt)
+    return True
 
 
 def _matches_variation_execution_receipts(

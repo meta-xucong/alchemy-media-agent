@@ -3277,14 +3277,14 @@ class ScenarioRuntime:
         if execution_budget is not None:
             audit["remote_brain_execution_budget"] = execution_budget
         first_continuation_direction = audit.pop("first_continuation_shot_direction", None)
-        creative_directions = audit.pop("creative_exploration_directions", None)
+        creative_contrasts_signed = audit.pop("creative_exploration_contrasts_signed", False)
         image_set_plan = brain_result.image_set_plan
         if first_continuation_direction is not None:
             image_set_plan = image_set_plan.model_copy(
                 update={"shot_plan": [first_continuation_direction, *image_set_plan.shot_plan[1:]]}
             )
-        elif creative_directions:
-            image_set_plan = image_set_plan.model_copy(update={"shot_plan": creative_directions})
+        elif creative_contrasts_signed:
+            image_set_plan = image_set_plan.model_copy(update={"shot_plan": [item.prompt for item in prompts]})
         return brain_result.model_copy(
             update={
                 "image_set_plan": image_set_plan,

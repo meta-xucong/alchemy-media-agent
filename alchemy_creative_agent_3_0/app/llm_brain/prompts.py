@@ -134,6 +134,7 @@ Author the exact complete natural-language renderer prompt requested by the sche
 The Remote Brain is the sole final prompt author. Do not replace an explicit current-request choice with an inherited reference style, age, camera, hair, wardrobe, expression, complexion, or scene unless the frozen ownership context explicitly assigns it to the reference.
 When frozen_render_context.variation_execution_contract is present, use its neutral output purposes, variation axes, must-keep meaning, and anti-drift meaning to make the outputs materially distinct. For the exact format axes format_vertical, format_square, format_horizontal, and format_tight, preserve the corresponding per-output canvas/layout meaning: tall portrait 2:3, balanced square 1:1, wide horizontal 3:2, or tight/detail framing on the frozen canvas. Translate that contract into complete prompts without copying its fields, axis identifiers, local role language, or any recipe wording into renderer text.
 Treat every explicit current-request choice of atmosphere, palette, time of day, lighting color or direction, lens, film finish, environment, composition, and mood as protected user-owned intent. Human Realism may improve the camera-observed rendering of people and materials inside that direction, but it must not replace, brighten, cool, warm, modernize, soften, or otherwise redesign those channels. When frozen_render_context.variation_execution_suite_direction_authoritative is true, any delivery-suite row may adapt only the baseline camera, framing, or pose channel named by its frozen shot-changing axes; for a continuation this includes output 1, and it remains an explicit user-selected suite variation, not an unrequested redesign. When a channel is not defined by the request, resolve it conservatively from the complete meaning; do not invent a new location, palette, lighting setup, or cinematic mood merely to demonstrate realism.
+When frozen_render_context.creative_exploration_history is nonempty, the selected creative exploration mode authorizes a substantive change to the prior treatment along the chosen creative dimension. For that dimension only, the exploration-specific user_direction_contract governs which baseline choices may vary, including when those choices were described in the source. This does not loosen fixed user facts, explicit locks, or reference-channel ownership.
 For a visible real person, resolve identity, current developmental stage, expression, photographic material, and scene together. Keep the person age-appropriate and non-sexual. Do not turn age, expression, complexion, skin, anatomy, or beauty into a feature formula or word stack. Preserve an explicitly user-owned commercial aesthetic while keeping the person materially camera-observed and individual; a pleasant or commercial frame alone does not justify a generic presenter expression.
 When multiple visible people share the frame, preserve the user's desired beauty, appeal, facial harmony, styling, and mood as the first visual priority while authoring them as distinct individuals observed in one real moment. Let their attention, timing, posture, expression, facial character, and light-dependent surface response differ naturally with the situation, without making faces interchangeable, retouching uniform, or skin artificially plastic. Keep the beauty direction flattering and coherent across the group; realism should add camera-observed material detail and presence, not make the people less attractive. Do not equate realism with dullness, harshness, fatigue, roughness, or deliberately imperfect facial features: preserve balanced attractive features, healthy complexion, and expressive eyes. If realism and texture compete with beauty, reduce the texture intervention before reducing facial appeal. Resolve skin as natural human material with restrained local highlights and soft highlight rolloff, preserving fine nonuniform texture without oily sheen or waxy gloss. Keep each face readable through scene-consistent reflected or ambient fill from the existing light, without replacing directional light with flat frontal studio fill. Preserve the prompt's light direction, color, mood, and contrast; keep facial shadow detail open without lifting the whole scene, and keep highlight rolloff physically coherent with the background and hair rim light. If warm backlight, retro color, soft focus, diffusion, or halation is requested, balance those effects against neutral skin color, gentle highlight transitions, and open shadow detail rather than intensifying amber saturation or contrast. When soft focus, diffusion, or halation is requested, keep it an optical property of the scene and highlights while retaining local face and material contrast at the focal plane.
 When improving human rendering inside an already specified scene, do not add new environmental facts, props, background landmarks, weather, time-of-day changes, palette changes, or alternate lighting setups. Make the smallest semantic improvement needed to the people and their interaction while leaving the complete scene direction intact.
@@ -1360,12 +1361,10 @@ def build_anthropic_structured_output(
                     "properties": {
                         "output_index": {"type": "integer"},
                         "delivered_output_id": {"type": "string"},
-                        "delivered_excerpt": {"type": "string"},
                         "changed_dimension": {"type": "string", "enum": list(CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS)},
-                        "new_direction": {"type": "string"},
                     },
                     "required": [
-                        "output_index", "delivered_output_id", "delivered_excerpt", "changed_dimension", "new_direction"
+                        "output_index", "delivered_output_id", "changed_dimension"
                     ],
                     "additionalProperties": False,
                 },
@@ -2377,11 +2376,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "version of the same concept, a different role label, and changes only to crop, angle, expression "
             "or pose. Keep the subject and fixed user facts, but create a materially new visual treatment, scene "
             "story, lighting/palette treatment, or visual hierarchy. Do not require a camera-side change. "
-            "For each output in order, return a creative_exploration_contrasts entry. Cite the closest delivered "
-            "output ID and quote the exact prior phrase that establishes what was done. Name the substantive "
-            "changed dimension and specify the new treatment as a complete concrete renderer instruction. "
-            "Write that instruction verbatim as the opening sentence of the approved prompt; do not copy the "
-            "old treatment back into the rest of the prompt. Do not approve if the concept is still materially "
+            "For each output in order, return a creative_exploration_contrasts entry with the closest delivered "
+            "output ID and the substantive changed dimension. Write the concrete new treatment directly into "
+            "the complete canonical provider prompt for that output. The prompt itself is the only text that "
+            "expresses the new treatment; a receipt or a role name cannot supply it. Do not restore the old "
+            "treatment elsewhere in the prompt. Do not approve if the concept is still materially "
             "the same as any delivered concept or another output in this batch."
         )
     if anchor_shot_instruction:
@@ -2774,20 +2773,28 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         payload["return_schema"]["creative_exploration_contrasts"] = [{
             "output_index": "same index as the approved prompt",
             "delivered_output_id": "closest delivered output ID from creative_exploration_history",
-            "delivered_excerpt": "exact phrase showing the old treatment in that delivered prompt",
             "changed_dimension": "|".join(CREATIVE_EXPLORATION_CONTRAST_DIMENSIONS),
-            "new_direction": "concrete new treatment; exact opening sentence of the matching approved prompt",
         }]
     if request.metadata.get("require_lossless_user_direction") is True:
-        protected_direction_rule = (
-            "Preserve every non-conflicting user choice. Output 1's assigned shot axes supersede the "
-            "conflicting baseline camera, framing, or pose; do not restore that baseline merely to preserve wording."
-            if continuation_shot_axes
-            else (
+        if delivered_concepts:
+            protected_direction_rule = (
+                "Preserve fixed facts: the core theme, subject and identity, factual product details, required literal "
+                "copy, output format, and anything the user explicitly says must stay in the exploration. For the "
+                "chosen creative dimension, treat the inherited treatment as a baseline, not a lock. The selected "
+                "mode may change its visual style, scene story, lighting and palette, or visual hierarchy as needed "
+                "for the new concept. Preserve the other, non-conflicting user choices. "
+                "Judge direction integrity against the fixed facts and the authorized change together."
+            )
+        elif continuation_shot_axes:
+            protected_direction_rule = (
+                "Preserve every non-conflicting user choice. Output 1's assigned shot axes supersede the "
+                "conflicting baseline camera, framing, or pose; do not restore that baseline merely to preserve wording."
+            )
+        else:
+            protected_direction_rule = (
                 "Do not summarize it into a short generic description, omit a material user-owned scene, "
                 "subject, styling, composition, camera, mood, or format choice, or replace it with a different direction."
             )
-        )
         payload["protected_user_direction"] = request.user_input
         payload["user_direction_contract"] = (
             "The protected_user_direction is the complete user-owned semantic source. Reconcile it with the frozen "
@@ -2798,7 +2805,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         )
         direction_receipt_rule = (
             f"{protected_direction_rule} Every item must include "
-            if continuation_shot_axes
+            if continuation_shot_axes or delivered_concepts
             else "Every canonical prompt must preserve its complete meaning, and every item must include "
         )
         payload["remote_response_contract"] = (
