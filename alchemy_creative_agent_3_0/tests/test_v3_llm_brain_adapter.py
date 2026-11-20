@@ -203,6 +203,54 @@ def test_finalizer_binds_first_suite_continuation_shot_to_actual_prompt(
 
 
 @pytest.mark.parametrize(
+    ("mode", "suite_mode", "with_history", "exposes_history"),
+    [
+        ("creative_exploration", "creative_exploration", True, True),
+        ("creative_exploration", "creative_exploration", False, False),
+        ("creative_exploration", "delivery_suite", True, False),
+        ("delivery_suite", "creative_exploration", True, False),
+        ("selection_candidates", "creative_exploration", True, False),
+        ("format_layout_adaptation", "creative_exploration", True, False),
+    ],
+)
+def test_real_brain_planning_uses_delivered_concepts_only_for_creative_exploration(
+    mode, suite_mode, with_history, exposes_history,
+) -> None:
+    history = {
+        "delivered_one": "A woman in silver glasses leans on a pole in a cool rain-soaked alley.",
+        "delivered_two": "A profile view of the same woman leaning on the pole in the same cool rainy alley.",
+    } if with_history else {}
+    request = V3LLMBrainAdapter().build_request(
+        user_input="Keep the same person and silver glasses in the rainy-alley project.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata={
+            "require_real_images": True,
+            "requested_image_count": 2,
+            "variation_mode_override": mode,
+            "project_context_snapshot": {
+                "general_suite_role_plan": {
+                    "variation_mode": suite_mode,
+                    "metadata": {"creative_exploration_history": history},
+                },
+            },
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    assert payload["user_input"] == request.user_input
+    if exposes_history:
+        assert payload["creative_exploration_history"] == history
+        assert "image_set_plan.shot_plan" in payload["creative_exploration_instructions"]
+        assert "not a new concept" in payload["creative_exploration_instructions"]
+    else:
+        assert "creative_exploration_history" not in payload
+        assert "creative_exploration_instructions" not in payload
+
+
+@pytest.mark.parametrize(
     ("mismatch", "count"),
     [(None, 1), (None, 2), ("missing", 2), ("old_treatment", 2), ("wrong_output", 2),
      ("same_batch", 2), ("role_only", 2)],
@@ -240,7 +288,13 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
         ),
         stage="provider_prompt_finalize", scenario_id="general_creative", template_id="general_template",
         requested_image_count=count, metadata={
-            "canonical_prompt_context": {"creative_exploration_history": history},
+            "canonical_prompt_context": {
+                "creative_exploration_history": history,
+                "brain_draft_directions": [
+                    {"output_index": index, "direction": direction}
+                    for index, direction in enumerate(directions, 1)
+                ],
+            },
             "require_lossless_user_direction": True,
         },
     )
@@ -308,6 +362,8 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
     body, structured, _ = build_anthropic_structured_output(request)
     payload = json.loads(body)
     assert payload["frozen_render_context"]["creative_exploration_history"] == history
+    assert [item["direction"] for item in payload["frozen_render_context"]["brain_draft_directions"]] == directions
+    assert "matching brain_draft_directions entry" in payload["remote_response_contract"]
     assert "creative_exploration_contrasts" in structured["schema"]["required"]
     assert set(structured["schema"]["properties"]["creative_exploration_contrasts"]["items"]["required"]) == {
         "output_index", "delivered_output_id", "changed_dimension",
