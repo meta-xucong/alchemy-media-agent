@@ -35,6 +35,7 @@ from app.schemas import (
     StageCommand,
 )
 from app.services.ids import new_id
+from app.services.poster_layout import poster_layout_requirements
 from app.services import task_queue
 from app.services.task_queue import StaleTaskClaim
 from app.services.asset_binding import build_asset_context
@@ -1864,7 +1865,7 @@ def _build_checkpoint_stage_prompt(
             "Follow visual_grammar_contract when present: grammar controls composition/hierarchy/mood/layout; user controls semantic content. "
             "If visual_grammar_contract.mode=uploaded_frame_visual_grammar, the uploaded reference controls the layout/composition frame and retrieved cases only polish compatible style. "
             "If visual_grammar_contract.info.active, keep poster/menu facts; use larger canvas/modules instead of dropping offers, prices, rules, requested CTA/QR, or items. "
-            "Template id stays selected_case_ids[0]; without template choose one primary anchor. "
+            "Manual ID wins. Choose one eligible case or use brief with []. "
             "Assets fill slots; composite poster/menu/screenshot sources are content only; synthesize missing key anchor elements. "
             "When a selected template is present, preserve its visual grammar as a frame/slot/virtual-content/typography plan, not merely its palette; "
             "do not flatten a hero-plus-information template into an equal-card catalog unless that is the template's own structure. "
@@ -3125,7 +3126,7 @@ def _build_workspace(
                 "- 如果 context.request.template_case_id 非空，它是用户手选原型，视觉语法强锁，优先级高于自动检索、Claude 草稿和上传图布局。",
                 "- 有手选原型时，selected_case_ids[0] 必须保留该 template_case_id；final_prompt 必须在该原型的视觉语法基础上替换/改写用户主体，不得只借颜色/边框。",
                 "- 有手选原型时，不得把多卡片、信息图、海报版式、注释排版或复杂背景原型简化成普通单人肖像/纯背景棚拍；除非原型本身就是这种结构。",
-                "- 没有手选原型时，也必须选定一个主视觉语法锚点；不要平均融合多个案例导致无主构图。辅助案例只能提供局部光影、材质、配色或行业细节。",
+                "- 没有手选原型时，从合格候选中选一个主视觉锚点。没有合格候选时，按用户需求构图，selected_case_ids 留空。辅助案例只提供局部风格。",
                 "- 如果手选原型包含 typography、notes、cards、labels、feature sheet 或 infographic，negative_prompt 不要禁止 text；只禁止错误文字、乱码、品牌 logo、水印和签名。",
                 "- 用户补充的感觉、用途、风格词只作为次级约束；如果与手选原型冲突，以手选原型为准。",
                 "- 如果存在 uploaded_assets.json 和 asset_binding_policy.json，上传图只能作为证据和 slot 变量；有手选原型或自动锚点时，上传图不得覆盖视觉语法的构图、光影、版式、背景密度、空间层级、氛围和视觉节奏。",
@@ -3229,7 +3230,7 @@ def _build_file_tool_prompt() -> str:
             "如果 context.json 中 request.template_case_id 非空，它是用户手选原型，必须作为最高优先级视觉语法锚点，并保留为 selected_case_ids 的第一项。",
             "有手选原型时，不要改选其他案例作为主风格；只能在手选原型基础上融合用户主体和兼容的补充要求。",
             "有手选原型时，必须迁移原型的视觉语法：主体框架、构图重心、空间层级、背景密度、排版/注释处理、主视觉强度和设计语言；不要把海报/信息图/多卡片原型改写成普通单人肖像。",
-            "无手选原型时，也必须选定一个主视觉语法锚点，最多用 1-2 个辅助案例提供局部风格；不得平均融合成无主构图。",
+            "无手选原型时，从合格候选中选一个主视觉锚点。没有合格候选时，按用户需求构图，selected_case_ids 留空。",
             "有视觉语法锚点且存在上传图时，上传图只能填入 replaceable slots：主体、商品身份、Logo、人脸、文字内容、用户明确要求保留的源图二维码、小道具；不得覆盖锚点的构图、光影、整体风格和视觉节奏。",
             "必须遵守 asset_binding_policy 中的 fusion_mode、placement_intent、target_surface 和 review_expectations；这些字段是上传素材的真实意图判定，不是可选说明。",
             "You must output task_intent as the central-brain decision for how uploaded assets relate to the selected template. If task_relationship_model conflicts with the user's plain-language intent, task_intent should correct it.",
@@ -3244,7 +3245,7 @@ def _build_file_tool_prompt() -> str:
             "若 fusion_mode=composite_content_source，上传图是内容证据而不是主画面参考；不得复制它的整页布局、菜单网格、截图结构或背景密度；不得为了通用 CTA 凭空添加二维码或扫码占位。",
             "若视觉语法锚点需要关键主视觉而上传素材没有对应素材，自动生成符合用户主题的虚拟主视觉补齐。",
             "若 Logo 的 fusion_mode=logo_product_surface，final_prompt 必须要求 uploaded reference image 中的 Logo 被自然印刷/刺绣/贴附到目标物体表面，并明确禁止被放成海报下方、角标、水印或独立贴片。",
-            "无手选原型时，可以灵活适配上传图和召回案例，但必须保留一个主视觉语法锚点；硬素材约束仍需要通过 provider input images 保真。",
+            "无手选原型时，可以灵活适配上传图和合格案例。没有合格候选时按用户需求构图。硬素材约束仍需要通过 provider input images 保真。",
             "没有手选原型时，你可以推翻 fallback_decision 的 selected_case_ids、prompt_directives 和 generation_directives，但必须保留安全边界。",
             "必须输出 final_prompt、negative_prompt、provider_parameters 和 prompt_rationale。final_prompt 要精简、原创、可直接用于 gpt-image-2。",
             "final_prompt 不得包含内部 case_id、asset_id、provider_id、source_url、API 或仓库工程标识。",
@@ -3288,7 +3289,8 @@ def _build_inline_json_prompt(workspace: Path) -> str:
             "Visual grammar lock: anchor controls composition, main visual presence, layout rhythm, hierarchy, background density, "
             "palette, lighting, mood, text/card treatment, subject relation, and design language; user/assets control semantic content. "
             "If visual_grammar_contract.mode=uploaded_frame_visual_grammar, uploaded layout/composition controls the frame and cases only supply compatible polish. "
-            "Template mode: selected_case_ids=[template_case_id] only. No-template mode: choose one primary grammar anchor, not an average hybrid. Obey "
+            "Template mode: selected_case_ids=[template_case_id] only. Without a template, choose one primary anchor from eligible candidates. "
+            "If none are listed, use the user brief for layout and leave selected_case_ids empty. Obey "
             "asset_binding_policy; hard refs stay input images. logo_product_surface means logo on target surface, never "
             "badge/watermark/sticker. composite_content_source means extract content only, do not copy uploaded layout. "
             "If task_relationship_model says replace_template_food_subject or replace_template_subject, uploads are replacement subjects for existing template slots. "
@@ -3896,6 +3898,11 @@ def _read_claude_decision(workspace: Path) -> dict[str, Any] | None:
     return None
 
 
+def _poster_layout_cache_fields(request: CreateCreativeRunRequest) -> dict[str, list[str]]:
+    layout = poster_layout_requirements(request.user_prompt) if not request.template_case_id else frozenset()
+    return {"poster_layout": sorted(layout)} if layout else {}
+
+
 def _cache_key(
     *,
     request: CreateCreativeRunRequest,
@@ -3903,6 +3910,7 @@ def _cache_key(
     fallback_retrieval_plan: CaseRetrievalPlan,
     candidate_cases: list[PromptCaseSummary],
 ) -> str:
+    layout_fields = _poster_layout_cache_fields(request)
     payload = {
         "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,
         "user_prompt": request.user_prompt,
@@ -3913,7 +3921,8 @@ def _cache_key(
         "output": _provider_visible_output(request.output),
         "fallback_mode": fallback_mode,
         "retrieval_plan": fallback_retrieval_plan.model_dump(mode="json"),
-        "candidate_case_ids": [item.case_id for item in candidate_cases[:8]],
+        "candidate_case_ids": [item.case_id for item in (candidate_cases if layout_fields else candidate_cases[:8])],
+        **layout_fields,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -4076,6 +4085,7 @@ def _cache_metadata(
         if output.get(key) not in (None, "", "auto", "default")
     }
     prompt_transform_profile = _prompt_transform_profile(request, fallback_mode=fallback_mode)
+    layout_fields = _poster_layout_cache_fields(request)
     return {
         "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,
         "normalized_user_prompt": normalized_prompt,
@@ -4088,7 +4098,8 @@ def _cache_metadata(
         "template_case_id": request.template_case_id or "",
         "output_signature": output_signature,
         "assets": _request_assets_for_cache(request),
-        "candidate_case_ids": [item.case_id for item in candidate_cases[:4]],
+        "candidate_case_ids": [item.case_id for item in (candidate_cases if layout_fields else candidate_cases[:4])],
+        **layout_fields,
     }
 
 
@@ -4145,6 +4156,10 @@ def _semantic_cache_score(current: dict[str, Any], cached: dict[str, Any]) -> fl
             return 0.0
     current_cases = [str(item) for item in current.get("candidate_case_ids", []) if str(item)]
     cached_cases = [str(item) for item in cached.get("candidate_case_ids", []) if str(item)]
+    if current.get("poster_layout") != cached.get("poster_layout"):
+        return 0.0
+    if current.get("poster_layout") and current_cases != cached_cases:
+        return 0.0
     if current_cases and cached_cases:
         overlap = len(set(current_cases[:3]) & set(cached_cases[:3]))
         required = min(2, len(current_cases[:3]), len(cached_cases[:3]))

@@ -724,7 +724,11 @@ def test_single_bridge_output_never_becomes_mainline_continuity_anchor(native_fi
     output = f.outputs.list_by_job(f.target.job_id)[0]
     with pytest.raises(ValueError, match="not_formally_accepted"):
         projects._continuity_output(f.target.project_id, output.output_id, f.target.job_id)
-    assert projects._project_completed_general_suite_role_keys(project=f.projects.get_project(f.target.project_id), mode="creative_exploration") == []
+    assert projects._project_general_suite_delivery_history(
+        project=f.projects.get_project(f.target.project_id),
+        mode="creative_exploration",
+        include_creative_history=True,
+    ) == ([], [], {})
     assert len(f.reviews) == 1
     assert f.review_only_calls == [True]
     assert f.debit.call_count == f.usage.call_count == 0

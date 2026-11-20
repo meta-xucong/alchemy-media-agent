@@ -14,6 +14,7 @@ from app.config import settings
 from app.repositories import repository
 from app.schemas import CaseProfile, PromptCase, PromptCaseSummary, SearchPromptCasesRequest, SearchPromptCasesResponse
 from app.services.bootstrap import bootstrap_v2_repository
+from app.services.poster_layout import case_supports_poster_layout
 from app.services.visual_signals import build_case_visual_signals
 
 
@@ -717,7 +718,9 @@ class _SearchQueryContext:
     normalized_query: str
 
 
-def search_prompt_cases(request: SearchPromptCasesRequest) -> SearchPromptCasesResponse:
+def search_prompt_cases(
+    request: SearchPromptCasesRequest, *, poster_layout: frozenset[str] = frozenset(),
+) -> SearchPromptCasesResponse:
     bootstrap_v2_repository(seed_cases=True)
     cases = repository.list_cases(active_only=True)
     scored: list[tuple[float, str, PromptCase]] = []
@@ -731,6 +734,8 @@ def search_prompt_cases(request: SearchPromptCasesRequest) -> SearchPromptCasesR
         if request.use_case_filters and not set(request.use_case_filters).intersection(case.use_case_tags):
             continue
         if _excluded_by_risk(request.risk_filters, case):
+            continue
+        if poster_layout and not case_supports_poster_layout(case, poster_layout):
             continue
         score, reason = _score_case(request, case, query_context=query_context)
         if has_free_text_query and not _case_has_relevance_evidence(request, case, score, query_context=query_context):

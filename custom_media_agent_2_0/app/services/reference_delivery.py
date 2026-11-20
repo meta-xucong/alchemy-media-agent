@@ -42,7 +42,9 @@ def build_reference_delivery_contract(asset_context: dict[str, Any] | None) -> d
     composite_source = any(item["usage_mode"] == "composite_content" for item in contracts)
     dense_source = composite_source or _is_information_dense(context, evidence)
     evidence_capture = _evidence_capture(context, evidence)
-    source_text_evidence_required = bool(dense_source)
+    # A typed brief already supplies the copy. Only uploaded content can
+    # create a requirement for separately captured source-text evidence.
+    source_text_evidence_required = bool(composite_source or evidence)
     # A single uploaded asset may deliberately fulfil several V2 roles (for
     # example, product identity and logo).  Keep every role-level contract for
     # auditability, while matching the provider plan's one-input-per-asset
@@ -63,7 +65,7 @@ def build_reference_delivery_contract(asset_context: dict[str, Any] | None) -> d
         "requires_image_reference": bool(required_reference_ids),
         "information_dense": dense_source,
         "text_rendering": {
-            "mode": "deterministic_overlay" if dense_source else "generative",
+            "mode": "deterministic_overlay" if source_text_evidence_required else "generative",
             "required_field_ids": critical_field_ids,
             "overlay_slots_required": bool(dense_source and critical_field_ids),
         },

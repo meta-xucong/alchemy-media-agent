@@ -5,6 +5,7 @@ from typing import Any
 
 from app.schemas import CreativeOrchestratorDecision, PromptCase
 from app.services.ids import new_id
+from app.services.poster_layout import is_poster_request, requests_blank_poster_qr_space
 from app.services.visual_signals import build_case_visual_signals
 
 
@@ -258,7 +259,9 @@ def visual_grammar_prompt_block(contract: dict[str, Any], *, user_prompt: str) -
     if anchor:
         parts.insert(insert_index, "Reusable visual grammar from the anchor: " + anchor + ".")
     information_integrity = contract.get("information_integrity") if isinstance(contract.get("information_integrity"), dict) else {}
-    if information_integrity.get("active"):
+    if information_integrity.get("active") and not source_layout_risk.get("detected"):
+        parts.append("Preserve the user's supplied copy and facts inside the requested layout.")
+    if information_integrity.get("active") and source_layout_risk.get("detected"):
         fields = ", ".join(str(item) for item in (information_integrity.get("critical_fields") or [])[:6])
         qr_intent = bool(information_integrity.get("qr_intent"))
         extracted_details = (
@@ -361,8 +364,11 @@ def _raw_visual_skeleton(raw_text: str) -> str:
 
 
 def _source_layout_risk(*, user_prompt: str, asset_context: dict[str, Any] | None) -> dict[str, Any]:
+    uploaded_assets = (asset_context or {}).get("uploaded_assets") or []
+    if not uploaded_assets:
+        return {"detected": False, "markers": []}
     text_parts = [user_prompt]
-    for asset in (asset_context or {}).get("uploaded_assets", []) or []:
+    for asset in uploaded_assets:
         if not isinstance(asset, dict):
             continue
         text_parts.append(str(asset.get("filename") or ""))
@@ -438,7 +444,12 @@ def _information_integrity_contract(
             flags=re.IGNORECASE,
         )
     )
-    active = False if replacement_relationship else bool(composite_source or explicit_retention or (source_layout_risk.get("detected") and len(hits) >= 2))
+    poster_copy = is_poster_request(user_prompt) and len(hits) >= 2
+    active = not replacement_relationship and bool(
+        composite_source or explicit_retention or poster_copy
+        or (source_layout_risk.get("detected") and len(hits) >= 2)
+    )
+    blank_qr_reserve = not (asset_context or {}).get("uploaded_assets") and requests_blank_poster_qr_space(user_prompt)
     return {
         "active": active,
         "priority": "hard" if explicit_retention else "strong",
@@ -446,7 +457,11 @@ def _information_integrity_contract(
         "triggers": hits[:10],
         "critical_fields": _critical_information_fields(qr_intent=qr_intent),
         "qr_intent": qr_intent,
-        "qr_policy": "preserve_real_source_qr_only" if qr_intent else "do_not_invent_qr_or_scan_placeholder",
+        "qr_policy": (
+            "reserve_blank_qr_space" if blank_qr_reserve
+            else "preserve_real_source_qr_only" if qr_intent
+            else "do_not_invent_qr_or_scan_placeholder"
+        ),
         "layout_policy": (
             "Preserve facts and commercial meaning inside the uploaded layout/composition frame; refresh only incompatible visual details."
             if uploaded_frame_primary

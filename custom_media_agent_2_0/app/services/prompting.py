@@ -7,6 +7,7 @@ from app.services.canvas_intent import resolve_prompt_canvas, exact_canvas_size,
 from app.schemas import CreativeOrchestratorDecision, ImagePromptPlan, PromptCase, PromptCaseSummary
 from app.services.intent_integrity import compile_prompt_artifact
 from app.services.ids import new_id
+from app.services.poster_layout import requests_blank_poster_qr_space
 from app.services.reference_delivery import build_reference_delivery_contract, reference_delivery_prompt_section
 from app.services.visual_signals import build_case_visual_signals
 from app.services.visual_grammar_lock import build_visual_grammar_contract
@@ -81,6 +82,7 @@ def compose_prompt_plan(
     asset_sections = _asset_sections_for_compiler(asset_context)
     visual_grammar_section = _visual_grammar_section_for_compiler(visual_grammar_contract)
     qr_excluded = _qr_explicitly_excluded(user_prompt)
+    blank_qr_reserve = not (asset_context or {}).get("uploaded_assets") and requests_blank_poster_qr_space(user_prompt)
     task_intent_payload = _task_intent_payload(orchestrator_decision, asset_context=asset_context)
     language_lock = _language_lock_from_task_intent(task_intent_payload)
     information_integrity = (
@@ -112,7 +114,9 @@ def compose_prompt_plan(
             "copied source poster layout",
             "source layout overriding selected template",
         ]
-        if information_integrity.get("qr_intent"):
+        if blank_qr_reserve:
+            information_negative_terms.append("invented QR code")
+        elif information_integrity.get("qr_intent"):
             information_negative_terms.append("missing requested or source QR")
         else:
             information_negative_terms.extend(QR_EXCLUSION_TERMS)
@@ -120,7 +124,9 @@ def compose_prompt_plan(
             negative_prompt,
             information_negative_terms,
         )
-    if qr_excluded:
+    if blank_qr_reserve:
+        negative_prompt = _remove_negative_terms(negative_prompt, {"empty QR placeholder", "decorative QR card"})
+    elif qr_excluded:
         negative_prompt = _merge_negative_prompt(negative_prompt, QR_EXCLUSION_TERMS)
     if language_lock.get("locked"):
         negative_prompt = _merge_negative_prompt(
@@ -160,6 +166,7 @@ def compose_prompt_plan(
     provider_parameters = _apply_aspect_lock(provider_parameters, aspect_lock)
     control_sections = _prompt_control_sections(
         qr_excluded=qr_excluded,
+        blank_qr_reserve=blank_qr_reserve,
         language_lock=language_lock,
         aspect_lock=aspect_lock,
     )
@@ -403,9 +410,16 @@ def _visual_grammar_section_for_compiler(contract: dict | None) -> str:
             f"{correspondence} must remain semantic relationships and must not stretch the canvas."
         )
     if isinstance(information_integrity, dict) and information_integrity.get("active"):
+        qr_rule = (
+            "Keep the requested QR area blank and unobstructed; do not draw a code."
+            if information_integrity.get("qr_policy") == "reserve_blank_qr_space"
+            else "Use the QR area only as explicitly requested; do not invent or substitute a scan code."
+            if information_integrity.get("qr_intent")
+            else "Do not invent QR codes, scan-code modules, empty scan cards, or placeholders."
+        )
         parts.append(
-            "Information integrity is active: retain every explicitly requested source fact and relationship. "
-            "Food-to-copy and offer-to-product correspondence must remain correct; Do not invent QR codes, scan-code modules, empty scan cards, or placeholders."
+            "Information integrity is active: retain every explicitly requested fact and relationship. "
+            "Food-to-copy and offer-to-product correspondence must remain correct. " + qr_rule
         )
     frame_strategy = contract.get("asset_frame_strategy")
     if isinstance(frame_strategy, dict) and frame_strategy.get("continuation_frame"):
@@ -533,9 +547,17 @@ def _asset_role_compiler_rule(*, role: str, fusion_mode: str, target_label: str)
     return rules.get(role, "Use it according to the resolved V2 asset intent.")
 
 
-def _prompt_control_sections(*, qr_excluded: bool, language_lock: dict, aspect_lock: dict) -> list[dict]:
+def _prompt_control_sections(*, qr_excluded: bool, blank_qr_reserve: bool, language_lock: dict, aspect_lock: dict) -> list[dict]:
     sections: list[dict] = []
-    if qr_excluded:
+    if blank_qr_reserve:
+        sections.append({
+            "intent_id": "intent_blank_qr_reserve",
+            "source": "user_request",
+            "priority": "required",
+            "title": "REQUIRED QR SPACE",
+            "text": "Reserve the requested blank QR area at the specified position and size. Keep its interior clear and do not draw a QR code.",
+        })
+    elif qr_excluded:
         sections.append(
             {
                 "intent_id": "intent_qr_exclusion",
