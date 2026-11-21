@@ -35,6 +35,7 @@ from ..llm_brain.prompt_policy import (
     build_brain_source_projection,
 )
 from ..llm_brain.providers import (
+    BrainCreativeExplorationRepairExhausted,
     BrainCreativeExplorationSignoffInvalid,
     BrainDevelopmentalPresenceDecisionMissing,
     BrainExecutionBudgetExceeded,
@@ -3023,7 +3024,7 @@ class ScenarioRuntime:
                     }
             elif isinstance(first_exc, BrainPromptContractInvalid) and not isinstance(
                 first_exc,
-                BrainPromptRequestContractInvalid,
+                (BrainPromptRequestContractInvalid, BrainCreativeExplorationRepairExhausted),
             ):
                 recovery_request = signing_request.model_copy(
                     update={

@@ -11,12 +11,14 @@ from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    BrainCreativeExplorationRepairExhausted,
     BrainPolicyRefusalError,
     BrainProviderUnavailable,
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
     BrainProtocolMismatchError,
     V3LLMBrainProvider,
+    pop_transport_receipt,
 )
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
     build_anthropic_structured_output,
@@ -411,13 +413,159 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
     ]
 
 
-def test_creative_exploration_signoff_retry_carries_first_rejected_output(monkeypatch) -> None:
+@pytest.mark.parametrize("claude_result,kimi_result,expected_calls", [
+    ("valid", "unused", [False]),
+    ("wrong_axis", "valid", [False, True]),
+    ("wrong_slot", "valid", [False, True]),
+    ("bad_receipt", "valid", [False, True]),
+    ("wrong_axis", "wrong_axis", [False, True]),
+        ("refused", "unused", [False]),
+])
+def test_creative_exploration_targets_only_rejected_output(monkeypatch, claude_result, kimi_result, expected_calls):
+    from copy import deepcopy
+    from alchemy_creative_agent_3_0.app.llm_brain import adapter as brain_adapter
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import (
+        VariationExecutionContract, VariationExecutionOutput,
+    )
+
+    contract = VariationExecutionContract.model_construct(
+        contract_version="v3_general_variation_execution_v1", mode="creative_exploration",
+        requested_image_count=2, preserve_style=False,
+        outputs=(
+            VariationExecutionOutput(output_index=1, output_purpose="creative_direction", variation_axes=["concept"]),
+            VariationExecutionOutput(output_index=2, output_purpose="creative_direction", variation_axes=["context"]),
+        ),
+    )
+    contract = contract.model_copy(update={"contract_digest": contract.computed_digest()})
+    context = {
+        "creative_exploration_history": {"delivered": "A previously delivered charcoal scene."},
+        "variation_execution_contract": contract.model_dump(mode="json"),
+        "variation_execution_contract_required": True,
+        "frozen_binding": {"variation_execution_contract": {
+            "contract_version": contract.contract_version, "contract_digest": contract.contract_digest,
+        }},
+    }
+    request = BrainRunRequest(
+        user_input="Explore new illustrations of the same subject.", stage="provider_prompt_finalize",
+        scenario_id="general_creative", template_id="general_template", requested_image_count=2,
+        metadata={"canonical_prompt_context": context},
+    )
+    original = {
+        "canonical_provider_prompts": [
+            {"output_index": index, "prompt": prompt, "review_status": "approved", "variation_execution_receipt": {
+                "contract_version": contract.contract_version, "contract_digest": contract.contract_digest,
+                "output_index": index, "status": "approved", "owner": "remote_v3_llm_brain",
+            }}
+            for index, prompt in enumerate(("Keep this approved embroidered illustration exactly.",
+                                            "A proposed treatment with an unsigned change of style."), 1)
+        ],
+        "creative_exploration_contrasts": {
+            "1": {"delivered_output_id": "delivered", "changed_dimension": "visual_style"},
+            "2": {"delivered_output_id": "delivered", "changed_dimension": "visual_style"},
+        },
+    }
+    saved_row = deepcopy(original["canonical_provider_prompts"][0])
+    fixed_text = "Place the same subject in a handmade paper theatre scene."
+    calls = []
+    full_calls = []
+    wire_payloads = []
+
+    def full_call(unchanged):
+        full_calls.append(unchanged)
+        return deepcopy(original)
+
+    def run_repair(repair, *, backup):
+        calls.append(backup)
+        model_payload = json.loads(build_remote_payload(repair))
+        wire_payloads.append(model_payload)
+        assert repair.requested_image_count == 2
+        assert repair.metadata == request.metadata
+        assert model_payload["response_output_indices"] == [2]
+        assert model_payload["creative_exploration_repair"]["rejected_outputs"] == {
+            "2": {"reason": "dimension_not_allowed", "allowed_dimensions": ["scene_story"]},
+        }
+        assert model_payload["creative_exploration_repair"]["retained_prompts"] == {"1": saved_row["prompt"]}
+        assert set(model_payload["return_schema"]["creative_exploration_contrasts"]) == {"2"}
+        _, wire, _ = build_anthropic_structured_output(repair)
+        shapes = wire["schema"]["properties"]
+        assert shapes["canonical_provider_prompts"]["items"]["properties"]["output_index"]["enum"] == [2]
+        assert shapes["creative_exploration_contrasts"]["required"] == ["2"]
+
+        result = kimi_result if backup else claude_result
+        if result == "refused":
+            raise BrainPolicyRefusalError("Provider refused")
+        row = deepcopy(original["canonical_provider_prompts"][1])
+        row["prompt"] = fixed_text
+        if result == "wrong_slot":
+            row["output_index"] = 1
+        if result == "bad_receipt":
+            row["variation_execution_receipt"]["output_index"] = 1
+        dimension = "visual_style" if result == "wrong_axis" else "scene_story"
+        return {"canonical_provider_prompts": [row], "creative_exploration_contrasts": {
+            "2": {"delivered_output_id": "delivered", "changed_dimension": dimension},
+        }}
+
+    monkeypatch.setattr(brain_adapter, "_enabled", lambda: True)
+    monkeypatch.setattr(V3LLMBrainAdapter, "_activation_scope_enabled", lambda *_: True)
+    monkeypatch.setattr(brain_adapter, "_validate_finalizer_request_contract", lambda _request: None)
+    finalizer = V3LLMBrainAdapter(provider=SimpleNamespace(
+        provider="anthropic", model="claude-sonnet-5-5", availability=lambda **_: {"available": True},
+        run=full_call, run_targeted_exploration_repair=run_repair,
+    ))
+
+    if claude_result == "refused":
+        with pytest.raises(BrainPolicyRefusalError):
+            finalizer.finalize_canonical_provider_prompts(request)
+    elif kimi_result == "wrong_axis":
+        with pytest.raises(BrainCreativeExplorationRepairExhausted):
+            finalizer.finalize_canonical_provider_prompts(request)
+    else:
+        signed, audit = finalizer.finalize_canonical_provider_prompts(request)
+        assert [row.prompt for row in signed] == [saved_row["prompt"], fixed_text]
+        saved_receipt = saved_row["variation_execution_receipt"]
+        assert signed[0].variation_execution_receipt.model_dump(mode="json", include=set(saved_receipt)) == saved_receipt
+        assert audit["creative_exploration_repaired_output_indices"] == [2]
+        assert audit["creative_exploration_repair_used_kimi"] is expected_calls[-1]
+        assert audit["remote_brain_call_count"] == 1 + len(expected_calls)
+    assert full_calls == [request]
+    assert request._creative_exploration_repair is None
+    assert calls == expected_calls
+    assert all(payload == wire_payloads[0] for payload in wire_payloads)
+
+
+def test_targeted_exploration_repair_uses_one_attempt_per_configured_route(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("V3_LLM_BRAIN_BACKUP_MODEL", "gpt-6.1-sol")
+    request = BrainRunRequest(user_input="Explore a new concept.", stage="provider_prompt_finalize")
+    request._creative_exploration_repair = {"errors": {2: "dimension_not_allowed"}}
+    calls = []
+
+    def run_attempt(provider, runner, repair, *, json_recovery):
+        assert repair is request
+        assert json_recovery is False
+        calls.append((provider.model, runner.__name__))
+        return {}
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_remote_attempt", run_attempt)
+    provider = V3LLMBrainProvider()
+    for backup, expected_model in ((False, "claude-sonnet-5-5"), (True, "kimi-k3")):
+        response = provider.run_targeted_exploration_repair(request, backup=backup)
+        assert pop_transport_receipt(response)["selected_model"] == expected_model
+    assert calls == [
+        ("claude-sonnet-5-5", "_run_anthropic_compatible"),
+        ("kimi-k3", "_run_openai_compatible"),
+    ]
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_creative_exploration_signoff_retry_carries_first_rejected_output(monkeypatch, exhausted) -> None:
     from alchemy_creative_agent_3_0.app.llm_brain.contracts import (
         BrainCanonicalProviderPrompt, BrainImageSetPlan, BrainRunResult,
     )
     from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainCreativeExplorationSignoffInvalid
     from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
     from alchemy_creative_agent_3_0.app.shared_capabilities.activation import general_capability_policy
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation.planner import CapabilityActivationError
 
     history = {"delivered": "A portrait in a cool rainy alley leaning against a metal pole."}
     frozen_context = {"creative_exploration_history": history}
@@ -425,6 +573,8 @@ def test_creative_exploration_signoff_retry_carries_first_rejected_output(monkey
 
     def finalize(request):
         attempts.append(request)
+        if exhausted:
+            raise BrainCreativeExplorationRepairExhausted("Neither targeted repair passed.")
         if len(attempts) == 1:
             raise BrainCreativeExplorationSignoffInvalid("dimension_not_allowed", output_index=1)
         return [BrainCanonicalProviderPrompt(
@@ -434,11 +584,12 @@ def test_creative_exploration_signoff_retry_carries_first_rejected_output(monkey
 
     runtime = ScenarioRuntime(llm_brain_adapter=SimpleNamespace(
         finalize_canonical_provider_prompts=finalize, execution_budget_receipt=lambda: None,
+        provider_failure_audit=lambda *_args, **_kwargs: {},
     ))
     monkeypatch.setattr(runtime, "_canonical_prompt_context", lambda *_: frozen_context)
     monkeypatch.setattr(runtime, "_runtime_job_id", lambda *_: "job_creative_retry")
     monkeypatch.setattr(runtime, "_template_id", lambda *_: "general_template")
-    result = runtime._finalize_canonical_provider_prompts(
+    arguments = (
         ScenarioRuntimeRequest(
             user_input="Explore a new concept with the same subject.",
             metadata={"requested_image_count": 1, "require_real_images": True},
@@ -451,6 +602,12 @@ def test_creative_exploration_signoff_retry_carries_first_rejected_output(monkey
         SimpleNamespace(provider_projection={}, ledger_id="ledger"),
     )
 
+    if exhausted:
+        with pytest.raises(CapabilityActivationError, match="remote_creative_brain_prompt_signoff_invalid"):
+            runtime._finalize_canonical_provider_prompts(*arguments)
+        assert len(attempts) == 1
+        return
+    result = runtime._finalize_canonical_provider_prompts(*arguments)
     assert len(attempts) == 2
     assert attempts[0].metadata["canonical_prompt_context"] == attempts[1].metadata["canonical_prompt_context"]
     feedback = {"output_index": 1, "reason": "dimension_not_allowed"}

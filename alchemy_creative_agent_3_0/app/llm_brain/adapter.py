@@ -15,7 +15,7 @@ import re
 import time
 import math
 from json import JSONDecodeError
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from pydantic import ValidationError
 
@@ -61,6 +61,7 @@ from .finalizer_lifecycle import (
     safe_remote_brain_finalizer_lifecycle,
 )
 from .providers import (
+    BrainCreativeExplorationRepairExhausted,
     BrainCreativeExplorationSignoffInvalid,
     BrainDevelopmentalAgeDecisionMissing,
     BrainDevelopmentalPresenceDecisionMissing,
@@ -68,6 +69,7 @@ from .providers import (
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
+    BrainPolicyRefusalError,
     BrainPromptContractInvalid,
     BrainPromptRequestContractInvalid,
     BrainProfessionalAnchorViewDecisionMissing,
@@ -887,6 +889,83 @@ class V3LLMBrainAdapter:
         )
         _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.set(transport_receipt or None)
         _ACTIVE_FINALIZER_CALL_STATE.set("response_validation")
+        try:
+            return self._validate_finalizer_response(request, data, transport_receipt, remote_brain_call_count)
+        except BrainCreativeExplorationSignoffInvalid as first_error:
+            repair = getattr(self.provider, "run_targeted_exploration_repair", None)
+            if request.stage != "provider_prompt_finalize" or not callable(repair):
+                raise
+            return self._repair_exploration_response(request, data, repair, first_error)
+
+    def _repair_exploration_response(
+        self,
+        request: BrainRunRequest,
+        original: dict[str, Any],
+        run_repair: Callable[..., dict[str, Any]],
+        first_error: BrainCreativeExplorationSignoffInvalid,
+    ) -> tuple[list[BrainCanonicalProviderPrompt], dict[str, Any]]:
+        prompts = original["canonical_provider_prompts"]
+        contrasts = original.get("creative_exploration_contrasts")
+        expected = {str(index) for index in range(1, len(prompts) + 1)}
+        if isinstance(contrasts, dict) and set(contrasts) - expected:
+            raise BrainCreativeExplorationRepairExhausted(
+                "An unexpected exploration output cannot be assigned to a repair target."
+            ) from first_error
+        errors = (
+            _creative_exploration_contrast_errors(
+                contrasts, prompts, creative_exploration_history(request),
+                _general_variation_execution_contract_for_request(request),
+            )
+            if isinstance(contrasts, dict)
+            else dict.fromkeys(range(1, len(prompts) + 1), "missing_contrasts")
+        )
+        if request.metadata.get("require_lossless_user_direction") is True:
+            for index, row in enumerate(prompts, start=1):
+                if issue := _creative_exploration_integrity_error(row):
+                    errors.setdefault(index, issue)
+        indices = sorted(errors)
+        if not indices:
+            raise BrainCreativeExplorationRepairExhausted("No exploration output could be isolated.") from first_error
+
+        repair_request = request.model_copy(deep=True)
+        repair_request._creative_exploration_repair = {
+            "errors": {index: errors[index] for index in indices},
+            "retained_prompts": {str(index): row["prompt"] for index, row in enumerate(prompts, 1) if index not in errors},
+        }
+        logging.getLogger(__name__).warning(
+            "V3 creative exploration targeted repair: job=%s outputs=%s", request.job_id, errors,
+        )
+        last_failure: Exception = first_error
+        for attempt, backup in enumerate((False, True), start=1):
+            started = time.perf_counter()
+            try:
+                partial = run_repair(repair_request, backup=backup)
+                receipt = _with_elapsed_transport_receipt(
+                    pop_transport_receipt(partial) if isinstance(partial, dict) else {},
+                    stage=request.stage, elapsed_ms=_elapsed_ms(started),
+                )
+                _ACTIVE_FINALIZER_TRANSPORT_RECEIPT.set(receipt or None)
+                merged = _merge_exploration_repair(original, partial, indices)
+                signed, audit = self._validate_finalizer_response(request, merged, receipt, 1 + attempt)
+            except (BrainPolicyRefusalError, BrainExecutionBudgetExceeded, BrainPromptRequestContractInvalid):
+                raise
+            except (BrainProviderError, BrainProviderUnavailable) as failure:
+                last_failure = failure
+                continue
+            return signed, {
+                **audit,
+                "canonical_prompt_signoff_recovery_attempted": True,
+                "canonical_prompt_signoff_recovery_succeeded": True,
+                "creative_exploration_repaired_output_indices": indices,
+                "creative_exploration_repair_used_kimi": backup,
+            }
+        raise BrainCreativeExplorationRepairExhausted(
+            "Neither targeted exploration repair passed validation."
+        ) from last_failure
+
+    def _validate_finalizer_response(
+        self, request: BrainRunRequest, data: Any, transport_receipt: dict[str, Any], remote_brain_call_count: int,
+    ) -> tuple[list[BrainCanonicalProviderPrompt], dict[str, Any]]:
         prompts_raw = data.get("canonical_provider_prompts") if isinstance(data, dict) else None
         expected_count = request.requested_image_count
         record_stage_event(
@@ -1049,20 +1128,19 @@ class V3LLMBrainAdapter:
                 )
             first_continuation_direction = shot_text
         if request.metadata.get("require_lossless_user_direction") is True:
-            integrity_statuses = {"rewritten"} if delivered_concepts else {"preserved", "rewritten"}
             for index, item in enumerate(prompts_raw, start=1):
+                if delivered_concepts:
+                    if issue := _creative_exploration_integrity_error(item):
+                        raise BrainCreativeExplorationSignoffInvalid(issue, output_index=index)
+                    continue
                 integrity = item.get("user_direction_integrity")
                 if (
                     isinstance(integrity, dict)
                     and integrity.get("contract_version") == "v3_user_direction_integrity_v1"
                     and integrity.get("owner") == "remote_v3_llm_brain"
                 ):
-                    if integrity.get("status") in integrity_statuses:
+                    if integrity.get("status") in {"preserved", "rewritten"}:
                         continue
-                    if delivered_concepts:
-                        raise BrainCreativeExplorationSignoffInvalid("treatment_not_rewritten", output_index=index)
-                if delivered_concepts:
-                    raise BrainCreativeExplorationSignoffInvalid("invalid_direction_integrity", output_index=index)
                 raise BrainPromptContractInvalid(
                     "Remote Brain did not return the required user-direction integrity decision."
                 )
@@ -3227,22 +3305,71 @@ def _validate_creative_exploration_contrasts(
 ) -> None:
     if not isinstance(contrasts, dict):
         raise BrainCreativeExplorationSignoffInvalid("missing_contrasts")
+    errors = _creative_exploration_contrast_errors(contrasts, prompts, history, contract)
+    if errors:
+        index, reason = next(iter(errors.items()))
+        raise BrainCreativeExplorationSignoffInvalid(reason, output_index=index)
+    if len(contrasts) != len(prompts):
+        raise BrainCreativeExplorationSignoffInvalid("unexpected_output_contrast")
+
+
+def _creative_exploration_contrast_errors(
+    contrasts: dict[str, Any], prompts: list[dict[str, Any]], history: dict[str, str],
+    contract: VariationExecutionContract | None,
+) -> dict[int, str]:
+    errors: dict[int, str] = {}
     used_prompts = {" ".join(prompt.casefold().split()) for prompt in history.values()}
     for index, prompt in enumerate(prompts, start=1):
         contrast = contrasts.get(str(index))
         if not isinstance(contrast, dict) or set(contrast) != {"delivered_output_id", "changed_dimension"}:
-            raise BrainCreativeExplorationSignoffInvalid("invalid_output_contrast", output_index=index)
+            errors[index] = "invalid_output_contrast"
+            continue
         delivered_id = contrast["delivered_output_id"]
         if not isinstance(delivered_id, str) or delivered_id not in history:
-            raise BrainCreativeExplorationSignoffInvalid("unknown_delivered_output", output_index=index)
+            errors[index] = "unknown_delivered_output"
+            continue
         if contrast["changed_dimension"] not in creative_exploration_dimensions(contract, index):
-            raise BrainCreativeExplorationSignoffInvalid("dimension_not_allowed", output_index=index)
+            errors[index] = "dimension_not_allowed"
+            continue
         signed_prompt = " ".join(prompt["prompt"].casefold().split())
         if signed_prompt in used_prompts:
-            raise BrainCreativeExplorationSignoffInvalid("duplicate_prompt_text", output_index=index)
+            errors[index] = "duplicate_prompt_text"
+            continue
         used_prompts.add(signed_prompt)
-    if len(contrasts) != len(prompts):
-        raise BrainCreativeExplorationSignoffInvalid("unexpected_output_contrast")
+    return errors
+
+
+def _creative_exploration_integrity_error(prompt: dict[str, Any]) -> str | None:
+    integrity = prompt.get("user_direction_integrity")
+    if not isinstance(integrity, dict) or (
+        integrity.get("contract_version") != "v3_user_direction_integrity_v1"
+        or integrity.get("owner") != "remote_v3_llm_brain"
+    ):
+        return "invalid_direction_integrity"
+    return None if integrity.get("status") == "rewritten" else "treatment_not_rewritten"
+
+
+def _merge_exploration_repair(original: dict[str, Any], partial: Any, indices: list[int]) -> dict[str, Any]:
+    if not isinstance(partial, dict) or set(partial) != {"canonical_provider_prompts", "creative_exploration_contrasts"}:
+        raise BrainPromptContractInvalid("Exploration repair must return only the targeted prompts and contrasts.")
+    prompts = partial["canonical_provider_prompts"]
+    contrasts = partial["creative_exploration_contrasts"]
+    if (
+        not isinstance(prompts, list) or len(prompts) != len(indices)
+        or any(not isinstance(row, dict) or type(row.get("output_index")) is not int
+               or row["output_index"] != index for row, index in zip(prompts, indices))
+        or not isinstance(contrasts, dict) or set(contrasts) != {str(index) for index in indices}
+    ):
+        raise BrainPromptContractInvalid("Exploration repair changed or omitted a targeted output index.")
+    merged_prompts = list(original["canonical_provider_prompts"])
+    for index, prompt in zip(indices, prompts):
+        merged_prompts[index - 1] = prompt
+    original_contrasts = original.get("creative_exploration_contrasts")
+    return {
+        **original,
+        "canonical_provider_prompts": merged_prompts,
+        "creative_exploration_contrasts": {**(original_contrasts if isinstance(original_contrasts, dict) else {}), **contrasts},
+    }
 
 
 def _matches_variation_execution_receipts(

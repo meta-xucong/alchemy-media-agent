@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, StrictInt, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from ..scenario_packs.ecommerce.contracts import (
@@ -462,6 +462,7 @@ class BrainCheckpoint(V3BaseModel):
 
 
 class BrainRunRequest(V3BaseModel):
+    _creative_exploration_repair: dict[str, Any] | None = PrivateAttr(default=None)
     user_input: str
     # Server-owned job identity keeps the Brain task profile and the frozen
     # shared activation plan on the same logical V3 Job.
