@@ -4557,19 +4557,21 @@ def test_v1_logged_in_generation_appears_in_account_history_and_usage(monkeypatc
         return type("Account", (), {"user_id": user_id, "role": "user", "balance": 100})()
 
     async def fake_load_billing_rule(rule_key: str | None = None):
-        return type("Rule", (), {"key": rule_key or "alchemy:v1", "enabled": True, "charge_amount": 2.5, "source": "alchemy:v1"})()
+        return type("Rule", (), {"key": rule_key or "alchemy:v1", "enabled": True, "charge_amount": 0.07, "source": "alchemy:v1"})()
 
     async def fake_ensure_sufficient_balance(*, user_id: int, amount: float):
+        assert amount == 0.21
         return type("Account", (), {"user_id": user_id, "role": "user", "balance": 100})()
 
     async def fake_debit_balance(*, user_id: int, amount: float, idempotency_key: str, source: str, reference_id: str):
+        assert amount == 0.21
         return type(
             "Debit",
             (),
             {
                 "user_id": user_id,
                 "amount": amount,
-                "balance_after": 97.5,
+                "balance_after": 99.79,
                 "idempotency_key": idempotency_key,
                 "source": source,
                 "replayed": False,
@@ -4597,7 +4599,7 @@ def test_v1_logged_in_generation_appears_in_account_history_and_usage(monkeypatc
             json={
                 "session_id": session_id,
                 "prompt": "生成一张账户历史测试图。",
-                "count": 1,
+                "count": 3,
                 "provider_preference": "mock_image",
             },
             headers={"Authorization": f"Bearer {token}"},
@@ -4605,6 +4607,7 @@ def test_v1_logged_in_generation_appears_in_account_history_and_usage(monkeypatc
 
         job = _completed_image_job(client, image_job, headers={"Authorization": f"Bearer {token}"})
         assert job["status"] == "ready"
+        assert len(job["outputs"]) == 3
         output_id = job["outputs"][0]["id"]
         assert job["outputs"][0]["metadata"]["veyra_user_id"] == 42
 
@@ -4616,7 +4619,7 @@ def test_v1_logged_in_generation_appears_in_account_history_and_usage(monkeypatc
         usage = client.get("/v1/veyra/usage?limit=10", headers={"Authorization": f"Bearer {token}"})
         assert usage.status_code == 200
         usage_items = usage.json()["items"]
-        assert any(item["reference_id"] == job["id"] and item["amount"] == 2.5 for item in usage_items)
+        assert [item["amount"] for item in usage_items if item["reference_id"] == job["id"]] == [0.21]
     finally:
         settings.veyra_auth_enabled = original_auth_enabled
         settings.veyra_internal_token = original_internal_token

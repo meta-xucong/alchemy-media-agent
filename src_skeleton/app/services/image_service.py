@@ -7,6 +7,7 @@ from weakref import WeakValueDictionary
 import logging
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.providers.base import ProviderRuntimeError
 from app.config import settings
@@ -774,7 +775,10 @@ async def _run_image_request_owned(
             billing_rule = await load_billing_rule(settings.veyra_billing_rule_key_v1)
             billing_required = _should_bill_veyra(request, billing_rule)
         if billing_required and billing_rule and not job.raw_response_summary.get("primary_image_transport"):
-            await ensure_sufficient_balance(user_id=int(request.veyra_user_id or 0), amount=billing_rule.charge_amount)
+            await ensure_sufficient_balance(
+                user_id=int(request.veyra_user_id or 0),
+                amount=float(Decimal(str(billing_rule.charge_amount)) * request.prompt_plan.count),
+            )
     except (VeyraInsufficientBalance, VeyraAuthError) as exc:
         # Existing ownership, especially an uncertain debit, must remain resumable.
         job.status = JobStatus.generating if job.raw_response_summary.get("primary_image_transport") else JobStatus.failed
@@ -838,10 +842,10 @@ async def _run_image_request_owned(
     current = repository.get_job(job.id) if primary_handled else None
     if current and current.status in TERMINAL_IMAGE_STATUSES:
         return current
-    if job.status == JobStatus.ready and billing_required and (billing_rule or frozen_debit):
+    if job.status == JobStatus.ready and job.outputs and billing_required and (billing_rule or frozen_debit):
         debit_parameters = dict(frozen_debit) if frozen_debit else {
             "user_id": int(request.veyra_user_id or 0),
-            "amount": billing_rule.charge_amount,
+            "amount": float(Decimal(str(billing_rule.charge_amount)) * len(job.outputs)),
             "idempotency_key": f"{billing_rule.key}:image:{job.id}",
             "source": billing_rule.source,
             "reference_id": job.id,

@@ -167,7 +167,7 @@ function renderRules() {
         <span>启用扣费</span>
       </label>
       <label class="field">
-        <span>单次生图扣费</span>
+        <span>每张图片扣费（积分）</span>
         <input data-rule-amount type="number" min="0" step="0.01" value="${Number(rule.charge_amount || 0)}" />
       </label>
     `;

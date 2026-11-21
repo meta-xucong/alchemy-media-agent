@@ -551,7 +551,7 @@ class CreateCreativeRunRequest(BaseModel):
         has_assets = bool(self.assets)
         if not self.user_prompt and not self.template_case_id and not has_assets:
             raise ValueError("请先填写提示词，或选择模板/上传素材。")
-        self.output = _normalize_run_output(self.output)
+        self.output = normalize_run_output(self.output)
         return self
 
 
@@ -562,11 +562,11 @@ class CreateRevisionRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def normalize_output_defaults(self) -> "CreateRevisionRunRequest":
-        self.output = _normalize_run_output(self.output)
+        self.output = normalize_run_output(self.output)
         return self
 
 
-def _normalize_run_output(value: dict[str, Any] | None) -> dict[str, Any]:
+def normalize_run_output(value: dict[str, Any] | None) -> dict[str, Any]:
     output = dict(value or {})
     try:
         count = int(output.get("count", 1))

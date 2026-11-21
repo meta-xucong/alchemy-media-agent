@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any
 
 from app.config import settings
@@ -12,6 +13,7 @@ from app.schemas import (
 )
 
 
+DEFAULT_IMAGE_CHARGE_AMOUNT = 0.07
 DEFAULT_RULES: dict[str, dict[str, Any]] = {
     "alchemy:v1": {
         "key": "alchemy:v1",
@@ -19,7 +21,7 @@ DEFAULT_RULES: dict[str, dict[str, Any]] = {
         "agent": "alchemy",
         "version": "v1",
         "enabled": True,
-        "charge_amount": 0.25,
+        "charge_amount": DEFAULT_IMAGE_CHARGE_AMOUNT,
         "source": "alchemy:v1",
     },
     "alchemy:v2": {
@@ -28,12 +30,16 @@ DEFAULT_RULES: dict[str, dict[str, Any]] = {
         "agent": "alchemy",
         "version": "v2",
         "enabled": True,
-        "charge_amount": 0.25,
+        "charge_amount": DEFAULT_IMAGE_CHARGE_AMOUNT,
         "source": "alchemy:v2",
     },
 }
 
 _runtime_rules: dict[str, VeyraBillingRule] | None = None
+
+
+def image_charge_total(amount_per_image: float, count: int) -> float:
+    return float(Decimal(str(amount_per_image)) * count)
 
 
 def billing_settings_path():
@@ -118,7 +124,7 @@ def _load_rules(*, force: bool = False) -> dict[str, VeyraBillingRule]:
 
 
 def _default_rules() -> dict[str, dict[str, Any]]:
-    amount = float(settings.veyra_generation_charge_amount or 0.25)
+    amount = float(settings.veyra_generation_charge_amount or DEFAULT_IMAGE_CHARGE_AMOUNT)
     enabled = bool(settings.veyra_billing_enabled)
     return {
         key: {
@@ -141,7 +147,8 @@ def _rules_from_payload(payload: Any) -> dict[str, dict[str, Any]]:
         }
     if "enabled" in payload or "charge_amount" in payload:
         enabled = bool(payload.get("enabled", True))
-        amount = float(payload.get("charge_amount") or settings.veyra_generation_charge_amount or 0.25)
+        amount = float(payload.get("charge_amount") or settings.veyra_generation_charge_amount
+                       or DEFAULT_IMAGE_CHARGE_AMOUNT)
         return {
             key: {
                 **value,
