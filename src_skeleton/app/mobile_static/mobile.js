@@ -5544,6 +5544,7 @@ function mobileV3IsActiveEcommerceTerminalReceipt(job = mobileV3State.currentJob
 }
 
 function mobileV3EcommerceTerminalMessage(job) {
+  if (job?.metadata?.image_billing?.status === "blocked") return mobileV3ImageBillingNotice(job);
   if (mobileV3JobNeedsProductInputReview(job)) return mobileV3EcommerceNeedsInputMessage();
   return "本次没有交付图片。项目和原始参考已保留，请确认需求后再手动生成。";
 }
@@ -6037,6 +6038,12 @@ async function generateMobileV3Job() {
     renderMobileV3ProjectOutputs(mobileV3State.currentProject);
     if (mobileV3IsTerminalJob(created)) {
       mobileV3SettleEcommerceTerminalReceipt(created);
+      if (created.metadata?.image_billing?.status === "blocked") {
+        const message = mobileV3ImageBillingNotice(created);
+        setMobileV3Progress("failed", message);
+        updateMobileV3Status(message);
+        return;
+      }
       await loadMobileV3ProjectOutputs(projectId, {
         limit: 120,
         shouldContinue,
@@ -6061,22 +6068,26 @@ async function generateMobileV3Job() {
     const deliveryWithheld = mobileV3JobDeliveryWithheld(finalJob);
     const partialDeliveryNotice = mobileV3FormalPartialDeliveryNotice(finalJob);
     const terminalFailure = mobileV3IsTerminalJob(finalJob);
+    const billingNotice = finalJob?.metadata?.image_billing ? mobileV3ImageBillingNotice(finalJob) : "";
+    const paidDeliveryNotice = !terminalFailure && !deliveryWithheld && billingNotice
+      ? [partialDeliveryNotice, billingNotice].filter(Boolean).join(" ")
+      : "";
+    const progressNotice = terminalFailure
+      ? (billingNotice || "本次没有交付图片，项目记录已保留。")
+      : deliveryWithheld
+        ? mobileV3JobFinalDeliveryNotice(finalJob)
+        : partialDeliveryNotice || "生成完成，已刷新项目图片";
+    const statusNotice = terminalFailure
+      ? mobileV3EcommerceTerminalMessage(finalJob)
+      : deliveryWithheld
+        ? mobileV3JobFinalDeliveryNotice(finalJob)
+        : partialDeliveryNotice || "生成完成";
     if (terminalFailure) mobileV3SettleEcommerceTerminalReceipt(finalJob);
     setMobileV3Progress(
       terminalFailure ? "failed" : deliveryWithheld ? "review_blocked" : "completed",
-      terminalFailure
-        ? "本次没有交付图片，项目记录已保留。"
-        : deliveryWithheld
-          ? mobileV3JobFinalDeliveryNotice(finalJob)
-          : partialDeliveryNotice || "生成完成，已刷新项目图片",
+      paidDeliveryNotice || progressNotice,
     );
-    updateMobileV3Status(
-      terminalFailure
-        ? mobileV3EcommerceTerminalMessage(finalJob)
-        : deliveryWithheld
-          ? mobileV3JobFinalDeliveryNotice(finalJob)
-          : partialDeliveryNotice || "生成完成",
-    );
+    updateMobileV3Status(paidDeliveryNotice || statusNotice);
   } catch (error) {
     if (!shouldContinue()) return;
     if (scenarioId === "ecommerce") {
@@ -6103,7 +6114,7 @@ async function recoverMobileV3GeneratedJob(
   let lastJob = initialJob || {};
   // Preserve the former five-minute foreground observation window with adaptive polling.
   let recoveryAttemptLimit = 66;
-  for (let attempt = 1; followToTerminal || attempt <= recoveryAttemptLimit; attempt += 1) {
+  for (let attempt = 1; followToTerminal || attempt <= recoveryAttemptLimit || lastJob?.metadata?.image_billing?.status === "pending"; attempt += 1) {
     if (!ownsRecovery()) return null;
     await new Promise((resolve) => window.setTimeout(resolve, mobileV3RecoveryDelayMs(attempt)));
     if (!ownsRecovery()) return null;
@@ -6126,7 +6137,8 @@ async function recoverMobileV3GeneratedJob(
         mobileV3SettleEcommerceTerminalReceipt(lastJob);
         return lastJob;
       }
-      if (["generating", "finalizing", "planned", "queued"].includes(lastJob?.status)) {
+      if (lastJob?.metadata?.image_billing?.status === "pending"
+        || ["generating", "finalizing", "planned", "queued"].includes(lastJob?.status)) {
         recoveryAttemptLimit = Math.max(
           recoveryAttemptLimit,
           mobileV3RecoveryAttemptLimitForServerWatchdog(lastJob, attempt),
@@ -6171,6 +6183,13 @@ function mobileV3RecoveryProgressPresentation(job, attempt, { statusReadFailed =
   const status = String(job?.status || "").trim().toLowerCase();
   const pollCount = Math.max(0, Number.parseInt(String(attempt ?? ""), 10) || 0);
   const checked = pollCount ? `后台状态查询已尝试 ${pollCount} 次。` : "";
+  const billing = job?.metadata?.image_billing;
+  if (["pending", "blocked"].includes(billing?.status) || (billing?.status === "checking" && !billing.unit_price)) {
+    return {
+      stageKey: billing.status === "blocked" ? "failed" : billing.status === "pending" ? "billing" : "recovering",
+      detail: `${mobileV3ImageBillingNotice(job)}${checked}`,
+    };
+  }
   if (statusReadFailed || !status) {
     return {
       stageKey: "recovering",
@@ -6234,10 +6253,13 @@ const mobileV3ProgressStages = [
 function setMobileV3Progress(stageKey, detail = "") {
   const panel = document.querySelector("#mobileV3ProgressPanel");
   if (!panel) return;
-  const stage = mobileV3ProgressStages.find((item) => item.key === stageKey) || mobileV3ProgressStages[0];
+  const stage = stageKey === "billing"
+    ? { key: stageKey, percent: 96, label: "确认扣费" }
+    : mobileV3ProgressStages.find((item) => item.key === stageKey) || mobileV3ProgressStages[0];
   mobileV3State.progressStage = stage.key;
   mobileV3State.progressStageKey = stage.key;
   mobileV3State.progressDetail = detail || stage.label;
+  if (stage.key === "billing" && mobileV3State.busy) setText("#mobileV3GenerateBtn", "确认扣费中…");
   panel.hidden = false;
   setText("#mobileV3ProgressTitle", stage.label);
   const elapsed = progressElapsedLabel(mobileV3State.progressStartedAt);
@@ -6246,7 +6268,7 @@ function setMobileV3Progress(stageKey, detail = "") {
   if (fill) fill.style.width = `${stage.percent}%`;
   const steps = document.querySelector("#mobileV3ProgressSteps");
   if (steps) {
-    const activeIndex = mobileV3ProgressStages.findIndex((item) => item.key === stage.key);
+    const activeIndex = mobileV3ProgressStages.findIndex((item) => item.key === (stage.key === "billing" ? "recovering" : stage.key));
     steps.innerHTML = mobileV3ProgressStages
       .filter((item) => item.key !== "failed" || stage.key === "failed")
       .map((item, index) => `<span class="${index <= activeIndex ? "active" : ""}">${escapeHtml(item.label)}</span>`)
@@ -6679,7 +6701,50 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
   updateMobileV3ReferencePriorityStatus();
   updateMobileV3ControlState();
   syncMobileV3PromptFromProject(project);
+  if (restoreJob) resumeMobileV3ImageBilling(requestedProjectId, requestEpoch);
   return true;
+}
+
+function resumeMobileV3ImageBilling(projectId, detailEpoch) {
+  const job = mobileV3State.currentJob;
+  if (job?.metadata?.image_billing?.status === "blocked") {
+    const message = mobileV3ImageBillingNotice(job);
+    setMobileV3Progress("failed", message);
+    updateMobileV3Status(message);
+    return;
+  }
+  if (job?.metadata?.image_billing?.status !== "pending" || !job.job_id) return;
+  const active = mobileV3State.followingGeneration;
+  if (active?.projectId === projectId && (!active.billingJobId || active.detailEpoch === detailEpoch)) return;
+  const follow = { projectId, billingJobId: job.job_id, detailEpoch };
+  mobileV3State.followingGeneration = follow;
+  const shouldContinue = () => mobileV3State.followingGeneration === follow
+    && mobileV3ProjectDetailRequestIsCurrent(projectId, detailEpoch);
+  setMobileV3Busy(true);
+  setMobileV3Progress("billing", mobileV3ImageBillingNotice(job));
+  void recoverMobileV3GeneratedJob(projectId, job.job_id, { initialJob: job, shouldContinue, followToTerminal: true })
+    .then((finalJob) => {
+      if (!finalJob || !shouldContinue()) return;
+      mobileV3State.currentJob = finalJob;
+      renderMobileV3ProjectOutputs();
+      const terminalFailure = mobileV3IsTerminalJob(finalJob);
+      const deliveryWithheld = mobileV3JobDeliveryWithheld(finalJob);
+      const message = terminalFailure
+        ? mobileV3EcommerceTerminalMessage(finalJob)
+        : deliveryWithheld
+          ? mobileV3JobFinalDeliveryNotice(finalJob)
+          : [mobileV3FormalPartialDeliveryNotice(finalJob), mobileV3ImageBillingNotice(finalJob)].filter(Boolean).join(" ") || "生成完成";
+      setMobileV3Progress(terminalFailure ? "failed" : deliveryWithheld ? "review_blocked" : "completed", message);
+      updateMobileV3Status(message);
+    })
+    .catch(() => {
+      if (shouldContinue()) updateMobileV3Status(mobileV3ImageBillingNotice(job));
+    })
+    .finally(() => {
+      if (mobileV3State.followingGeneration !== follow) return;
+      mobileV3State.followingGeneration = null;
+      setMobileV3Busy(false);
+    });
 }
 
 function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
@@ -7790,6 +7855,7 @@ function mobileV3FinalDeliveryProjection(job = mobileV3State.currentJob) {
 }
 
 function mobileV3JobDeliveryWithheld(job = mobileV3State.currentJob) {
+  if (job?.metadata?.image_billing?.status === "pending") return false;
   const projection = mobileV3FinalDeliveryProjection(job);
   return Boolean(
     projection?.delivery_gate_applies === true
@@ -7878,7 +7944,27 @@ function mobileV3JobFinalDeliveryNotice(job = mobileV3State.currentJob) {
 }
 
 function mobileV3JobAwaitingFinalDelivery(job) {
-  return job?.status === "finalizing" || Boolean(job?.metadata?.delivery_settling);
+  return job?.status === "finalizing" || Boolean(job?.metadata?.delivery_settling)
+    || job?.metadata?.image_billing?.status === "pending";
+}
+
+function mobileV3ImageBillingNotice(job) {
+  const billing = job?.metadata?.image_billing;
+  if (billing?.status === "checking" && !billing.unit_price) return "正在核对账户余额。";
+  if (billing?.status === "pending") {
+    if (billing.code === "insufficient_balance") return "图片已生成。请前往账户补足积分，页面会继续核对原任务的扣费结果。";
+    if (billing.code === "delivery_unavailable") return "图片已生成，但交付文件暂时不可用。项目已保留，请稍后查看原任务。";
+    return "图片已生成，正在确认本次扣费。页面会继续核对原任务。";
+  }
+  if (billing?.status === "blocked") {
+    return billing.code === "insufficient_balance"
+      ? "积分不足，本次未开始生成，也未扣费。请前往账户补足积分后再试。"
+      : "账户余额暂时无法核对，本次未扣费。请稍后再试。";
+  }
+  if (billing?.status === "charged" && /^\d+(?:\.\d{1,2})?$/.test(billing.amount)) {
+    return `图片已交付，已扣 ${billing.amount} 积分。`;
+  }
+  return "";
 }
 
 function mobileV3JobHasTerminalOutcome(job = mobileV3State.currentJob) {
@@ -8021,6 +8107,7 @@ function mobileV3ExpectedImageCountForJob(job = mobileV3State.currentJob, explic
 }
 
 function mobileV3RecoveredJobFromProjectOutputs(projectId, jobId, baseJob = mobileV3State.currentJob, { allowPartial = false } = {}) {
+  if (["pending", "blocked"].includes(baseJob?.metadata?.image_billing?.status)) return null;
   const targetJobId = String(jobId || "").trim();
   if (!projectId || !targetJobId) return null;
   const outputs = mobileV3FinalOutputsForProject(projectId).filter((item) => item?.job_id === targetJobId || item?.metadata?.job_id === targetJobId || item?.related_job_id === targetJobId);
