@@ -142,26 +142,7 @@ async def ensure_sufficient_balance(*, user_id: int, amount: float) -> VeyraAcco
 
 
 async def node_reward_wallet(user_id: int, *, eligible_images: int | None = None) -> dict[str, int]:
-    _ensure_bridge_enabled()
-    token = settings.veyra_node_reward_credit_token
-    if len(token) < 32 or token == settings.veyra_internal_token:
-        raise VeyraAuthMisconfigured("Node reward service credential is not configured.")
-    url = settings.veyra_sub2api_base_url.rstrip("/") + f"/api/veyra/internal/users/{user_id}/node-rewards"
-    headers = {
-        "X-Veyra-Internal-Token": str(settings.veyra_internal_token or ""),
-        "X-Veyra-Node-Reward-Token": token,
-    }
-    try:
-        async with httpx.AsyncClient(
-            timeout=settings.veyra_request_timeout_seconds, transport=_bridge_transport(), trust_env=False,
-        ) as client:
-            if eligible_images is None:
-                response = await client.get(url, headers=headers)
-            else:
-                response = await client.post(url, headers=headers, json={"eligible_images": eligible_images})
-        data = _checked_data(response)
-    except (httpx.HTTPError, ValueError, TypeError) as exc:
-        raise VeyraAuthError("Node reward settlement unavailable.") from exc
+    data = await _node_reward_request(user_id, eligible_images=eligible_images)
     redeemed, credited = data.get("redeemed_images"), data.get("credited_images")
     if (
         type(data.get("user_id")) is not int or data["user_id"] != user_id
@@ -172,6 +153,50 @@ async def node_reward_wallet(user_id: int, *, eligible_images: int | None = None
     ):
         raise VeyraAuthError("Invalid node reward settlement receipt.")
     return {"redeemed_images": redeemed, "credited_images": credited}
+
+
+async def node_reward_receipts(user_id: int, *, before_redeemed_images: int | None = None) -> dict[str, Any]:
+    params = {} if before_redeemed_images is None else {"before_redeemed_images": before_redeemed_images}
+    data = await _node_reward_request(user_id, suffix="/receipts", params=params)
+    items, cursor = data.get("items"), data.get("next_before_redeemed_images")
+    if (not isinstance(items, list) or len(items) > 20
+            or (cursor is not None and (type(cursor) is not int or not 0 < cursor <= 1_000_000_000))):
+        raise VeyraAuthError("Invalid node reward receipt list.")
+    receipts = []
+    for item in items:
+        if (not isinstance(item, dict)
+                or type(item.get("redeemed_images")) is not int
+                or type(item.get("credited_images")) is not int
+                or not 0 < item["credited_images"] <= item["redeemed_images"] <= 1_000_000_000
+                or any(not isinstance(item.get(field), str) for field in ("amount", "balance_after", "created_at"))):
+            raise VeyraAuthError("Invalid node reward receipt.")
+        receipts.append({field: item[field] for field in
+                         ("redeemed_images", "credited_images", "amount", "balance_after", "created_at")})
+    return {"items": receipts, "next_before_redeemed_images": cursor}
+
+
+async def _node_reward_request(user_id: int, *, eligible_images: int | None = None, suffix: str = "",
+                               params: dict[str, int] | None = None) -> dict[str, Any]:
+    _ensure_bridge_enabled()
+    token = settings.veyra_node_reward_credit_token
+    if len(token) < 32 or token == settings.veyra_internal_token:
+        raise VeyraAuthMisconfigured("Node reward service credential is not configured.")
+    url = settings.veyra_sub2api_base_url.rstrip("/") + f"/api/veyra/internal/users/{user_id}/node-rewards" + suffix
+    headers = {
+        "X-Veyra-Internal-Token": str(settings.veyra_internal_token or ""),
+        "X-Veyra-Node-Reward-Token": token,
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.veyra_request_timeout_seconds, transport=_bridge_transport(), trust_env=False,
+        ) as client:
+            if eligible_images is None:
+                response = await client.get(url, headers=headers, params=params)
+            else:
+                response = await client.post(url, headers=headers, json={"eligible_images": eligible_images})
+        return _checked_data(response)
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise VeyraAuthError("Node reward settlement unavailable.") from exc
 
 
 async def debit_balance(*, user_id: int, amount: float, idempotency_key: str, source: str, reference_id: str) -> VeyraDebitResult:

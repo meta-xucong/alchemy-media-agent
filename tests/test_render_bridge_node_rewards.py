@@ -14,7 +14,7 @@ from app.integrations.render_bridge.node_rewards import install_node_reward_acco
 from app.services.veyra_auth import VeyraAuthError
 
 
-def _app(tmp_path, nodes, *, truncated=False, approvals=None, wallet=None):
+def _app(tmp_path, nodes, *, truncated=False, approvals=None, wallet=None, receipts=None):
     approvals = approvals if approvals is not None else {}
 
     async def metrics():
@@ -40,6 +40,7 @@ def _app(tmp_path, nodes, *, truncated=False, approvals=None, wallet=None):
             digest, {"available": False, "code": "claim_approval_not_found"}),
         node_binding_status_secret="bridge-reward-secret",
         wallet_rewards=wallet,
+        wallet_reward_receipts=receipts,
         database_path=Path(tmp_path) / "node-rewards.sqlite3",
     )
     return app
@@ -107,6 +108,89 @@ def test_reward_correction_cannot_reassign_reserved_images(tmp_path):
         assert client.post(url, headers=_headers(42), json={}).json()["credited_points"] == "0.04"
         assert client.post(url, headers=_headers(41), json={}).json()["credited_points"] == "0.00"
     assert claims == {41: 9, 42: 2}
+
+
+@pytest.mark.parametrize("truncated", [True, False])
+def test_reward_view_and_settlement_share_the_same_block(tmp_path, truncated):
+    node = _node(images=9)
+    credited = []
+
+    async def wallet(user_id, *, eligible_images=None):
+        if eligible_images is not None:
+            credited.append(eligible_images)
+        return {"redeemed_images": 0, "credited_images": 0}
+
+    app = _app(tmp_path, [node], truncated=truncated, wallet=wallet)
+    store = app.state.node_reward_account_store
+    store.bind_node(41, pool_id="pool_1", node_id="node_1", executor_instance="executor_1", baseline_images=3)
+    if not truncated:
+        store.reserve_redemption(41, store.account_snapshot(41), [10])
+    code = "node_reward_metrics_unavailable" if truncated else "node_reward_metrics_regressed"
+    with TestClient(app) as client:
+        base = "/api/account/node-rewards"
+        initial = client.get(base, headers=_headers()).json()
+        assert initial["available"] is True
+        assert initial["redemption"]["available"] is False
+        assert initial["redemption"]["code"] == code
+        assert "redeemable_points" not in initial["redemption"]
+        refused = client.post(base + "/redeem", headers=_headers(), json={})
+        assert refused.status_code == 503
+        assert refused.json()["detail"]["code"] == code
+    assert credited == []
+
+
+def test_owner_unbind_keeps_points_and_requires_fresh_binding_revision(tmp_path):
+    node = _node(images=3)
+    approvals = {}
+    app = _app(tmp_path, [node], approvals=approvals)
+    store = app.state.node_reward_account_store
+    now = 100
+    store.clock = lambda: now
+    base = "/api/account/node-rewards"
+    with TestClient(app) as client:
+        first = _start_claim(client)
+        _register_approval(approvals, first, node)
+        assert _confirm_claim(client, first).status_code == 200
+        old_proof = _start_claim(client, account=42)
+        _register_approval(approvals, old_proof, node)
+        now = 101
+        node["metrics"]["rewardable_images"] = 9
+        request = dict(pool_id="pool_1", node_id="node_1", executor_instance="executor_1", binding_revision=1)
+        assert client.post(base + "/unbind", headers=_headers(42), json=request).status_code == 409
+        result = client.post(base + "/unbind", headers=_headers(), json=request)
+        assert result.status_code == 200
+        assert result.json()["status"] == "unbound"
+        node["metrics"]["rewardable_images"] = 11
+        former = client.get(base, headers=_headers()).json()
+        assert former["totals"] == {"bound_nodes": 0, "successful_images": 6, "reward_points": "0.12"}
+        assert former["nodes"][0]["binding_status"] == "unbound"
+        assert _confirm_claim(client, old_proof, account=42).status_code == 409
+        now = 102
+        fresh = _start_claim(client, account=42)
+        _register_approval(approvals, fresh, node)
+        assert _confirm_claim(client, fresh, account=42).status_code == 200
+        new = client.get(base, headers=_headers(42)).json()
+        assert new["totals"]["successful_images"] == 0
+        assert new["nodes"][0]["binding_revision"] == 2
+        assert client.post(base + "/unbind", headers=_headers(42), json=request).status_code == 409
+
+
+def test_wallet_receipts_are_scoped_to_the_current_session(tmp_path):
+    calls = []
+
+    async def receipts(user_id, *, before_redeemed_images):
+        calls.append((user_id, before_redeemed_images))
+        return {"items": [], "next_before_redeemed_images": None}
+
+    app = _app(tmp_path, [], receipts=receipts)
+    with TestClient(app) as client:
+        path = "/api/account/node-rewards/receipts"
+        assert client.get(path).status_code == 401
+        assert client.get(path + "?before_redeemed_images=0", headers=_headers()).status_code == 422
+        response = client.get(path + "?before_redeemed_images=44&user_id=42", headers=_headers())
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+    assert calls == [(41, 44)]
 
 
 def _node(*, node_id="node_1", pool_id="pool_1", executor="executor_1",

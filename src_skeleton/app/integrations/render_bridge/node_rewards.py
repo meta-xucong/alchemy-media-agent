@@ -38,6 +38,10 @@ class NodeBindingStatusRequest(BaseModel):
                                    pattern=r"^[A-Za-z0-9_-]{1,128}$")
 
 
+class UnbindNodeRewardRequest(NodeBindingStatusRequest):
+    binding_revision: int = Field(ge=1)
+
+
 class NodeRewardStoreError(Exception):
     def __init__(self, code: str, status: int):
         self.code = code
@@ -107,7 +111,9 @@ class NodeRewardAccountStore:
                 corrected_at INTEGER NOT NULL,
                 baseline_images INTEGER NOT NULL,
                 final_images INTEGER NOT NULL CHECK(final_images >= 0),
-                corrected_by_admin_user_id INTEGER
+                corrected_by_admin_user_id INTEGER,
+                close_kind TEXT NOT NULL DEFAULT 'corrected',
+                closed_revision INTEGER NOT NULL DEFAULT 0
             )
         """)
         history_columns = {row["name"] for row in con.execute(
@@ -115,6 +121,12 @@ class NodeRewardAccountStore:
         if "corrected_by_admin_user_id" not in history_columns:
             con.execute("""ALTER TABLE node_reward_binding_history
                 ADD COLUMN corrected_by_admin_user_id INTEGER""")
+        if "close_kind" not in history_columns:
+            con.execute("""ALTER TABLE node_reward_binding_history
+                ADD COLUMN close_kind TEXT NOT NULL DEFAULT 'corrected'""")
+        if "closed_revision" not in history_columns:
+            con.execute("""ALTER TABLE node_reward_binding_history
+                ADD COLUMN closed_revision INTEGER NOT NULL DEFAULT 0""")
         con.execute("""
             CREATE INDEX IF NOT EXISTS node_reward_binding_history_user_idx
             ON node_reward_binding_history(user_id, corrected_at)
@@ -181,10 +193,10 @@ class NodeRewardAccountStore:
                                  baseline_images: int) -> dict:
         now = int(self.clock())
         identity = (pool_id, node_id, executor_instance)
-        with self._connect() as con:
+        with closing(self._connect()) as con, con:
             con.execute("BEGIN IMMEDIATE")
             challenge = con.execute("""
-                SELECT expires_at,consumed_at
+                SELECT expires_at,consumed_at,created_at
                 FROM node_reward_binding_challenges
                 WHERE challenge_digest=? AND user_id=?
             """, (challenge_digest, user_id)).fetchone()
@@ -193,6 +205,14 @@ class NodeRewardAccountStore:
             if challenge["expires_at"] <= now:
                 raise NodeRewardStoreError("node_reward_claim_expired", 410)
             if challenge["consumed_at"] is not None:
+                raise NodeRewardStoreError("node_reward_claim_invalid", 409)
+            prior = con.execute("""
+                SELECT COALESCE(MAX(closed_revision), 0) AS revision,
+                       MAX(CASE WHEN close_kind='unbound' THEN corrected_at END) AS last_unbound
+                FROM node_reward_binding_history
+                WHERE pool_id=? AND node_id=? AND executor_instance=?
+            """, identity).fetchone()
+            if prior["last_unbound"] is not None and challenge["created_at"] <= prior["last_unbound"]:
                 raise NodeRewardStoreError("node_reward_claim_invalid", 409)
             existing = con.execute("""
                 SELECT user_id FROM node_reward_node_bindings
@@ -208,9 +228,9 @@ class NodeRewardAccountStore:
                 return {"status": "already_bound"}
             con.execute("""
                 INSERT INTO node_reward_node_bindings
-                    (pool_id,node_id,executor_instance,user_id,bound_at,baseline_images)
-                VALUES (?,?,?,?,?,?)
-            """, (*identity, user_id, now, baseline_images))
+                    (pool_id,node_id,executor_instance,user_id,bound_at,baseline_images,binding_revision)
+                VALUES (?,?,?,?,?,?,?)
+            """, (*identity, user_id, now, baseline_images, prior["revision"] + 1))
             consumed = con.execute("""
                 UPDATE node_reward_binding_challenges SET consumed_at=?
                 WHERE challenge_digest=? AND user_id=? AND consumed_at IS NULL
@@ -221,11 +241,12 @@ class NodeRewardAccountStore:
 
     def correct_binding(self, *, pool_id: str, node_id: str, executor_instance: str,
                         expected_user_id: int, expected_revision: int,
-                        new_user_id: int, observed_images: int,
-                        corrected_by_admin_user_id: int) -> dict:
+                        new_user_id: int | None, observed_images: int,
+                        corrected_by_admin_user_id: int | None) -> dict:
         identity = (pool_id, node_id, executor_instance)
         now = int(self.clock())
-        with self._connect() as con:
+        close_kind = "unbound" if new_user_id is None else "corrected"
+        with closing(self._connect()) as con, con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("""
                 SELECT user_id,bound_at,baseline_images,binding_revision,redemption_floor
@@ -247,21 +268,28 @@ class NodeRewardAccountStore:
             con.execute("""
                 INSERT INTO node_reward_binding_history
                     (pool_id,node_id,executor_instance,user_id,bound_at,corrected_at,
-                     baseline_images,final_images,corrected_by_admin_user_id)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                     baseline_images,final_images,corrected_by_admin_user_id,close_kind,closed_revision)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (*identity, expected_user_id, row["bound_at"], now,
-                  baseline, accrued, corrected_by_admin_user_id))
-            updated = con.execute("""
-                UPDATE node_reward_node_bindings
-                SET user_id=?,bound_at=?,baseline_images=?,binding_revision=binding_revision+1,
-                    redemption_floor=0
-                WHERE pool_id=? AND node_id=? AND executor_instance=?
-                  AND user_id=? AND binding_revision=?
-            """, (new_user_id, now, observed_images, *identity,
-                  expected_user_id, expected_revision)).rowcount
+                  baseline, accrued, corrected_by_admin_user_id, close_kind, expected_revision))
+            if new_user_id is None:
+                updated = con.execute("""
+                    DELETE FROM node_reward_node_bindings
+                    WHERE pool_id=? AND node_id=? AND executor_instance=?
+                      AND user_id=? AND binding_revision=?
+                """, (*identity, expected_user_id, expected_revision)).rowcount
+            else:
+                updated = con.execute("""
+                    UPDATE node_reward_node_bindings
+                    SET user_id=?,bound_at=?,baseline_images=?,binding_revision=binding_revision+1,
+                        redemption_floor=0
+                    WHERE pool_id=? AND node_id=? AND executor_instance=?
+                      AND user_id=? AND binding_revision=?
+                """, (new_user_id, now, observed_images, *identity,
+                      expected_user_id, expected_revision)).rowcount
             if updated != 1:
                 raise NodeRewardStoreError("node_reward_binding_stale", 409)
-        return {"status": "corrected", "revision": expected_revision + 1,
+        return {"status": close_kind, "revision": expected_revision + 1,
                 "former_images": accrued, "reward_points": _points(accrued)}
 
     def initialize_baseline(self, user_id: int, *, pool_id: str, node_id: str,
@@ -292,7 +320,7 @@ class NodeRewardAccountStore:
         """, (user_id,))
         history = con.execute("""
             SELECT pool_id,node_id,executor_instance,bound_at,corrected_at,
-                   baseline_images,final_images
+                   baseline_images,final_images,close_kind
             FROM node_reward_binding_history WHERE user_id=?
             ORDER BY corrected_at DESC,history_id DESC
         """, (user_id,))
@@ -403,6 +431,7 @@ def install_node_reward_account_routes(
     reward_claim_approval_loader=None,
     node_binding_status_secret=None,
     wallet_rewards=None,
+    wallet_reward_receipts=None,
     database_path: Path,
 ):
     router = APIRouter(prefix="/api/account/node-rewards")
@@ -498,7 +527,7 @@ def install_node_reward_account_routes(
             "pool_name": "历史节点",
             "node_id": item["node_id"],
             "executor_instance": item["executor_instance"],
-            "node_state": "corrected",
+            "node_state": item["close_kind"],
             "liveness": "offline",
             "last_seen_at": None,
             "current_execution": None,
@@ -506,16 +535,13 @@ def install_node_reward_account_routes(
             "reward_points": _points(item["final_images"]),
             "bound_at": _utc(item["bound_at"]),
             "corrected_at": _utc(item["corrected_at"]),
-            "binding_status": "corrected",
+            "binding_status": item["close_kind"],
         } for item in history]
         try:
             raw = await reward_metrics() if bindings else {"nodes": []}
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             return unavailable(detail.get("code") or "node_reward_metrics_unavailable")
-        if redeem and raw.get("truncated") is True:
-            return unavailable("node_reward_metrics_unavailable")
-
         node_index = {
             (item.get("pool_id"), item.get("node_id"), item.get("executor_instance")): item
             for item in raw["nodes"] if isinstance(item, dict)
@@ -523,6 +549,7 @@ def install_node_reward_account_routes(
         nodes = []
         observations = []
         total_images = history_images
+        redemption_block = "node_reward_metrics_unavailable" if raw.get("truncated") is True else None
         for binding in bindings:
             item = node_index.get((binding["pool_id"], binding["node_id"], binding["executor_instance"]))
             if item is None:
@@ -537,8 +564,8 @@ def install_node_reward_account_routes(
                         pool_id=binding["pool_id"], node_id=binding["node_id"],
                         executor_instance=binding["executor_instance"],
                         baseline_images=ledger_images)
-                if redeem and ledger_images < max(baseline_images, binding["redemption_floor"]):
-                    return unavailable("node_reward_metrics_regressed")
+                if ledger_images < max(baseline_images, binding["redemption_floor"]):
+                    redemption_block = redemption_block or "node_reward_metrics_regressed"
                 images = max(0, ledger_images - baseline_images)
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -548,6 +575,7 @@ def install_node_reward_account_routes(
             current = item.get("current_execution")
             nodes.append({
                 "pool_name": item.get("pool_name", ""),
+                "pool_id": binding["pool_id"],
                 "node_id": binding["node_id"],
                 "executor_instance": binding["executor_instance"],
                 "node_state": item.get("node_state", "unknown"),
@@ -558,8 +586,11 @@ def install_node_reward_account_routes(
                 "reward_points": _points(images),
                 "bound_at": _utc(binding["bound_at"]),
                 "binding_status": "active",
+                "binding_revision": binding["binding_revision"],
             })
         nodes.extend(history_nodes)
+        if redeem and redemption_block:
+            return unavailable(redemption_block)
         if redeem and total_images:
             try:
                 store.reserve_redemption(user_id, snapshot, observations)
@@ -572,6 +603,7 @@ def install_node_reward_account_routes(
             "available": True,
             "tracking_since": _utc(min(bound_times)) if bound_times else None,
             "reward_points_per_image": "0.02",
+            "redemption_block": redemption_block,
             "totals": {"bound_nodes": len(bindings), "successful_images": total_images,
                        "reward_points": _points(total_images)},
             "nodes": nodes,
@@ -581,8 +613,10 @@ def install_node_reward_account_routes(
     async def summary(request: Request):
         user_id = await current_user_id(request)
         value = await reward_summary(user_id)
+        redemption_block = value.pop("redemption_block", None)
         if value["available"]:
-            value["redemption"] = {"available": False, "withdrawal_minimum_points": "10.00"}
+            value["redemption"] = {"available": False, "withdrawal_minimum_points": "10.00",
+                                   "code": redemption_block or "node_reward_redemption_unavailable"}
             if wallet_rewards is not None:
                 try:
                     settlement = await wallet_rewards(user_id)
@@ -591,8 +625,10 @@ def install_node_reward_account_routes(
                 else:
                     redeemed = settlement["redeemed_images"]
                     available = max(0, value["totals"]["successful_images"] - redeemed)
-                    value["redemption"].update(
-                        available=True, redeemable_points=_points(available), redeemed_points=_points(redeemed))
+                    value["redemption"]["redeemed_points"] = _points(redeemed)
+                    if not redemption_block:
+                        value["redemption"].update(available=True, redeemable_points=_points(available))
+                        value["redemption"].pop("code")
         return JSONResponse(value, headers=NO_STORE)
 
     @router.post("/redeem")
@@ -612,6 +648,44 @@ def install_node_reward_account_routes(
         except VeyraAuthError:
             raise HTTPException(503, detail={"code": "node_reward_redemption_unconfirmed"}, headers=NO_STORE) from None
         return JSONResponse({"credited_points": _points(settlement["credited_images"])}, headers=NO_STORE)
+
+    @router.get("/receipts")
+    async def reward_receipts(request: Request, before_redeemed_images: int | None = None):
+        user_id = await current_user_id(request)
+        if before_redeemed_images is not None and not 1 <= before_redeemed_images <= 1_000_000_000:
+            raise HTTPException(422, detail={"code": "invalid_reward_receipt_cursor"}, headers=NO_STORE)
+        if wallet_reward_receipts is None:
+            raise HTTPException(503, detail={"code": "node_reward_receipts_unavailable"}, headers=NO_STORE)
+        try:
+            page = await wallet_reward_receipts(user_id, before_redeemed_images=before_redeemed_images)
+        except VeyraAuthError:
+            raise HTTPException(503, detail={"code": "node_reward_receipts_unavailable"}, headers=NO_STORE) from None
+        return JSONResponse(page, headers=NO_STORE)
+
+    @router.post("/unbind")
+    async def unbind_node(request: Request, body: UnbindNodeRewardRequest):
+        user_id = await current_user_id(request)
+        _write_same_origin(request)
+        identity = (body.pool_id, body.node_id, body.executor_instance)
+        raw = await reward_metrics()
+        if raw.get("truncated") is True:
+            raise HTTPException(503, detail={"code": "node_reward_metrics_unavailable"}, headers=NO_STORE)
+        matches = [item for item in raw["nodes"] if isinstance(item, dict)
+                   and (item.get("pool_id"), item.get("node_id"), item.get("executor_instance")) == identity]
+        if len(matches) != 1:
+            raise HTTPException(503, detail={"code": "node_reward_history_unavailable"}, headers=NO_STORE)
+        observed = image_count(matches[0])
+        try:
+            result = store.correct_binding(
+                pool_id=identity[0], node_id=identity[1], executor_instance=identity[2],
+                expected_user_id=user_id, expected_revision=body.binding_revision,
+                new_user_id=None, observed_images=observed, corrected_by_admin_user_id=None,
+            )
+        except NodeRewardStoreError as exc:
+            raise HTTPException(exc.status, detail={"code": exc.code}, headers=NO_STORE) from None
+        except (sqlite3.Error, OSError):
+            raise HTTPException(503, detail={"code": "node_reward_storage_unavailable"}, headers=NO_STORE) from None
+        return JSONResponse(result, headers=NO_STORE)
 
     @router.post("/claims")
     async def create_binding_claim(body: CreateNodeRewardClaimRequest, request: Request):

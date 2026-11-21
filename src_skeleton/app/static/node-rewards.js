@@ -7,7 +7,7 @@
 
   const sessionKey = "alchemy_veyra_access_token";
   const state = { loading: false, binding: false, redeeming: false, canRedeem: false, epoch: 0, challenge: "",
-                  claimEpoch: 0, pollTimer: null };
+                  claimEpoch: 0, pollTimer: null, unbinding: false, receiptEpoch: 0, receiptCursor: null };
   const CLAIM_POLL_MS = 5000;
   const $ = (selector) => root.querySelector(selector);
   const labels = {
@@ -24,6 +24,9 @@
     node_reward_binding_changed: "节点绑定或统计已更新，请刷新后再转入。",
     node_reward_metrics_regressed: "Bridge 的累计图片数暂未对齐，积分转入已暂停。",
     node_reward_baseline_unavailable: "节点奖励基线暂不可用，请刷新奖励统计。",
+    node_reward_binding_stale: "节点绑定已变更，请刷新后重试。",
+    node_reward_binding_not_found: "该节点的绑定已解除，请刷新。",
+    node_reward_receipts_unavailable: "暂时无法读取转入记录，请稍后重试。",
     node_reward_claim_unverified: "正在等待目标节点确认；确认后会自动绑定。",
     node_reward_claim_invalid: "绑定码无效或已使用，请重新创建。",
     node_reward_claim_expired: "绑定码已过期，请重新创建。",
@@ -157,14 +160,19 @@
     const redeemable = $("#nodeRewardsRedeemable");
     const redeemed = $("#nodeRewardsRedeemed");
     if (redeemable) redeemable.textContent = available ? redemption.redeemable_points : "-";
-    if (redeemed) redeemed.textContent = available ? redemption.redeemed_points : "-";
+    if (redeemed) redeemed.textContent = redemption?.redeemed_points ?? "-";
+    const notice = $("#nodeRewardsRedemptionNotice");
+    if (notice) {
+      notice.textContent = labels[redemption?.code] || "";
+      notice.hidden = !notice.textContent;
+    }
     updateRedeemButton();
   }
 
   function updateRedeemButton() {
     const button = $("#nodeRewardsRedeemBtn");
     if (!button) return;
-    button.disabled = !state.canRedeem || state.loading || state.redeeming;
+    button.disabled = !state.canRedeem || state.loading || state.redeeming || state.unbinding;
     button.textContent = state.redeeming ? "正在转入…" : "转入余额";
   }
 
@@ -174,9 +182,9 @@
     const title = text("strong", item.pool_name || item.node_id || "共享节点");
     const livenessLabels = { online: "在线", busy: "运行中", needs_attention: "需要检查", offline: "离线" };
     const stateLabels = { active: "已启用", draining: "暂停接单", revoked: "已停用" };
-    const stateLabel = item.binding_status === "corrected"
-      ? "归属已修正"
-      : livenessLabels[item.liveness] || stateLabels[item.node_state] || "状态未知";
+    const bindingLabels = { corrected: "归属已修正", unbound: "已解绑" };
+    const closedLabel = bindingLabels[item.binding_status];
+    const stateLabel = closedLabel || livenessLabels[item.liveness] || stateLabels[item.node_state] || "状态未知";
     heading.append(title, text("span", stateLabel, "node-rewards-status"));
     row.append(heading);
     row.append(text("p", "节点 ID：" + (item.node_id || "-"), "node-rewards-identity"));
@@ -185,8 +193,8 @@
     stats.append(
       text("span", "成功图片 " + Number(item.successful_images || 0).toLocaleString("zh-CN")),
       text("strong", item.reward_points + " 积分"),
-      text("small", item.binding_status === "corrected"
-        ? "归属修正于：" + date(item.corrected_at)
+      text("small", closedLabel
+        ? closedLabel + " · " + date(item.corrected_at)
         : "最近在线：" + date(item.last_seen_at)),
       text("small", "绑定于：" + date(item.bound_at)),
     );
@@ -201,6 +209,12 @@
       };
       row.append(text("p", "当前任务：" + (executionLabels[item.current_execution.state] || "处理中"),
                       "node-rewards-execution"));
+    }
+    if (item.binding_status === "active" && Number.isInteger(item.binding_revision)) {
+      const button = text("button", "解绑节点", "button ghost");
+      button.type = "button";
+      button.addEventListener("click", () => unbindNode(item, button));
+      row.append(button);
     }
     return row;
   }
@@ -256,7 +270,7 @@
   }
 
   async function redeemToBalance() {
-    if (state.loading || state.redeeming || !state.canRedeem) return;
+    if (state.loading || state.redeeming || state.unbinding || !state.canRedeem) return;
     state.redeeming = true;
     const token = readToken();
     const epoch = state.epoch;
@@ -268,6 +282,7 @@
       await load({ afterRedemption: true });
       if (epoch + 1 !== state.epoch || token !== readToken()) return;
       window.refreshVeyraAccount?.().catch(() => {});
+      if ($("#nodeRewardsReceipts")?.open) loadReceipts();
       showNotice(Number(receipt.credited_points) > 0
         ? "已转入 " + receipt.credited_points + " 积分。"
         : "没有新的可转积分，已刷新余额和奖励统计。");
@@ -278,6 +293,59 @@
     } finally {
       state.redeeming = false;
       updateRedeemButton();
+    }
+  }
+
+  async function unbindNode(item, button) {
+    if (state.unbinding || state.loading || state.redeeming) return;
+    if (!window.confirm("解绑这台节点？已获得的积分会保留，解绑后新交付的图片不再计入当前账户。")) return;
+    const token = readToken();
+    state.unbinding = true;
+    button.disabled = true;
+    updateRedeemButton();
+    try {
+      await request("/api/account/node-rewards/unbind", { method: "POST", body: {
+        pool_id: item.pool_id, node_id: item.node_id, executor_instance: item.executor_instance,
+        binding_revision: item.binding_revision,
+      } });
+      if (token !== readToken()) return;
+      await load();
+      if (token === readToken()) showNotice("已解绑，历史奖励已保留。");
+    } catch (error) {
+      if (token === readToken()) showNotice(friendly(error));
+    } finally {
+      state.unbinding = false;
+      button.disabled = false;
+      updateRedeemButton();
+    }
+  }
+
+  async function loadReceipts(append = false) {
+    const list = $("#nodeRewardsReceiptList");
+    const status = $("#nodeRewardsReceiptStatus");
+    const more = $("#nodeRewardsReceiptMore");
+    if (!list || !status || !more || (append && !state.receiptCursor)) return;
+    const epoch = ++state.receiptEpoch;
+    const token = readToken();
+    const query = append ? "?before_redeemed_images=" + state.receiptCursor : "";
+    more.disabled = true;
+    status.hidden = false;
+    status.textContent = "正在读取转入记录…";
+    try {
+      const page = await request("/api/account/node-rewards/receipts" + query);
+      if (epoch !== state.receiptEpoch || token !== readToken()) return;
+      if (!append) list.replaceChildren();
+      for (const row of page.items) {
+        list.append(text("li", date(row.created_at) + " · 转入 " + row.amount + " 积分 · 入账后余额 " + row.balance_after));
+      }
+      state.receiptCursor = page.next_before_redeemed_images;
+      more.hidden = !state.receiptCursor;
+      status.textContent = list.childElementCount ? "" : "暂无转入记录。";
+      status.hidden = !status.textContent;
+    } catch (error) {
+      if (epoch === state.receiptEpoch && token === readToken()) status.textContent = friendly(error);
+    } finally {
+      if (epoch === state.receiptEpoch) more.disabled = false;
     }
   }
 
@@ -382,18 +450,30 @@
   $("#nodeRewardsCopyClaimBtn")?.addEventListener("click", copyChallenge);
   $("#nodeRewardsRefreshBtn")?.addEventListener("click", load);
   $("#nodeRewardsRedeemBtn")?.addEventListener("click", redeemToBalance);
+  $("#nodeRewardsReceipts")?.addEventListener("toggle", (event) => {
+    if (event.target.open) loadReceipts();
+  });
+  $("#nodeRewardsReceiptMore")?.addEventListener("click", () => loadReceipts(true));
   document.addEventListener("alchemy:account-view", (event) => {
     if (event.detail && event.detail.view === "node-rewards") load();
   });
   window.addEventListener("storage", (event) => {
     if (event.key === sessionKey || event.key === null) {
       state.epoch += 1;
+      state.receiptEpoch += 1;
+      state.receiptCursor = null;
+      $("#nodeRewardsReceiptList")?.replaceChildren();
+      const receipts = $("#nodeRewardsReceipts");
+      if (receipts) receipts.open = false;
+      const more = $("#nodeRewardsReceiptMore");
+      if (more) more.hidden = true;
       setChallenge("");
       unavailable("请先登录 Alchemy 账户。");
     }
   });
   window.addEventListener("pagehide", () => {
     state.epoch += 1;
+    state.receiptEpoch += 1;
     state.claimEpoch += 1;
     if (state.pollTimer) window.clearTimeout(state.pollTimer);
     state.pollTimer = null;
