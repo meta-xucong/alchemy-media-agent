@@ -324,6 +324,7 @@ class Settings(BaseModel):
     veyra_auth_enabled: bool = os.getenv("VEYRA_AUTH_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     veyra_sub2api_base_url: str = os.getenv("VEYRA_SUB2API_BASE_URL", "http://127.0.0.1:8080")
     veyra_internal_token: str | None = os.getenv("VEYRA_INTERNAL_TOKEN")
+    veyra_node_reward_credit_token: str = os.getenv("VEYRA_NODE_REWARD_CREDIT_TOKEN", "").strip()
     veyra_session_secret: str | None = os.getenv("VEYRA_SESSION_SECRET")
     veyra_require_ui_auth: bool = os.getenv("VEYRA_REQUIRE_UI_AUTH", "false").lower() in {"1", "true", "yes", "on"}
     veyra_login_base_url: str = os.getenv("VEYRA_LOGIN_BASE_URL", "https://aiself.vip").rstrip("/")

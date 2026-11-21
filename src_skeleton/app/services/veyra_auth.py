@@ -141,6 +141,39 @@ async def ensure_sufficient_balance(*, user_id: int, amount: float) -> VeyraAcco
     return account
 
 
+async def node_reward_wallet(user_id: int, *, eligible_images: int | None = None) -> dict[str, int]:
+    _ensure_bridge_enabled()
+    token = settings.veyra_node_reward_credit_token
+    if len(token) < 32 or token == settings.veyra_internal_token:
+        raise VeyraAuthMisconfigured("Node reward service credential is not configured.")
+    url = settings.veyra_sub2api_base_url.rstrip("/") + f"/api/veyra/internal/users/{user_id}/node-rewards"
+    headers = {
+        "X-Veyra-Internal-Token": str(settings.veyra_internal_token or ""),
+        "X-Veyra-Node-Reward-Token": token,
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.veyra_request_timeout_seconds, transport=_bridge_transport(), trust_env=False,
+        ) as client:
+            if eligible_images is None:
+                response = await client.get(url, headers=headers)
+            else:
+                response = await client.post(url, headers=headers, json={"eligible_images": eligible_images})
+        data = _checked_data(response)
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise VeyraAuthError("Node reward settlement unavailable.") from exc
+    redeemed, credited = data.get("redeemed_images"), data.get("credited_images")
+    if (
+        type(data.get("user_id")) is not int or data["user_id"] != user_id
+        or type(redeemed) is not int or type(credited) is not int
+        or not 0 <= credited <= redeemed <= 1_000_000_000
+        or (eligible_images is None and credited != 0)
+        or (eligible_images is not None and (redeemed < eligible_images or credited > eligible_images))
+    ):
+        raise VeyraAuthError("Invalid node reward settlement receipt.")
+    return {"redeemed_images": redeemed, "credited_images": credited}
+
+
 async def debit_balance(*, user_id: int, amount: float, idempotency_key: str, source: str, reference_id: str) -> VeyraDebitResult:
     _ensure_bridge_enabled()
     payload = {

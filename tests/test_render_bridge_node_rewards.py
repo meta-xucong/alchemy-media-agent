@@ -11,9 +11,10 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.integrations.render_bridge.node_rewards import install_node_reward_account_routes
+from app.services.veyra_auth import VeyraAuthError
 
 
-def _app(tmp_path, nodes, *, truncated=False, approvals=None):
+def _app(tmp_path, nodes, *, truncated=False, approvals=None, wallet=None):
     approvals = approvals if approvals is not None else {}
 
     async def metrics():
@@ -38,9 +39,74 @@ def _app(tmp_path, nodes, *, truncated=False, approvals=None):
         reward_claim_approval_loader=lambda digest: approvals.get(
             digest, {"available": False, "code": "claim_approval_not_found"}),
         node_binding_status_secret="bridge-reward-secret",
+        wallet_rewards=wallet,
         database_path=Path(tmp_path) / "node-rewards.sqlite3",
     )
     return app
+
+
+def test_rewards_redeem_to_session_owner_and_retry_lost_receipt(tmp_path):
+    node = _node(images=9)
+    calls = []
+    settled = {}
+
+    async def wallet(user_id, *, eligible_images=None):
+        before = settled.get(user_id, 0)
+        if eligible_images is None:
+            return {"redeemed_images": before, "credited_images": 0}
+        calls.append((user_id, eligible_images))
+        settled[user_id] = max(before, eligible_images)
+        if len(calls) == 1:
+            raise VeyraAuthError("receipt lost after wallet commit")
+        return {"redeemed_images": settled[user_id], "credited_images": settled[user_id] - before}
+
+    app = _app(tmp_path, [node], wallet=wallet)
+    store = app.state.node_reward_account_store
+    store.bind_node(41, pool_id="pool_1", node_id="node_1", executor_instance="executor_1",
+                    baseline_images=3)
+    with TestClient(app) as client:
+        url = "/api/account/node-rewards"
+        current = client.get(url, headers=_headers()).json()
+        assert current["redemption"]["redeemable_points"] == "0.12"
+        assert current["redemption"]["withdrawal_minimum_points"] == "10.00"
+        assert client.post(url + "/redeem", json={}).status_code == 401
+        assert client.post(url + "/redeem", headers=_headers(), json={"user_id": 42}).status_code == 422
+        invalid_origin = {**_headers(), "Origin": "https://example.com"}
+        assert client.post(url + "/redeem", headers=invalid_origin, json={}).status_code == 403
+        assert client.post(url + "/redeem", headers=_headers(42), json={}).json()["credited_points"] == "0.00"
+        assert client.post(url + "/redeem", headers=_headers(), json={}).status_code == 503
+        assert client.post(url + "/redeem", headers=_headers(), json={}).json()["credited_points"] == "0.00"
+        assert client.get(url, headers=_headers()).json()["redemption"]["redeemed_points"] == "0.12"
+        node["metrics"]["rewardable_images"] = 10
+        assert client.post(url + "/redeem", headers=_headers(), json={}).json()["credited_points"] == "0.02"
+    assert calls == [(41, 6), (41, 6), (41, 7)]
+
+
+def test_reward_correction_cannot_reassign_reserved_images(tmp_path):
+    set_count = _node(images=12)
+    claims = {}
+
+    async def wallet(user_id, *, eligible_images=None):
+        before = claims.get(user_id, 0)
+        after = before if eligible_images is None else max(before, eligible_images)
+        claims[user_id] = after
+        return {"redeemed_images": after, "credited_images": after - before}
+
+    app = _app(tmp_path, [set_count], wallet=wallet)
+    store = app.state.node_reward_account_store
+    store.bind_node(41, pool_id="pool_1", node_id="node_1", executor_instance="executor_1",
+                    baseline_images=3)
+    with TestClient(app) as client:
+        url = "/api/account/node-rewards/redeem"
+        assert client.post(url, headers=_headers(), json={}).json()["credited_points"] == "0.18"
+        correction = store.correct_binding(pool_id="pool_1", node_id="node_1", executor_instance="executor_1",
+                                           expected_user_id=41, expected_revision=1, new_user_id=42,
+                                           observed_images=10, corrected_by_admin_user_id=5)
+        assert correction["former_images"] == 9
+        set_count["metrics"]["rewardable_images"] = 14
+        assert client.post(url, headers=_headers(42), json={}).json()["credited_points"] == "0.04"
+        assert client.post(url, headers=_headers(41), json={}).json()["credited_points"] == "0.00"
+    assert claims == {41: 9, 42: 2}
 
 
 def _node(*, node_id="node_1", pool_id="pool_1", executor="executor_1",

@@ -1132,6 +1132,18 @@
                   <article class="account-kpi"><span>成功图片</span><strong id="nodeRewardsImageCount">-</strong><small>只统计真实图片</small></article>
                   <article class="account-kpi"><span>奖励积分</span><strong id="nodeRewardsPoints">-</strong><small>每张成功图片 0.02 积分</small></article>
                 </div>
+                <section class="account-access-card node-rewards-bind-card" aria-label="积分兑换">
+                  <div class="account-access-card-head">
+                    <div>
+                      <h4>可转入 <strong id="nodeRewardsRedeemable">-</strong> 积分</h4>
+                      <p>1 积分兑换 1 个余额单位。累计已转入 <span id="nodeRewardsRedeemed">-</span> 积分。</p>
+                    </div>
+                  </div>
+                  <div class="node-rewards-id-row">
+                    <button id="nodeRewardsRedeemBtn" class="button primary" type="button" disabled>转入余额</button>
+                    <button class="button ghost" type="button" disabled>提现（满 10 积分，暂未开放）</button>
+                  </div>
+                </section>
                                   <section class="account-access-card node-rewards-bind-card">
                     <div class="account-access-card-head">
                       <div><h4>绑定节点</h4><p>在当前 Alchemy 账户创建绑定码，再到目标机器的 RenderBridge 本地状态页输入并确认。确认后自动绑定；多台机器分别创建绑定码即可。</p></div>
@@ -1154,7 +1166,7 @@
                   </div>
                   <div id="nodeRewardsNodeList" class="node-rewards-node-list" aria-live="polite"></div>
                 </section>
-                <p class="node-rewards-policy">仅真实成功图片计奖；测试图片不计奖。目前没有扣分规则，奖励积分独立展示，不影响账户余额和生图扣费。</p>
+                <p class="node-rewards-policy">真实成功交付的图片计奖，测试图片不计奖。奖励积分可转入账户余额。</p>
               </section>
               <section id="accountAccessPanel" class="account-center-view account-access-panel" data-account-view="access" data-account-access hidden>
                 <div class="account-access-hero">

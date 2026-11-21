@@ -4473,6 +4473,7 @@ def _create_render_bridge_native_gateway(config):
 
 
 from app.integrations.render_bridge.admin import install_render_bridge_admin
+from app.services.veyra_auth import node_reward_wallet
 install_render_bridge_admin(
     app,
     admin_resolver=lambda request, authorization: _require_veyra_admin(request, authorization),
@@ -4481,5 +4482,6 @@ install_render_bridge_admin(
     project_snapshot=_render_bridge_preview_project_snapshot,
     native_gateway_factory=_create_render_bridge_native_gateway,
     account_loader=lambda user_id: _veyra_account(user_id),
+    wallet_rewards=node_reward_wallet if settings.veyra_node_reward_credit_token else None,
     node_rewards_database_path=media_store.root / "render_bridge" / "node-rewards.sqlite3",
 )
