@@ -444,7 +444,7 @@ class BridgeDispatch:
 def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabled, project_snapshot,
                                 native_gateway_factory=None, baseline=None, client_factory=BridgeClient,
                                 reward_client_factory=BridgeRewardClient, account_loader=None,
-                                node_rewards_database_path=None):
+                                node_rewards_database_path=None, wallet_rewards=None):
     controller = BridgeAdminController(baseline=baseline or BridgeSettings.from_env(preserve_disabled=True),
         admin_resolver=admin_resolver, session_user=session_user, auth_enabled=auth_enabled,
         project_snapshot=project_snapshot, native_gateway_factory=native_gateway_factory,
@@ -454,6 +454,7 @@ def install_render_bridge_admin(app, *, admin_resolver, session_user, auth_enabl
         reward_metrics_loader=controller.reward_metrics,
         reward_claim_approval_loader=controller.reward_claim_approval,
         node_binding_status_secret=controller.baseline.reward_read_token,
+        wallet_rewards=wallet_rewards,
         database_path=(node_rewards_database_path or
                        controller.baseline.storage / "node-rewards.sqlite3"))
     router = APIRouter(prefix="/v1/admin/render-bridge")
