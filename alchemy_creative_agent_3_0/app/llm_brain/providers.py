@@ -145,6 +145,10 @@ class BrainCreativeExplorationSignoffInvalid(BrainPromptContractInvalid):
         self.feedback = {"reason": reason, "output_index": output_index}
 
 
+class BrainCreativeExplorationRepairExhausted(BrainPromptContractInvalid):
+    """No authorized targeted repair yielded a valid batch."""
+
+
 class BrainPromptRequestContractInvalid(BrainPromptContractInvalid):
     """The local frozen request contract is invalid before a Brain call."""
 
@@ -645,6 +649,35 @@ class V3LLMBrainProvider:
         if last_error is not None:
             raise last_error
         raise BrainProviderUnavailable("no configured remote Brain model candidates")
+
+    def run_targeted_exploration_repair(self, request: BrainRunRequest, *, backup: bool) -> dict[str, Any]:
+        """One repair call through Claude or Kimi under the current Brain budget."""
+        if request.stage != "provider_prompt_finalize" or not request._creative_exploration_repair:
+            raise BrainPromptRequestContractInvalid("An internal exploration repair is required.")
+        self._ensure_budget_available()
+        candidate = copy.copy(self)
+        if backup:
+            candidate.provider, candidate.model = next(
+                (provider, model) for provider, model in build_v3_model_candidates(self.model, self.backup_model)
+                if model.lower().startswith("kimi-")
+            )
+            runner = candidate._run_openai_compatible
+        else:
+            if _model_protocol(self.model) != "anthropic":
+                raise BrainProviderUnavailable("The configured primary is not a Claude model.")
+            candidate.provider = "anthropic"
+            runner = candidate._run_anthropic_compatible
+        result = _with_transport_receipt(
+            candidate._run_remote_attempt(runner, request, json_recovery=False),
+            attempts=1,
+            json_recovery_attempted=False,
+            execution_budget=self.execution_budget_receipt(),
+        )
+        result[_TRANSPORT_RECEIPT_KEY].update(
+            primary_model=self.model, selected_model=candidate.model,
+            selected_provider=candidate.provider, fallback_used=backup,
+        )
+        return result
 
     def _run_single_model(self, request: BrainRunRequest) -> dict[str, Any]:
         """Run one Brain decision with bounded transport and JSON recovery.
@@ -1692,7 +1725,9 @@ def _log_claude_attempt(
     _claude_attempt_logger.info("V3_CLAUDE_ATTEMPT %s", json.dumps({
         "operation_id": safe_operation_id,
         "stage": _safe_brain_stage(request.stage),
-        "semantic_recovery": bool(request.metadata.get("remote_semantic_contract_recovery")),
+        "semantic_recovery": bool(
+            request.metadata.get("remote_semantic_contract_recovery") or request._creative_exploration_repair
+        ),
         "retry_kind": retry_kind,
         "stop_reason": trace.get("claude_stop_reason"),
         "failure_kind": failure_kind,
