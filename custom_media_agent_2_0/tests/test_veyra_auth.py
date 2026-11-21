@@ -593,11 +593,22 @@ def test_veyra_usage_filters_by_session_user(tmp_path) -> None:
     assert response.json()["items"][0]["reference_id"] == "job_1"
 
 
-def test_veyra_generation_billing_success_records_usage(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("requested", "returned", "total"), [(1, 1, 0.07), (3, 3, 0.21), (3, 2, 0.14)])
+def test_veyra_generation_billing_success_records_usage(tmp_path, monkeypatch: pytest.MonkeyPatch,
+                                                       requested, returned, total) -> None:
+    from app.providers.images.mock import V2MockImageProvider
+
+    generate = V2MockImageProvider.generate
+
+    async def generate_outputs(provider, request):
+        result = await generate(provider, request)
+        return result.model_copy(update={"outputs": result.outputs[:returned]})
+
+    monkeypatch.setattr(V2MockImageProvider, "generate", generate_outputs)
     object.__setattr__(settings, "veyra_auth_enabled", True)
     object.__setattr__(settings, "veyra_billing_enabled", True)
     object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
-    object.__setattr__(settings, "veyra_generation_charge_amount", 1.25)
+    object.__setattr__(settings, "veyra_generation_charge_amount", 0.07)
     object.__setattr__(settings, "veyra_usage_path", tmp_path / "usage.jsonl")
     object.__setattr__(settings, "storage_dir", tmp_path / "storage")
     object.__setattr__(settings, "image_generation_provider", "mock_image")
@@ -606,12 +617,12 @@ def test_veyra_generation_billing_success_records_usage(tmp_path, monkeypatch: p
 
     async def fake_debit(self, *, user_id: int, amount: float, idempotency_key: str, source: str = "alchemy", reference_id: str = ""):
         assert user_id == 42
-        assert amount == 1.25
+        assert amount == total
         assert reference_id == "job_bill"
         return VeyraDebitResult(
             user_id=user_id,
             amount=amount,
-            balance_after=8.75,
+            balance_after=round(10.0 - total, 2),
             idempotency_key=idempotency_key,
             replayed=False,
         )
@@ -623,7 +634,8 @@ def test_veyra_generation_billing_success_records_usage(tmp_path, monkeypatch: p
     monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "account", fake_account)
     monkeypatch.setattr(veyra_auth_module.VeyraSub2APIClient, "debit", fake_debit)
     request = CreateImageJobRequest(
-        prompt_plan=ImagePromptPlan(plan_id="plan_bill", mode="smart_enhance", prompt="Create a clean product image."),
+        prompt_plan=ImagePromptPlan(plan_id="plan_bill", mode="smart_enhance", prompt="Create a clean product image.",
+                                    provider_parameters={"count": requested}),
         provider_hint="mock_image",
         veyra_user_id=42,
     )
@@ -631,7 +643,8 @@ def test_veyra_generation_billing_success_records_usage(tmp_path, monkeypatch: p
     job = asyncio.run(generation_service.create_image_job(request, job_id="job_bill"))
 
     assert job.status == "completed"
-    assert job.outputs[0].metadata["veyra_billing"]["amount"] == 1.25
+    assert len(job.outputs) == returned
+    assert job.outputs[0].metadata["veyra_billing"]["amount"] == total
     assert settings.veyra_usage_path.exists()
     assert "job_bill" in settings.veyra_usage_path.read_text(encoding="utf-8")
 

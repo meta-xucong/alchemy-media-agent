@@ -18,7 +18,7 @@ from app.services.generation_capacity import GenerationCapacityExceeded, Generat
 from app.services.ids import new_id
 from app.services.prompting import summarize_intent
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
-from app.services.veyra_billing_settings import get_billing_rule
+from app.services.veyra_billing_settings import get_billing_rule, image_charge_total
 
 
 _UPSTREAM_BALANCE_WAIT_SECONDS = 300.0
@@ -269,7 +269,8 @@ async def _preflight_veyra_balance(request: CreateCreativeRunRequest, run_id: st
         return None
     try:
         account = await VeyraSub2APIClient().account(int(request.veyra_user_id))
-        if float(account.balance) + 1e-9 >= float(rule.charge_amount):
+        required = image_charge_total(rule.charge_amount, request.output.get("count", 1))
+        if float(account.balance) + 1e-9 >= required:
             return None
         raise VeyraInsufficientBalance("Insufficient sub2api balance.")
     except VeyraInsufficientBalance:

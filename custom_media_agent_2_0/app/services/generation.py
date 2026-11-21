@@ -12,7 +12,7 @@ from app.providers.images import (
 from app.repositories import repository
 
 from app.repositories.memory import utc_now
-from app.schemas import CreateImageJobRequest, ImageJob, ImageOutput
+from app.schemas import CreateImageJobRequest, ImageJob, ImageOutput, normalize_run_output
 from app.services.ids import new_id
 from app.services.image_history import persist_image_job_history
 from app.services.intent_integrity import preflight_prompt_integrity
@@ -23,7 +23,7 @@ from app.services.reference_delivery import reference_delivery_audit
 from app.services import task_queue
 from app.services import render_bridge_primary as bridge_primary
 from app.services.veyra_auth import VeyraAuthError, VeyraInsufficientBalance, VeyraSub2APIClient
-from app.services.veyra_billing_settings import get_billing_rule
+from app.services.veyra_billing_settings import get_billing_rule, image_charge_total
 from app.services.veyra_usage import VeyraUsageRecord, record_veyra_usage
 
 
@@ -166,7 +166,11 @@ async def create_image_job(
     billing_required = _should_bill_veyra(request, billing_rule=billing_rule)
     if billing_required and frozen is None:
         try:
-            await _ensure_veyra_balance(user_id=int(request.veyra_user_id or 0), amount=billing_rule.charge_amount)
+            requested_count = normalize_run_output(request.prompt_plan.provider_parameters)["count"]
+            await _ensure_veyra_balance(
+                user_id=int(request.veyra_user_id or 0),
+                amount=image_charge_total(billing_rule.charge_amount, requested_count),
+            )
         except (VeyraInsufficientBalance, VeyraAuthError) as exc:
             return _save_job(_failed_job(request, provider_id=provider_name, error=_billing_provider_error(exc), job_id=job_id, created_at=created_at))
 
@@ -264,10 +268,11 @@ async def create_image_job(
         if current is not None and current.status == "cancelled":
             return current
     debit_arguments = {
-        "user_id": int(request.veyra_user_id or 0), "amount": billing_rule.charge_amount,
+        "user_id": int(request.veyra_user_id or 0),
+        "amount": image_charge_total(billing_rule.charge_amount, len(result.outputs)),
         "idempotency_key": _billing_idempotency_key(billing_rule, job_id),
         "source": billing_rule.source, "reference_id": _billing_reference_id(job_id),
-    } if billing_required else None
+    } if billing_required and result.outputs else None
     if frozen:
         finalization = task_queue.begin_bridge_finalization(job_id, debit_arguments)
         if finalization is None:
