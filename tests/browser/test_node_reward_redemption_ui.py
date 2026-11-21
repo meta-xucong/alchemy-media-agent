@@ -51,6 +51,7 @@ def test_node_reward_balance_button_and_disabled_withdrawal(surface):
             button = page.locator("#nodeRewardsRedeemBtn")
             expect(button).to_be_enabled()
             expect(page.locator("#nodeRewardsRedeemable")).to_have_text("0.88")
+            expect(page.locator(".node-rewards-policy")).to_contain_text("奖励积分可转入账户余额")
             expect(page.get_by_role("button", name="提现（满 10 积分，暂未开放）")).to_be_disabled()
             with page.expect_request("**/api/account/node-rewards/redeem"):
                 button.click()
