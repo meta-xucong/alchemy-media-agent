@@ -21,12 +21,15 @@ import math
 import os
 from pathlib import Path
 import re
-from time import sleep
+from threading import Lock
+from time import sleep, time
 from typing import Any, Callable, Literal
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
 from pydantic import ValidationError
+
+from .account_billing import V3AccountImageBilling, V3AccountImageBillingCheckpoint, V3AccountImageBillingError
 
 from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
@@ -881,6 +884,7 @@ class ProductJobRecord:
     lifecycle: JobLifecycleRecord | None = None
     ecommerce_authority_snapshot: ProductApiEcommerceAuthoritySnapshot | None = None
     balance_estimate: dict[str, Any] = field(default_factory=dict)
+    account_image_billing: V3AccountImageBillingCheckpoint | None = None
     warnings: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=_utc_now_iso)
     updated_at: str = field(default_factory=_utc_now_iso)
@@ -1007,6 +1011,10 @@ def deserialize_product_job_record(
                 else None
             ),
             balance_estimate=dict(payload.get("balance_estimate") or {}),
+            account_image_billing=(
+                V3AccountImageBillingCheckpoint.model_validate(payload["account_image_billing"])
+                if payload.get("account_image_billing") is not None else None
+            ),
             warnings=[str(item) for item in payload.get("warnings") or []],
             created_at=str(payload.get("created_at") or _utc_now_iso()),
             updated_at=str(payload.get("updated_at") or _utc_now_iso()),
@@ -1352,6 +1360,7 @@ class PersistentProductJobStore(InMemoryProductJobStore):
                 else None
             ),
             "balance_estimate": dict(record.balance_estimate),
+            "account_image_billing": _model_json(record.account_image_billing),
             "warnings": list(record.warnings),
             "created_at": record.created_at,
             "updated_at": record.updated_at,
@@ -1400,6 +1409,8 @@ def _default_product_job_storage_root() -> Path:
 
 class V3ProductApiService:
     """V3-owned product API facade over the Creative Core."""
+
+    account_image_billing: V3AccountImageBilling | None = None
 
     @staticmethod
     def _inspect_outputs_in_order(
@@ -1515,9 +1526,13 @@ class V3ProductApiService:
         mcp_materialization_store: McpMaterializationHandoffStore | None = None,
         body_proportion_source_analyzer: BodySourceAnalysisProvider | None = None,
         body_cross_view_review_provider: BodyCrossViewReviewProvider | None = None,
+        account_image_billing: V3AccountImageBilling | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
+        self.account_image_billing = account_image_billing
+        self._billing_job_locks = WeakValueDictionary()
+        self._billing_job_locks_guard = Lock()
         self.job_store = job_store or InMemoryProductJobStore()
         self.ecommerce_planner = ecommerce_planner or EcommerceScenarioPackPlanner()
         self.asset_store = asset_store or V3UploadedAssetStore()
@@ -1782,6 +1797,8 @@ class V3ProductApiService:
         actual_owner = metadata.get("veyra_user_id") or metadata.get("owner_user_id")
         if owner_user_id is not None and actual_owner != owner_user_id:
             raise ValueError("render_bridge_target_not_found")
+        if self._billing_owns_finalization(record):
+            return {"job_id": job_id, "status": "payment_pending", "cancel_requested": False}
         owner = str(actual_owner or "server") + ":" + str(metadata.get("project_id") or "project")
         settings = PrimarySettings.from_env(product="v3")
         transport = PrimaryTransport(settings)
@@ -3482,6 +3499,8 @@ class V3ProductApiService:
             return
         if record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
             return
+        if self._billing_owns_finalization(record):
+            return
         attempt_id = str(watchdog.get("background_attempt_id") or "")
         timeout_seconds = watchdog.get("timeout_seconds")
         started_at = str(watchdog.get("started_at") or "")
@@ -3522,6 +3541,7 @@ class V3ProductApiService:
         if (
             active_attempt_id != str(background_attempt_id)
             or record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+            or self._billing_owns_finalization(record)
         ):
             return self._status_from_record(record)
         rounded_timeout = max(1, int(round(float(timeout_seconds))))
@@ -3602,6 +3622,7 @@ class V3ProductApiService:
         if (
             active_attempt_id != str(background_attempt_id)
             or record.status not in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+            or self._billing_owns_finalization(record)
         ):
             return self._status_from_record(record)
         requested_code = str(failure_code).strip()
@@ -3916,6 +3937,36 @@ class V3ProductApiService:
         _trusted_body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
         _trusted_generate_continuation: GenerateContinuation | None = None,
     ) -> ProductJobStatus:
+        if self.account_image_billing is None:
+            return self._generate_asset_series(
+                job_id, request,
+                _trusted_body_refresh_analysis_context=_trusted_body_refresh_analysis_context,
+                _trusted_generate_continuation=_trusted_generate_continuation,
+            )
+        with self._billing_job_locks_guard:
+            job_lock = self._billing_job_locks.get(job_id)
+            if job_lock is None:
+                job_lock = Lock()
+                self._billing_job_locks[job_id] = job_lock
+        if not job_lock.acquire(blocking=False):
+            return self.get_job(job_id)
+        try:
+            return self._generate_asset_series(
+                job_id, request,
+                _trusted_body_refresh_analysis_context=_trusted_body_refresh_analysis_context,
+                _trusted_generate_continuation=_trusted_generate_continuation,
+            )
+        finally:
+            job_lock.release()
+
+    def _generate_asset_series(
+        self,
+        job_id: str,
+        request: GenerateJobRequest | dict[str, Any] | None,
+        *,
+        _trusted_body_refresh_analysis_context: BodyRefreshAnalysisContext | None,
+        _trusted_generate_continuation: GenerateContinuation | None,
+    ) -> ProductJobStatus:
         record = self.job_store.get(job_id)
         if record is None:
             return self._not_found_status(job_id)
@@ -3933,6 +3984,8 @@ class V3ProductApiService:
         continuation = self._coerce_generate_continuation(_trusted_generate_continuation)
         if continuation is not None and continuation.job_id != record.job_id:
             raise ValueError("generate_continuation_job_mismatch")
+        if self._billing_owns_finalization(record):
+            return self._finalize_reviewed_image_delivery(record)
         worker_claim = continuation.background_worker_claim if continuation is not None else False
         background_attempt_id = (
             continuation.background_generation_attempt_id or "" if continuation is not None else ""
@@ -4060,6 +4113,8 @@ class V3ProductApiService:
             record.warnings.append("The saved execution plan could not be reconciled with this job.")
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
+            return self._status_from_record(record)
+        if not self._prepare_account_image_billing(record):
             return self._status_from_record(record)
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         submitted_mcp_generation_result = None
@@ -4320,6 +4375,89 @@ class V3ProductApiService:
                 record.lifecycle = self._build_lifecycle(record)
                 self.job_store.save(record)
                 return self._status_from_record(record)
+        return self._finalize_reviewed_image_delivery(record, background_attempt_id)
+
+    def _prepare_account_image_billing(self, record: ProductJobRecord) -> bool:
+        billing = self.account_image_billing
+        user_id = record.request.metadata.get("veyra_user_id")
+        if billing is None or type(user_id) is not int or user_id <= 0:
+            return True
+        if record.account_image_billing is not None and record.account_image_billing.unit_price is not None:
+            return record.account_image_billing.user_id == user_id
+        count = len(record.planning_result.series_plan.assets) if record.planning_result else 1
+        try:
+            price = billing.prepare(user_id, max(1, count))
+        except V3AccountImageBillingError as exc:
+            record.account_image_billing = V3AccountImageBillingCheckpoint(user_id=user_id, code=exc.code)
+            record.status = ProductJobStatusValue.BLOCKED
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+            return False
+        record.account_image_billing = (
+            V3AccountImageBillingCheckpoint(user_id=user_id, unit_price=price) if price is not None else None
+        )
+        self.job_store.save(record)
+        return True
+
+    @staticmethod
+    def _billing_owns_finalization(record: ProductJobRecord) -> bool:
+        return bool(
+            record.status == ProductJobStatusValue.FINALIZING
+            and record.account_image_billing
+            and record.account_image_billing.output_ids
+        )
+
+    def account_image_billing_retry_owner(self, job_id: str) -> int | None:
+        record = self.job_store.get(job_id)
+        if record is None or not self._billing_owns_finalization(record):
+            return None
+        bill = record.account_image_billing
+        if bill.code == "delivery_unavailable" or bill.retry_after > time():
+            return None
+        return bill.user_id
+
+    def account_image_delivery_is_held(self, job_id: str) -> bool:
+        record = self.job_store.get(job_id)
+        return bool(record and record.account_image_billing and record.status in {
+            ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING,
+        })
+
+    def _finalize_reviewed_image_delivery(
+        self, record: ProductJobRecord, background_attempt_id: str = "",
+    ) -> ProductJobStatus:
+        generation_result = record.generation_result
+        if generation_result is None:
+            return self._status_from_record(record)
+        bill = record.account_image_billing
+        if bill is not None and bill.unit_price is not None and not bill.charged:
+            _delivery, eligible, _assets = self._public_final_delivery_projection(generation_result)
+            if bill.output_ids or eligible:
+                if not bill.output_ids:
+                    if not self._background_generation_attempt_is_current(record, background_attempt_id):
+                        return self._status_from_record(record)
+                    bill.output_ids = tuple(sorted(eligible))
+                    bill.retry_after = time() + 15
+                    record.status = ProductJobStatusValue.FINALIZING
+                    record.lifecycle = self._build_lifecycle(record)
+                    # Freeze the reviewed output set and idempotency amount before the wallet write.
+                    self.job_store.save(record)
+                try:
+                    stored_ids = {output.output_id for output in self.output_store.list_by_job(record.job_id)}
+                    if (bill.user_id != record.request.metadata.get("veyra_user_id")
+                            or set(bill.output_ids) != eligible or not eligible.issubset(stored_ids)
+                            or not all(self.output_store.file_for_variant(value, "download") for value in bill.output_ids)):
+                        raise V3AccountImageBillingError("delivery_unavailable")
+                    if self.account_image_billing is None:
+                        raise V3AccountImageBillingError("wallet_unavailable")
+                    self.account_image_billing.debit(bill.user_id, bill.amount, record.job_id)
+                except (V3AccountImageBillingError, OSError) as exc:
+                    bill.code = exc.code if isinstance(exc, V3AccountImageBillingError) else "delivery_unavailable"
+                    bill.retry_after = time() + 15
+                    self.job_store.save(record)
+                    return self._status_from_record(record)
+                bill.charged = True
+                bill.code = None
+                self.job_store.save(record)
         if not self._persist_output_store_job_closure(record, generation_result):
             # Durable restart recovery is an auxiliary projection.  It must
             # not turn an otherwise complete in-memory core result into a
@@ -5544,20 +5682,7 @@ class V3ProductApiService:
                 record.lifecycle = self._build_lifecycle(record)
                 self.job_store.save(record)
                 return self._status_from_record(record)
-        if not self._persist_output_store_job_closure(record, generation_result):
-            # Durable restart recovery is an auxiliary projection and cannot
-            # block the already-reviewed core result.
-            warning = (
-                "Generated output was not sealed for restart recovery; the current result remains available."
-            )
-            if warning not in record.warnings:
-                record.warnings.append(warning)
-        record.status = ProductJobStatusValue.GENERATED
-        record.balance_estimate = self._estimate_for_result(generation_result)
-        record.lifecycle = self._build_lifecycle(record)
-        self.job_store.save(record)
-        self._finalize_project_continuity_anchor(record)
-        return self._status_from_record(record)
+        return self._finalize_reviewed_image_delivery(record, background_attempt_id)
 
     def _render_bridge_cloud_request(self, binding):
         from ..generation_router.render_bridge_provider import RenderBridgeCloudContinuation
@@ -13060,6 +13185,11 @@ class V3ProductApiService:
                 warnings=["Creative job was not found in the V3 product API store."],
                 metadata={"source": "V3ProductApiService", "rules_version": RULE_VERSION},
             )
+        if self._billing_owns_finalization(record):
+            return V3ExportPackageResponse(
+                job_id=job_id, status=record.status, api_namespace=API_NAMESPACE, download_route=download_route,
+                warnings=["Image delivery is awaiting account settlement."],
+            )
 
         scenario_id = record.scenario_resolution.manifest.scenario_id if record.scenario_resolution else None
         if scenario_id != "ecommerce":
@@ -13127,6 +13257,33 @@ class V3ProductApiService:
         )
 
     def _status_from_record(self, record: ProductJobRecord) -> ProductJobStatus:
+        status = self._product_status_from_record(record)
+        bill = record.account_image_billing
+        if bill is None:
+            return status
+        if self._billing_owns_finalization(record):
+            state = "pending"
+            final = status.metadata.get("final_delivery", {})
+            status.metadata["final_delivery"] = {
+                **final, "final_delivery_status": "settlement_pending", "automatic_delivery_available": False,
+                "manual_confirmation_required": False, "final_delivery_output_count": 0,
+            }
+        elif bill.charged:
+            state = "charged"
+        elif bill.code:
+            state = "blocked"
+        elif record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
+            state = "checking"
+        else:
+            state = "no_charge"
+        status.metadata["image_billing"] = {
+            "status": state, "amount": format(bill.amount, "f"),
+            **({"unit_price": format(bill.unit_price, "f")} if bill.unit_price is not None else {}),
+            **({"code": bill.code} if bill.code else {}),
+        }
+        return status
+
+    def _product_status_from_record(self, record: ProductJobRecord) -> ProductJobStatus:
         if isinstance(dict(record.request.metadata or {}).get("provider_deliverability_closure_receipt"), dict):
             return self._doc271_closure_status(record)
         phase3_status = self._doc270_general_phase3_safe_status(record)
@@ -17098,7 +17255,7 @@ class V3ProductApiService:
         """Return only exact image bindings authorized by the shared delivery projection."""
 
         result = record.generation_result
-        if result is None:
+        if result is None or self._billing_owns_finalization(record):
             return set()
         final_delivery, eligible_output_ids, eligible_asset_ids = self._public_final_delivery_projection(result)
         if not final_delivery.get("automatic_delivery_available"):
@@ -17155,7 +17312,7 @@ class V3ProductApiService:
 
     def _ecommerce_eligible_output_bindings(self, record: ProductJobRecord) -> set[tuple[str, str]]:
         result = record.generation_result
-        if result is None:
+        if result is None or self._billing_owns_finalization(record):
             return set()
         final_delivery, eligible_output_ids, eligible_asset_ids = self._public_final_delivery_projection(result)
         if not final_delivery.get("automatic_delivery_available"):

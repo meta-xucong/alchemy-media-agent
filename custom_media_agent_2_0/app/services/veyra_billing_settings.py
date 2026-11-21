@@ -33,6 +33,15 @@ DEFAULT_RULES: dict[str, dict[str, Any]] = {
         "charge_amount": DEFAULT_IMAGE_CHARGE_AMOUNT,
         "source": "alchemy:v2",
     },
+    "alchemy:v3": {
+        "key": "alchemy:v3",
+        "label": "Alchemy V3 生图",
+        "agent": "alchemy",
+        "version": "v3",
+        "enabled": True,
+        "charge_amount": DEFAULT_IMAGE_CHARGE_AMOUNT,
+        "source": "alchemy:v3",
+    },
 }
 
 _runtime_rules: dict[str, VeyraBillingRule] | None = None
@@ -130,7 +139,7 @@ def _default_rules() -> dict[str, dict[str, Any]]:
         key: {
             **value,
             "enabled": enabled,
-            "charge_amount": amount,
+            "charge_amount": value["charge_amount"] if key == "alchemy:v3" else amount,
         }
         for key, value in DEFAULT_RULES.items()
     }
@@ -156,6 +165,7 @@ def _rules_from_payload(payload: Any) -> dict[str, dict[str, Any]]:
                 "charge_amount": amount,
             }
             for key, value in DEFAULT_RULES.items()
+            if key != "alchemy:v3"
         }
     return {
         _normalize_rule_key(key): dict(value)

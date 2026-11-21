@@ -135,7 +135,9 @@ jobs:
             tests/test_prompt_canvas_authority.py \
             tests/test_*_exact_canvas.py \
             alchemy_creative_agent_3_0/tests/test_v3_bridge_primary_transport.py \
+            alchemy_creative_agent_3_0/tests/test_v3_account_image_billing.py \
             alchemy_creative_agent_3_0/tests/test_v3_prompt_size_precedence_and_replay_ui.py
+          node --test tests/v3_frontend_progress_accuracy.test.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -121,6 +121,7 @@ from app.services.image_service import (
 from app.services.media_acceleration import signed_output_url as signed_v1_output_url
 from app.services.retention_settings import get_retention_settings, save_retention_settings
 from app.services.session_service import create_session, handle_message
+from app.services.v3_veyra_billing import V3VeyraImageBilling
 from app.services.veyra_auth import (
     VeyraAuthDisabled,
     VeyraAuthError,
@@ -300,6 +301,7 @@ V3_VISUAL_ASSET_LIBRARY_ROOT = resolve_runtime_storage_path(
 _v3_product_service = V3ProductApiService(
     job_store=PersistentProductJobStore(),
     visual_asset_catalog=PersistentVisualAssetCatalog(V3_VISUAL_ASSET_CATALOG_ROOT),
+    account_image_billing=V3VeyraImageBilling() if settings.veyra_auth_enabled else None,
 )
 _v3_visual_asset_library_catalog = PersistentVisualAssetLibraryCatalog(V3_VISUAL_ASSET_LIBRARY_ROOT)
 _v3_project_visual_asset_binding_service = PersistentProjectVisualAssetBindingService(
@@ -2491,6 +2493,13 @@ async def v3_get_job_endpoint(job_id: str, request: Request, authorization: str 
     status = _run_v3_handler(v3_route_handlers.get_job, job_id)
     metadata = status.get("metadata") if isinstance(status, dict) else None
     project_id = str(metadata.get("project_id") or "").strip() if isinstance(metadata, dict) else ""
+    billing = metadata.get("image_billing") if isinstance(metadata, dict) else None
+    if (owner_user_id is not None and isinstance(billing, dict) and billing.get("status") == "pending"
+            and v3_route_handlers.service.account_image_billing_retry_owner(job_id) == owner_user_id):
+        if project_id:
+            _start_v3_project_generation_background(project_id, job_id, {"metadata": {"veyra_user_id": owner_user_id}})
+        else:
+            return await _run_v3_handler_threaded(v3_route_handlers.post_generate, job_id, {})
     if project_id and (owner_user_id is not None or not settings.veyra_auth_enabled):
         return _recover_v3_planned_auto_generation(project_id, status)
     return status
@@ -3306,11 +3315,13 @@ async def _require_v3_output_read_visible(request: Request, output_id: str, auth
     user_id = _veyra_user_id_from_request(request, authorization)
     output_owner_id = _v3_output_owner_id(output_id)
     project_owner_id = _v3_output_project_owner_id(output_id) if output_owner_id is None else None
-    if output_owner_id == user_id or (output_owner_id is None and project_owner_id == user_id):
-        return
-    if await _v3_is_admin_request(request, user_id):
-        return
-    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+    if user_id not in {output_owner_id, project_owner_id} and not await _v3_is_admin_request(request, user_id):
+        raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+    output = v3_output_store.get_output(output_id)
+    if output and v3_route_handlers.service.account_image_delivery_is_held(output.job_id):
+        raise HTTPException(status_code=409, detail={
+            "code": "v3_image_delivery_pending", "message": "V3 image delivery is awaiting confirmation.",
+        })
 
 
 async def _require_v3_job_read_visible(

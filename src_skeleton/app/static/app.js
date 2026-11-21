@@ -5504,6 +5504,7 @@ function v3FinalDeliveryProjection(job = v3State.currentJob) {
 }
 
 function v3JobDeliveryWithheld(job = v3State.currentJob) {
+  if (job?.metadata?.image_billing?.status === "pending") return false;
   const certification = v3ReviewCertification(job);
   if (certification?.final_delivery_withheld) return true;
   if (job?.metadata?.specialized_execution_summary?.final_delivery_withheld) return true;
@@ -5755,7 +5756,8 @@ function v3ReviewCertificationNotice(certification) {
 
 function v3JobDeliverySettled(job) {
   const status = String(job?.status || "");
-  return (status === "generated" || status === "selected") && !v3JobDeliveryWithheld(job);
+  return (status === "generated" || status === "selected")
+    && !v3JobAwaitingFinalDelivery(job) && !v3JobDeliveryWithheld(job);
 }
 
 function v3CurrentJobRealImageItems(job = v3State.currentJob) {
@@ -5849,6 +5851,7 @@ function v3ProjectOutputsForJob(jobId, project = v3State.currentProject) {
 }
 
 function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob, { allowPartial = false } = {}) {
+  if (["pending", "blocked"].includes(baseJob?.metadata?.image_billing?.status)) return null;
   const baseStatus = String(baseJob?.status || "").trim();
   if (baseJob && !v3JobDeliverySettled(baseJob)) {
     if (!allowPartial || !["blocked", "failed", "not_found"].includes(baseStatus)) return null;
@@ -8284,6 +8287,7 @@ function v3IsActiveEcommerceTerminalReceipt(job = v3State.currentJob) {
 }
 
 function v3EcommerceTerminalReceiptMessage(job) {
+  if (job?.metadata?.image_billing?.status === "blocked") return v3ImageBillingNotice(job);
   const operation = job?.metadata?.current_operation;
   if (String(operation?.state || "").trim().toLowerCase() === "needs_input") {
     return v3EcommerceFailureMessage(job) || "商品原图需要重新确认后再手动尝试。";
@@ -11182,6 +11186,10 @@ async function createV3Job() {
       return;
     }
     if (v3IsTerminalJob(created)) {
+      if (created.metadata?.image_billing?.status === "blocked") {
+        setV3Progress("failed", v3ImageBillingNotice(created), "warning");
+        return;
+      }
       await loadV3ProjectOutputs({
         silent: true,
         force: true,
@@ -11265,7 +11273,10 @@ async function completeV3GeneratedJob(
   );
   const missingDelivery = !hasExpectedDelivery && !partialRecovery && !deliveryWithheld;
   const failedWithoutPartialDelivery = (terminalFailure && !partialRecovery) || missingDelivery;
-  const terminalFailureNotice = missingDelivery && !terminalFailure
+  const billingNotice = generated?.metadata?.image_billing ? v3ImageBillingNotice(generated) : "";
+  const terminalFailureNotice = generated?.metadata?.image_billing?.status === "blocked"
+    ? billingNotice
+    : missingDelivery && !terminalFailure
     ? "任务已结束，但没有可交付图片；项目记录已保留。"
     : generated?.status === "not_found"
     ? "任务不存在或已无法恢复，请从项目中重新发起生成。"
@@ -11280,7 +11291,7 @@ async function completeV3GeneratedJob(
         ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
         ? partialDeliveryNotice
-        : "后台已完成出图，正在刷新项目图片。",
+        : billingNotice || "后台已完成出图，正在刷新项目图片。",
     failedWithoutPartialDelivery || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
   renderV3Job(generated);
@@ -11306,7 +11317,7 @@ async function completeV3GeneratedJob(
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     openV3ProjectSubpage("compose");
   }
-  if (failedWithoutPartialDelivery) {
+  if (failedWithoutPartialDelivery && generated?.metadata?.image_billing?.status !== "blocked") {
     const ecommerceFailure = v3EcommerceFailureMessage(generated);
     if (ecommerceFailure) {
       updateV3Notice(ecommerceFailure, "warning");
@@ -11319,8 +11330,8 @@ async function completeV3GeneratedJob(
       : deliveryWithheld
         ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
-        ? partialDeliveryNotice
-        : copy.generatedNotice,
+        ? [partialDeliveryNotice, billingNotice].filter(Boolean).join(" ")
+        : billingNotice || copy.generatedNotice,
     failedWithoutPartialDelivery || deliveryWithheld || partialRecovery ? "warning" : "success"
   );
 }
@@ -11398,7 +11409,8 @@ async function recoverV3GeneratedJob(
   let lastOutputProjectionSignature = "";
   let outputRetryAttempt = 0;
   let nextOutputRetryAt = 0;
-  for (let attempt = 1; followToTerminal || attempt <= recoveryAttemptLimit; attempt += 1) {
+  let latestObservedJob = v3State.currentJob?.job_id === jobId ? v3State.currentJob : null;
+  for (let attempt = 1; followToTerminal || attempt <= recoveryAttemptLimit || latestObservedJob?.metadata?.image_billing?.status === "pending"; attempt += 1) {
     if (typeof shouldContinue === "function" && !shouldContinue()) {
       throw new Error("v3_project_recovery_replaced");
     }
@@ -11410,7 +11422,6 @@ async function recoverV3GeneratedJob(
     let outputProjectionChanged = false;
     let outputProjectionSignature = "";
     let statusReadFailed = true;
-    let latestObservedJob = v3State.currentJob;
     try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
       statusReadFailed = false;
@@ -11548,7 +11559,27 @@ async function recoverV3GeneratedJob(
 }
 
 function v3JobAwaitingFinalDelivery(job) {
-  return job?.status === "finalizing" || Boolean(job?.metadata?.delivery_settling);
+  return job?.status === "finalizing" || Boolean(job?.metadata?.delivery_settling)
+    || job?.metadata?.image_billing?.status === "pending";
+}
+
+function v3ImageBillingNotice(job) {
+  const billing = job?.metadata?.image_billing;
+  if (billing?.status === "checking" && !billing.unit_price) return "正在核对账户余额。";
+  if (billing?.status === "pending") {
+    if (billing.code === "insufficient_balance") return "图片已生成。请前往账户补足积分，页面会继续核对原任务的扣费结果。";
+    if (billing.code === "delivery_unavailable") return "图片已生成，但交付文件暂时不可用。项目已保留，请稍后查看原任务。";
+    return "图片已生成，正在确认本次扣费。页面会继续核对原任务。";
+  }
+  if (billing?.status === "blocked") {
+    return billing.code === "insufficient_balance"
+      ? "积分不足，本次未开始生成，也未扣费。请前往账户补足积分后再试。"
+      : "账户余额暂时无法核对，本次未扣费。请稍后再试。";
+  }
+  if (billing?.status === "charged" && /^\d+(?:\.\d{1,2})?$/.test(billing.amount)) {
+    return `图片已交付，已扣 ${billing.amount} 积分。`;
+  }
+  return "";
 }
 
 function v3RecoveryDelayMs(attempt) {
@@ -11563,6 +11594,14 @@ function v3RecoveryProgressPresentation(job, attempt, { statusReadFailed = false
   const status = String(job?.status || "").trim().toLowerCase();
   const pollCount = Math.max(0, Number.parseInt(String(attempt ?? ""), 10) || 0);
   const checked = pollCount ? `后台状态查询已尝试 ${pollCount} 次。` : "";
+  const billing = job?.metadata?.image_billing;
+  if (["pending", "blocked"].includes(billing?.status) || (billing?.status === "checking" && !billing.unit_price)) {
+    return {
+      stageKey: billing.status === "blocked" ? "failed" : billing.status === "pending" ? "billing" : "recovering",
+      detail: `${v3ImageBillingNotice(job)}${checked}`,
+      type: billing.code || billing.status === "blocked" ? "warning" : "info",
+    };
+  }
   if (statusReadFailed || !status) {
     return {
       stageKey: "recovering",
@@ -11721,6 +11760,7 @@ function v3RemoteCreativeBrainFailureMessage(job) {
 }
 
 function v3ProviderFailureUserMessage(job) {
+  if (job?.metadata?.image_billing?.status === "blocked") return v3ImageBillingNotice(job);
   const ecommerceFailure = v3EcommerceFailureMessage(job);
   if (ecommerceFailure) return ecommerceFailure;
   const remoteBrainFailure = v3RemoteCreativeBrainFailureMessage(job);
@@ -12027,6 +12067,7 @@ const v3ProgressStages = [
   { key: "generating", percent: 68, label: "生成图片" },
   { key: "recovering", percent: 82, label: "核对结果" },
   { key: "reviewing", percent: 92, label: "复检与交付" },
+  { key: "billing", percent: 96, label: "确认扣费" },
   { key: "completed", percent: 100, label: "完成" },
   { key: "review_blocked", percent: 100, label: "未交付" },
   { key: "failed", percent: 100, label: "需要处理" },
@@ -12081,6 +12122,9 @@ function setV3Progress(stageKey = "planning", detail = "", type = "info", { forc
   v3State.progressStageKey = normalized;
   v3State.progressDetail = detail || stage.label;
   v3State.progressType = type;
+  if (normalized === "billing" && v3State.loading && els.v3CreateJobBtn) {
+    els.v3CreateJobBtn.textContent = "确认扣费中…";
+  }
   renderV3ProjectWorkflow();
   const noticeKey = `${normalized}:${v3State.progressDetail}:${type}`;
   if (forceNotice || noticeKey !== v3State.progressNoticeKey) {
@@ -12131,7 +12175,7 @@ function renderV3Job(job) {
     v3State.progressStartedAt = null;
     v3State.progressDetail = "";
   }
-  if (els.v3JobStatus) els.v3JobStatus.textContent = reviewWithheldFinalization ? "人工复核" : (deliveryRouteUnavailable ? "交付选项" : (ambiguousProviderRequestHold ? "确认条件" : (job ? v3StatusLabel(job.status) : "待创建")));
+  if (els.v3JobStatus) els.v3JobStatus.textContent = job?.metadata?.image_billing?.status === "pending" ? "确认扣费" : (reviewWithheldFinalization ? "人工复核" : (deliveryRouteUnavailable ? "交付选项" : (ambiguousProviderRequestHold ? "确认条件" : (job ? v3StatusLabel(job.status) : "待创建"))));
   if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization || deliveryRouteUnavailable || ambiguousProviderRequestHold || v3IsActiveEcommerceTerminalReceipt(job) ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
   renderV3ResultBoard(job);
   renderV3PhotographyRoleBoard(job);
@@ -12506,6 +12550,13 @@ function renderV3ResultBoard(job) {
   if (!job) {
     v3State.resultItems = [];
     els.v3ResultBoard.textContent = copy.emptyResult;
+    return;
+  }
+  const billing = job?.metadata?.image_billing;
+  if (["pending", "blocked"].includes(billing?.status) || (billing?.status === "checking" && !billing.unit_price)) {
+    v3State.resultItems = [];
+    els.v3ResultBoard.classList.add("empty-v3-board");
+    els.v3ResultBoard.textContent = v3ImageBillingNotice(job);
     return;
   }
   const reviewCertification = finalizationWithheld ? null : v3ReviewCertification(job);

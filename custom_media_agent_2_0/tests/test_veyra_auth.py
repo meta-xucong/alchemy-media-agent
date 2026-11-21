@@ -396,6 +396,10 @@ def test_veyra_billing_settings_support_versioned_rules(tmp_path, monkeypatch: p
     client = TestClient(app)
     admin_token = issue_session_token(42)
 
+    public_v3 = client.get("/api/v2/veyra/billing/settings/public?rule_key=alchemy:v3")
+    assert public_v3.status_code == 200
+    assert public_v3.json()["charge_amount"] == 0.07
+
     updated = client.post(
         "/api/v2/veyra/billing/settings",
         json={

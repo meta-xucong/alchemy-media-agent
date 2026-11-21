@@ -80,10 +80,12 @@ def verify_session_token(token: str) -> int:
     return user_id
 
 
-async def load_billing_rule(rule_key: str | None = None) -> VeyraBillingRule:
+async def load_billing_rule(rule_key: str | None = None, *, require_versioned: bool = False) -> VeyraBillingRule:
     rule_key = str(rule_key or settings.veyra_billing_rule_key_v1 or "alchemy:v1")
     url = str(settings.veyra_billing_settings_url or "").strip()
     if not url:
+        if require_versioned:
+            raise VeyraAuthMisconfigured("Veyra billing settings URL is required.")
         return VeyraBillingRule(key=rule_key, enabled=False, charge_amount=0.0, source=rule_key)
     try:
         async with httpx.AsyncClient(
@@ -104,6 +106,8 @@ async def load_billing_rule(rule_key: str | None = None) -> VeyraBillingRule:
         for item in rules:
             if isinstance(item, dict) and str(item.get("key") or "").lower() == rule_key.lower():
                 return _billing_rule_from_payload(item, fallback_key=rule_key)
+    if require_versioned:
+        raise VeyraAuthError("The requested Veyra billing rule is missing.")
     if isinstance(payload, dict):
         return _billing_rule_from_payload(payload, fallback_key=rule_key)
     return VeyraBillingRule(key=rule_key, enabled=False, charge_amount=0.0, source=rule_key)
