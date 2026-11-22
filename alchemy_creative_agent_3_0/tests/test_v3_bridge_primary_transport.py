@@ -651,7 +651,8 @@ def test_quarantined_bridge_output_not_recovered_as_candidate(rig):
     assert service._status_from_output_store('job_v3_prod') is None
 
 
-def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig, monkeypatch):
+@pytest.mark.parametrize(("failed_slot", "failure_state"), [(2, "execution_unknown"), (1, "failed"), (2, "failed")])
+def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig, monkeypatch, failed_slot, failure_state):
     """Run real Central Brain output iteration twice, with a process-style restart."""
     from copy import deepcopy
     from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
@@ -670,8 +671,8 @@ def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig
         rig.client.calls += 1
         index = len(tasks) + 1
         task = {'remote_task_id': f'task_{index}', 'origin_key': payload['origin_key'], 'request': payload,
-                'attempt_id': f'attempt_{index}', 'state': 'artifacts_ready' if index == 1 else 'execution_unknown',
-                'receipt_id': f'receipt_{index}' if index == 1 else None}
+                'attempt_id': f'attempt_{index}', 'state': failure_state if index == failed_slot else 'artifacts_ready',
+                'receipt_id': None if index == failed_slot else f'receipt_{index}'}
         tasks[payload['origin_key']] = task
         receipts[f'receipt_{index}'] = index
         return task
@@ -708,6 +709,20 @@ def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig
         brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
         return brain.run_generation_loop('Create two independent abstract landscape images.',
             provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER, runtime_metadata=deepcopy(metadata))
+    if failure_state == "failed":
+        result = run()
+        assert rig.client.calls == 2
+        assert len(result.series_plan.assets) == 2
+        packed, = result.asset_pack.assets
+        assert packed.asset_id == result.series_plan.assets[2 - failed_slot].asset_id
+        assert result.metadata["failed_image_slots"] == [{
+            "asset_id": result.series_plan.assets[failed_slot - 1].asset_id,
+            "output_index": failed_slot,
+            "failure_code": "bridge_failed",
+        }]
+        assert len(rig.store.list_outputs()) == 1
+        assert_legacy_partial_review_resumes_original(rig, metadata, failed_slot, monkeypatch)
+        return
     with pytest.raises(ProviderRuntimeError):
         run()
     assert len(tasks) == rig.client.calls == 2
@@ -720,6 +735,63 @@ def test_real_multi_output_loop_replays_first_checkpoint_and_recovers_second(rig
     assert {key: value['request'] for key, value in tasks.items()} == frozen
     assert first_checkpoint.file_path in {item.file_path for item in result.asset_pack.assets}
     assert len(rig.store.list_outputs()) == 2
+
+
+def assert_legacy_partial_review_resumes_original(rig, metadata, failed_slot, monkeypatch):
+    from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
+    from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+
+    output, = rig.store.list_outputs()
+    original = rig.store.file_for_variant(output.output_id, "download")[0]
+    original_digest = hashlib.sha256(original.read_bytes()).hexdigest()
+    service, record = _cancel_service(rig, job_id=output.job_id)
+    service.output_store = rig.store
+    record.planning_result = CentralCreativeBrain().run_creative_planning(
+        "Create two independent abstract landscape images.", runtime_metadata=metadata,
+    )
+    record.status = ProductJobStatusValue.BLOCKED
+    record.request.metadata.update(
+        template_id="general_template",
+        requested_image_count=2,
+        project_id=output.metadata.get("project_id"),
+        veyra_user_id=output.metadata.get("veyra_user_id"),
+        provider_failure_retry={
+            "final_classification": "non_retryable_provider_failure",
+            "final_failure_code": "bridge_failed",
+        },
+        render_bridge_primary={"route": "bridge", "state": "failed", "task_id": f"task_{failed_slot}"},
+    )
+    calls = []
+
+    def finish(current, _request, *, review_only, assert_current):
+        assert current.status == ProductJobStatusValue.FINALIZING
+        assert review_only
+        assert_current()
+        assert len(current.generation_result.series_plan.assets) == 2
+        packed, = current.generation_result.asset_pack.assets
+        assert packed.asset_id == output.asset_id
+        assert packed.metadata["output_id"] == output.output_id
+        assert packed.metadata["selected_candidate_id"] == output.candidate_id
+        assert current.generation_result.metadata["failed_image_slots"][0]["output_index"] == failed_slot
+        calls.append(packed.metadata["output_id"])
+        current.status = ProductJobStatusValue.GENERATED
+        return current.status
+
+    monkeypatch.setattr(service, "_resume_finalizing_generation_review", finish)
+    monkeypatch.setattr(service, "_status_from_record", lambda current: current.status)
+    checkpoint = output.metadata["provider_prompt_sha256"]
+    rig.store.update_metadata(output.output_id, {"provider_prompt_sha256": "wrong"})
+    with pytest.raises(ValueError, match="partial_bridge_output_unbound"):
+        service.resume_partial_bridge_image_review(output.job_id, output.output_id, assert_current=lambda: None)
+    assert record.generation_result is None and calls == []
+    rig.store.update_metadata(output.output_id, {"provider_prompt_sha256": checkpoint})
+    for _ in range(2):
+        assert service.resume_partial_bridge_image_review(
+            output.job_id, output.output_id, assert_current=lambda: None,
+        ) == ProductJobStatusValue.GENERATED
+    assert calls == [output.output_id]
+    assert rig.client.calls == 2 and len(rig.store.list_outputs()) == 1
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == original_digest
 
 
 def test_materialized_identity_reference_uses_native_defaults_and_keeps_image(rig, tmp_path):

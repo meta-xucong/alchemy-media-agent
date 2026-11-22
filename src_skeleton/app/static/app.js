@@ -8478,6 +8478,7 @@ function resumeV3ActiveProjectJobRecovery(job = v3State.currentJob) {
   setV3Progress("recovering", "正在恢复仍在后台完成的图片任务，避免重复生成。", "info", { forceNotice: true });
   void recoverV3GeneratedJob(projectId, jobId, new Error("v3_background_generation_pending"), {
     expectedCount,
+    followToTerminal: true,
     shouldContinue: () => (
       v3State.projectRecoveryKey === recoveryKey
       && v3State.currentProject?.project_id === projectId
@@ -11163,12 +11164,6 @@ async function createV3Job() {
       v3SettleEcommerceTerminalReceipt(created);
     }
     renderV3Job(created);
-    await refreshV3CurrentProject({
-      silent: true,
-      shouldContinue,
-      sessionReceipt: ecommerceSession,
-      restoreJob: false,
-    });
     if (!shouldContinue()) return;
     if (!v3IsTerminalJob(created)) {
       setV3Progress("generating", created?.metadata?.background_generation_started === false ? "后台已有同一任务在生成，正在同步结果。" : "后台已开始生成，页面会持续刷新结果。");
@@ -11264,8 +11259,11 @@ async function completeV3GeneratedJob(
   const deliveryWithheld = v3JobDeliveryWithheld(generated);
   const finalDelivery = v3FinalDeliveryProjection(generated);
   const formalPartialDelivery = partialRecovery && finalDelivery?.partial_delivery === true;
+  const failedCount = Number(finalDelivery?.generation_failed_count || 0);
   const partialDeliveryNotice = formalPartialDelivery
-    ? `已交付 ${Number(finalDelivery.final_delivery_output_count)} 张合格图片；其余图片未通过审核或需要人工确认。`
+    ? (failedCount > 0
+      ? `已交付 ${Number(finalDelivery.final_delivery_output_count)} 张合格图片，另有 ${failedCount} 张生成失败。`
+      : `已交付 ${Number(finalDelivery.final_delivery_output_count)} 张合格图片；其余图片未通过审核或需要人工确认。`)
     : "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。";
   const hasExpectedDelivery = v3JobHasExpectedVisibleImages(generated, expectedCount);
   const terminalFailure = ["blocked", "failed", "not_found"].includes(
@@ -11295,17 +11293,18 @@ async function completeV3GeneratedJob(
     failedWithoutPartialDelivery || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
   renderV3Job(generated);
-  const projectRefreshed = await refreshV3CurrentProject({
+  await loadV3ProjectOutputs({
     silent: true,
+    force: true,
+    limit: 160,
     shouldContinue,
     sessionReceipt,
-    restoreJob: false,
-    preserveOutputOnError: true,
+    preserveOnError: true,
   });
   if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   if (syncV3CurrentJobFromProjectOutputs({ preferLatest: false })) {
     renderV3Job(v3State.currentJob);
-  } else if (projectRefreshed) {
+  } else {
     // The first render runs before the project endpoint returns review-only
     // images. Reproject the result board after the review cache is refreshed;
     // review cards stay outside the formal delivery set.
@@ -11485,7 +11484,7 @@ async function recoverV3GeneratedJob(
       throw new Error("v3_project_recovery_replaced");
     }
     try {
-      if (outputProjectionChanged) {
+      if (!followToTerminal && outputProjectionChanged) {
         try {
           await loadV3ProjectOutputs({
             silent: true,
