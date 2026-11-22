@@ -121,6 +121,27 @@ def test_recent_failed_job_remains_visible_to_the_cleanup_scan(tmp_path: Path) -
     assert items == []
 
 
+def test_inventory_keeps_only_cleanup_fields_and_preserves_linked_partial_delivery(tmp_path: Path) -> None:
+    root = tmp_path / "media"
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    output_id = "v3_output_" + "a" * 20
+    _write(root / "v3_projects/project_1/project.json", {"output_id": output_id})
+    _write(root / "v3_jobs/job_partial.json", {
+        "job_id": "job_partial", "status": "failed", "updated_at": old,
+        "request": {"provider": "real", "original_image_base64": "x" * 100_000},
+        "candidate": {"output_id": output_id},
+    })
+    _write(root / "v3_outputs" / output_id / "output.json", {
+        "job_id": "job_partial", "output_id": output_id, "provider": "real",
+        "metadata": {"large_diagnostic": "x" * 100_000},
+    })
+    inventory = build_inventory(root)
+    assert inventory.job_records["job_partial"]["request"] == {"provider": "real"}
+    assert inventory.output_records[output_id] == {"job_id": "job_partial", "provider": "real"}
+    assert output_id in inventory.job_output_ids
+    assert candidates(root, inventory, retention_days=30, now=datetime.now(timezone.utc)) == []
+
+
 def test_protected_data_requires_explicit_opt_in(tmp_path: Path) -> None:
     root = tmp_path / "media"
     protected_paths = [

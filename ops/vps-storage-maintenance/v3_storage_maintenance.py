@@ -146,35 +146,40 @@ def build_inventory(root: Path) -> Inventory:
     history = root / "history" / "outputs.jsonl"
     if history.exists():
         try:
-            for line in history.read_text(encoding="utf-8", errors="strict").splitlines():
-                try:
-                    value = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                _walk_ids(value, jobs=set(), outputs=inventory.history_output_ids)
+            with history.open(encoding="utf-8") as stream:
+                for line in stream:
+                    try:
+                        value = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    _walk_ids(value, jobs=set(), outputs=inventory.history_output_ids)
         except (OSError, UnicodeDecodeError):
             inventory.unreadable.append(str(history))
 
     for path in _files(root / "v3_jobs"):
         value = _json(path)
-        if value is None:
+        if not isinstance(value, dict):
             inventory.unreadable.append(str(path))
             continue
         job_id = str(value.get("job_id") or path.stem)
         if JOB_ID_RE.fullmatch(job_id):
-            inventory.job_records[job_id] = value
+            record = {key: value.get(key) for key in ("status", "created_at", "updated_at", "provider")}
+            request = value.get("request")
+            if isinstance(request, dict):
+                record["request"] = {"provider": request.get("provider")}
+            inventory.job_records[job_id] = record
         _walk_ids(value, jobs=set(), outputs=inventory.job_output_ids)
 
     for path in _files(root / "v3_outputs"):
         if path.name != "output.json":
             continue
         value = _json(path)
-        if value is None:
+        if not isinstance(value, dict):
             inventory.unreadable.append(str(path))
             continue
         output_id = str(value.get("output_id") or path.parent.name)
         if OUTPUT_ID_RE.fullmatch(output_id):
-            inventory.output_records[output_id] = value
+            inventory.output_records[output_id] = {key: value.get(key) for key in ("job_id", "provider")}
 
     for path in _files(root / "v3_mcp_materializations"):
         value = _json(path)
@@ -272,16 +277,20 @@ def candidates(
                 result.append(Candidate("cache", path, path.stat().st_size, f"expired_{name}"))
 
     referenced_jobs = inventory.project_job_ids | inventory.mcp_job_ids
-    referenced_outputs = (
-        inventory.project_output_ids
-        | inventory.history_output_ids
-        | inventory.job_output_ids
-        | inventory.mcp_output_ids
-    )
+    durable_output_ids = inventory.project_output_ids | inventory.history_output_ids | inventory.mcp_output_ids
+    referenced_outputs = durable_output_ids | inventory.job_output_ids
+    jobs_with_retained_outputs = {
+        str(record.get("job_id") or "")
+        for output_id, record in inventory.output_records.items()
+        if output_id in durable_output_ids
+    }
+    jobs_with_retained_outputs.update(inventory.mcp_job_ids)
     expired_failed_jobs: set[str] = set()
     for job_id, record in inventory.job_records.items():
         path = root / "v3_jobs" / f"{job_id}.json"
-        if path.exists() and _record_expired(record, retention_days=failure_retention_days, now=now):
+        if job_id not in jobs_with_retained_outputs and path.exists() and _record_expired(
+            record, retention_days=failure_retention_days, now=now
+        ):
             expired_failed_jobs.add(job_id)
             result.append(Candidate("expired_failed_job", path, _size(path), "expired_terminal_failure"))
     for job_id, record in inventory.job_records.items():

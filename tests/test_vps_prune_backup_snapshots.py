@@ -180,10 +180,38 @@ def test_selection_rejects_duplicate_or_malformed_tokens(tmp_path):
         guard.parse_selection(token + ',' + token)
 
 
-def test_activation_prunes_only_after_public_acceptance_and_keeps_the_new_rollback_checkpoint():
+def test_completed_cutover_discards_only_release_snapshots_after_live_check(tmp_path):
+    root, keep, old, archives = fixture_snapshots(tmp_path)
+    note = root / 'operator-note.txt'
+    note.write_text('preserve', encoding='utf-8')
+    snapshots, _ = guard.inventory_snapshots(root=root)
+    selection = ','.join(guard.selection_token(item) for item in snapshots)
+    ledger = root / 'ledger.jsonl'
+
+    def unavailable():
+        raise guard.SnapshotBlocked('active_release_changed')
+
+    with pytest.raises(guard.SnapshotBlocked, match='active_release_changed'):
+        guard.retire_snapshots(selection, KEEP_NAME, ACTIVE_SHA, ROLLBACK_SHA, root=root, ledger=ledger,
+                               retain_current=False, live_check=unavailable, reference_check=lambda _: None)
+    assert all(path.exists() for path in [keep, *old, *archives]) and not ledger.exists()
+
+    result = guard.retire_snapshots(selection, KEEP_NAME, ACTIVE_SHA, ROLLBACK_SHA, root=root, ledger=ledger,
+                                    retain_current=False, live_check=lambda: None, reference_check=lambda _: None)
+    assert result['kept_snapshot'] is None and result['retired_count'] == len(snapshots)
+    assert not guard.inventory_snapshots(root=root)[0]
+    assert note.read_text(encoding='utf-8') == 'preserve'
+    receipt = [json.loads(line) for line in ledger.read_text(encoding='utf-8').splitlines()]
+    assert [item['state'] for item in receipt if item['operation'] == 'retire_completed_cutover_snapshot'] == ['intent', 'removed']
+
+
+def test_activation_discards_temporary_rollback_snapshot_only_after_public_acceptance():
     workflow = (Path(__file__).parents[1] / '.github/workflows/guarded-vps-activate.yml').read_text(encoding='utf-8')
-    assert workflow.index('protected_ok "$project_status" || fail_public_open v3_projects_not_protected') < workflow.index('--mode retain-latest')
-    assert workflow.index('--mode retain-latest') < workflow.index('GUARDED_ACTIVATE_RESULT=pass')
+    finalization = workflow.index('--mode finalize-cutover')
+    assert workflow.index('protected_ok "$project_status" || fail_public_open v3_projects_not_protected') < finalization
+    assert workflow.index('fail_public_open maintenance_timer_restore_unverified') < finalization
+    assert finalization < workflow.index('GUARDED_ACTIVATE_RESULT=pass')
+    assert '--confirmation DISCARD-COMPLETED-CUTOVER-SNAPSHOTS' in workflow
     assert '--keep-name "${maintenance_backup##*/}"' in workflow
     assert 'GUARDED_ACTIVATE_BACKUP_RETENTION=blocked' in workflow
 
