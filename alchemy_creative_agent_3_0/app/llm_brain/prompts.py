@@ -1294,7 +1294,7 @@ _ANTHROPIC_CONDITIONAL_OUTPUT_FIELDS = frozenset({"compression_receipt"})
 
 
 def build_anthropic_structured_output(
-    request: BrainRunRequest,
+    request: BrainRunRequest, *, compact_visual_profile: bool = False,
 ) -> tuple[str, dict[str, object], tuple[tuple[tuple[str, ...], str], ...]] | None:
     """Prepare Claude-only structured output without changing the Brain contract.
 
@@ -1328,11 +1328,21 @@ def build_anthropic_structured_output(
             return None
         if set(response_shape) != set(model_by_section):
             raise ValueError("Claude real-image planning schema does not match its typed response contract")
-        _rewrite_plan_open_values_for_anthropic(payload)
-        response_shape = payload.get("return_schema")
-        wire_value_paths = _ANTHROPIC_PLAN_JSON_VALUE_PATHS
+        if compact_visual_profile:
+            # This section exceeds the provider's grammar compile budget when
+            # fully expanded. Its original schema and validation stay intact.
+            payload["remote_response_contract"] += (
+                " Return visual_task_profile as a JSON-encoded string containing exactly its full object "
+                "from return_schema; the values inside that object keep their original types."
+            )
+            wire_value_paths = ((("visual_task_profile",), "object"),)
+        else:
+            _rewrite_plan_open_values_for_anthropic(payload)
+            response_shape = payload["return_schema"]
+            wire_value_paths = _ANTHROPIC_PLAN_JSON_VALUE_PATHS
         properties = {
-            section: _anthropic_typed_schema_for_shape(
+            section: {"type": "string"} if compact_visual_profile and section == "visual_task_profile"
+            else _anthropic_typed_schema_for_shape(
                 model_by_section[section].model_json_schema(),
                 shape,
                 path=(section,),
