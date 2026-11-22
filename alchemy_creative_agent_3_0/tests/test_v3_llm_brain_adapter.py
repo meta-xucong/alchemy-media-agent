@@ -533,9 +533,36 @@ def test_creative_exploration_targets_only_rejected_output(monkeypatch, claude_r
     assert all(payload == wire_payloads[0] for payload in wire_payloads)
 
 
+@pytest.mark.parametrize(("primary", "stage", "real_images", "expected"), [
+    ("claude-sonnet-5-5", "plan", True, "claude-sonnet-5-5-alchemy-structured"),
+    ("claude-sonnet-5-5", "provider_prompt_finalize", True, "claude-sonnet-5-5-alchemy-structured"),
+    ("claude-sonnet-5-5", "plan", False, "claude-sonnet-5-5"),
+    ("claude-sonnet-5-5", "provider_prompt_human_naturalness_resign", True, "claude-sonnet-5-5"),
+    ("kimi-k3", "plan", True, "kimi-k3"),
+])
+def test_v3_first_brain_call_uses_structured_claude_route_only_when_applicable(
+    monkeypatch, primary, stage, real_images, expected,
+) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", primary)
+    monkeypatch.setenv("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL", "claude-sonnet-5-5-alchemy-structured")
+    calls = []
+
+    def run_single(provider, request):
+        calls.append(provider.model)
+        return {}
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", run_single)
+    request = BrainRunRequest(
+        user_input="Explore a synthetic concept.", stage=stage, metadata={"require_real_images": real_images},
+    )
+    V3LLMBrainProvider().run(request)
+    assert calls == [expected]
+
+
 def test_targeted_exploration_repair_uses_one_attempt_per_configured_route(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
     monkeypatch.setenv("V3_LLM_BRAIN_BACKUP_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL", "claude-sonnet-5-5-alchemy-structured")
     request = BrainRunRequest(user_input="Explore a new concept.", stage="provider_prompt_finalize")
     request._creative_exploration_repair = {"errors": {2: "dimension_not_allowed"}}
     calls = []
@@ -548,11 +575,11 @@ def test_targeted_exploration_repair_uses_one_attempt_per_configured_route(monke
 
     monkeypatch.setattr(V3LLMBrainProvider, "_run_remote_attempt", run_attempt)
     provider = V3LLMBrainProvider()
-    for backup, expected_model in ((False, "claude-sonnet-5-5"), (True, "kimi-k3")):
+    for backup, expected_model in ((False, "claude-sonnet-5-5-alchemy-structured"), (True, "kimi-k3")):
         response = provider.run_targeted_exploration_repair(request, backup=backup)
         assert pop_transport_receipt(response)["selected_model"] == expected_model
     assert calls == [
-        ("claude-sonnet-5-5", "_run_anthropic_compatible"),
+        ("claude-sonnet-5-5-alchemy-structured", "_run_anthropic_compatible"),
         ("kimi-k3", "_run_openai_compatible"),
     ]
 
