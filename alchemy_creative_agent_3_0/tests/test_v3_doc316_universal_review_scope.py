@@ -128,7 +128,10 @@ def test_lighting_refinement_uses_only_the_targeted_output_evidence() -> None:
     }
     result = SimpleNamespace(
         metadata={"post_generation_review_package": review, "visual_cluster": review},
-        series_plan=SimpleNamespace(assets=[SimpleNamespace(asset_id=f"asset_{side}") for side in ("left", "right")]),
+        series_plan=SimpleNamespace(assets=[
+            SimpleNamespace(asset_id="asset_right", priority=2),
+            SimpleNamespace(asset_id="asset_left", priority=1),
+        ]),
     )
     observations = service._brain_retry_review_observations(result, ["asset_left"])
     assert observations == ["Output 1: Hard shadow on cheek."]

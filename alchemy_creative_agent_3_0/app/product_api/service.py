@@ -10634,7 +10634,7 @@ class V3ProductApiService:
         positions: dict[str, int] = {}
         if target_asset_ids is not None:
             slots = {
-                asset.asset_id: index for index, asset in enumerate(result.series_plan.assets, 1)
+                asset.asset_id: asset.priority for asset in result.series_plan.assets
                 if asset.asset_id in target_asset_ids
             }
             for inspection in result.metadata["post_generation_review_package"]["inspections"]:
