@@ -533,10 +533,71 @@ def test_creative_exploration_targets_only_rejected_output(monkeypatch, claude_r
     assert all(payload == wire_payloads[0] for payload in wire_payloads)
 
 
+@pytest.mark.parametrize(("primary", "stage", "has_history", "expected"), [
+    ("claude-sonnet-5-5", "provider_prompt_finalize", True, "claude-sonnet-5-5-alchemy-structured"),
+    ("claude-sonnet-5-5", "provider_prompt_finalize", False, "claude-sonnet-5-5"),
+    ("claude-sonnet-5-5", "plan", True, "claude-sonnet-5-5-alchemy-structured"),
+    ("claude-sonnet-5-5", "plan", False, "claude-sonnet-5-5"),
+    ("claude-sonnet-5-5", "provider_prompt_human_naturalness_resign", True, "claude-sonnet-5-5"),
+    ("kimi-k3", "provider_prompt_finalize", True, "kimi-k3"),
+])
+def test_v3_first_brain_call_uses_structured_claude_route_only_when_applicable(
+    monkeypatch, primary, stage, has_history, expected,
+) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", primary)
+    monkeypatch.setenv("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL", "claude-sonnet-5-5-alchemy-structured")
+    calls = []
+
+    def run_single(provider, request):
+        calls.append(provider.model)
+        return {}
+
+    monkeypatch.setattr(V3LLMBrainProvider, "_run_single_model", run_single)
+    request = BrainRunRequest(
+        user_input="Explore a synthetic concept.", stage=stage,
+        scenario_id="general_creative", template_id="general_template",
+        metadata={
+            "require_real_images": True,
+            "effective_variation_mode": "creative_exploration",
+            "canonical_prompt_context": {
+                "creative_exploration_history": {"previous": "Synthetic baseline"} if has_history else {},
+            },
+        },
+        project_context={
+            "general_suite_role_plan": {
+                "variation_mode": "creative_exploration",
+                "metadata": {"creative_exploration_history": {"previous": "Synthetic baseline"} if has_history else {}},
+            },
+        },
+    )
+    V3LLMBrainProvider().run(request)
+    assert calls == [expected]
+
+
+def test_compact_claude_plan_restores_original_visual_profile_types() -> None:
+    request = BrainRunRequest(
+        user_input="Explore a synthetic concept.", stage="plan", metadata={"require_real_images": True},
+    )
+    plain = json.loads(build_remote_payload(request))
+    body, wire, paths = build_anthropic_structured_output(request, compact_visual_profile=True)
+    assert json.loads(body)["return_schema"] == plain["return_schema"]
+    assert wire["schema"]["properties"]["visual_task_profile"] == {"type": "string"}
+    assert wire["schema"]["properties"]["image_set_plan"]["type"] == "object"
+    profile = {"evidence": [{"value": ["synthetic"], "metadata": {"concrete": True}}]}
+    received = {"visual_task_profile": json.dumps(profile)}
+    restore_anthropic_structured_output(received, paths)
+    assert received["visual_task_profile"] == profile
+
+
 def test_targeted_exploration_repair_uses_one_attempt_per_configured_route(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
     monkeypatch.setenv("V3_LLM_BRAIN_BACKUP_MODEL", "gpt-6.1-sol")
-    request = BrainRunRequest(user_input="Explore a new concept.", stage="provider_prompt_finalize")
+    monkeypatch.setenv("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL", "claude-sonnet-5-5-alchemy-structured")
+    request = BrainRunRequest(
+        user_input="Explore a new concept.", stage="provider_prompt_finalize",
+        scenario_id="general_creative", template_id="general_template",
+        metadata={"canonical_prompt_context": {"creative_exploration_history": {"previous": "Synthetic baseline"}}},
+    )
     request._creative_exploration_repair = {"errors": {2: "dimension_not_allowed"}}
     calls = []
 
@@ -548,11 +609,11 @@ def test_targeted_exploration_repair_uses_one_attempt_per_configured_route(monke
 
     monkeypatch.setattr(V3LLMBrainProvider, "_run_remote_attempt", run_attempt)
     provider = V3LLMBrainProvider()
-    for backup, expected_model in ((False, "claude-sonnet-5-5"), (True, "kimi-k3")):
+    for backup, expected_model in ((False, "claude-sonnet-5-5-alchemy-structured"), (True, "kimi-k3")):
         response = provider.run_targeted_exploration_repair(request, backup=backup)
         assert pop_transport_receipt(response)["selected_model"] == expected_model
     assert calls == [
-        ("claude-sonnet-5-5", "_run_anthropic_compatible"),
+        ("claude-sonnet-5-5-alchemy-structured", "_run_anthropic_compatible"),
         ("kimi-k3", "_run_openai_compatible"),
     ]
 

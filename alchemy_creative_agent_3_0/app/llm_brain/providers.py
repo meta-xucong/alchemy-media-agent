@@ -28,8 +28,10 @@ from .contracts import (
 from .model_routing_receipts import sanitize_model_attempts
 from .prompts import (
     AnthropicWireValueError,
+    _requires_remote_creative_contract,
     build_anthropic_structured_output,
     build_remote_payload,
+    creative_exploration_history,
     restore_anthropic_structured_output,
     system_prompt_for_stage,
 )
@@ -439,8 +441,11 @@ _BRAIN_OUTPUT_TOKEN_MAX = 32_768
 class V3LLMBrainProvider:
     """Small provider adapter that keeps V3 brain calls optional."""
 
+    structured_claude_model: str | None = None
+
     def __init__(self) -> None:
         self.model = _env("V3_LLM_BRAIN_MODEL") or "claude-sonnet-5-5"
+        self.structured_claude_model = _env("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL")
         self.backup_model = _env("V3_LLM_BRAIN_BACKUP_MODEL") or "kimi-k3"
         self.provider = _model_protocol(self.model) or "unsupported"
         self.backup_provider = _model_protocol(self.backup_model) or "unsupported"
@@ -566,6 +571,20 @@ class V3LLMBrainProvider:
             "health_checked": False,
         }
 
+    def _primary_model_for_request(self, request: BrainRunRequest) -> str:
+        if not self.structured_claude_model or not _is_claude_sonnet_55(self.model):
+            return self.model
+        if request.stage not in {"plan", "provider_prompt_finalize"} or not creative_exploration_history(request):
+            return self.model
+        if request.stage == "plan" and not _requires_remote_creative_contract(request):
+            return self.model
+        if not _is_claude_sonnet_55(self.structured_claude_model):
+            raise BrainProviderUnavailable(
+                "The configured structured route is not a Claude Sonnet 5.5 model.",
+                reason_code="invalid_configuration",
+            )
+        return self.structured_claude_model
+
     def run(self, request: BrainRunRequest) -> dict[str, Any]:
         budget = _ACTIVE_EXECUTION_BUDGET.get()
         if budget is not None:
@@ -574,7 +593,7 @@ class V3LLMBrainProvider:
             # single-model transport path charges local preparation time
             # against every candidate's slice.
             budget.start_remote_clock()
-        candidates = list(build_v3_model_candidates(self.model, self.backup_model))
+        candidates = list(build_v3_model_candidates(self._primary_model_for_request(request), self.backup_model))
         attempts: list[dict[str, Any]] = []
         last_error: BrainProviderError | None = None
         for index, (provider_name, model_name) in enumerate(candidates):
@@ -656,6 +675,7 @@ class V3LLMBrainProvider:
             raise BrainPromptRequestContractInvalid("An internal exploration repair is required.")
         self._ensure_budget_available()
         candidate = copy.copy(self)
+        primary_model = self._primary_model_for_request(request)
         if backup:
             candidate.provider, candidate.model = next(
                 (provider, model) for provider, model in build_v3_model_candidates(self.model, self.backup_model)
@@ -663,8 +683,9 @@ class V3LLMBrainProvider:
             )
             runner = candidate._run_openai_compatible
         else:
-            if _model_protocol(self.model) != "anthropic":
+            if _model_protocol(primary_model) != "anthropic":
                 raise BrainProviderUnavailable("The configured primary is not a Claude model.")
+            candidate.model = primary_model
             candidate.provider = "anthropic"
             runner = candidate._run_anthropic_compatible
         result = _with_transport_receipt(
@@ -674,7 +695,7 @@ class V3LLMBrainProvider:
             execution_budget=self.execution_budget_receipt(),
         )
         result[_TRANSPORT_RECEIPT_KEY].update(
-            primary_model=self.model, selected_model=candidate.model,
+            primary_model=primary_model, selected_model=candidate.model,
             selected_provider=candidate.provider, fallback_used=backup,
         )
         return result
@@ -1325,7 +1346,12 @@ class V3LLMBrainProvider:
                 headers["authorization"] = f"Bearer {api_key}"
             url = _anthropic_messages_url(base_url)
             structured_output = (
-                build_anthropic_structured_output(request)
+                build_anthropic_structured_output(
+                    request,
+                    compact_visual_profile=(
+                        request.stage == "plan" and self.model == self.structured_claude_model
+                    ),
+                )
                 if _is_claude_sonnet_55(self.model)
                 else None
             )
