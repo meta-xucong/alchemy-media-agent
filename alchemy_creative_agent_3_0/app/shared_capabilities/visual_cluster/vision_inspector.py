@@ -40,6 +40,7 @@ from .vision_provider import (
     active_review_contract,
     inspection_reference_paths,
     review_feedback_contract,
+    signed_output_direction,
 )
 from .identity_metric import create_default_identity_metric_provider
 from .human_photorealism import HUMAN_REALISM_REVIEW_DIMENSIONS, normalize_human_realism_issue_code
@@ -643,6 +644,14 @@ class VisionOutputInspector:
             review_contract=review_contract,
         )
         issue_codes = _dedupe([*issue_codes, *face_integrity_issue_codes])
+        lighting_finding = {}
+        lighting_unverified = False
+        if "lighting_mismatch" in issue_codes:
+            lighting_finding = _grounded_lighting_finding(payload, metadata, resolution.output_id)
+            if not lighting_finding:
+                lighting_unverified = True
+                issue_codes.remove("lighting_mismatch")
+                issue_codes.append("review_evidence_lighting_unverified")
         confidence = _safe_float(payload.get("confidence"), default=0.5)
         score_card = _provider_score_card(payload.get("scores"), str(payload.get("status") or ""))
         if review_contract.get("enforced"):
@@ -677,19 +686,29 @@ class VisionOutputInspector:
             retryable = False
         else:
             status = _status_from_issues(issue_codes, str(payload.get("status") or ""))
+            if lighting_unverified and status != "fail_final" and not any(
+                code in RETRYABLE_ISSUE_CODES or code in FINAL_ISSUE_CODES for code in issue_codes
+            ):
+                status = "manual_review"
             retryable = status == "fail_retryable"
         preserve_portrait_identity = "portrait_identity" in set(review_contract.get("active_capability_ids") or [])
         retry_patch = _merge_retry_patches(
             _retry_patch_for_issues(issue_codes, preserve_portrait_identity=preserve_portrait_identity),
-            payload.get("retry_patch") if retryable else {},
+            payload.get("retry_patch") if retryable and not lighting_unverified else {},
         )
         detected_issues = [_issue_payload(code, confidence) for code in issue_codes]
+        if lighting_finding:
+            for issue in detected_issues:
+                if issue["code"] == "lighting_mismatch":
+                    issue["message"] = f"光线不符（{lighting_finding['region']}）。{lighting_finding['observed']}"
         if not identity_fusion:
             score_card = _provider_score_card(payload.get("scores"), status)
             if review_contract.get("enforced"):
                 allowed_dimensions = set(review_contract.get("score_dimensions") or [])
                 score_card = {key: value for key, value in score_card.items() if key in allowed_dimensions}
         user_summary = _string_list(payload.get("summary")) or _summary_for_status(status, issue_codes)
+        if lighting_unverified:
+            user_summary = [issue["message"] for issue in detected_issues]
         return VisualInspectionReport(
             inspection_id=stable_id("visual_inspection", resolution.job_id, resolution.candidate_id, resolution.output_id, mode, ",".join(issue_codes)),
             project_id=resolution.project_id,
@@ -721,6 +740,7 @@ class VisionOutputInspector:
                 "provider_timeout_recovery_attempted": bool(provider_timeout_recovery_attempted),
                 "provider_timeout_recovery_succeeded": bool(provider_timeout_recovery_succeeded),
                 "provider_issue_codes": issue_codes,
+                **({"signed_lighting_mismatch": lighting_finding} if lighting_finding else {}),
                 "identity_deltas": _string_list(payload.get("identity_deltas")),
                 "identity_metric": identity_metric,
                 "identity_review_fusion": identity_fusion,
@@ -1187,6 +1207,31 @@ def _local_image_quality_issue_codes(image: Any, width: int | None, height: int 
     return _dedupe(issue_codes), evidence
 
 
+def _grounded_lighting_finding(
+    payload: dict[str, Any], metadata: dict[str, Any], output_id: str | None,
+) -> dict[str, str]:
+    direction = signed_output_direction(metadata)
+    raw = payload.get("lighting_mismatch_evidence")
+    if not output_id or direction.get("output_id") != output_id or not isinstance(raw, dict):
+        return {}
+    fields = {}
+    for key, maximum in (("region", 100), ("expected_excerpt", 200), ("observed", 190)):
+        value = raw.get(key)
+        text = " ".join(value.split()) if isinstance(value, str) else ""
+        if not text or len(text) > maximum:
+            return {}
+        fields[key] = text
+    expected = fields["expected_excerpt"]
+    if (
+        len(expected) < 10
+        or expected not in " ".join(direction["prompt"].split())
+        or fields["observed"].casefold().strip(".") == expected.casefold().strip(".")
+        or fields["region"].casefold() in {"image", "overall", "whole image", "scene", "画面", "整体", "整张图"}
+    ):
+        return {}
+    return fields
+
+
 def _issue_payload(code: str, confidence: float, retryable: bool | None = None) -> dict[str, Any]:
     is_retryable = code in RETRYABLE_ISSUE_CODES if retryable is None else retryable
     severity = "high" if code in FINAL_ISSUE_CODES else "medium" if is_retryable else "low"
@@ -1219,6 +1264,7 @@ def _issue_message(code: str) -> str:
         "hair_or_outfit_drift": "Hair or outfit direction may have drifted.",
         "composition_mismatch": "Composition may not match the intended direction.",
         "lighting_mismatch": "Lighting may not match the intended direction.",
+        "review_evidence_lighting_unverified": "光线需人工复核。自动审核未指出与该图签核要求冲突的具体光影。",
         "unrelated_object": "An unrelated object may have appeared.",
         "unrelated_product": "An unrelated subject or object may have appeared.",
         "product_identity_drift": "A referenced subject or object may have drifted.",

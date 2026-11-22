@@ -104,6 +104,7 @@ test("result board adds only requested-count review cards without delivery actio
   assert.match(boardSource, /\.slice\(0,\s*Math\.max\(0,\s*expectedCount\s*-\s*items\.length\)\)/);
   assert.match(boardSource, /appendV3ReviewOnlyResultCards\(els\.v3ResultBoard,\s*reviewItems/);
   assert.match(cardSource, /仅供复核/);
+  assert.match(cardSource, /escapeHtml\(v3ProjectReviewReason\(item\)\)/);
   assert.doesNotMatch(cardSource, /data-v3-result-action/);
 });
 

@@ -363,6 +363,17 @@ class OutputQualityReviewMerger:
         else:
             action = "keep"
         issue_groups = _dedupe(_issue_group(code) for code in issue_codes if _issue_group(code))
+        observations = list(inspection.user_visible_summary)
+        lighting = (inspection.evidence or {}).get("signed_lighting_mismatch")
+        if (
+            "lighting_mismatch" in retryable_issue_codes
+            and isinstance(lighting, dict)
+            and all(lighting.get(key) for key in ("region", "observed", "expected_excerpt"))
+        ):
+            observations[:0] = [
+                f"Lighting at {lighting['region']}: {lighting['observed']}",
+                f"Signed lighting requirement for the same region: {lighting['expected_excerpt']}",
+            ]
         return RealReviewCandidateSignal(
             candidate_id=inspection.candidate_id,
             output_id=inspection.output_id,
@@ -372,7 +383,7 @@ class OutputQualityReviewMerger:
             retry_patch=dict(inspection.retry_patch) if retry_eligible else {},
             recommended_action=action,
             user_visible_summary=list(inspection.user_visible_summary) or [self._candidate_summary(action)],
-            observed_review_evidence=_bounded_review_observations(inspection.user_visible_summary),
+            observed_review_evidence=_bounded_review_observations(observations),
             metadata={
                 "inspection_id": inspection.inspection_id,
                 "inspection_mode": inspection.mode,

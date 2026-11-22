@@ -571,7 +571,9 @@ def test_doc_review_only_generated_images_are_visible_without_delivery_promotion
             assert details.locator("[data-v3-output-action='select']").count() == 0
             assert page.locator("#v3ResultBoard .v3-review-only-card img").count() == 1
             assert page.locator("#v3ProjectOutputBoard .v3-project-output-tile").count() == 0
-            assert "已生成，但没有进入正式交付" in page.locator("#v3ResultBoard").inner_text()
+            review_card = page.locator("#v3ResultBoard .v3-review-only-card")
+            assert review_card.locator(".mini-pill").inner_text() == "仅供复核"
+            assert review_card.locator("p").inner_text() == review_output["review_reason"]
 
             page.evaluate(
                 """
