@@ -837,13 +837,13 @@ test("returning home releases an opening project and permits a later project aft
   }
 });
 
-test("generation completion uses one project projection refresh", () => {
+test("generation completion renders before one scoped gallery read", () => {
   const completion = extractFunction("completeV3GeneratedJob", "\nasync function runV3GenerationWithRecovery");
   const recovery = extractFunction("recoverV3GeneratedJob", "\nfunction v3JobAwaitingFinalDelivery");
-  assert.equal((completion.match(/refreshV3CurrentProject\(/g) || []).length, 1);
-  assert.equal((completion.match(/loadV3ProjectOutputs\(/g) || []).length, 0);
-  assert.match(completion, /restoreJob:\s*false/);
-  assert.match(completion, /preserveOutputOnError:\s*true/);
-  assert.match(completion, /preserveOutputOnError:\s*true/);
+  assert.doesNotMatch(completion, /refreshV3CurrentProject\(/);
+  assert.equal((completion.match(/loadV3ProjectOutputs\(/g) || []).length, 1);
+  assert.match(completion, /renderV3Job\(generated\);\s*await loadV3ProjectOutputs\(/);
+  assert.match(completion, /preserveOnError:\s*true/);
   assert.doesNotMatch(recovery, /refreshV3CurrentProject\(/);
+  assert.match(recovery, /if \(!followToTerminal && outputProjectionChanged\)/);
 });
