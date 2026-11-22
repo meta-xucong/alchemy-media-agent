@@ -5412,7 +5412,10 @@ class V3ProductApiService:
     ) -> PlanningResult:
         """Project provider-owned persisted pixels without another generation pass."""
 
-        packaged = planning_result.asset_pack.assets[0]
+        matches = [item for item in planning_result.asset_pack.assets if item.asset_id == output_record.asset_id]
+        if len(matches) != 1:
+            raise ValueError("frozen_provider_asset_mismatch")
+        packaged = matches[0]
         candidate_metadata = dict(candidate.metadata or {})
         output_uri = str(output_record.thumbnail_url or output_record.download_url or "")
         candidates = list(provider_response.candidates)
@@ -5864,6 +5867,115 @@ class V3ProductApiService:
             record, GenerateJobRequest(), review_only=True, assert_current=assert_current
         )
         return self.lookup_render_bridge_registration(binding)
+
+    def resume_partial_bridge_image_review(
+        self, job_id: str, output_id: str, *, assert_current: Callable[[], None],
+    ) -> ProductJobStatus:
+        """Continue an already-acknowledged original from a blocked two-image General job."""
+
+        from ..generation_router.bridge_primary import output_id as bridge_output_id
+        from ..generation_router.providers import GenerationResponse
+        from ..schemas import CandidateResult
+
+        assert_current()
+        record = self.get_job_record(job_id)
+        if record is None or record.planning_result is None:
+            raise ValueError("partial_bridge_job_missing")
+        plan = record.planning_result
+        metadata = record.request.metadata
+        failure = metadata.get("provider_failure_retry") or {}
+        failed_unit = metadata.get("render_bridge_primary") or {}
+        ready_outputs = self.output_store.list_by_job(job_id)
+        output = ready_outputs[0] if len(ready_outputs) == 1 else None
+        slots = {asset.asset_id: asset.priority for asset in plan.series_plan.assets}
+        if (
+            metadata.get("template_id") != "general_template"
+            or metadata.get("generation_channel") == "mcp"
+            or metadata.get("render_bridge_primary_cancel_requested")
+            or plan.creative_job.job_id != job_id
+            or metadata.get("requested_image_count") != 2
+            or set(slots.values()) != {1, 2}
+            or len(slots) != 2
+            or failure.get("final_classification") != "non_retryable_provider_failure"
+            or failure.get("final_failure_code") != "bridge_failed"
+            or failed_unit.get("route") != "bridge"
+            or failed_unit.get("state") != "failed"
+            or not failed_unit.get("task_id")
+            or output is None
+            or output.output_id != output_id
+            or output.asset_id not in slots
+        ):
+            raise ValueError("partial_bridge_job_unbound")
+        output_slot = slots[output.asset_id]
+        output_metadata = output.metadata
+        receipt = output_metadata.get("render_bridge_primary") or {}
+        prompt = output_metadata.get("final_provider_prompt")
+        signed = [
+            row.get("prompt")
+            for row in (plan.metadata.get("llm_brain") or {}).get("canonical_provider_prompts", [])
+            if row.get("output_index") == output_slot
+        ]
+        download = self.output_store.file_for_variant(output_id, "download")
+        if (
+            output.provider != "render_bridge"
+            or output_metadata.get("project_id") != metadata.get("project_id")
+            or output_metadata.get("veyra_user_id") != metadata.get("veyra_user_id")
+            or output_metadata.get("visual_auto_retry_attempt", 0) != 0
+            or output_metadata.get("render_bridge_primary_checkpoint_complete") is not True
+            or receipt.get("route") != "bridge"
+            or not receipt.get("task_id")
+            or receipt["task_id"] == failed_unit["task_id"]
+            or not receipt.get("receipt_id")
+            or not receipt.get("execution_key")
+            or bridge_output_id(receipt) != output_id
+            or output.candidate_id != stable_id("candidate", output_id)
+            or not isinstance(prompt, str)
+            or not prompt.strip()
+            or signed != [prompt]
+            or hashlib.sha256(prompt.encode("utf-8")).hexdigest() != output_metadata.get("provider_prompt_sha256")
+            or download is None
+            or download[0].resolve() != Path(output.file_path).resolve()
+        ):
+            raise ValueError("partial_bridge_output_unbound")
+
+        existing = record.generation_result
+        if existing is None:
+            if record.status != ProductJobStatusValue.BLOCKED:
+                raise ValueError("partial_bridge_job_not_blocked")
+            generation_plan = next(item for item in plan.generation_plans if item.asset_id == output.asset_id)
+            candidate = CandidateResult(
+                candidate_id=output.candidate_id, asset_id=output.asset_id, provider=output.provider,
+                file_path=output.file_path, uri=output.thumbnail_url, is_mock=False,
+                prompt_compilation_id=output_metadata.get("prompt_compilation_id"),
+                metadata={**output_metadata, "output_id": output_id},
+            )
+            result = self._project_frozen_provider_candidate(
+                record, plan, generation_plan, GenerationResponse(candidates=[candidate]),
+                candidate, output, consumer="bridge_partial",
+            )
+            missing_asset = next(asset for asset in plan.series_plan.assets if asset.asset_id != output.asset_id)
+            result.metadata["failed_image_slots"] = [{
+                "asset_id": missing_asset.asset_id,
+                "output_index": missing_asset.priority,
+                "failure_code": "bridge_failed",
+            }]
+            assert_current()
+            record.generation_result = result
+            record.status = ProductJobStatusValue.FINALIZING
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+        elif existing.metadata.get("bridge_partial_consumer") != "frozen_planning_result":
+            raise ValueError("partial_bridge_job_projection_conflict")
+        elif record.status in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
+            return self._status_from_record(record)
+        elif record.account_image_billing and record.account_image_billing.output_ids:
+            # The original wallet operation is already frozen on this job.
+            # Resume its normal settlement without another review.
+            return self._finalize_reviewed_image_delivery(record)
+
+        return self._resume_finalizing_generation_review(
+            record, GenerateJobRequest(), review_only=True, assert_current=assert_current,
+        )
 
     def register_render_bridge_result(
         self, binding, artifact_bytes: bytes, *, assert_current: Callable[[], None],
@@ -14003,6 +14115,16 @@ class V3ProductApiService:
                             term in line.casefold() for term in ("light", "shadow", "reflection", "光", "反射", "阴影")
                         )
                     ), reason)
+                if not reason:
+                    reason = "；".join(
+                        line.strip() for line in summary[:2] if isinstance(line, str) and line.strip()
+                    ) if isinstance(summary, list) else ""
+                if not reason:
+                    reason = "；".join(
+                        entry["message"].strip() for entry in issues
+                        if isinstance(entry, dict) and isinstance(entry.get("message"), str)
+                        and entry["message"].strip()
+                    )
                 if reason:
                     details[output_id] = reason[:300]
         return details
@@ -14317,8 +14439,10 @@ class V3ProductApiService:
                 "manual_confirmation_required": manual_confirmation_required,
                 "reviewed_output_count": len(real_inspections),
                 "final_delivery_output_count": len(eligible_output_ids),
+                **({"generation_failed_count": len(result.metadata["failed_image_slots"])}
+                   if result.metadata.get("failed_image_slots") else {}),
                 **({"partial_delivery": True} if eligible_output_ids and (
-                    doc276_uncertified or any(
+                    result.metadata.get("failed_image_slots") or doc276_uncertified or any(
                         str(item.get("output_id") or "").strip() not in eligible_output_ids
                         for item in inspections
                     )

@@ -432,6 +432,16 @@ class CentralCreativeBrain:
         ):
             raise GenerationOutputCountMismatch("retry asset scope does not match the frozen plan")
         execution_count = len(execution_ids) if execution_ids is not None else requested_image_count
+        # General images have independent signed directions. A confirmed Bridge
+        # failure has no pixels for that slot; it must not erase ready siblings.
+        allow_partial_images = (
+            not use_mock_generation
+            and execution_ids is None
+            and context.metadata.get("template_id") == "general_template"
+            and context.metadata.get("generation_channel") != "mcp"
+        )
+        failed_image_slots: list[dict[str, Any]] = []
+        first_image_failure: Exception | None = None
         for index, asset in enumerate(context.series_plan.assets):
             if execution_ids is not None and asset.asset_id not in execution_ids:
                 continue
@@ -674,6 +684,24 @@ class CentralCreativeBrain:
                 )
             except Exception as exc:
                 if not require_independent_role_terminal_states:
+                    detail = getattr(exc, "detail", None)
+                    bridge = detail.get("render_bridge_primary") if isinstance(detail, dict) else None
+                    if (
+                        allow_partial_images
+                        and (not auto_identity_anchor_enabled or index != 0)
+                        and isinstance(bridge, dict)
+                        and bridge.get("route") == "bridge"
+                        and bridge.get("state") == "failed"
+                        and bridge.get("task_id")
+                        and detail.get("failure_code") == "bridge_failed"
+                    ):
+                        failed_image_slots.append({
+                            "asset_id": asset.asset_id,
+                            "output_index": index + 1,
+                            "failure_code": "bridge_failed",
+                        })
+                        first_image_failure = first_image_failure or exc
+                        continue
                     raise
                 role_execution_records.append(
                     self._role_execution_record(
@@ -731,10 +759,12 @@ class CentralCreativeBrain:
                     f"asset {asset.asset_id} packaged with {selected_evaluation.recommendation} recommendation"
                 )
 
+        if first_image_failure is not None and not context.selected_candidates:
+            raise first_image_failure
         if (
             not require_independent_role_terminal_states
             and execution_count is not None
-            and len(context.selected_candidates) != execution_count
+            and len(context.selected_candidates) + len(failed_image_slots) != execution_count
         ):
             raise GenerationOutputCountMismatch(
                 f"expected={execution_count}; selected={len(context.selected_candidates)}"
@@ -784,11 +814,16 @@ class CentralCreativeBrain:
             if apply_memory_update:
                 self.brand_memory_agent.profile_service.apply_memory_update(memory_update)
 
+        failed_asset_ids = {slot["asset_id"] for slot in failed_image_slots}
         asset_pack = self.asset_packager_agent.create_generated_asset_pack(
             job,
             brand_profile,
             context.series_plan.model_copy(update={
-                "assets": [asset for asset in context.series_plan.assets if execution_ids is None or asset.asset_id in execution_ids],
+                "assets": [
+                    asset for asset in context.series_plan.assets
+                    if asset.asset_id not in failed_asset_ids
+                    and (execution_ids is None or asset.asset_id in execution_ids)
+                ],
             }),
             context.layout_plans,
             context.prompt_compilations,
@@ -834,6 +869,7 @@ class CentralCreativeBrain:
                 "planning_only": False,
                 "candidate_loop": True,
                 **({"specialized_role_execution": role_execution_payload} if role_execution_records else {}),
+                **({"failed_image_slots": failed_image_slots} if failed_image_slots else {}),
                 "candidate_count": len(context.candidate_results),
                 "selected_candidate_ids": [candidate.candidate_id for candidate in context.selected_candidates],
                 "refinement_plan_count": len(context.refinement_plans),

@@ -49,11 +49,10 @@ async function completeWith(job, expectedCount = null, { reviewItems = [] } = {}
     renderV3ResultBoard: (value) => {
       resultBoardSnapshots.push(context.v3State.projectReviewOutputs.map((item) => item.output_id));
     },
-    refreshV3CurrentProject: async () => {
+    loadV3ProjectOutputs: async () => {
       context.v3State.projectReviewOutputs = reviewItems;
       return true;
     },
-    loadV3ProjectOutputs: async () => {},
     syncV3CurrentJobFromProjectOutputs: () => false,
     maybePersistV3UploadedReferences: async () => {},
     openV3ProjectSubpage: () => {},
@@ -262,6 +261,7 @@ test("desktop submits once and follows long planning and review through to the o
   let checks = 0;
   let planning = 0;
   let reviewing = 0;
+  let galleryReads = 0;
   let delivered;
   const context = {
     v3State, v3ApiBase: "/v3", window: { setTimeout: (resolve) => resolve() },
@@ -271,12 +271,18 @@ test("desktop submits once and follows long planning and review through to the o
     uploadV3Files: async () => [], buildV3JobPayload: () => ({ metadata: {} }),
     v3CurrentGenerationSettings: () => ({ count: 1 }),
     syncV3ProjectOutputsFromPayload() {}, renderV3Job() {}, renderV3ProjectDetail() {},
-    refreshV3CurrentProject: async () => true,
+    refreshV3CurrentProject: async () => {
+      throw new Error("project details and timeline must not delay polling");
+    },
+    loadV3ProjectOutputs: async () => {
+      galleryReads += 1;
+      throw new Error("project outputs must not delay polling");
+    },
     v3GenerationSessionOwns: (owns) => owns(), v3IsTerminalJob: () => false,
     clearV3RecoverPolling() {}, clearV3ProgressTimer() {},
     v3Delay: async () => {}, v3RecoveryDelayMs: () => 1, v3RecoveryMaxAttempts: 96,
     v3RecoveryAttemptLimitForServerWatchdog: () => 0,
-    v3JobOutputProjectionSignature: () => "", v3SettleEcommerceTerminalReceipt() {},
+    v3JobOutputProjectionSignature: () => "pending-assets", v3SettleEcommerceTerminalReceipt() {},
     v3JobHasTerminalOutcome: (result) => result.status === "generated",
     v3JobHasExpectedVisibleImages: () => true, v3JobHasRecoverablePartialDelivery: () => false,
     v3RecoveredJobFromProjectOutputs: () => null,
@@ -310,6 +316,7 @@ test("desktop submits once and follows long planning and review through to the o
   assert.deepEqual(requests.filter(([, method]) => method !== "GET"), [["/v3/projects/p1/jobs", "POST"]]);
   assert.equal(planning, 246);
   assert.equal(reviewing, 106);
+  assert.equal(galleryReads, 0);
   assert.equal(delivered, job);
   assert.equal(v3State.loading, false);
 });

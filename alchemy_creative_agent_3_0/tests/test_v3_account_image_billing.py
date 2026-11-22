@@ -133,11 +133,17 @@ def test_insufficient_balance_blocks_before_generation(make_service, monkeypatch
     assert wallet.debit_calls == []
 
 
-def test_partial_delivery_charges_only_the_final_images(make_service):
+@pytest.mark.parametrize("missing_image", [False, True])
+def test_partial_delivery_charges_only_the_final_images(make_service, missing_image):
     wallet = Wallet()
     service = make_service(wallet)
-    record, outputs = reviewed_job(service, ["pass", "fail_retryable", "warning"])
-    expected = {outputs[0], outputs[2]}
+    statuses = ["pass"] if missing_image else ["pass", "fail_retryable", "warning"]
+    record, outputs = reviewed_job(service, statuses)
+    expected = {outputs[0]} if missing_image else {outputs[0], outputs[2]}
+    if missing_image:
+        record.generation_result.metadata["failed_image_slots"] = [{
+            "asset_id": "asset_missing", "output_index": 2, "failure_code": "bridge_failed",
+        }]
 
     def assert_durable_checkpoint():
         saved = make_service(wallet).job_store.get(record.job_id)
@@ -148,12 +154,15 @@ def test_partial_delivery_charges_only_the_final_images(make_service):
         assert service.output_store.get_job_closure(record.job_id) is None
 
     wallet.before_debit = assert_durable_checkpoint
-    service._finalize_reviewed_image_delivery(record)
+    status = service._finalize_reviewed_image_delivery(record)
 
     assert record.status == ProductJobStatusValue.GENERATED
-    assert wallet.debit_calls == [(USER_ID, Decimal("0.14"), record.job_id)]
+    assert wallet.debit_calls == [(USER_ID, PRICE * len(expected), record.job_id)]
     assert record.account_image_billing.charged
     assert set(record.account_image_billing.output_ids) == expected
+    if missing_image:
+        assert status.metadata["final_delivery"]["partial_delivery"] is True
+        assert status.metadata["final_delivery"]["generation_failed_count"] == 1
 
 
 def test_unreadable_approved_output_does_not_charge(make_service):

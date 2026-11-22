@@ -6063,8 +6063,6 @@ async function generateMobileV3Job() {
     mobileV3State.currentJob = finalJob;
     renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
     renderMobileV3ProjectOutputs(mobileV3State.currentProject);
-    await refreshMobileV3ProjectDetail(projectId, { shouldContinue, restoreJob: false }).catch(() => false);
-    if (!shouldContinue()) return;
     const deliveryWithheld = mobileV3JobDeliveryWithheld(finalJob);
     const partialDeliveryNotice = mobileV3FormalPartialDeliveryNotice(finalJob);
     const terminalFailure = mobileV3IsTerminalJob(finalJob);
@@ -6088,6 +6086,8 @@ async function generateMobileV3Job() {
       paidDeliveryNotice || progressNotice,
     );
     updateMobileV3Status(paidDeliveryNotice || statusNotice);
+    await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
+    if (shouldContinue()) renderMobileV3ProjectOutputs(mobileV3State.currentProject);
   } catch (error) {
     if (!shouldContinue()) return;
     if (scenarioId === "ecommerce") {
@@ -6129,11 +6129,10 @@ async function recoverMobileV3GeneratedJob(
         if (Array.isArray(lastJob?.metadata?.project_outputs)) {
           mobileV3MergeProjectOutputs(projectId, lastJob.metadata.project_outputs);
         }
-        await loadMobileV3ProjectOutputs(projectId, {
-          limit: 120,
-          shouldContinue: ownsRecovery,
-        });
-        if (!ownsRecovery()) return null;
+        if (!followToTerminal) {
+          await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue: ownsRecovery });
+          if (!ownsRecovery()) return null;
+        }
         mobileV3SettleEcommerceTerminalReceipt(lastJob);
         return lastJob;
       }
@@ -6723,7 +6722,7 @@ function resumeMobileV3ImageBilling(projectId, detailEpoch) {
   setMobileV3Busy(true);
   setMobileV3Progress("billing", mobileV3ImageBillingNotice(job));
   void recoverMobileV3GeneratedJob(projectId, job.job_id, { initialJob: job, shouldContinue, followToTerminal: true })
-    .then((finalJob) => {
+    .then(async (finalJob) => {
       if (!finalJob || !shouldContinue()) return;
       mobileV3State.currentJob = finalJob;
       renderMobileV3ProjectOutputs();
@@ -6736,6 +6735,8 @@ function resumeMobileV3ImageBilling(projectId, detailEpoch) {
           : [mobileV3FormalPartialDeliveryNotice(finalJob), mobileV3ImageBillingNotice(finalJob)].filter(Boolean).join(" ") || "生成完成";
       setMobileV3Progress(terminalFailure ? "failed" : deliveryWithheld ? "review_blocked" : "completed", message);
       updateMobileV3Status(message);
+      await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
+      if (shouldContinue()) renderMobileV3ProjectOutputs();
     })
     .catch(() => {
       if (shouldContinue()) updateMobileV3Status(mobileV3ImageBillingNotice(job));
@@ -7872,6 +7873,8 @@ function mobileV3FormalPartialDeliveryNotice(job = mobileV3State.currentJob) {
     || !Number.isSafeInteger(eligibleCount)
     || eligibleCount <= 0
   ) return "";
+  const failedCount = Number(projection.generation_failed_count || 0);
+  if (failedCount > 0) return `已交付 ${eligibleCount} 张合格图片，另有 ${failedCount} 张生成失败。`;
   return `已交付 ${eligibleCount} 张合格图片；其余图片未通过审核或需要人工确认。`;
 }
 
