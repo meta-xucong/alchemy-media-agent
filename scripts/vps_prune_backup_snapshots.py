@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep one verified pre-cutover rollback snapshot and retire older snapshots."""
+"""Retire verified pre-cutover snapshots after checking the live release."""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +26,7 @@ REVISION = re.compile(r'[0-9a-f]{40}')
 MAX_SELECTION = 100
 MAX_SELECTION_BYTES = 20000
 CONFIRMATION = 'RETAIN-ONE-ROLLBACK-SNAPSHOT'
+FINALIZE_CONFIRMATION = 'DISCARD-COMPLETED-CUTOVER-SNAPSHOTS'
 V2_UNITS = ('alchemy-v2-api.service', 'alchemy-v2-worker.service', 'alchemy-v2-sync-worker.service')
 
 
@@ -396,6 +397,7 @@ def append_ledger(record: dict, ledger: Path = LEDGER) -> None:
 
 def retire_snapshots(selection: str, keep_name: str, expected_active: str, expected_rollback: str,
                      *, root: Path = ROOT, ledger: Path = LEDGER,
+                     retain_current: bool = True,
                      live_check: Callable[[], None] | None = None,
                      reference_check: Callable[[list[Path]], None] | None = None) -> dict:
     snapshots, _ = inventory_snapshots(root=root)
@@ -406,7 +408,7 @@ def retire_snapshots(selection: str, keep_name: str, expected_active: str, expec
     if by_name[keep_name]['kind'] != 'directory':
         raise SnapshotBlocked('keep_snapshot_not_directory')
     verify_keep_snapshot(by_name[keep_name], expected_active, root=root)
-    deleting = [item for item in snapshots if item['name'] != keep_name]
+    deleting = [item for item in snapshots if not retain_current or item['name'] != keep_name]
     live_check = live_check or (lambda: assert_live_state(expected_active, expected_rollback))
     reference_check = reference_check or (lambda paths: assert_unreferenced(paths))
     live_check()
@@ -420,7 +422,8 @@ def retire_snapshots(selection: str, keep_name: str, expected_active: str, expec
             raise SnapshotBlocked('snapshot_changed_after_inspection')
         reference_check([Path(inspected['path'])])
         stamp = datetime.now(timezone.utc).isoformat()
-        entry = {'schema_version': 1, 'operation': 'retire_old_backup_snapshot',
+        operation = 'retire_completed_cutover_snapshot' if inspected['name'] == keep_name else 'retire_old_backup_snapshot'
+        entry = {'schema_version': 1, 'operation': operation,
                  'kind': inspected['kind'], 'name': inspected['name'], 'bytes': inspected['bytes'],
                  'entries': inspected['entries'],
                  'device': inspected['device'], 'inode': inspected['inode'], 'timestamp_utc': stamp}
@@ -438,25 +441,25 @@ def retire_snapshots(selection: str, keep_name: str, expected_active: str, expec
         removed.append({'kind': inspected['kind'], 'name': inspected['name'], 'bytes': inspected['bytes']})
 
     remaining, other_entries = inventory_snapshots(root=root)
-    if len(remaining) != 1 or remaining[0]['name'] != keep_name or remaining[0]['kind'] != 'directory':
+    expected_remaining = [by_name[keep_name]] if retain_current else []
+    if remaining != expected_remaining:
         raise SnapshotBlocked('unexpected_snapshot_after_retirement')
-    preserved = next((item for item in remaining if item['name'] == keep_name), None)
-    if preserved != by_name[keep_name]:
-        raise SnapshotBlocked('keep_snapshot_changed_during_retirement')
-    verify_keep_snapshot(preserved, expected_active, root=root)
+    if retain_current:
+        verify_keep_snapshot(remaining[0], expected_active, root=root)
     live_check()
     return {'retired': removed, 'retired_count': len(removed),
             'freed_snapshot_bytes': sum(item['bytes'] for item in removed),
             'retired_archives': sum(item['kind'] == 'archive' for item in removed),
             'retired_directories': sum(item['kind'] == 'directory' for item in removed),
-            'kept_snapshot': keep_name, 'other_root_entries_preserved': other_entries}
+            'kept_snapshot': keep_name if retain_current else None, 'other_root_entries_preserved': other_entries}
 
 
-def retain_latest_snapshot(keep_name: str, expected_active: str, expected_rollback: str,
-                           *, root: Path = ROOT, ledger: Path = LEDGER) -> dict:
+def retire_snapshot_inventory(keep_name: str, expected_active: str, expected_rollback: str,
+                              *, retain_current: bool, root: Path = ROOT, ledger: Path = LEDGER) -> dict:
     snapshots, _ = inventory_snapshots(root=root)
     selection = ','.join(selection_token(item) for item in snapshots)
-    return retire_snapshots(selection, keep_name, expected_active, expected_rollback, root=root, ledger=ledger)
+    return retire_snapshots(selection, keep_name, expected_active, expected_rollback,
+                            root=root, ledger=ledger, retain_current=retain_current)
 
 
 def main() -> int:
@@ -464,7 +467,7 @@ def main() -> int:
     parser.add_argument('--expected-active-sha', required=True)
     parser.add_argument('--expected-rollback-sha', required=True)
     parser.add_argument('--keep-name', required=True)
-    parser.add_argument('--mode', choices=('inspect', 'retire', 'retain-latest'), required=True)
+    parser.add_argument('--mode', choices=('inspect', 'retire', 'retain-latest', 'finalize-cutover'), required=True)
     parser.add_argument('--selection', default='')
     parser.add_argument('--confirmation', default='')
     args = parser.parse_args()
@@ -500,11 +503,15 @@ def main() -> int:
                                       args.expected_rollback_sha)
             print(json.dumps({'status': 'complete', 'mode': 'retire', **result}, sort_keys=True), flush=True)
         else:
-            if args.selection or args.confirmation != CONFIRMATION:
+            retain_current = args.mode == 'retain-latest'
+            expected_confirmation = CONFIRMATION if retain_current else FINALIZE_CONFIRMATION
+            if args.selection or args.confirmation != expected_confirmation:
                 raise SnapshotBlocked('retention_inputs_invalid')
-            result = retain_latest_snapshot(args.keep_name, args.expected_active_sha,
-                                            args.expected_rollback_sha)
-            print(json.dumps({'status': 'complete', 'mode': 'retain-latest', **result}, sort_keys=True), flush=True)
+            if not retain_current and Path('/etc/alchemy/alchemy-media-agent-maintenance').exists():
+                raise SnapshotBlocked('public_maintenance_gate_active')
+            result = retire_snapshot_inventory(args.keep_name, args.expected_active_sha, args.expected_rollback_sha,
+                                               retain_current=retain_current)
+            print(json.dumps({'status': 'complete', 'mode': args.mode, **result}, sort_keys=True), flush=True)
     except (SnapshotBlocked, OSError, ValueError) as error:
         reason = str(error) if isinstance(error, SnapshotBlocked) else type(error).__name__
         print(json.dumps({'status': 'blocked', 'reason': reason}, sort_keys=True), flush=True)
