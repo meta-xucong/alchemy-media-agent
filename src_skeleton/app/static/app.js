@@ -5637,7 +5637,7 @@ function appendV3ReviewOnlyResultCards(board, items, { job, startIndex = 0 } = {
     const downloadUrl = v3OutputDownloadUrl(item);
     card.className = "v3-result-card v3-review-only-card";
     card.innerHTML = `
-      <button class="v3-result-preview" type="button" data-v3-review-preview aria-label="预览复核图"><img alt="${escapeHtml(title)}" loading="lazy" /></button>
+      <button class="v3-result-preview" type="button" data-v3-review-preview aria-label="预览复核图"><img alt="${escapeHtml(title)}" loading="eager" /></button>
       <div class="v3-card-head">
         <strong>${escapeHtml(title)}</strong>
         <span class="mini-pill">仅供复核</span>
@@ -6080,6 +6080,7 @@ function v3IsOutputItemSelected(item, project = v3State.currentProject) {
 function renderV3ProjectOutputBoard() {
   if (!els.v3ProjectOutputBoard) return;
   const project = v3State.currentProject;
+  const currentJobId = v3State.currentJob?.job_id;
   const ecommerceProject = project?.primary_template_id === "ecommerce_template";
   const items = v3AllProjectImageItems(project);
   const reviewItems = v3StoredProjectReviewOutputItems(project);
@@ -6098,6 +6099,8 @@ function renderV3ProjectOutputBoard() {
   }
   items.forEach((item, index) => {
     const urls = v3OutputImageCandidates(item);
+    const itemJobId = item.job_id || item.metadata?.job_id;
+    const eager = index === 0 || Boolean(currentJobId && itemJobId === currentJobId);
     const anchorState = project?.metadata?.continuity_anchor;
     const isSelected = anchorState
       ? anchorState.state === "active" && anchorState.active_continuity_anchor?.output_id === item.output_id
@@ -6109,7 +6112,7 @@ function renderV3ProjectOutputBoard() {
     const card = document.createElement("article");
     card.className = `v3-project-output-tile${isSelected ? " selected" : ""}`;
     card.innerHTML = `
-      <button class="v3-project-output-preview" type="button" data-v3-project-preview="${index}" aria-label="查看项目图片"><img alt="${escapeHtml(title)}" loading="${index === 0 ? "eager" : "lazy"}" decoding="async" ${index === 0 ? "fetchpriority=\"high\" data-v3-project-first-preview=\"true\"" : ""} /></button>
+      <button class="v3-project-output-preview" type="button" data-v3-project-preview="${index}" aria-label="查看项目图片"><img alt="${escapeHtml(title)}" loading="${eager ? "eager" : "lazy"}" decoding="async" ${index === 0 ? "fetchpriority=\"high\" data-v3-project-first-preview=\"true\"" : ""} /></button>
       <div>
         <strong>${escapeHtml(title)}</strong>
         <p>${escapeHtml(reason)}</p>
@@ -12670,7 +12673,7 @@ function renderV3ResultBoard(job) {
     card.innerHTML = `
       ${
         hasRealImage
-          ? `<button class="v3-result-preview" type="button" data-v3-preview="${escapeHtml(String(index))}" aria-label="预览生成图"><img alt="${escapeHtml(v3ReadableTitle(title))}" loading="${index === 0 ? "eager" : "lazy"}" /></button>`
+          ? `<button class="v3-result-preview" type="button" data-v3-preview="${escapeHtml(String(index))}" aria-label="预览生成图"><img alt="${escapeHtml(v3ReadableTitle(title))}" loading="eager" /></button>`
           : `<div class="v3-result-placeholder"><span>${escapeHtml(job.status === "generated" ? "准备中" : "已规划")}</span></div>`
       }
       <div class="v3-card-head">
@@ -17689,7 +17692,7 @@ function bindImageWithFallback(
     onExhausted?.();
   };
   const loadCandidate = async (index) => {
-    if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) return;
+    if (effectiveSignal.aborted || image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) return;
     const candidate = urls[index];
     if (!candidate) {
       fail();
@@ -17698,7 +17701,7 @@ function bindImageWithFallback(
     image.dataset.fallbackIndex = String(index);
     try {
       const resolved = await resolveAuthenticatedMediaSource(candidate, { signal: effectiveSignal, v3Queued });
-      if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) {
+      if (effectiveSignal.aborted || image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) {
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
         return;
       }

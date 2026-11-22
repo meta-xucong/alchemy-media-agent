@@ -462,6 +462,66 @@ test("V3 deferred image teardown releases disconnected image references and subs
   assert.equal(observers[0].observed.size, 0);
 });
 
+test("V3 loads all images from the current delivery without waiting for scrolling", () => {
+  const start = source.indexOf("function renderV3ProjectOutputBoard()");
+  const end = source.indexOf("\nfunction ", start + 1);
+  const cards = [];
+  const board = { classList: { toggle() {} }, appendChild: (card) => cards.push(card) };
+  const context = {
+    els: { v3ProjectOutputBoard: board },
+    v3State: { currentProject: { project_id: "project_1" }, currentJob: { job_id: "job_now" } },
+    document: { createElement: () => ({ querySelector: () => null }) },
+    v3AllProjectImageItems: () => [
+      { output_id: "newer", job_id: "job_now" },
+      { output_id: "older", metadata: { job_id: "job_now" } },
+      { output_id: "history", job_id: "job_then" },
+    ],
+    v3StoredProjectReviewOutputItems: () => [],
+    v3OutputImageCandidates: () => [],
+    v3IsOutputItemSelected: () => false,
+    v3ProjectOutputReason: () => "",
+    v3ProjectOutputReviewNotice: () => "",
+    v3OutputDownloadUrl: () => "",
+    v3OutputFullImageUrl: () => "",
+    v3OutputPreviewImageUrl: () => "",
+    generatedImageSourceText: () => "RenderBridge",
+    releaseV3ImageBindingsWithin() {},
+    escapeHtml: (value) => value,
+  };
+  vm.runInNewContext(source.slice(start, end), context);
+  context.renderV3ProjectOutputBoard();
+  assert.deepEqual(cards.map((card) => card.innerHTML.match(/loading="([^"]+)"/)[1]), ["eager", "eager", "lazy"]);
+});
+
+test("V3 does not attach a late image response after its card has been removed", async () => {
+  const start = source.indexOf("const v3DeferredImageLoads = new Map();");
+  const end = source.indexOf("function bindProgressiveLightboxImage", start);
+  const revoked = [];
+  let finishRead;
+  const context = {
+    AbortController,
+    URL: { revokeObjectURL: (url) => revoked.push(url) },
+    uniqueNonEmpty: (items) => items,
+    mediaUrlNeedsAuthenticatedFetch: () => true,
+    releaseImageObjectUrl() {},
+    v3State: {},
+    v3ProjectDetailSignal: () => undefined,
+    resolveAuthenticatedMediaSource: () => new Promise((resolve) => { finishRead = resolve; }),
+  };
+  vm.runInNewContext(source.slice(start, end), context);
+  const image = {
+    dataset: {}, loading: "eager", src: "",
+    classList: { add() {}, remove() {} },
+    removeAttribute() { this.src = ""; },
+  };
+  context.bindV3ImageWithFallback(image, ["/api/v3/media/ready/thumbnail"], { detailBound: true });
+  context.releaseV3ImageBindingsWithin({ querySelectorAll: () => [image] });
+  finishRead({ url: "blob:old-image", objectUrl: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(image.src, "");
+  assert.deepEqual(revoked, ["blob:old-image"]);
+});
+
 test("output projection retry commits a signature only after successful refresh", async () => {
   const recoverySource = extractV3RecoveryUnit();
   let now = 0;
