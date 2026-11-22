@@ -474,6 +474,8 @@ test("V3 loads all images from the current delivery without waiting for scrollin
     v3AllProjectImageItems: () => [
       { output_id: "newer", job_id: "job_now" },
       { output_id: "older", metadata: { job_id: "job_now" } },
+      { output_id: "just-returned", _v3Source: "current_job" },
+      { output_id: "restored", related_job_id: "job_now" },
       { output_id: "history", job_id: "job_then" },
     ],
     v3StoredProjectReviewOutputItems: () => [],
@@ -490,7 +492,7 @@ test("V3 loads all images from the current delivery without waiting for scrollin
   };
   vm.runInNewContext(source.slice(start, end), context);
   context.renderV3ProjectOutputBoard();
-  assert.deepEqual(cards.map((card) => card.innerHTML.match(/loading="([^"]+)"/)[1]), ["eager", "eager", "lazy"]);
+  assert.deepEqual(cards.map((card) => card.innerHTML.match(/loading="([^"]+)"/)[1]), ["eager", "eager", "eager", "eager", "lazy"]);
 });
 
 test("V3 does not attach a late image response after its card has been removed", async () => {

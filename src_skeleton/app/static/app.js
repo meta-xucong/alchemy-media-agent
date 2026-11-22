@@ -6099,8 +6099,8 @@ function renderV3ProjectOutputBoard() {
   }
   items.forEach((item, index) => {
     const urls = v3OutputImageCandidates(item);
-    const itemJobId = item.job_id || item.metadata?.job_id;
-    const eager = index === 0 || Boolean(currentJobId && itemJobId === currentJobId);
+    const itemJobId = item.job_id || item.metadata?.job_id || item.related_job_id;
+    const eager = index === 0 || item._v3Source === "current_job" || Boolean(currentJobId && itemJobId === currentJobId);
     const anchorState = project?.metadata?.continuity_anchor;
     const isSelected = anchorState
       ? anchorState.state === "active" && anchorState.active_continuity_anchor?.output_id === item.output_id
