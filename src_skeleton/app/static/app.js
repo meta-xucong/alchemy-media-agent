@@ -5642,7 +5642,7 @@ function appendV3ReviewOnlyResultCards(board, items, { job, startIndex = 0 } = {
         <strong>${escapeHtml(title)}</strong>
         <span class="mini-pill">仅供复核</span>
       </div>
-      <p>这张图已生成，但没有进入正式交付；可查看并人工确认。</p>
+      <p>${escapeHtml(v3ProjectReviewReason(item))}</p>
       <div class="v3-result-meta">
         <span class="v3-source-badge">生成方式：${escapeHtml(generatedImageSourceText(item, job))}</span>
         ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载复核图</button>` : ""}

@@ -3567,7 +3567,7 @@ class V3ProjectModeService:
         if isinstance(review, dict):
             review_projection = {
                 key: review[key]
-                for key in ("recommended_output_ids",)
+                for key in ("recommended_output_ids", "output_review_details")
                 if key in review
             }
             inspection_fields = (
@@ -12921,6 +12921,8 @@ class V3ProjectModeService:
             return "持久化输出尚未完成交付闭环，仅提供复核和恢复入口。"
         if restore_state == "delivery_withheld":
             return "持久化输出的最终交付已保留，仅提供复核入口。"
+        if item.get("review_detail"):
+            return item["review_detail"]
         codes = [
             str(code).strip().lower()
             for code in metadata.get("retry_reason_codes", [])
@@ -14005,6 +14007,9 @@ class V3ProjectModeService:
                 or output_id in canonical_final_output_ids
             ),
         }
+        details = review.get("output_review_details")
+        if isinstance(details, dict) and details.get(output_id):
+            projection["review_detail"] = details[output_id]
         restore_state = V3ProjectModeService._output_store_restore_state(job_status)
         if restore_state in {"needs_recovery", "delivery_withheld"}:
             projection.update(

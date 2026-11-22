@@ -8293,7 +8293,7 @@ class V3ProductApiService:
                 "retry_attempt": attempt_index,
                 "visual_retry_reason_codes": reason_codes,
                 "max_visual_retry_attempts": max_attempts,
-                **self._resolved_retry_metadata(merged_result, retry_patch),
+                **self._resolved_retry_metadata(merged_result, retry_patch, plan.get("target_asset_ids")),
                 **identity_local_repair,
             }
             record.request.metadata = retry_metadata
@@ -8906,8 +8906,8 @@ class V3ProductApiService:
         if brain_signed_retry:
             # The review service is allowed to classify what it observed.  It
             # is not allowed to translate those observations into a pile of
-            # new words.  The remote Brain receives only these normalized
-            # evidence codes during its next canonical prompt sign-off.
+            # new words. The remote Brain receives bounded evidence during
+            # its next canonical prompt sign-off.
             retry_patch = {}
         elif (
             not retry_patch
@@ -10565,13 +10565,14 @@ class V3ProductApiService:
             "doc73_auto_identity_anchor_reference": reference,
         }
 
-    def _resolved_retry_metadata(self, result: PlanningResult, retry_patch: dict[str, Any]) -> dict[str, Any]:
+    def _resolved_retry_metadata(
+        self, result: PlanningResult, retry_patch: dict[str, Any], target_asset_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Carry retry evidence through the shared runtime without local prose.
 
         Historical compatibility paths may still preserve a local patch.  New
-        Brain-signed runs retain only auditable provenance; normalized review
-        codes already travel in ``visual_retry_reason_codes`` and are the only
-        retry input the canonical prompt finalizer may use.
+        Brain-signed runs retain auditable provenance and bounded findings.
+        Normalized review codes travel in ``visual_retry_reason_codes``.
         """
 
         doc73_metadata = self._doc73_retry_metadata(result)
@@ -10597,7 +10598,7 @@ class V3ProductApiService:
                 "retry_evidence_only": True,
                 "prompt_owner": "remote_v3_llm_brain",
             }
-            observed_evidence = self._brain_retry_review_observations(result)
+            observed_evidence = self._brain_retry_review_observations(result, target_asset_ids)
             if observed_evidence:
                 provenance["observed_review_evidence"] = observed_evidence
             return {
@@ -10614,7 +10615,9 @@ class V3ProductApiService:
             },
         }
 
-    def _brain_retry_review_observations(self, result: PlanningResult) -> list[str]:
+    def _brain_retry_review_observations(
+        self, result: PlanningResult, target_asset_ids: list[str] | None = None,
+    ) -> list[str]:
         """Return bounded Vision observations for the next whole-direction pass.
 
         Enforced retries previously retained only normalized issue dimensions.
@@ -10628,15 +10631,30 @@ class V3ProductApiService:
         signals = package.get("candidate_signals") if isinstance(package, dict) else None
         if not isinstance(signals, list):
             return []
+        positions: dict[str, int] = {}
+        if target_asset_ids is not None:
+            slots = {
+                asset.asset_id: index for index, asset in enumerate(result.series_plan.assets, 1)
+                if asset.asset_id in target_asset_ids
+            }
+            for inspection in result.metadata["post_generation_review_package"]["inspections"]:
+                if inspection.get("asset_id") in slots and inspection.get("output_id"):
+                    positions[inspection["output_id"]] = slots[inspection["asset_id"]]
         observations: list[str] = []
         for signal in signals:
             if not isinstance(signal, dict) or signal.get("recommended_action") != "retry":
+                continue
+            position = positions.get(signal.get("output_id"))
+            if target_asset_ids is not None and position is None:
                 continue
             raw = signal.get("observed_review_evidence")
             if not isinstance(raw, list):
                 continue
             for item in raw:
-                text = " ".join(str(item or "").replace("\x00", " ").split())[:240].strip()
+                text = " ".join(str(item or "").replace("\x00", " ").split())
+                if text and position is not None:
+                    text = f"Output {position}: {text}"
+                text = text[:240].strip()
                 if text and text not in observations:
                     observations.append(text)
                 if len(observations) >= 8:
@@ -13924,6 +13942,7 @@ class V3ProductApiService:
             "recommended_output_ids": [str(value) for value in raw_recommended_output_ids if str(value)],
             "hidden_output_ids": [str(value) for value in raw_hidden_output_ids if str(value)],
             "review_output_ids": list(dict.fromkeys(review_output_ids)),
+            "output_review_details": V3ProductApiService._public_output_review_details(package, raw_inspections),
             "universal_review_scope": universal_review_scope(),
             "quality_assessment": universal_quality["quality_assessment"],
             "quality_failure": bool(universal_quality["quality_failure"]),
@@ -13938,6 +13957,55 @@ class V3ProductApiService:
                 certified_output_ids=certified_output_ids,
             ),
         }
+
+    @staticmethod
+    def _public_output_review_details(
+        package: dict[str, Any], current_inspections: list[Any],
+    ) -> dict[str, str]:
+        """Carry the user-facing lighting finding with its own image, including earlier attempts."""
+
+        attempts = package.get("review_attempts")
+        history = [
+            attempt["inspections"] for attempt in attempts[-4:]
+            if isinstance(attempt, dict) and isinstance(attempt.get("inspections"), list)
+        ] if isinstance(attempts, list) else []
+        details: dict[str, str] = {}
+        for inspections in [*history, current_inspections]:
+            for item in inspections:
+                if not isinstance(item, dict):
+                    continue
+                output_id = str(item.get("output_id") or "").strip()
+                if not output_id:
+                    continue
+                details.pop(output_id, None)
+                if item.get("status") not in {"manual_review", "fail_retryable", "fail_final"}:
+                    continue
+                issues = item.get("detected_issues")
+                if not isinstance(issues, list):
+                    continue
+                issue = next(
+                    (entry for entry in issues if isinstance(entry, dict) and entry.get("code") in {
+                        "lighting_mismatch", "review_evidence_lighting_unverified",
+                    }),
+                    None,
+                )
+                reason = str(issue.get("message") or "").strip() if issue else ""
+                # Older reviews only recorded the location or visual cue in their summary.
+                summary = item.get("user_visible_summary")
+                if (
+                    isinstance(summary, list)
+                    and (reason == "Lighting may not match the intended direction."
+                         or (issue is None and item.get("status") == "manual_review"))
+                ):
+                    reason = next((
+                        line.strip() for line in summary
+                        if isinstance(line, str) and any(
+                            term in line.casefold() for term in ("light", "shadow", "reflection", "光", "反射", "阴影")
+                        )
+                    ), reason)
+                if reason:
+                    details[output_id] = reason[:300]
+        return details
 
     @staticmethod
     def _public_reference_comparison(

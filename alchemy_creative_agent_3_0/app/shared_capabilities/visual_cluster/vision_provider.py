@@ -644,16 +644,34 @@ def _compact_review_contract(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _output_direction_review_prompt(metadata: dict[str, Any]) -> str:
+def signed_output_direction(metadata: dict[str, Any]) -> dict[str, Any]:
     direction = metadata.get("reviewed_output_direction")
-    if not isinstance(direction, dict) or direction.get("source") != "persisted_output_record":
+    if (
+        isinstance(direction, dict) and direction.get("source") == "persisted_output_record"
+        and isinstance(direction.get("prompt"), str) and direction["prompt"].strip()
+    ):
+        return direction
+    return {}
+
+
+def _output_direction_review_prompt(metadata: dict[str, Any]) -> str:
+    direction = signed_output_direction(metadata)
+    if not direction:
         return ""
     return (
         "Exact output-specific generation direction: " + _compact_prompt_json(direction) + "\n"
         "Assess this image's approved crop, camera, pose, visibility and rendering style against this direction, "
         "rather than requiring every image to repeat the starting composition. Preserve global hard requirements: "
         "identity/product truth, exclusions and explicit non-variable user constraints remain authoritative. "
-        "Output variation cannot excuse a violation of those requirements. Judge finish within the requested rendering style."
+        "Output variation cannot excuse a violation of those requirements. Judge finish within the requested rendering style. "
+        "For lighting_mismatch compare Image 1 to the current output's signed lighting. Do not compare authorized "
+        "lighting changes to the starting brief or reference. A warm key plus localized cool shadows or reflections "
+        "can coexist. Distinguish key direction, key color, fill and contrast. Report a mismatch only when a named "
+        "visible region contradicts a definite signed lighting requirement. Quote that exact signed excerpt and "
+        "describe the observed highlight, shadow or reflection in the same region. Set lighting_mismatch_evidence "
+        "only for that finding, with region and observed in the user's language; leave the quotation verbatim. "
+        "Compatible lighting has no lighting issue. If a possible discrepancy cannot be localized or verified, "
+        "use manual_review and explain the uncertainty in summary without recommending a lighting retry."
     )
 
 
@@ -810,6 +828,11 @@ def _review_response_shape(contract: dict[str, Any], *, metadata: dict[str, Any]
             + json.dumps(integrated_shape, ensure_ascii=False, separators=(",", ":"))
         )
     doc276_shape = _doc276_face_integrity_response_shape(dict(metadata or {}))
+    lighting_shape = (
+        ',"lighting_mismatch_evidence":{"region":"","expected_excerpt":"","observed":""}'
+        if signed_output_direction(metadata or {}) and "lighting_mismatch" in contract.get("issue_codes", ())
+        else ""
+    )
     return (
         'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review",'
         '"confidence":0.0,"issue_codes":[],"scores":'
@@ -821,6 +844,7 @@ def _review_response_shape(contract: dict[str, Any], *, metadata: dict[str, Any]
         + human_verdict
         + doc276_shape
         + body_evidence
+        + lighting_shape
         + ',"retry_patch":{}}'
     )
 

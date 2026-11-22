@@ -2353,6 +2353,20 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "structured visual recipe, or a local repair suffix; compare the complete "
             "meanings semantically and rewrite the whole prompt when restoration is needed."
         )
+        retry_evidence = context.get("retry_evidence")
+        if (
+            isinstance(retry_evidence, dict) and retry_evidence.get("active")
+            and "lighting_mismatch" in (retry_evidence.get("issue_codes") or [])
+            and retry_evidence.get("observed_review_evidence")
+        ):
+            response_contract += (
+                " Apply each lighting finding only to its named output index. Use its region, observed pixels and signed "
+                "requirement as evidence. Make the correction visible in the complete renderer prompt: specify "
+                "the key light's screen direction and relative position, and where reflected fill should reach "
+                "with its relative strength and color. Keep the signed light setup where it already matches; "
+                "change the identified shadow, highlight or reflection without changing protected choices. "
+                "A generic request to improve lighting or polish is insufficient."
+            )
     source_projection_required = request.metadata.get("brain_source_projection_required") is True
     source_projection = context.get("brain_source_projection")
     if source_projection_required:
