@@ -362,9 +362,13 @@ def test_doc290_normal_entry_dispatch_baseline(captured_entry):
     assert audit["llm_used"] is True and audit["fallback_used"] is False
     assert all(brain_providers.pop_transport_receipt(deepcopy(item))["attempts"] == 1 for item in state.responses)
     finalizer = state.captures[1]["user"]
-    assert finalizer["protected_user_direction"] == finalizer["user_input"]
+    assert "protected_user_direction" not in finalizer
     context = finalizer["frozen_render_context"]
-    assert context == state.requests[1].metadata["canonical_prompt_context"]
+    frozen = dict(state.requests[1].metadata["canonical_prompt_context"])
+    projection = frozen.get("brain_source_projection") or {}
+    if projection.get("per_output_directions") and frozen.get("brain_draft_directions") == projection["per_output_directions"]:
+        del frozen["brain_draft_directions"]
+    assert context == frozen
     metadata = state.record.request.metadata
     binding = context["frozen_binding"]
     assert binding["ledger_id"] == metadata["resolved_constraint_ledger"]["ledger_id"]
@@ -398,7 +402,7 @@ def test_doc290_original_user_input_is_lossless_at_dispatch(captured_entry):
         actual_digest = hashlib.sha256(capture["user"]["user_input"].encode("utf-8")).hexdigest()
         expected_digest = hashlib.sha256(state.original.encode("utf-8")).hexdigest()
         assert actual_digest == expected_digest, "BrainRunRequest folds original whitespace before HTTP dispatch"
-    assert state.captures[1]["user"]["protected_user_direction"] == state.original
+    assert "protected_user_direction" not in state.captures[1]["user"]
 
 
 def test_doc290_bound_contracts_survive_both_stages(captured_entry):
@@ -662,7 +666,8 @@ def test_doc290_normal_entry_preserves_outer_whitespace(tmp_path, offline_transp
     assert [item.user_input for item in state.requests] == [original, original]
     for capture in state.captures:
         assert capture["user"]["user_input"].encode("utf-8") == original.encode("utf-8")
-    assert state.captures[-1]["user"]["protected_user_direction"] == original
+    assert state.captures[-1]["user"]["user_input"] == original
+    assert "protected_user_direction" not in state.captures[-1]["user"]
     store_root = tmp_path / "reload"
     PersistentProductJobStore(storage_root=store_root).save(state.record)
     restored = PersistentProductJobStore(storage_root=store_root).get(state.record.job_id)

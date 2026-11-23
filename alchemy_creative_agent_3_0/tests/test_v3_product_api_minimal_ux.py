@@ -1,5 +1,6 @@
 import base64
 import gc
+import json
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 import os
@@ -1612,6 +1613,54 @@ def test_persistent_job_store_refreshes_a_cached_lifecycle_after_background_term
     refreshed = polling_service.get_job(created.job_id)
     assert refreshed.status == ProductJobStatusValue.BLOCKED
     assert refreshed.metadata["generation_lifecycle_failure"]["failure_code"] == "background_generation_worker_error"
+
+
+def test_persistent_job_store_writes_identical_review_reports_once(tmp_path) -> None:
+    store = PersistentProductJobStore(tmp_path / "jobs")
+    service = V3ProductApiService(job_store=store)
+    created = service.create_job({"user_input": "Create a quiet still-life image."})
+    record = store.get(created.job_id)
+    result = record.planning_result
+    key = "post_generation_review_package"
+    report = {"package_id": "review-dedup-fixture", "inspections": [{"status": "pass"}]}
+    historical_report = {"package_id": "historical-review", "inspections": []}
+    record.generation_result = result.model_copy(update={
+        "metadata": {
+            **result.metadata,
+            key: report,
+            "visual_cluster": {key: report},
+            "shared_capabilities": {"visual_cluster": {key: report}},
+        },
+        "asset_pack": result.asset_pack.model_copy(update={
+            "manifest": {key: report},
+            "metadata": {key: historical_report},
+        }),
+    })
+    record.status = ProductJobStatusValue.GENERATED
+    expected = record.generation_result.model_dump(mode="json")
+    store.save(record)
+
+    path = store.storage_root / f"{created.job_id}.json"
+    compact = json.loads(path.read_text(encoding="utf-8"))
+    assert compact["generation_review_package_aliases"] == ["visual_cluster", "shared_visual_cluster", "asset_manifest"]
+    assert compact["generation_result"]["metadata"][key] == report
+    assert compact["generation_result"]["asset_pack"]["metadata"][key] == historical_report
+    assert json.dumps(compact).count("review-dedup-fixture") == 1
+    assert record.generation_result.model_dump(mode="json") == expected
+    assert PersistentProductJobStore(store.storage_root).get(created.job_id).generation_result.model_dump(mode="json") == expected
+
+    # Simulate an existing file that persisted each alias without a marker.
+    compact.pop("generation_review_package_aliases")
+    compact["generation_result"] = expected
+    path.write_text(json.dumps(compact), encoding="utf-8")
+    assert PersistentProductJobStore(store.storage_root).get(created.job_id).generation_result.model_dump(mode="json") == expected
+
+    report["certified"] = True
+    record.generation_result.asset_pack.metadata[key] = {**report, "certified": 1}
+    store.save(record)
+    distinct = json.loads(path.read_text(encoding="utf-8"))
+    assert "asset_metadata" not in distinct["generation_review_package_aliases"]
+    assert type(distinct["generation_result"]["asset_pack"]["metadata"][key]["certified"]) is int
 
 
 def test_persistent_job_store_recent_reads_only_the_requested_page(tmp_path, monkeypatch) -> None:

@@ -945,10 +945,11 @@ def _compact_remote_creative_payload(
             else "Preserve its subject/style and anti-drift meaning, make"
         )
         payload["variation_execution_contract_instructions"] = (
-            f"{GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} "
-            f"Use this typed contract as neutral per-output semantic guidance. {make_output_distinct}"
+            "Use this typed contract as neutral per-output semantic guidance and respect its must-keep and anti-drift meaning. "
+            f"{make_output_distinct}"
             " each output serve its own purpose and variation axes, and author the "
-            "complete Brain-owned direction for each output. If a row contains format_vertical, format_square, "
+            "complete, materially distinct Brain-owned direction for each image_set_plan.shot_plan row. "
+            "If a row contains format_vertical, format_square, "
             "format_horizontal, or format_tight, make that output respectively a tall portrait 2:3 layout, a "
             "balanced square 1:1 layout, a wide horizontal 3:2 layout, or a tight/detail framing on the frozen "
             "canvas. Do not echo the contract fields, axis identifiers, internal role language, or any local "
@@ -1062,15 +1063,6 @@ def build_remote_payload(request: BrainRunRequest) -> str:
                 "visual_task_profile.reference_channel_ownership_intent.applicability to exactly "
                 "`applicable`. The remote Brain still owns the semantic decision about which exact reference "
                 "channels and current-request channels apply; cite the provided reference evidence IDs."
-            )
-        if "variation_execution_contract" in payload:
-            payload["remote_response_contract"] += (
-                f" {GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} When variation_execution_contract is present, "
-                "use its neutral per-output purpose and variation axes to make image_set_plan.shot_plan materially "
-                "distinct while preserving its must-keep and anti-drift meaning. For format_vertical, "
-                "format_square, format_horizontal, and format_tight, preserve the matching tall portrait 2:3, "
-                "balanced square 1:1, wide horizontal 3:2, or tight/detail-on-the-frozen-canvas layout meaning. "
-                "Do not return the contract itself as prompt text or add local recipe wording."
             )
         if professional_ecommerce_pose_contract:
             payload["professional_ecommerce_pose_contract_instructions"] = (
@@ -2369,9 +2361,14 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             )
     source_projection_required = request.metadata.get("brain_source_projection_required") is True
     source_projection = context.get("brain_source_projection")
+    draft_direction_field = "brain_draft_directions"
     if source_projection_required:
         if not isinstance(source_projection, dict) or not str(source_projection.get("source_digest") or ""):
             raise ValueError("Brain source projection is required for fresh canonical finalization.")
+        signed_directions = source_projection.get("per_output_directions")
+        if isinstance(signed_directions, list) and signed_directions and context.get(draft_direction_field) == signed_directions:
+            context.pop(draft_direction_field)
+            draft_direction_field = "brain_source_projection.per_output_directions"
         source_projection_receipt_digests = {
             str(output_index): build_brain_source_projection_receipt(
                 source_projection,
@@ -2417,7 +2414,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         )
     if variation_execution_contract is not None:
         response_contract += (
-            f" {GENERAL_VARIATION_MATERIALIZATION_INSTRUCTIONS} For every output, use the frozen "
+            " For every output, use the frozen "
             "variation_execution_contract to author a materially distinct output "
             "purpose and variation direction while preserving its must_keep and avoid_drift meaning. Return the "
             "exact schema-only variation_execution_receipt with contract_version "
@@ -2458,7 +2455,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "story, lighting/palette treatment, or visual hierarchy. Do not require a camera-side change. "
             "For each output, key its creative_exploration_contrasts entry by the output index shown in the schema. "
             "Return the closest delivered "
-            "output ID and the substantive changed dimension. Use the matching brain_draft_directions entry "
+            f"output ID and the substantive changed dimension. Use the matching {draft_direction_field} entry "
             "as the planned concept. Check that it is distinct from delivered work and the other outputs, then "
             "write its distinguishing treatment directly into the complete canonical provider prompt for that output. "
             "The prompt itself is the only text that "
@@ -2914,9 +2911,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "Do not summarize it into a short generic description, omit a material user-owned scene, "
                 "subject, styling, composition, camera, mood, or format choice, or replace it with a different direction."
             )
-        payload["protected_user_direction"] = request.user_input
         payload["user_direction_contract"] = (
-            "The protected_user_direction is the complete user-owned semantic source. Reconcile it with the frozen "
+            "The user_input is the complete user-owned semantic source. Reconcile it with the frozen "
             f"contracts as one complete renderer direction. {protected_direction_rule} "
             "Return one complete natural-language prompt and the required "
             "user_direction_integrity receipt; do not return a diff or local repair suffix. The receipt is a Brain "
@@ -2929,7 +2925,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         )
         integrity_status = "rewritten" if delivered_concepts else "preserved or rewritten"
         payload["remote_response_contract"] = (
-            f"{payload['remote_response_contract']} The protected_user_direction is an immutable user-owned "
+            f"{payload['remote_response_contract']} The user_input is an immutable user-owned "
             f"semantic source. {direction_receipt_rule}"
             "user_direction_integrity with contract_version v3_user_direction_integrity_v1, owner "
             f"remote_v3_llm_brain, and status {integrity_status}."

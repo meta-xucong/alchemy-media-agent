@@ -199,7 +199,8 @@ def test_finalizer_payload_declares_lossless_user_direction_boundary() -> None:
 
     payload = json.loads(build_remote_payload(request))
 
-    assert payload["protected_user_direction"] == request.user_input
+    assert payload["user_input"] == request.user_input
+    assert "protected_user_direction" not in payload
     assert "complete user-owned semantic source" in payload["user_direction_contract"]
     assert payload["return_schema"]["canonical_provider_prompts"][0]["user_direction_integrity"]["owner"] == (
         "remote_v3_llm_brain"

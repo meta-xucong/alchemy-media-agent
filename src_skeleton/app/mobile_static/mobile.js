@@ -6037,6 +6037,7 @@ async function generateMobileV3Job() {
     mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
     renderMobileV3ProjectOutputs(mobileV3State.currentProject);
     if (mobileV3IsTerminalJob(created)) {
+      renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
       mobileV3SettleEcommerceTerminalReceipt(created);
       if (created.metadata?.image_billing?.status === "blocked") {
         const message = mobileV3ImageBillingNotice(created);
@@ -6048,16 +6049,16 @@ async function generateMobileV3Job() {
         limit: 120,
         shouldContinue,
       });
-      if (!shouldContinue()) return;
-      renderMobileV3ProjectOutputs(mobileV3State.currentProject);
-      await refreshMobileV3ProjectDetail(projectId, { shouldContinue, restoreJob: false }).catch(() => false);
       return;
     }
-    setMobileV3Progress("generating", `已提交生成，正在等待 ${count} 张图片`);
-    const recoveryReceipt = scenarioId === "ecommerce" ? mobileV3StartEcommerceRecovery(projectId, jobId) : null;
-    const finalJob = await recoverMobileV3GeneratedJob(projectId, jobId, {
-      expectedCount: count, initialJob: created, recoveryReceipt, shouldContinue, followToTerminal: true,
-    });
+    let finalJob = created;
+    if (!mobileV3JobHasTerminalOutcome(created)) {
+      setMobileV3Progress("generating", `已提交生成，正在等待 ${count} 张图片`);
+      const recoveryReceipt = scenarioId === "ecommerce" ? mobileV3StartEcommerceRecovery(projectId, jobId) : null;
+      finalJob = await recoverMobileV3GeneratedJob(projectId, jobId, {
+        expectedCount: count, initialJob: created, recoveryReceipt, shouldContinue, followToTerminal: true,
+      });
+    }
     if (!shouldContinue()) return;
     if (!finalJob) return;
     mobileV3State.currentJob = finalJob;
@@ -6087,7 +6088,6 @@ async function generateMobileV3Job() {
     );
     updateMobileV3Status(paidDeliveryNotice || statusNotice);
     await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
-    if (shouldContinue()) renderMobileV3ProjectOutputs(mobileV3State.currentProject);
   } catch (error) {
     if (!shouldContinue()) return;
     if (scenarioId === "ecommerce") {
@@ -6736,7 +6736,6 @@ function resumeMobileV3ImageBilling(projectId, detailEpoch) {
       setMobileV3Progress(terminalFailure ? "failed" : deliveryWithheld ? "review_blocked" : "completed", message);
       updateMobileV3Status(message);
       await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
-      if (shouldContinue()) renderMobileV3ProjectOutputs();
     })
     .catch(() => {
       if (shouldContinue()) updateMobileV3Status(mobileV3ImageBillingNotice(job));
