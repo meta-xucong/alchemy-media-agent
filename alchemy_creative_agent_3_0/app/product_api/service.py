@@ -962,6 +962,70 @@ class InMemoryProductJobStore:
 
 _PRODUCT_JOB_ID_PATTERN = re.compile(r"^job_[A-Za-z0-9_-]{1,128}$")
 _MCP_OPERATION_INDEX_SCHEMA = "v3_mcp_operation_index_v1"
+_JOB_REVIEW_PACKAGE_KEY = "post_generation_review_package"
+_JOB_REVIEW_PACKAGE_ALIASES = {
+    "visual_cluster": ("metadata", "visual_cluster"),
+    "shared_visual_cluster": ("metadata", "shared_capabilities", "visual_cluster"),
+    "asset_manifest": ("asset_pack", "manifest"),
+    "asset_metadata": ("asset_pack", "metadata"),
+}
+
+
+def _job_review_alias_parent(generation: dict, path: tuple[str, ...], *, copy_containers: bool = False) -> dict | None:
+    parent = generation
+    for key in path:
+        child = parent.get(key)
+        if not isinstance(child, dict):
+            return None
+        if copy_containers:
+            child = dict(child)
+            parent[key] = child
+        parent = child
+    return parent
+
+
+def _compact_job_review_aliases(payload: dict) -> None:
+    generation = payload.get("generation_result")
+    metadata = generation.get("metadata") if isinstance(generation, dict) else None
+    package = metadata.get(_JOB_REVIEW_PACKAGE_KEY) if isinstance(metadata, dict) else None
+    if not isinstance(package, dict):
+        return
+    aliases = []
+    canonical_json = None
+    for name, path in _JOB_REVIEW_PACKAGE_ALIASES.items():
+        parent = _job_review_alias_parent(generation, path)
+        if parent is None or parent.get(_JOB_REVIEW_PACKAGE_KEY) != package:
+            continue
+        alias = parent[_JOB_REVIEW_PACKAGE_KEY]
+        # Python equates booleans with 0/1. Only collapse matching JSON types.
+        if alias is not package:
+            if canonical_json is None:
+                canonical_json = json.dumps(package, sort_keys=True)
+            if json.dumps(alias, sort_keys=True) != canonical_json:
+                continue
+        del parent[_JOB_REVIEW_PACKAGE_KEY]
+        aliases.append(name)
+    if aliases:
+        payload["generation_review_package_aliases"] = aliases
+
+
+def _job_generation_from_disk(payload: dict) -> PlanningResult | None:
+    generation = payload.get("generation_result")
+    if not isinstance(generation, dict):
+        return None
+    aliases = payload.get("generation_review_package_aliases")
+    metadata = generation.get("metadata")
+    package = metadata.get(_JOB_REVIEW_PACKAGE_KEY) if isinstance(metadata, dict) else None
+    if isinstance(aliases, list) and isinstance(package, dict):
+        generation = dict(generation)
+        for name, path in _JOB_REVIEW_PACKAGE_ALIASES.items():
+            if name in aliases:
+                parent = _job_review_alias_parent(generation, path, copy_containers=True)
+                if parent is not None:
+                    parent.setdefault(_JOB_REVIEW_PACKAGE_KEY, package)
+    return PlanningResult.model_validate(generation)
+
+
 def deserialize_product_job_record(
     payload: object, *, schema_version: str = "v3_product_job_record_v1",
 ) -> ProductJobRecord | None:
@@ -978,11 +1042,7 @@ def deserialize_product_job_record(
                 if isinstance(payload.get("planning_result"), dict)
                 else None
             ),
-            generation_result=(
-                PlanningResult.model_validate(payload["generation_result"])
-                if isinstance(payload.get("generation_result"), dict)
-                else None
-            ),
+            generation_result=_job_generation_from_disk(payload),
             scenario_resolution=(
                 ScenarioPackResolution.model_validate(payload["scenario_resolution"])
                 if isinstance(payload.get("scenario_resolution"), dict)
@@ -1365,6 +1425,7 @@ class PersistentProductJobStore(InMemoryProductJobStore):
             "created_at": record.created_at,
             "updated_at": record.updated_at,
         }
+        _compact_job_review_aliases(payload)
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         # A project-status poll can have the current JSON open for a very short

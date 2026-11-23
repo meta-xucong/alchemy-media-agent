@@ -737,6 +737,8 @@ def _v3_auto_generation_payload_from_status(status: object) -> dict | None:
 def _recover_v3_planned_auto_generation(project_id: str, status: dict) -> dict:
     """Make a lost planning-to-generation handoff observable and recoverable."""
 
+    if str(status.get("status") or "").strip().lower() != "planned":
+        return status
     payload = _v3_auto_generation_payload_from_status(status)
     job_id = str(status.get("job_id") or "").strip()
     if not job_id:

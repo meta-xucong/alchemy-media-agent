@@ -264,6 +264,27 @@ def test_admin_job_read_does_not_start_foreign_auto_generation(native, monkeypat
     assert len(recovered) == 1
 
 
+def test_v3_only_reads_private_handoff_intent_for_planned_status(native, monkeypatch):
+    reads = []
+    admitted = []
+    service = native.main.v3_route_handlers.service
+    intent = {"quality_mode": "standard", "metadata": {"require_real_images": True}}
+    record = SimpleNamespace(status="planned", request=SimpleNamespace(metadata={"_v3_auto_generation_intent": intent}))
+    monkeypatch.setattr(service.job_store, "get", lambda job_id: reads.append(job_id) or record)
+    monkeypatch.setattr(native.main, "_start_v3_project_generation_background", lambda *args: admitted.append(args) or True)
+    monkeypatch.setattr(native.main.v3_route_handlers, "get_job", lambda job_id: {"job_id": job_id, "status": "generating"})
+
+    for state in ("generating", "finalizing", "generated", "failed"):
+        status = {"job_id": "job-follow", "status": state}
+        assert native.main._recover_v3_planned_auto_generation("project-1", status) is status
+    assert reads == admitted == []
+
+    recovered = native.main._recover_v3_planned_auto_generation("project-1", {"job_id": "job-follow", "status": "planned"})
+    assert reads == ["job-follow"]
+    assert admitted == [("project-1", "job-follow", intent)]
+    assert recovered["metadata"]["background_generation_recovered"] is True
+
+
 @pytest.mark.parametrize("method,path", [("GET","/api/access/keys"),("POST","/api/access/keys"),
     ("GET","/api/access/admin/keys"),("GET","/v1/admin/retention/settings"),
     ("GET","/api/v3/creative-agent/mcp-materializations/handoff"),

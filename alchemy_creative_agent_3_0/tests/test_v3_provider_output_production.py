@@ -1731,6 +1731,39 @@ def test_v3_output_store_creates_preview_thumbnail_and_download(tmp_path) -> Non
     assert store.file_for_variant(record.output_id, "thumbnail")[1] == "image/png"
 
 
+def test_v3_output_store_decodes_once_for_both_preview_sizes(tmp_path, monkeypatch) -> None:
+    import hashlib
+    from PIL import Image, ImageOps
+
+    source = _png_base64(1086, 1448)
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    reads = []
+    exif_transpose = ImageOps.exif_transpose
+
+    def track_decode(image):
+        reads.append(image.size)
+        return exif_transpose(image)
+
+    monkeypatch.setattr(ImageOps, "exif_transpose", track_decode)
+    output = store.save_base64_output(
+        job_id="job_preview",
+        candidate_id="candidate_preview",
+        asset_id="asset_preview",
+        provider="fixture",
+        model=None,
+        encoded_image=source,
+        preserve_original_bytes=True,
+    )
+    assert reads == [(1086, 1448)]
+    original = Path(output.file_path).read_bytes()
+    assert original == base64.b64decode(source)
+    assert output.metadata["content_sha256"] == hashlib.sha256(original).hexdigest()
+    for path, size in ((output.preview_path, (1086, 1448)), (output.thumbnail_path, (384, 512))):
+        with Image.open(path) as preview:
+            assert preview.size == size
+            preview.load()
+
+
 def test_v3_output_store_serves_canonical_files_when_migrated_record_paths_are_stale(tmp_path) -> None:
     store = V3GeneratedOutputStore(tmp_path / "outputs")
     record = store.save_base64_output(

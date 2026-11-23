@@ -909,3 +909,13 @@ test("generation completion renders before one scoped gallery read", () => {
   assert.doesNotMatch(recovery, /refreshV3CurrentProject\(/);
   assert.match(recovery, /if \(!followToTerminal && outputProjectionChanged\)/);
 });
+
+test("gallery media prefers a thumbnail even when the preview is stored on the outer row", () => {
+  const desktop = extractFunction("v3OutputImageCandidates", "\nfunction v3OutputDownloadUrl");
+  const context = { uniqueNonEmpty: (items) => [...new Set(items.filter(Boolean))], v3MediaUrl: (value) => value };
+  vm.runInNewContext(desktop, context);
+  const preview = "/api/v3/creative-agent/outputs/current/preview";
+  const thumbnail = "/api/v3/creative-agent/outputs/current/thumbnail";
+  assert.deepEqual([...context.v3OutputImageCandidates({ preview_url: preview, metadata: { thumbnail_url: thumbnail } })], [thumbnail, preview]);
+  assert.deepEqual([...context.v3OutputImageCandidates({ preview_url: preview })], [preview]);
+});

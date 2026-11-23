@@ -20,7 +20,7 @@ const recoveryEnd = source.indexOf("\nasync function createV3Job", recoveryStart
 assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, "planned job recovery function must be present");
 const plannedJobRecoverySource = source.slice(recoveryStart, recoveryEnd);
 
-async function completeWith(job, expectedCount = null, { reviewItems = [] } = {}) {
+async function completeWith(job, expectedCount = null, { reviewItems = [], hydratedItems = [] } = {}) {
   const progress = [];
   const notices = [];
   const partialExpectedCounts = [];
@@ -31,6 +31,17 @@ async function completeWith(job, expectedCount = null, { reviewItems = [] } = {}
     v3ScenarioWorkspaceCopy: () => ({ generatedNotice: "生成成功" }),
     v3SettleEcommerceTerminalReceipt: () => {},
     syncV3ProjectOutputsFromPayload: () => {},
+    v3CurrentJobImageItems: () => context.v3State.projectOutputs.length ? context.v3State.projectOutputs : (job.candidates || []),
+    v3ReviewOnlyJobImageItems: () => context.v3State.projectReviewOutputs,
+    v3OutputItemIdentity: (item) => item.output_id,
+    v3OutputItemCandidateId: (item) => item.candidate_id,
+    v3OutputItemAssetId: (item) => item.asset_id,
+    v3IsOutputItemSelected: () => false,
+    v3OutputDisplayPurpose: (item) => item.purpose,
+    v3OutputImageCandidates: (item) => [item.thumbnail_url],
+    v3OutputDownloadUrl: (item) => item.download_url,
+    v3ProjectReviewReason: (item) => item.review_reason,
+    generatedImageSourceText: () => "RenderBridge",
     v3JobDeliverySettled: (value) => ["generated", "selected"].includes(value.status),
     v3JobVisibleImageCount: (value) => Number(value.visibleCount || 0),
     v3ExpectedImageCountForJob: (value, count) => Number(count ?? value.expectedCount ?? 1),
@@ -51,6 +62,7 @@ async function completeWith(job, expectedCount = null, { reviewItems = [] } = {}
     },
     loadV3ProjectOutputs: async () => {
       context.v3State.projectReviewOutputs = reviewItems;
+      context.v3State.projectOutputs = hydratedItems;
       return true;
     },
     syncV3CurrentJobFromProjectOutputs: () => false,
@@ -98,6 +110,7 @@ test("blocked jobs remain failures while complete delivery is successful", async
   assert.equal(complete.progress[0][0], "completed");
   assert.equal(complete.progress[0][2], "success");
   assert.equal(complete.notices[0][1], "success");
+  assert.deepEqual(complete.resultBoardSnapshots, [[]]);
 });
 
 test("partial recovery and review-held delivery stay distinct from full success", async () => {
@@ -140,6 +153,14 @@ test("review-only images render after project refresh without becoming formal de
 
   assert.deepEqual(result.resultBoardSnapshots, [[], ["review-output-1"]]);
   assert.equal(result.formalOutputCount, 0);
+});
+
+test("a scoped gallery read refreshes the result when it supplies a thumbnail for an existing output", async () => {
+  const item = { output_id: "formal-image", preview_url: "/preview" };
+  const result = await completeWith({ status: "generated", hasExpectedDelivery: true, candidates: [item] }, null, {
+    hydratedItems: [{ ...item, thumbnail_url: "/thumbnail" }],
+  });
+  assert.equal(result.resultBoardSnapshots.length, 2);
 });
 
 test("formal partial delivery from the backend remains visible as a partial outcome", async () => {

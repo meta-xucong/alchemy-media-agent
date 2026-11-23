@@ -11166,16 +11166,19 @@ async function createV3Job() {
       v3SetEcommerceSubmissionReceipt(v3State.currentProject?.project_id, created.job_id);
       v3SettleEcommerceTerminalReceipt(created);
     }
-    renderV3Job(created);
     if (!shouldContinue()) return;
     if (!v3IsTerminalJob(created)) {
-      setV3Progress("generating", created?.metadata?.background_generation_started === false ? "后台已有同一任务在生成，正在同步结果。" : "后台已开始生成，页面会持续刷新结果。");
-      const generated = await recoverV3GeneratedJob(projectId, created.job_id, new Error("v3_background_generation_pending"), {
-        expectedCount: generationSettings.count,
-        shouldContinue,
-        sessionReceipt: ecommerceSession,
-        followToTerminal: true,
-      });
+      let generated = created;
+      if (!v3JobHasTerminalOutcome(created)) {
+        renderV3Job(created);
+        setV3Progress("generating", created?.metadata?.background_generation_started === false ? "后台已有同一任务在生成，正在同步结果。" : "后台已开始生成，页面会持续刷新结果。");
+        generated = await recoverV3GeneratedJob(projectId, created.job_id, new Error("v3_background_generation_pending"), {
+          expectedCount: generationSettings.count,
+          shouldContinue,
+          sessionReceipt: ecommerceSession,
+          followToTerminal: true,
+        });
+      }
       await completeV3GeneratedJob(generated, uploadedAssets, copy, {
         expectedCount: generationSettings.count,
         shouldContinue,
@@ -11184,6 +11187,7 @@ async function createV3Job() {
       return;
     }
     if (v3IsTerminalJob(created)) {
+      renderV3Job(created);
       if (created.metadata?.image_billing?.status === "blocked") {
         setV3Progress("failed", v3ImageBillingNotice(created), "warning");
         return;
@@ -11295,6 +11299,19 @@ async function completeV3GeneratedJob(
         : billingNotice || "后台已完成出图，正在刷新项目图片。",
     failedWithoutPartialDelivery || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
+  const itemMedia = (item) => [
+    v3OutputItemIdentity(item), v3OutputImageCandidates(item), v3OutputDownloadUrl(item),
+    generatedImageSourceText(item, v3State.currentJob),
+  ];
+  const resultSignature = () => JSON.stringify([
+    v3CurrentJobImageItems(v3State.currentJob).map((item) => [
+      ...itemMedia(item), v3IsOutputItemSelected(item), v3OutputDisplayPurpose(item),
+      item.status || v3State.currentJob?.status, v3OutputItemCandidateId(item), v3OutputItemAssetId(item),
+      item.metadata?.photography_lineage_role || item.metadata?.role_key || item.role_key || "",
+    ]),
+    v3ReviewOnlyJobImageItems(v3State.currentJob).map((item) => [...itemMedia(item), v3ProjectReviewReason(item)]),
+  ]);
+  const previousResult = resultSignature();
   renderV3Job(generated);
   await loadV3ProjectOutputs({
     silent: true,
@@ -11307,10 +11324,7 @@ async function completeV3GeneratedJob(
   if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   if (syncV3CurrentJobFromProjectOutputs({ preferLatest: false })) {
     renderV3Job(v3State.currentJob);
-  } else {
-    // The first render runs before the project endpoint returns review-only
-    // images. Reproject the result board after the review cache is refreshed;
-    // review cards stay outside the formal delivery set.
+  } else if (resultSignature() !== previousResult) {
     renderV3ResultBoard(v3State.currentJob);
   }
   await maybePersistV3UploadedReferences(uploadedAssets);
@@ -11440,8 +11454,10 @@ async function recoverV3GeneratedJob(
       );
       if (v3JobHasTerminalOutcome(job)) {
         v3State.currentJob = job;
-        v3SettleEcommerceTerminalReceipt(job);
-        renderV3Job(job);
+        if (!followToTerminal) {
+          v3SettleEcommerceTerminalReceipt(job);
+          renderV3Job(job);
+        }
         return job;
       }
       if (!followToTerminal && v3JobHasExpectedVisibleImages(job, expectedCount)) {

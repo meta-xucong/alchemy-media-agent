@@ -397,7 +397,8 @@ def test_creative_exploration_finalizer_uses_delivered_concept_evidence(monkeypa
             ["visual_style", "scene_story", "lighting_palette", "visual_hierarchy"] if count == 1
             else ["visual_style", "lighting_palette"] if output_key == "1" else ["scene_story"]
         )
-    assert payload["protected_user_direction"] == request.user_input
+    assert payload["user_input"] == request.user_input
+    assert "protected_user_direction" not in payload
     assert "Preserve fixed facts" in payload["user_direction_contract"]
     assert "inherited treatment as a baseline, not a lock" in payload["user_direction_contract"]
     assert "Every item must include user_direction_integrity" in payload["remote_response_contract"]

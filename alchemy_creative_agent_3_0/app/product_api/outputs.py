@@ -163,8 +163,7 @@ class V3GeneratedOutputStore:
         original_path.write_bytes(content)
         preview_path = output_dir / "preview.png"
         thumbnail_path = output_dir / "thumbnail.png"
-        _write_resized_png(content, preview_path, max_side=1600)
-        _write_resized_png(content, thumbnail_path, max_side=512)
+        _write_preview_variants(content, preview_path, thumbnail_path)
 
         stored_metadata = _doc281_bind_output_record_metadata(dict(metadata or {}), output_id=output_id)
         stored_metadata = finalize_doc73_auto_identity_anchor_binding(
@@ -1265,19 +1264,8 @@ def _canonical_output_files_match_record(record: V3GeneratedOutputRecord, output
         return hashlib.sha256(original_bytes).hexdigest() == expected_sha
     if expected_sha:
         return hashlib.sha256(original_bytes).hexdigest() == expected_sha
-    width, height = _validate_image(original_bytes)
-    if record.width is not None and int(record.width) != int(width):
-        # Pre-hash V3 records occasionally contain the provider's requested
-        # dimensions instead of the dimensions of the persisted PNG.  The
-        # canonical file has already been decoded successfully above, so a
-        # hashless legacy dimension mismatch is descriptive metadata drift,
-        # not evidence that the file is unsafe. Hash-bound records remain
-        # strict because their metadata is part of the immutable contract.
-        if canonical_hash_present or expected_sha:
-            return False
-    if record.height is not None and int(record.height) != int(height):
-        if canonical_hash_present or expected_sha:
-            return False
+    # Hashless records may describe the requested dimensions. The validated
+    # original is authoritative for those records even if the metadata drifted.
     return True
 
 
@@ -1414,18 +1402,26 @@ def _validate_image(content: bytes) -> tuple[int | None, int | None]:
         raise ValueError(f"V3 provider output was not a valid image: {str(exc)[:200]}") from exc
 
 
-def _write_resized_png(content: bytes, path: Path, *, max_side: int) -> None:
+def _write_preview_variants(content: bytes, preview_path: Path, thumbnail_path: Path) -> None:
     try:
         from PIL import Image, ImageOps
 
         with Image.open(BytesIO(content)) as source:
-            image = ImageOps.exif_transpose(source)
+            oriented = ImageOps.exif_transpose(source)
+    except Exception:
+        preview_path.write_bytes(content)
+        thumbnail_path.write_bytes(content)
+        return
+
+    for path, max_side in ((preview_path, 1600), (thumbnail_path, 512)):
+        try:
+            image = oriented.copy()
             image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
             if image.mode not in {"RGB", "RGBA"}:
                 image = image.convert("RGBA")
             image.save(path, format="PNG", optimize=True)
-    except Exception:
-        path.write_bytes(content)
+        except Exception:
+            path.write_bytes(content)
 
 
 def _normalise_format(output_format: str | None, mime_type: str | None) -> str:
