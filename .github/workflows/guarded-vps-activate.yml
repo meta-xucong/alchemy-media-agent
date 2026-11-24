@@ -947,4 +947,14 @@ jobs:
           printf 'GUARDED_ACTIVATE_FRONTEND=desktop_h5_static_markers_verified\n'
           printf 'GUARDED_ACTIVATE_PROTECTION=v3_projects_%s\n' "$project_status"
           printf 'GUARDED_ACTIVATE_ROLLBACK=not_needed\n'
+          # A supervisor install failure must not close the healthy live app.
+          if install -m 644 "$candidate_release"/ops/vps-release/alchemy-media-agent-watchdog.{service,timer} /etc/systemd/system/ \
+            && systemctl daemon-reload \
+            && systemctl enable --now alchemy-media-agent-watchdog.timer \
+            && systemctl is-active --quiet alchemy-media-agent-watchdog.timer; then
+            printf 'GUARDED_ACTIVATE_WATCHDOG=active\n'
+          else
+            printf 'GUARDED_ACTIVATE_WATCHDOG=install_failed\n' >&2
+            exit 1
+          fi
           REMOTE_SCRIPT

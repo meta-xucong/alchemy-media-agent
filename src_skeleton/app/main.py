@@ -226,6 +226,10 @@ _v3_browse_header_executor = ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="v3-project-header",
 )
+_v3_project_detail_executor = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="v3-project-detail",
+)
 # Defaults to two workers; explicit counts can scale with the container's CPUs.
 _V3_BROWSE_COMPUTE_CPU_LIMIT = effective_cpu_count()
 _V3_BROWSE_COMPUTE_WORKERS = resolve_browse_compute_workers(
@@ -1802,17 +1806,16 @@ async def v3_project_outputs_endpoint(
             for value in str(project_ids).split(",")
             if value.strip()
         ))[:100]
-    if str(surface or "").strip().lower() in {"home_preview", "delivery_preview"}:
-        return await _run_v3_handler_threaded(
-            v3_route_handlers.get_project_outputs,
-            limit,
-            user_id,
-            compact,
-            project_id,
-            surface,
-            requested_project_ids,
+    surface_name = str(surface or "").strip().lower()
+    if project_id and surface_name != "delivery_preview":
+        # The scoped gallery also reconciles project state. Keep it on
+        # the detail lane, including histories too large for browse workers.
+        return await asyncio.get_running_loop().run_in_executor(
+            _v3_project_detail_executor, _run_v3_handler,
+            v3_route_handlers.get_project_outputs, limit, user_id, compact,
+            project_id, surface, requested_project_ids,
         )
-    if _v3_browse_compute is not None and str(surface or "").strip().lower() not in {"home_preview", "delivery_preview"}:
+    if _v3_browse_compute is not None and surface_name not in {"home_preview", "delivery_preview"}:
         try:
             return await run_output_browse(
                 v3_route_handlers.project_service, _v3_browse_compute,
@@ -1831,7 +1834,7 @@ async def v3_project_outputs_endpoint(
             def raise_original():
                 raise exc
             return _run_v3_handler(raise_original)
-    return _run_v3_handler(
+    return await _run_v3_handler_threaded(
         v3_route_handlers.get_project_outputs,
         limit,
         user_id,
@@ -1866,10 +1869,14 @@ async def v3_get_project_endpoint(
             user_id,
             view,
         )
-    else:
-        response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id, view)
-    if str(view or "").strip().lower() == "summary":
         return response
+    return await asyncio.get_running_loop().run_in_executor(
+        _v3_project_detail_executor, _read_full_v3_project, project_id, user_id, view,
+    )
+
+
+def _read_full_v3_project(project_id: str, user_id: int | None, view: str):
+    response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id, view)
     project = response.get("project") if isinstance(response, dict) else None
     job_ids = project.get("job_ids") if isinstance(project, dict) else None
     job_id = str(job_ids[-1] or "").strip() if isinstance(job_ids, list) and job_ids else ""
@@ -1906,13 +1913,20 @@ def v3_archive_project_endpoint(project_id: str, request: Request, authorization
 @app.delete("/api/v3/creative-agent/projects/{project_id}")
 async def v3_delete_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     await _require_v3_project_delete_visible(request, project_id, authorization)
-    return _run_v3_handler(v3_route_handlers.delete_project, project_id)
+    # Full reads can persist reconciled metadata. A delete must not race that
+    # write and let a stale read recreate the project.
+    return await asyncio.get_running_loop().run_in_executor(
+        _v3_project_detail_executor, _run_v3_handler, v3_route_handlers.delete_project, project_id,
+    )
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/timeline")
 async def v3_project_timeline_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     user_id = await _require_v3_project_read_visible(request, project_id, authorization)
-    return await _run_v3_handler_threaded(v3_route_handlers.get_project_timeline, project_id, user_id)
+    return await asyncio.get_running_loop().run_in_executor(
+        _v3_project_detail_executor, _run_v3_handler,
+        v3_route_handlers.get_project_timeline, project_id, user_id,
+    )
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/context")
@@ -2492,18 +2506,19 @@ async def v3_create_job_endpoint(request: Request, authorization: str = Header(d
 @app.get("/api/v3/creative-agent/jobs/{job_id}")
 async def v3_get_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
     owner_user_id = await _require_v3_job_read_visible(request, job_id, authorization)
-    status = _run_v3_handler(v3_route_handlers.get_job, job_id)
+    status = await _run_v3_handler_threaded(v3_route_handlers.get_job, job_id)
     metadata = status.get("metadata") if isinstance(status, dict) else None
     project_id = str(metadata.get("project_id") or "").strip() if isinstance(metadata, dict) else ""
     billing = metadata.get("image_billing") if isinstance(metadata, dict) else None
     if (owner_user_id is not None and isinstance(billing, dict) and billing.get("status") == "pending"
-            and v3_route_handlers.service.account_image_billing_retry_owner(job_id) == owner_user_id):
+            and await run_in_threadpool(v3_route_handlers.service.account_image_billing_retry_owner, job_id) == owner_user_id):
         if project_id:
             _start_v3_project_generation_background(project_id, job_id, {"metadata": {"veyra_user_id": owner_user_id}})
         else:
             return await _run_v3_handler_threaded(v3_route_handlers.post_generate, job_id, {})
-    if project_id and (owner_user_id is not None or not settings.veyra_auth_enabled):
-        return _recover_v3_planned_auto_generation(project_id, status)
+    if (project_id and status.get("status") == "planned"
+            and (owner_user_id is not None or not settings.veyra_auth_enabled)):
+        return await run_in_threadpool(_recover_v3_planned_auto_generation, project_id, status)
     return status
 
 

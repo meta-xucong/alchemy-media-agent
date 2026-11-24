@@ -1,0 +1,11 @@
+[Unit]
+Description=Recover the Alchemy main container when it stops responding
+ConditionPathExists=/opt/alchemy-media-agent/scripts/vps_main_watchdog.py
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/alchemy-media-agent
+StateDirectory=alchemy-media-agent-watchdog
+ExecStart=/usr/bin/python3 -B -m scripts.vps_main_watchdog
+TimeoutStartSec=240

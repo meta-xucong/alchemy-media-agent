@@ -3786,9 +3786,17 @@ class V3ProjectModeService:
         self._reconcile_project_outputs(project)
         self._ensure_project_product_reference_integrity(project)
         project.latest_context = self._build_context(project)
+        # Reconciliation can change visibility. Reuse reads only after it
+        # finishes, and only for this response.
+        output_reads = {
+            "output_records_by_job": {},
+            "job_status_by_id": {},
+            "job_record_by_id": {},
+        }
         project.memory_summary = self._memory_summary(
             project,
             owner_user_id=owner_user_id,
+            **output_reads,
         )
         self.project_store.save_project(project)
         public_context = (
@@ -3800,6 +3808,7 @@ class V3ProjectModeService:
             project,
             owner_user_id=owner_user_id,
             context_override=public_context,
+            **output_reads,
         )
 
     def _project_summary_response(
@@ -13224,6 +13233,7 @@ class V3ProjectModeService:
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None:
             return []
+        get_job_read_snapshot = getattr(self.product_service, "get_job_read_snapshot", None)
         state_map = self._selected_output_state_map(project)
         active = self._continuity_state(project).get("active_continuity_anchor")
         if active:
@@ -13236,7 +13246,16 @@ class V3ProjectModeService:
                 job_status = job_status_by_id[clean_job_id]
             else:
                 try:
-                    job_status = self.product_service.get_job(clean_job_id)
+                    if (
+                        job_status_by_id is not None
+                        and job_record_by_id is not None
+                        and clean_job_id not in job_record_by_id
+                        and callable(get_job_read_snapshot)
+                    ):
+                        job_status, job_record = get_job_read_snapshot(clean_job_id)
+                        job_record_by_id[clean_job_id] = self._project_output_job_record_projection(job_record)
+                    else:
+                        job_status = self.product_service.get_job(clean_job_id)
                 except Exception:
                     if job_read_failures is not None:
                         job_read_failures.add(clean_job_id)
@@ -15734,11 +15753,17 @@ class V3ProjectModeService:
         *,
         owner_user_id: int | None = None,
         context_override: ProjectContextPackage | None = None,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
     ) -> ProjectResponse:
         project_output_items = self._project_output_items(
             project,
             limit=60,
             owner_user_id=owner_user_id,
+            output_records_by_job=output_records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
         )
         public_project = self._public_project_record(
             project,
@@ -15747,7 +15772,11 @@ class V3ProjectModeService:
         )
         disclosures = self._doc281_used_source_disclosures(
             project,
+            project_output_items,
             owner_user_id=owner_user_id,
+            output_records_by_job=output_records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
         )
         if disclosures:
             public_project.metadata["doc281_used_source_disclosures"] = disclosures
@@ -15830,16 +15859,15 @@ class V3ProjectModeService:
     def _doc281_used_source_disclosures(
         self,
         project: ProjectRecord,
+        delivered: list[dict[str, Any]],
         *,
         owner_user_id: int | None = None,
+        output_records_by_job: dict[str, list[Any]] | None = None,
+        job_status_by_id: dict[str, ProductJobStatus | None] | None = None,
+        job_record_by_id: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Project safe source labels for exact eligible Job/output bindings only."""
 
-        delivered = self._project_output_items(
-            project,
-            limit=60,
-            owner_user_id=owner_user_id,
-        )
         output_by_id = {
             self._public_project_output_identity(item): item
             for item in delivered
@@ -15853,6 +15881,9 @@ class V3ProjectModeService:
             limit=60,
             include_hidden=True,
             owner_user_id=owner_user_id,
+            output_records_by_job=output_records_by_job,
+            job_status_by_id=job_status_by_id,
+            job_record_by_id=job_record_by_id,
         ):
             output_id = self._public_project_output_identity(item)
             if (

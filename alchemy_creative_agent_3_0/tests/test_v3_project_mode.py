@@ -491,6 +491,39 @@ def test_project_mode_scopes_same_user_input_jobs_by_project() -> None:
     assert second_job["metadata"]["project_job_sequence"] == 1
 
 
+def test_full_project_detail_reuses_history_status_and_delivery_projection(monkeypatch) -> None:
+    handlers = V3ProductRouteHandlers()
+    service = handlers.project_service
+    project_id = handlers.post_projects({"user_goal": "Plan a series of café posters"})["project"]["project_id"]
+    project = service.project_store.get_project(project_id)
+    project.job_ids = [f"job_historical_{index}" for index in range(24)]
+    service.project_store.save_project(project)
+
+    historical_reads = []
+    original_snapshot = service.product_service.get_job_read_snapshot
+
+    def snapshot(job_id):
+        historical_reads.append(job_id)
+        return original_snapshot(job_id)
+
+    projection_calls = []
+    original_projection = service._project_output_items
+
+    def projection(*args, **kwargs):
+        projection_calls.append((kwargs["limit"], kwargs.get("include_hidden", False)))
+        return original_projection(*args, **kwargs)
+
+    monkeypatch.setattr(service.product_service, "get_job_read_snapshot", snapshot)
+    monkeypatch.setattr(service, "_project_output_items", projection)
+    detail = handlers.get_project(project_id)
+
+    assert detail["project"]["job_ids"] == project.job_ids
+    assert detail["metadata"]["project_outputs"] == []
+    assert historical_reads == list(reversed(project.job_ids))
+    assert projection_calls.count((60, False)) == 1
+    assert projection_calls.count((60, True)) == 1
+
+
 def test_project_archive_hides_project_from_recent_list_but_keeps_detail() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects({"user_goal": "Create a launch poster", "title": "Launch"})["project"]
@@ -2933,11 +2966,8 @@ def test_v3_template_catalog_rerenders_after_initial_loading_settles() -> None:
     shell_end = source.index("\nfunction handleV3ScenarioClick", shell_start)
     shell = source[shell_start:shell_end]
 
-    settled = shell.index("v3State.loading = false;")
-    rerender = shell.index("renderV3HomeTemplateChooser();", settled)
-    page_ready = shell.index("setV3PageLoading(false);", settled)
-
-    assert settled < rerender < page_ready
+    cleanup = shell[shell.index("} finally {"):]
+    assert cleanup.index("v3State.projectsLoading = false;") < cleanup.index("renderV3HomeTemplateChooser();")
 
 
 def test_v3_photography_generation_count_is_fixed_by_delivery_mode() -> None:

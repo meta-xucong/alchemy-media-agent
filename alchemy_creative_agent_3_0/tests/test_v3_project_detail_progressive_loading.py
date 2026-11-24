@@ -601,7 +601,7 @@ def test_desktop_first_open_failure_returns_to_project_home() -> None:
                     opening: Boolean(v3State.projectOpening),
                     workspaceVisible: document.querySelector("#v3WorkspaceView")?.hidden === false,
                     homeVisible: document.querySelector("#v3HomeView")?.hidden === false,
-                    explicitHome: Boolean(v3State.explicitHome),
+                    detailProjectId: v3State.projectDetailProjectId,
                   };
                 }
                 """,
@@ -611,7 +611,7 @@ def test_desktop_first_open_failure_returns_to_project_home() -> None:
             assert result["opening"] is False
             assert result["workspaceVisible"] is False
             assert result["homeVisible"] is True
-            assert result["explicitHome"] is True
+            assert result["detailProjectId"] == ""
         finally:
             browser.close()
 
