@@ -124,11 +124,10 @@ def test_list_and_selection_keep_native_review_facts_and_exact_binding(native, m
             "metadata": {"review_status": "manual_review", "quality_failure": False}}],
         "project_output_counts": {project_id: 1}, "project_review_counts": {project_id: 1}}
     calls = []
-    async def list_outputs(project_service, compute, **kwargs):
-        assert kwargs["owner_user_id"] == 101 and kwargs["project_id"] == project_id
+    def list_outputs(_limit, owner, _compact, scoped_project, _surface, _project_ids):
+        assert owner == 101 and scoped_project == project_id
         return rows
-    monkeypatch.setattr(native.main, "_v3_browse_compute", object())
-    monkeypatch.setattr(native.main, "run_output_browse", list_outputs)
+    monkeypatch.setattr(native.handlers, "get_project_outputs", list_outputs)
     listed = native.tools.call("alchemy_list_outputs", {"project_id": project_id})
     assert listed["items"] == rows["items"]
     assert listed["review_items"] == rows["review_items"]

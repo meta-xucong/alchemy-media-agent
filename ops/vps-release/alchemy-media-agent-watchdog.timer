@@ -1,0 +1,10 @@
+[Unit]
+Description=Probe the Alchemy main service
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=20s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

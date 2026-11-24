@@ -10260,7 +10260,7 @@ async function initV2({ silent = true, force = false } = {}) {
   if (showPageOverlay) setMobilePageLoading(true, "正在加载 V2", "正在读取历史、模板和中枢状态。");
   updateV2Notice("正在检查 V2.0 Agent 中枢。", "info");
   if (force) invalidateHistoryDemand("v2");
-  ensureHistoryDemand("v2").catch((error) => updateV2Notice(`2.0 历史加载失败：${friendlyError(error)}`, "error"));
+  ensureHistoryDemand("v2").catch((error) => updateV2Notice(`2.0 历史加载失败：${v2HistoryLoadErrorMessage(error)}`, "error"));
   try {
     const [
       health,
@@ -10761,7 +10761,7 @@ async function loadV2History({ silent = true, invalidate = false } = {}) {
     if (!silent && historyDemandVisible("v2")) updateV2Notice(historyWindowLabel("v2", Math.min(v2State.historyRenderLimit, v2State.history.length)), "success");
     return historyDemandState("v2").loaded && !historyDemandState("v2").dirty;
   } catch (error) {
-    if (historyDemandVisible("v2")) updateV2Notice(`2.0 历史加载失败：${friendlyError(error)}`, "error");
+    if (historyDemandVisible("v2")) updateV2Notice(`2.0 历史加载失败：${v2HistoryLoadErrorMessage(error)}`, "error");
     return false;
   } finally {
     if (els.v2RefreshHistoryBtn) els.v2RefreshHistoryBtn.disabled = false;
@@ -10787,7 +10787,7 @@ async function loadMoreV2History() {
   try {
     await readHistoryDemand("v2");
   } catch (error) {
-    if (historyDemandVisible("v2")) updateV2Notice(`更多 2.0 历史加载失败：${friendlyError(error)}`, "error");
+    if (historyDemandVisible("v2")) updateV2Notice(`更多 2.0 历史加载失败：${v2HistoryLoadErrorMessage(error)}`, "error");
   }
 }
 

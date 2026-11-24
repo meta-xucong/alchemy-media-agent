@@ -1,11 +1,16 @@
 """Real key lifecycle against original HTTP auth with isolated account fixtures."""
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import io
 import json
 import sqlite3
+import threading
+import time
 from types import SimpleNamespace
 from urllib.error import HTTPError
+import httpx
 import pytest
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from app.services.api_keys import ApiKeyStore, KeyAccessError
 
@@ -52,6 +57,96 @@ def native(tmp_path, monkeypatch):
 
 def headers(token="session-a", *, write=False):
     return {"Authorization": "Bearer " + token, **({"X-Alchemy-UI": "api-access", "Origin": "https://ui.test"} if write else {})}
+
+
+@pytest.mark.parametrize("cancel_read", [False, True])
+def test_slow_v3_full_detail_keeps_h5_v2_and_health_responsive(native, monkeypatch, cancel_read):
+    main = native.main
+    route = "/api/v3/creative-agent/projects/project-heavy"
+    entered = threading.Event()
+    release = threading.Event()
+    delete_entered = threading.Event()
+    finish_order = []
+
+    async def allowed(*_args):
+        return 101
+
+    def full(project_id, owner, view):
+        assert (project_id, owner, view) == ("project-heavy", 101, "full")
+        entered.set()
+        deadline = time.monotonic() + 10
+        while not release.is_set() and time.monotonic() < deadline:
+            sum(range(20_000))
+        finish_order.append("full")
+        return {"project": {"project_id": project_id, "job_ids": []}, "context": {"preserved": True}}
+
+    def deleted(project_id):
+        assert project_id == "project-heavy"
+        delete_entered.set()
+        finish_order.append("delete")
+        return {"deleted": True}
+
+    def gallery(_limit, _owner, _compact, project_id, surface, _project_ids):
+        assert project_id == "project-heavy"
+        if surface != "delivery_preview":
+            finish_order.append("gallery")
+        return {"items": [{"output_id": "out-retained"}]}
+
+    def timeline(project_id, owner):
+        assert (project_id, owner) == ("project-heavy", 101)
+        finish_order.append("timeline")
+        return {"items": []}
+
+    async def v2_upstream(path, _request):
+        assert path == "veyra/history"
+        return JSONResponse({"items": [{"output_id": "out-retained"}]})
+
+    monkeypatch.setattr(main, "_require_v3_project_read_visible", allowed)
+    monkeypatch.setattr(main, "_require_v3_project_delete_visible", allowed)
+    monkeypatch.setattr(main.v3_route_handlers, "get_project", full)
+    monkeypatch.setattr(main.v3_route_handlers, "delete_project", deleted)
+    monkeypatch.setattr(main.v3_route_handlers, "get_project_outputs", gallery)
+    monkeypatch.setattr(main.v3_route_handlers, "get_project_timeline", timeline)
+    monkeypatch.setattr(main, "_proxy_v2_request", v2_upstream)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="https://ui.test") as client:
+            detail = asyncio.create_task(client.get(route, headers=headers()))
+            try:
+                assert await asyncio.to_thread(entered.wait, 2)
+                urls = ("/healthz", "/api/v2/veyra/history", "/h5?ticket=fixture",
+                        "/api/v3/creative-agent/project-outputs?project_id=project-heavy&surface=delivery_preview")
+                checks = [asyncio.create_task(client.get(url, headers=headers()), name=url) for url in urls]
+                _, pending = await asyncio.wait(checks, timeout=2)
+                assert not pending, [task.get_name() for task in pending]
+                health, history, h5, preview = [task.result() for task in checks]
+                assert health.json()["ok"] is True
+                assert history.json()["items"] == [{"output_id": "out-retained"}]
+                assert h5.status_code in {200, 302, 303, 307}
+                assert preview.json()["items"] == [{"output_id": "out-retained"}]
+                assert not detail.done()
+                if cancel_read:
+                    detail.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await detail
+                deletion = asyncio.create_task(client.delete(route, headers=headers()))
+                gallery_read = asyncio.create_task(client.get(
+                    "/api/v3/creative-agent/project-outputs?project_id=project-heavy", headers=headers(),
+                ))
+                timeline_read = asyncio.create_task(client.get(route + "/timeline", headers=headers()))
+                await asyncio.sleep(0.05)
+                assert not delete_entered.is_set() and not gallery_read.done() and not timeline_read.done()
+            finally:
+                release.set()
+            if not cancel_read:
+                assert (await detail).json()["context"] == {"preserved": True}
+            assert (await deletion).json() == {"deleted": True}
+            assert (await gallery_read).json()["items"] == [{"output_id": "out-retained"}]
+            assert (await timeline_read).json() == {"items": []}
+
+    asyncio.run(exercise())
+    assert finish_order[0] == "full"
+    assert set(finish_order[1:]) == {"delete", "gallery", "timeline"}
 
 
 def create(native, token="session-a", name="Test key"):
@@ -246,7 +341,7 @@ def test_admin_job_read_does_not_start_foreign_auto_generation(native, monkeypat
     monkeypatch.setattr(
         native.main.v3_route_handlers,
         "get_job",
-        lambda job_id: {"job_id": job_id, "metadata": {"project_id": "foreign-project"}},
+        lambda job_id: {"job_id": job_id, "status": "planned", "metadata": {"project_id": "foreign-project"}},
     )
     recovered = []
     monkeypatch.setattr(
