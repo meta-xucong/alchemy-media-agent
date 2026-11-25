@@ -757,3 +757,82 @@ def test_mobile_releases_project_mask_after_first_preview_while_history_is_slow(
             page.evaluate("window.__releaseMobileHistory()")
         finally:
             browser.close()
+
+
+def test_mobile_delivery_opens_current_batch_without_reopening_project() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            result = page.evaluate(
+                """
+                async (thumbnail) => {
+                  const project = {
+                    project_id: "project_h5_delivery",
+                    title: "H5 delivery",
+                    primary_template_id: "general_template",
+                    job_ids: ["job_old", "job_current"],
+                  };
+                  const currentIds = ["first", "second", "third", "fourth"];
+                  const items = [
+                    { output_id: "previous", job_id: "job_old" },
+                    ...currentIds.map((output_id) => ({ output_id, job_id: "job_current" })),
+                  ].map((item) => ({
+                    ...item,
+                    project_id: project.project_id,
+                    delivery_state: "final_delivery",
+                    thumbnail_url: thumbnail,
+                  }));
+                  const job = {
+                    job_id: "job_current",
+                    status: "generated",
+                    candidates: items.slice(1),
+                    metadata: { image_billing: { status: "charged", amount: "0.28" } },
+                  };
+                  const requests = [];
+                  const fallbackFetch = window.fetch;
+                  window.fetch = async (input, init = {}) => {
+                    const url = String(input);
+                    if (!url.includes("/api/v3/")) return fallbackFetch(input, init);
+                    requests.push([url, init.method || "GET"]);
+                    if (!url.includes("/project-outputs?")) {
+                      return new Response("{}", { status: 400 });
+                    }
+                    return new Response(JSON.stringify({ items }), { status: 200 });
+                  };
+                  mobileV3State.projects = [project];
+                  mobileV3State.currentProject = project;
+                  mobileV3State.currentJob = job;
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  openMobileSurface("v3-compose");
+                  const before = document.body.dataset.mobileActiveSurface;
+                  setMobileV3Progress("completed", mobileV3ImageBillingNotice(job));
+                  await showMobileV3FinishedResults(project.project_id, job, () => true);
+                  const target = document.activeElement;
+                  return {
+                    before,
+                    surface: document.body.dataset.mobileActiveSurface,
+                    selected: target.dataset.mobileV3GalleryPreview,
+                    resultVisible: target.closest("[data-mobile-view]")?.hidden === false,
+                    cards: [...document.querySelectorAll("#mobileV3OutputGrid [data-mobile-v3-gallery-preview]")]
+                      .map((button) => button.dataset.mobileV3GalleryPreview),
+                    progress: document.querySelector("#mobileV3ProgressSteps").textContent,
+                    requests,
+                  };
+                }
+                """,
+                "data:image/png;base64," + _ONE_PIXEL_PNG,
+            )
+            assert result["before"] == "v3-compose", result
+            assert result["surface"] == "v3-project-detail", result
+            assert result["resultVisible"], result
+            assert result["selected"] == "first"
+            assert result["cards"] == ["previous", "first", "second", "third", "fourth"]
+            assert "未交付" not in result["progress"]
+            assert len(result["requests"]) == 1
+            url, method = result["requests"][0]
+            assert method == "GET"
+            assert "/project-outputs?" in url and "project_id=project_h5_delivery" in url
+        finally:
+            browser.close()

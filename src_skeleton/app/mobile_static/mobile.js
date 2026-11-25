@@ -6045,10 +6045,7 @@ async function generateMobileV3Job() {
         updateMobileV3Status(message);
         return;
       }
-      await loadMobileV3ProjectOutputs(projectId, {
-        limit: 120,
-        shouldContinue,
-      });
+      await showMobileV3FinishedResults(projectId, created, shouldContinue);
       return;
     }
     let finalJob = created;
@@ -6075,7 +6072,7 @@ async function generateMobileV3Job() {
       ? (billingNotice || "本次没有交付图片，项目记录已保留。")
       : deliveryWithheld
         ? mobileV3JobFinalDeliveryNotice(finalJob)
-        : partialDeliveryNotice || "生成完成，已刷新项目图片";
+        : partialDeliveryNotice || "生成完成";
     const statusNotice = terminalFailure
       ? mobileV3EcommerceTerminalMessage(finalJob)
       : deliveryWithheld
@@ -6087,7 +6084,7 @@ async function generateMobileV3Job() {
       paidDeliveryNotice || progressNotice,
     );
     updateMobileV3Status(paidDeliveryNotice || statusNotice);
-    await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
+    await showMobileV3FinishedResults(projectId, finalJob, shouldContinue);
   } catch (error) {
     if (!shouldContinue()) return;
     if (scenarioId === "ecommerce") {
@@ -6102,6 +6099,33 @@ async function generateMobileV3Job() {
       if (!ecommerceSession || mobileV3EcommerceGenerationSessionOwns(ecommerceSession)) setMobileV3Busy(false);
     }
   }
+}
+
+async function showMobileV3FinishedResults(projectId, job, shouldContinue) {
+  await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
+  if (!mobileV3GenerationSessionOwns(shouldContinue)
+    || mobileV3State.currentProject?.project_id !== projectId
+    || document.body.dataset.mobileActiveSurface !== "v3-compose") return;
+
+  const jobId = String(job?.job_id || "").trim();
+  if (!jobId) return;
+  const outputId = (item) => item?.output_id || item?.metadata?.output_id || "";
+  const outputIds = new Set([
+    ...(job.candidates || []),
+    ...(job.asset_series || []),
+  ].map(outputId).filter(Boolean));
+  const buttons = [...document.querySelectorAll("#mobileV3OutputGrid [data-mobile-v3-gallery-preview]")];
+  const results = buttons.filter((button) => {
+    if (button.closest(".v3-mobile-output-card.history-only")) return false;
+    const item = button.__mobileV3OutputItem;
+    const itemJobId = String(item?.job_id || item?.metadata?.job_id || item?.related_job_id || "").trim();
+    return itemJobId ? itemJobId === jobId : outputIds.has(outputId(item));
+  });
+  const target = results.find((button) => button.dataset.mobileV3ReviewOnly !== "true") || results[0];
+  if (!target) return;
+  openMobileSurface("v3-project-detail");
+  target.closest(".v3-mobile-output-card")?.scrollIntoView({ block: "start" });
+  target.focus({ preventScroll: true });
 }
 
 async function recoverMobileV3GeneratedJob(
@@ -6267,9 +6291,10 @@ function setMobileV3Progress(stageKey, detail = "") {
   if (fill) fill.style.width = `${stage.percent}%`;
   const steps = document.querySelector("#mobileV3ProgressSteps");
   if (steps) {
-    const activeIndex = mobileV3ProgressStages.findIndex((item) => item.key === (stage.key === "billing" ? "recovering" : stage.key));
-    steps.innerHTML = mobileV3ProgressStages
-      .filter((item) => item.key !== "failed" || stage.key === "failed")
+    const visibleOutcome = stage.percent === 100 ? stage.key : "completed";
+    const visibleSteps = mobileV3ProgressStages.filter((item) => item.percent < 100 || item.key === visibleOutcome);
+    const activeIndex = visibleSteps.findIndex((item) => item.key === (stage.key === "billing" ? "recovering" : stage.key));
+    steps.innerHTML = visibleSteps
       .map((item, index) => `<span class="${index <= activeIndex ? "active" : ""}">${escapeHtml(item.label)}</span>`)
       .join("");
   }
@@ -6735,7 +6760,7 @@ function resumeMobileV3ImageBilling(projectId, detailEpoch) {
           : [mobileV3FormalPartialDeliveryNotice(finalJob), mobileV3ImageBillingNotice(finalJob)].filter(Boolean).join(" ") || "生成完成";
       setMobileV3Progress(terminalFailure ? "failed" : deliveryWithheld ? "review_blocked" : "completed", message);
       updateMobileV3Status(message);
-      await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
+      await showMobileV3FinishedResults(projectId, finalJob, shouldContinue);
     })
     .catch(() => {
       if (shouldContinue()) updateMobileV3Status(mobileV3ImageBillingNotice(job));
