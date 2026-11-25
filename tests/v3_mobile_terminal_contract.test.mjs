@@ -46,7 +46,6 @@ test("backend formal partial delivery reports the eligible image count on mobile
   assert.match(notice, /已交付 1 张合格图片/);
   assert.match(notice, /其余图片未通过审核或需要人工确认/);
   assert.match(completionSource, /const partialDeliveryNotice = mobileV3FormalPartialDeliveryNotice\(finalJob\)/);
-  assert.match(completionSource, /: partialDeliveryNotice \|\| "生成完成，已刷新项目图片"/);
   assert.match(completionSource, /: partialDeliveryNotice \|\| "生成完成"/);
 });
 
@@ -163,6 +162,7 @@ test("mobile submission stays locked until the bound job finishes review", async
   let displayed;
   const context = {
     mobileV3State, window: { setTimeout: (resolve) => resolve() },
+    document: { body: { dataset: {} } },
     mobileV3ScenarioForTemplate: () => "general_creative", mobileV3BoundedCount: () => 1,
     setMobileV3Busy: (busy) => { mobileV3State.busy = busy; },
     uploadMobileV3Files: async () => [], buildMobileV3JobPayload: () => ({}),
@@ -209,4 +209,94 @@ test("mobile submission stays locked until the bound job finishes review", async
   assert.equal(progress.at(-1), "completed");
   assert.equal(mobileV3State.currentProject.metadata.current_operation, undefined);
   assert.equal(mobileV3State.busy, false);
+});
+
+test("mobile moves from the composer to this job's visible results with one gallery read", async () => {
+  const start = source.indexOf("async function showMobileV3FinishedResults(");
+  const end = source.indexOf("\nasync function recoverMobileV3GeneratedJob(", start);
+  const reads = [];
+  const transitions = [];
+  const actions = [];
+  let active = "v3-compose";
+  let current = true;
+  let owns = true;
+  let leaveDuringRead = false;
+  const job = { job_id: "job_new", candidates: [{ output_id: "candidate_review" }] };
+  const card = (id, jobId, { review = false, history = false } = {}) => {
+    const element = { scrollIntoView: () => actions.push(["scroll", id]) };
+    return {
+      __mobileV3OutputItem: { output_id: id, job_id: jobId },
+      dataset: { mobileV3ReviewOnly: String(review) },
+      closest: (selector) => selector.endsWith(".history-only") ? (history ? element : null) : element,
+      focus: () => actions.push(["focus", id]),
+    };
+  };
+  const previous = card("previous", "job_old");
+  const superseded = card("superseded", "job_new", { history: true });
+  const review = card("candidate_review", "", { review: true });
+  const delivered = card("delivered", "job_new");
+  let cards = [previous, superseded, review, delivered];
+  const context = {
+    mobileV3State: { get currentProject() { return { project_id: current ? "p1" : "p2" }; } },
+    document: {
+      body: { dataset: { get mobileActiveSurface() { return active; } } },
+      querySelectorAll: () => cards,
+    },
+    loadMobileV3ProjectOutputs: async (project, options) => {
+      reads.push([project, options.limit]);
+      if (leaveDuringRead) active = "v3-workflow";
+    },
+    mobileV3GenerationSessionOwns: (shouldContinue) => shouldContinue(),
+    openMobileSurface: (surface) => { transitions.push(surface); active = surface; },
+  };
+  vm.runInNewContext(source.slice(start, end), context);
+
+  await context.showMobileV3FinishedResults("p1", job, () => owns);
+  assert.deepEqual(reads, [["p1", 120]]);
+  assert.deepEqual(transitions, ["v3-project-detail"]);
+  assert.deepEqual(actions, [["scroll", "delivered"], ["focus", "delivered"]]);
+
+  active = "v3-compose";
+  cards = [previous, superseded, review];
+  await context.showMobileV3FinishedResults("p1", job, () => owns);
+  assert.deepEqual(actions.slice(-2), [["scroll", "candidate_review"], ["focus", "candidate_review"]]);
+
+  active = "v3-compose";
+  cards = [previous, superseded];
+  await context.showMobileV3FinishedResults("p1", job, () => owns);
+  assert.equal(transitions.length, 2);
+
+  cards = [delivered];
+  leaveDuringRead = true;
+  await context.showMobileV3FinishedResults("p1", job, () => owns);
+  assert.equal(transitions.length, 2);
+
+  active = "v3-compose";
+  leaveDuringRead = false;
+  current = false;
+  await context.showMobileV3FinishedResults("p1", job, () => owns);
+  current = true;
+  owns = false;
+  await context.showMobileV3FinishedResults("p1", job, () => owns);
+  assert.equal(transitions.length, 2);
+});
+
+test("mobile progress displays only the matching terminal outcome", () => {
+  const start = source.indexOf("const mobileV3ProgressStages = ");
+  const end = source.indexOf("\nfunction clearMobileV3Progress(", start);
+  const steps = {};
+  const nodes = { "#mobileV3ProgressPanel": {}, "#mobileV3ProgressFill": { style: {} }, "#mobileV3ProgressSteps": steps };
+  const context = {
+    document: { querySelector: (selector) => nodes[selector] },
+    mobileV3State: {},
+    progressElapsedLabel: () => "",
+    setText() {},
+    escapeHtml: (label) => label,
+  };
+  vm.runInNewContext(source.slice(start, end), context);
+  for (const [stage, label] of [["completed", "完成"], ["review_blocked", "未交付"], ["failed", "需重试"]]) {
+    context.setMobileV3Progress(stage);
+    const outcomes = [...steps.innerHTML.matchAll(/<span class="([^"]*)">(完成|未交付|需重试)<\/span>/g)];
+    assert.deepEqual(outcomes.map((item) => item.slice(1)), [["active", label]]);
+  }
 });
