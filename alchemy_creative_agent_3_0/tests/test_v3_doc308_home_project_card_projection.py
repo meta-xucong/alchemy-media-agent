@@ -118,9 +118,10 @@ def test_desktop_contract_scopes_and_appends_home_previews() -> None:
     assert "appendHomePreview" in loader
     assert "project_ids=" in loader
     assert "mergeV3HomePreviewItems" in loader
-    assert "projectIds: firstPageProjectIds" in source
-    assert "projectIds: previewProjectIds" in projects
-    assert "appendHomePreview: requestingMore" in projects
+    assert "loadV3HomePreviews(firstPageProjectIds)" in source
+    assert "loadV3HomePreviews(previewProjectIds)" in projects
+    assert "projectIds: batch" in projects
+    assert "appendHomePreview: true" in projects
     assert "image count" not in source.lower()
     assert "图片数量未同步" in source
 

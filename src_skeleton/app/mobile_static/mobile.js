@@ -963,7 +963,7 @@ async function readHistoryDemand(moduleName, { reset = false, allFavorites = fal
     while (current() && demanded() && pages < 3 && offset < start + historyWindowSize) {
       const limit = Math.min(historyFetchPageSize, start + historyWindowSize - offset);
       const response = moduleName === "v2"
-        ? await loadV2HistoryResponse({ limit, offset, favorite: favoritesDemand })
+        ? await loadV2HistoryPage({ limit, offset, favorite: favoritesDemand }, () => current() && demanded())
         : await request(`/v1/image/history?limit=${limit}&offset=${offset}${favoritesDemand ? "&favorite=true" : ""}`);
       if (!current()) return;
       const incoming = Array.isArray(response.items) ? response.items : [];
@@ -1353,8 +1353,10 @@ function bindControls() {
     if (event.key === "Escape" && document.body.dataset.mobileActiveSurface) closeMobileSurface();
   });
   window.addEventListener("popstate", (event) => {
-    if (document.body.dataset.mobileActiveSurface && event.state?.mobileSurface !== document.body.dataset.mobileActiveSurface) {
+    const activeSurface = document.body.dataset.mobileActiveSurface;
+    if (activeSurface && event.state?.mobileSurface !== activeSurface) {
       closeMobileSurface({ silent: true, fromHistory: true });
+      if (activeSurface.startsWith("v3-")) resumeMobileV3HomePreviews();
     }
   });
 }
@@ -2233,7 +2235,7 @@ function renderLabBoard(board) {
     article.className = `lab-result-card ${labResultCardClass(card.status)}`;
     const styleName = group.style_name || group.style_preset_id || "Rare Style";
     const imageHtml = card.image_url
-      ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-title="${escapeHtml(styleName)}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img alt="${escapeHtml(styleName)}" loading="lazy" decoding="async" /></button>`
+      ? `<button class="lab-image-button" type="button" data-lab-preview="${escapeHtml(card.image_url)}" data-lab-thumbnail="${escapeHtml(card.thumbnail_url || "")}" data-lab-display="${escapeHtml(card.preview_url || "")}" data-lab-title="${escapeHtml(styleName)}" data-lab-prompt="${escapeHtml(card.prompt || "")}"><img alt="${escapeHtml(styleName)}" loading="lazy" decoding="async" /></button>`
       : `<div class="lab-error-tile">${escapeHtml(labPlaceholderText(card))}</div>`;
     const imageActions = card.image_url
       ? `<a class="lab-card-action" href="${escapeHtml(card.image_url)}" data-lab-download="${escapeHtml(card.image_url)}" data-lab-filename="${escapeHtml(`alchemy-lab-${card.variant_id || "image"}.png`)}">下载原图</a>`
@@ -2281,7 +2283,7 @@ function firstLabErrorMessage(board) {
 async function handleLabComparisonClick(event) {
   const previewButton = event.target.closest("[data-lab-preview]");
   if (previewButton) {
-    openLabPreview(previewButton.dataset.labPreview, previewButton.dataset.labTitle || "Alchemy Lab", previewButton.dataset.labPrompt || "");
+    openLabPreview(previewButton.dataset);
     return;
   }
   const copyPromptButton = event.target.closest("[data-lab-copy-prompt]");
@@ -2327,14 +2329,14 @@ async function copyLabPrompt(prompt) {
   updateLabNotice("已复制这张图使用的提示词。", "success");
 }
 
-function openLabPreview(url, title, prompt) {
+function openLabPreview({ labPreview: url, labTitle: title, labPrompt: prompt, labThumbnail, labDisplay }) {
   if (!url || !els.imageLightbox) return;
   openImageLightbox({
     id: "alchemy-lab",
     title: title || "Alchemy Lab",
     url,
-    thumbnailUrl: url,
-    previewUrl: url,
+    thumbnailUrl: labThumbnail || labDisplay || url,
+    previewUrl: labDisplay || labThumbnail || url,
     format: "png",
     meta: "Alchemy Lab",
     promptText: prompt || "",
@@ -3931,63 +3933,72 @@ function mergeMobileV3ProjectItems(primaryItems, fallbackItems) {
     });
 }
 
-function mergeMobileV3HomePreviewItems(existingItems, incomingItems) {
-  const byProject = new Map();
-  [...(Array.isArray(existingItems) ? existingItems : []), ...(Array.isArray(incomingItems) ? incomingItems : [])]
-    .forEach((item) => {
-      const projectId = String(item?.project_id || item?.metadata?.project_id || "").trim();
-      const identity = projectId || String(item?.output_id || item?.id || "").trim();
-      if (!identity) return;
-      byProject.set(identity, item);
-    });
-  return Array.from(byProject.values()).sort((a, b) => mobileV3OutputTime(b) - mobileV3OutputTime(a));
+const mobileV3HomePreviewsPending = new Set();
+
+async function loadMobileV3HomePreviews(projectIds) {
+  const ids = [...new Set(projectIds)].filter((id) => id && !mobileV3HomePreviewsPending.has(id));
+  if (!ids.length) return;
+  const token = getVeyraToken();
+  const ownsRead = () => token === getVeyraToken();
+  ids.forEach((id) => mobileV3HomePreviewsPending.add(id));
+  const batches = [ids.slice(0, 2), ids.slice(2)].filter((batch) => batch.length);
+  await Promise.all(batches.map(async (batch) => {
+    try {
+      await loadMobileV3HomePreviewBatch(batch, ownsRead);
+    } catch (error) {
+      if (!ownsRead()) return;
+      markMobileV3HomePreviewStale(batch);
+      mobileV3State.outputError = friendlyError(error);
+      renderMobileV3ProjectCards();
+    } finally {
+      batch.forEach((id) => mobileV3HomePreviewsPending.delete(id));
+    }
+  }));
 }
 
-async function loadMobileV3HomePreviews(projectIds, { append = false } = {}) {
-  const requestedProjectIds = [...new Set(
-    (Array.isArray(projectIds) ? projectIds : [])
-      .map((projectId) => String(projectId || "").trim())
-      .filter(Boolean),
-  )];
-  if (!requestedProjectIds.length) {
-    mobileV3State.outputs = [];
-    mobileV3State.reviewOutputs = [];
-    mobileV3State.outputsLoaded = true;
-    mobileV3State.outputsSurface = "home_preview";
-    mobileV3State.previewProjectIds = new Set();
-    return [];
-  }
+async function loadMobileV3HomePreviewBatch(projectIds, ownsRead) {
   const payload = await mobileV3RequestWithTimeout(
-    `/project-outputs?limit=${requestedProjectIds.length}&compact=true&surface=home_preview&project_ids=${encodeURIComponent(requestedProjectIds.join(","))}`,
+    `/project-outputs?limit=${projectIds.length}&compact=true&surface=home_preview&project_ids=${encodeURIComponent(projectIds.join(","))}`,
     mobileV3HomePreviewRequestTimeoutMs,
   );
+  if (!ownsRead()) return;
   const incoming = Array.isArray(payload?.items) ? payload.items : [];
   const historyItems = Array.isArray(payload?.history_items) ? payload.history_items : [];
   const displayItems = [...incoming, ...historyItems];
-  const appendItems = append && mobileV3State.outputsSurface === "home_preview";
+  const detailId = document.body.dataset.mobileActiveSurface?.startsWith("v3-")
+    ? mobileV3State.currentProject?.project_id
+    : null;
+  const covered = new Set(projectIds.filter((id) => id !== detailId));
+  const belongsToBatch = (item) => covered.has(item?.project_id || item?.metadata?.project_id);
   mobileV3State.outputError = "";
   mobileV3State.outputsLoaded = true;
   mobileV3State.outputsSurface = "home_preview";
-  mobileV3State.outputs = appendItems
-    ? mergeMobileV3HomePreviewItems(mobileV3State.outputs, displayItems)
-    : displayItems;
+  mobileV3State.outputs = [
+    ...mobileV3State.outputs.filter((item) => !belongsToBatch(item)),
+    ...displayItems.filter(belongsToBatch),
+  ];
+  covered.forEach((id) => mobileV3State.previewProjectIds.add(id));
   syncMobileV3HomeProjectProjection({
-    projectIds: requestedProjectIds,
+    projectIds,
     formalCounts: payload?.project_output_counts,
     historyCounts: payload?.project_history_counts,
     reviewCounts: payload?.project_review_counts,
     displayItems,
     reviewPreviewItems: payload?.project_review_preview_items,
   });
-  mobileV3State.reviewOutputs = [];
-  mobileV3State.previewProjectIds = new Set(
-    mobileV3State.outputs
-      .map((item) => String(item?.project_id || item?.metadata?.project_id || ""))
-      .filter(Boolean),
-  );
   persistMobileV3Caches();
   renderMobileV3ProjectCards();
-  return incoming;
+}
+
+function resumeMobileV3HomePreviews() {
+  if (!mobileV3State.loaded || document.body.dataset.mobileActiveSurface) return;
+  if (document.querySelector("#mobileV3ProjectGrid .image-load-failed")) renderMobileV3ProjectCards();
+  const staleIds = mobileV3ProjectGroupsFromProjects()
+    .slice(0, mobileV3State.projectRenderLimit)
+    .filter((group) => group.project.home_preview_stale === true
+      || (group.count > 0 && !mobileV3HomeThumbUrl(group.latestItem)))
+    .map((group) => group.projectId);
+  if (staleIds.length) void loadMobileV3HomePreviews(staleIds);
 }
 
 function syncMobileV3HomeProjectCounts(counts) {
@@ -4298,6 +4309,7 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
   }
   if (!requestingMore && mobileV3State.loaded && !force) {
     renderMobileV3ProjectCards();
+    resumeMobileV3HomePreviews();
     return;
   }
   if (requestingMore) {
@@ -4356,34 +4368,14 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
     mobileV3State.projectsLoadError = "";
     mobileV3State.loaded = true;
     persistMobileV3Caches();
-    renderMobileV3ProjectCards({ deferImages: true });
     renderMobileV3ProjectCards();
     // The project catalog is enough to navigate. Preview delivery and image
     // decoding must not keep a full-screen mask over already visible cards.
     if (!mobileV3ProjectDetailLoadingActive()) setMobileV3LoadingLayer(false);
     const projectCount = mobileV3VisibleProjects().length;
     updateMobileV3Status(mobileV3ProjectCountLabel(projectCount));
-    if (requestingMore) {
-      if (previewProjectIds.length) {
-        try {
-          await loadMobileV3HomePreviews(previewProjectIds, { append: true });
-        } catch (error) {
-          markMobileV3HomePreviewStale(previewProjectIds);
-          mobileV3State.outputError = friendlyError(error);
-          renderMobileV3ProjectCards();
-        }
-      }
-    } else {
-      try {
-        await loadMobileV3HomePreviews(previewProjectIds);
-      } catch (error) {
-        markMobileV3HomePreviewStale(previewProjectIds);
-        mobileV3State.outputError = friendlyError(error);
-        renderMobileV3ProjectCards();
-        updateMobileV3Status(`${mobileV3ProjectCountLabel(projectCount)} · 图片暂时无法读取`);
-      }
-      homePreviewSettled = true;
-    }
+    await loadMobileV3HomePreviews(previewProjectIds);
+    homePreviewSettled = true;
   } catch (error) {
     if (!mobileV3ProjectDetailLoadingActive()) setMobileV3LoadingLayer(false);
     if (requestingMore) {
@@ -4616,7 +4608,7 @@ function mobileV3ProjectImageCountLabel(group) {
     ? Math.max(Number(group?.reviewCount || 0), reviewCount)
     : (reviewKnown ? reviewCount : 0);
   const hasKnownCount = formalKnown || historyKnown || reviewKnown;
-  if (group?.project?.home_preview_stale === true) {
+  if (group?.project?.home_preview_stale === true && !group.latestItem) {
     return "图片暂时无法读取";
   }
   if (mobileV3State.outputError && !hasKnownCount) {
@@ -4731,6 +4723,8 @@ function mobileV3FindProject(projectId) {
 function renderMobileV3ProjectCards({ deferImages = false } = {}) {
   const grid = document.querySelector("#mobileV3ProjectGrid");
   if (!grid) return;
+  const previousImages = new Map([...grid.querySelectorAll("[data-mobile-v3-project-id] img[data-cover-url]")]
+    .map((image) => [image.closest("[data-mobile-v3-project-id]").dataset.mobileV3ProjectId, image]));
   const groups = mobileV3ProjectGroupsFromProjects();
   const visibleGroups = groups.slice(0, mobileV3State.projectRenderLimit || mobileV3ProjectPageSize);
   setText("#mobileV3ProjectCount", mobileV3ProjectCountLabel(groups.length));
@@ -4773,7 +4767,7 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     card.innerHTML = `
       <button class="v3-mobile-project-preview" type="button" data-mobile-v3-open-project="${escapeHtml(projectId)}" aria-label="查看项目图片：${escapeHtml(mobileV3ProjectTitle(project))}">
         <span class="v3-mobile-history-stack" aria-hidden="true">${Array.from({ length: stackCount }, () => "<span></span>").join("")}</span>
-        ${thumb ? `<img alt="${escapeHtml(mobileV3ProjectTitle(project))}" loading="eager" decoding="async" data-mobile-v3-home-thumb="true" />` : `<span class="v3-mobile-empty-thumb">新项目</span>`}
+        ${thumb ? `<img alt="${escapeHtml(mobileV3ProjectTitle(project))}" loading="lazy" decoding="async" data-mobile-v3-home-thumb="true" />` : `<span class="v3-mobile-empty-thumb">${visualCount ? "封面待加载" : "新项目"}</span>`}
       </button>
       <button class="v3-mobile-project-copy v3-mobile-project-open" type="button" data-mobile-v3-open-project-detail="${escapeHtml(projectId)}" aria-label="打开项目主页：${escapeHtml(mobileV3ProjectTitle(project))}">
         <strong>${escapeHtml(mobileV3ProjectTitle(project))}</strong>
@@ -4784,8 +4778,20 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     `;
     grid.appendChild(card);
     const image = card.querySelector("img");
-    if (image) bindImageWithFallback(image, [thumb], { emptyAlt: mobileV3ProjectTitle(project) });
+    const previous = previousImages.get(projectId);
+    if (image && previous?.dataset.coverUrl === thumb && !previous.classList.contains("image-load-failed")) {
+      image.replaceWith(previous);
+      previousImages.delete(projectId);
+    } else if (image) {
+      image.dataset.coverUrl = thumb;
+      bindImageWithFallback(image, [thumb], { emptyAlt: image.alt });
+    }
   });
+  for (const image of previousImages.values()) {
+    authenticatedImageLoadControllers.get(image)?.abort();
+    cancelDeferredAuthenticatedImage(image);
+    releaseImageObjectUrl(image);
+  }
   if (mobileV3State.projectsHasMore || groups.length > visibleGroups.length) {
     const card = document.createElement("article");
     card.className = "v3-mobile-project-card v3-mobile-project-load-more";
@@ -6102,7 +6108,34 @@ async function generateMobileV3Job() {
 }
 
 async function showMobileV3FinishedResults(projectId, job, shouldContinue) {
-  await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue });
+  const delivery = job?.metadata?.final_delivery;
+  const billing = job?.metadata?.image_billing?.status;
+  const ready = delivery?.automatic_delivery_available === true
+    && ["generated", "selected"].includes(job.status)
+    && !["blocked", "pending", "checking"].includes(billing);
+  if (ready && mobileV3GenerationSessionOwns(shouldContinue)
+    && mobileV3State.currentProject?.project_id === projectId) {
+    // The terminal status already applies review and settlement to its public candidates.
+    const batch = mobileV3DedupeOutputItems((job.candidates || [])
+      .filter((item) => item.output_id && item.thumbnail_url));
+    if (batch.length && batch.length === delivery.final_delivery_output_count) {
+      const ids = new Set(batch.map((item) => item.output_id));
+      mobileV3State.outputs = [
+        ...batch.map((item) => ({ ...item, project_id: projectId, job_id: job.job_id, delivery_state: "final_delivery" })),
+        ...mobileV3State.outputs.filter((item) => !ids.has(item.output_id)),
+      ];
+      renderMobileV3ProjectOutputs(mobileV3State.currentProject);
+      renderMobileV3ProjectCards();
+      persistMobileV3Caches();
+      focusMobileV3FinishedResult(projectId, job, shouldContinue);
+      if (!delivery.partial_delivery && !delivery.manual_confirmation_required) return;
+    }
+  }
+  await loadMobileV3ProjectOutputs(projectId, { limit: 120, shouldContinue, preserveOnError: ready });
+  focusMobileV3FinishedResult(projectId, job, shouldContinue);
+}
+
+function focusMobileV3FinishedResult(projectId, job, shouldContinue) {
   if (!mobileV3GenerationSessionOwns(shouldContinue)
     || mobileV3State.currentProject?.project_id !== projectId
     || document.body.dataset.mobileActiveSurface !== "v3-compose") return;
@@ -6513,13 +6546,15 @@ function mobileV3ProjectPreviewImages() {
 
 function mobileV3RequestWithTimeout(path, timeoutMs = 6000) {
   return new Promise((resolve, reject) => {
+    const controller = new AbortController();
     let settled = false;
     const timer = window.setTimeout(() => {
       if (settled) return;
       settled = true;
       reject(new Error("项目首屏读取超时"));
+      controller.abort();
     }, timeoutMs);
-    mobileV3Request(path).then(
+    mobileV3Request(path, { signal: controller.signal }).then(
       (value) => {
         if (settled) return;
         settled = true;
@@ -8191,7 +8226,7 @@ function mobileV3ProcessOutputsForProject(projectId) {
   });
 }
 
-async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinue = null } = {}) {
+async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinue = null, preserveOnError = false } = {}) {
   if (!projectId || !mobileV3GenerationSessionOwns(shouldContinue)) return [];
   try {
     const payload = await mobileV3Request(`/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`);
@@ -8214,6 +8249,7 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
   } catch (error) {
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
     mobileV3State.outputError = friendlyError(error);
+    if (preserveOnError) return [];
     mobileV3MergeProjectOutputs(projectId, [], []);
     mobileV3State.outputsLoaded = false;
     clearMobileV3Caches();
@@ -8722,6 +8758,7 @@ function closeMobileSurface(options = {}) {
   const openerId = document.body.dataset.mobileSurfaceOpener;
   document.body.dataset.mobileActiveSurface = "";
   document.body.dataset.mobileSurfaceOpener = "";
+  if (!silent && activeId?.startsWith("v3-")) resumeMobileV3HomePreviews();
   const historyModule = activePanelName() === "v2" ? "v2" : "v1";
   window.requestAnimationFrame(() => {
     if (!document.body.dataset.mobileActiveSurface && historyDemandVisible(historyModule)) {
@@ -12464,6 +12501,7 @@ const protectedMediaQueue = [];
 const protectedMediaInflight = new Map();
 const authenticatedImageLoadControllers = new WeakMap();
 let protectedMediaActive = 0;
+let protectedMediaPreviewActive = false;
 const protectedMediaConcurrency = 2;
 const deferredAuthenticatedImages = new Map();
 let deferredAuthenticatedImageObserver = null;
@@ -12476,7 +12514,9 @@ function protectedMediaAbortError() {
 
 function scheduleProtectedMediaFetches() {
   while (protectedMediaActive < protectedMediaConcurrency && protectedMediaQueue.length) {
-    const entry = protectedMediaQueue.shift();
+    const visibleIndex = protectedMediaQueue.findIndex((entry) => !entry.preview);
+    if (visibleIndex < 0 && protectedMediaPreviewActive) return;
+    const [entry] = protectedMediaQueue.splice(Math.max(0, visibleIndex), 1);
     if (!entry || entry.waiters <= 0) {
       if (entry) {
         if (protectedMediaInflight.get(entry.key) === entry) protectedMediaInflight.delete(entry.key);
@@ -12486,6 +12526,10 @@ function scheduleProtectedMediaFetches() {
     }
     entry.started = true;
     protectedMediaActive += 1;
+    if (entry.preview) protectedMediaPreviewActive = true;
+    const thumbnailDeadline = /\/thumbnail(?:[?#]|$)/.test(entry.url)
+      ? setTimeout(() => entry.controller.abort(), 30000)
+      : null;
     void (async () => {
       const response = await fetch(entry.url, {
         credentials: "include",
@@ -12498,14 +12542,16 @@ function scheduleProtectedMediaFetches() {
       if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) throw new Error("Media response did not contain an image.");
       return blob;
     })().then(entry.resolve, entry.reject).finally(() => {
+      if (thumbnailDeadline !== null) clearTimeout(thumbnailDeadline);
       protectedMediaActive = Math.max(0, protectedMediaActive - 1);
+      if (entry.preview) protectedMediaPreviewActive = false;
       if (protectedMediaInflight.get(entry.key) === entry) protectedMediaInflight.delete(entry.key);
       scheduleProtectedMediaFetches();
     });
   }
 }
 
-function fetchProtectedMediaBlob(url, signal) {
+function fetchProtectedMediaBlob(url, signal, { preview = false } = {}) {
   if (signal?.aborted) return Promise.reject(protectedMediaAbortError());
   const token = getVeyraToken();
   const key = JSON.stringify([url, token]);
@@ -12515,10 +12561,11 @@ function fetchProtectedMediaBlob(url, signal) {
     let rejectEntry;
     const promise = new Promise((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
     promise.catch(() => {});
-    entry = { key, url, token, controller: new AbortController(), promise, resolve: resolveEntry, reject: rejectEntry, waiters: 0, started: false };
+    entry = { key, url, token, controller: new AbortController(), promise, resolve: resolveEntry, reject: rejectEntry, waiters: 0, started: false, preview };
     protectedMediaInflight.set(key, entry);
     protectedMediaQueue.push(entry);
   }
+  if (!preview && !entry.started) entry.preview = false;
   entry.waiters += 1;
   scheduleProtectedMediaFetches();
   return new Promise((resolve, reject) => {
@@ -12577,10 +12624,10 @@ function deferAuthenticatedImageUntilVisible(image, start, signal) {
   deferredAuthenticatedImageObserver.observe(image);
 }
 
-async function resolveAuthenticatedMediaSource(url, { signal = null } = {}) {
+async function resolveAuthenticatedMediaSource(url, { signal = null, preview = false } = {}) {
   const value = String(url || "").trim();
   if (!mediaUrlNeedsAuthenticatedFetch(value)) return { url: value, objectUrl: false };
-  const blob = await fetchProtectedMediaBlob(value, signal);
+  const blob = await fetchProtectedMediaBlob(value, signal, { preview });
   if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) {
     throw new Error("Media response did not contain an image.");
   }
@@ -12665,8 +12712,11 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
   void loadCandidate(0);
 }
 
+let lightboxPreviewController = null;
+
 function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "", emptyAlt = "图片暂不可用" } = {}) {
   if (!image) return;
+  lightboxPreviewController?.abort();
   const display = String(displayUrl || "").trim();
   const thumbnail = String(thumbnailUrl || "").trim();
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -12677,10 +12727,12 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
     image.classList.remove("is-loading-full");
     return;
   }
+  const controller = new AbortController();
+  lightboxPreviewController = controller;
   image.classList.add("is-loading-full");
   const preloader = new Image();
   preloader.decoding = "async";
-  void resolveAuthenticatedMediaSource(display).then((resolved) => {
+  void resolveAuthenticatedMediaSource(display, { signal: controller.signal, preview: true }).then((resolved) => {
     if (image.dataset.lightboxLoadToken !== token) {
       if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
       return;
@@ -12690,6 +12742,7 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
         return;
       }
+      authenticatedImageLoadControllers.get(image)?.abort();
       releaseImageObjectUrl(image);
       if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
       image.classList.remove("is-loading-full");
@@ -12916,6 +12969,15 @@ async function loadV2TemplateBootstrap(path, fallbackValue = null) {
   } catch (error) {
     console.warn(`V2 template bootstrap unavailable: ${path}`, error);
     return fallbackValue;
+  }
+}
+
+async function loadV2HistoryPage(options, shouldContinue) {
+  try {
+    return await loadV2HistoryResponse(options);
+  } catch (error) {
+    if (error.name !== "AbortError" || options.limit <= 1 || !shouldContinue()) throw error;
+    return loadV2HistoryResponse({ ...options, limit: Math.ceil(options.limit / 2) });
   }
 }
 
@@ -15278,6 +15340,12 @@ function openImageLightbox({ id, title, url, downloadUrl, thumbnailUrl, previewU
 
 function closeImageLightbox() {
   els.imageLightbox.hidden = true;
+  lightboxPreviewController?.abort();
+  lightboxPreviewController = null;
+  authenticatedImageLoadControllers.get(els.lightboxImage)?.abort();
+  authenticatedImageLoadControllers.delete(els.lightboxImage);
+  els.lightboxImage.dataset.mediaLoadToken = "";
+  els.lightboxImage.classList.remove("is-loading-full");
   releaseImageObjectUrl(els.lightboxImage);
   els.lightboxImage.removeAttribute("src");
   els.lightboxImage.removeAttribute("data-full-url");
@@ -15991,6 +16059,7 @@ async function request(path, options = {}) {
     headers: Object.keys(headers).length ? headers : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
     credentials: "include",
+    signal: options.signal,
   });
   if (!response.ok) {
     const detail = await response.text();

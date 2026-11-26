@@ -2487,7 +2487,7 @@ async def v3_output_preview_endpoint(output_id: str, request: Request, authoriza
 @app.get("/api/v3/creative-agent/outputs/{output_id}/thumbnail")
 async def v3_output_thumbnail_endpoint(output_id: str, request: Request, authorization: str = Header(default="")):
     await _require_v3_output_read_visible(request, output_id, authorization)
-    resolved = v3_output_store.file_for_variant(output_id, "thumbnail")
+    resolved = await run_in_threadpool(v3_output_store.file_for_browser_thumbnail, output_id)
     if resolved is None:
         raise HTTPException(status_code=404, detail={"code": "v3_output_not_found", "message": "Generated V3 output thumbnail not found."})
     path, media_type, _filename = resolved

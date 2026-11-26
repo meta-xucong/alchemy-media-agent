@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+from tempfile import NamedTemporaryFile
 import threading
 import time
 from types import MappingProxyType
@@ -591,6 +592,34 @@ class V3GeneratedOutputStore:
         if path.resolve(strict=False) != original_path.resolve(strict=False) and not self._image_is_valid_cached(path):
             return None
         return path, media_type, filename
+
+    def file_for_browser_thumbnail(self, output_id: str) -> tuple[Path, str, str] | None:
+        resolved = self.file_for_variant(output_id, "thumbnail")
+        if resolved is None:
+            return None
+        source, _, _ = resolved
+        target = source.with_suffix(".webp")
+        temporary = None
+        try:
+            if not target.is_file() or target.stat().st_mtime_ns < source.stat().st_mtime_ns:
+                from PIL import Image
+
+                with NamedTemporaryFile(dir=source.parent, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    with Image.open(source) as image:
+                        image.save(stream, format="WEBP", quality=82)
+                temporary.replace(target)
+            if _path_is_within(source.parent, target):
+                return target, "image/webp", f"{output_id}_thumbnail.webp"
+        except (OSError, ValueError):
+            return resolved
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return resolved
 
     def verify_canonical_download(
         self,

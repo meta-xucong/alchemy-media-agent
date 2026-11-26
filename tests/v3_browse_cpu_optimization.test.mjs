@@ -390,6 +390,7 @@ test("mobile lazy protected history images defer until visible and cancel when c
   let fetchSignal = null;
   const context = {
     Map, WeakMap, AbortController, IntersectionObserver: MockIntersectionObserver,
+    setTimeout: () => 0, clearTimeout() {},
     Date, Math, URL, uniqueNonEmpty: (values) => [...new Set(values.filter(Boolean))],
     mediaUrlNeedsAuthenticatedFetch: () => true,
     releaseImageObjectUrl: () => {},
@@ -720,7 +721,7 @@ test("desktop V3 project cards can be opened during preview loading", async () =
     mergeV3ProjectItems: (primary) => primary,
     waitForV3Paint: async () => {},
     request: async () => ({ projects: [{ project_id: "picked" }] }),
-    loadV3ProjectOutputs: () => previews,
+    loadV3HomePreviews: () => previews,
     waitForV3HomePreviewImages: async () => {},
     openV3Project: (id) => {
       requested.push(id);
@@ -828,6 +829,7 @@ test("returning home releases an opening project and permits a later project aft
       renderV3HomeTemplateChooser: () => {},
       renderV3Projects: () => {},
       renderV3History: () => {},
+      v3ProjectImageGroups: () => [],
       renderV3ProjectDetail: () => {},
       renderV3ProjectOpeningState: () => {},
       renderV3Job: () => {},
