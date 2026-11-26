@@ -1730,6 +1730,19 @@ def test_v3_output_store_creates_preview_thumbnail_and_download(tmp_path) -> Non
     assert store.file_for_variant(record.output_id, "preview")[1] == "image/png"
     assert store.file_for_variant(record.output_id, "thumbnail")[1] == "image/png"
 
+    from PIL import Image
+
+    browser_thumb = store.file_for_browser_thumbnail(record.output_id)
+    assert browser_thumb is not None
+    assert browser_thumb[1:] == ("image/webp", f"{record.output_id}_thumbnail.webp")
+    with Image.open(browser_thumb[0]) as converted, Image.open(record.thumbnail_path) as source:
+        assert converted.format == "WEBP"
+        assert converted.size == source.size
+    mtime = browser_thumb[0].stat().st_mtime_ns
+    assert store.file_for_browser_thumbnail(record.output_id) == browser_thumb
+    assert browser_thumb[0].stat().st_mtime_ns == mtime
+    assert store.file_for_variant(record.output_id, "thumbnail")[0] == Path(record.thumbnail_path)
+
 
 def test_v3_output_store_decodes_once_for_both_preview_sizes(tmp_path, monkeypatch) -> None:
     import hashlib

@@ -95,7 +95,7 @@ const historyFunctions = [
   "hasMoreV1History", "hasMoreV2History", "loadMoreV1History", "loadMoreV2History",
   "loadRemainingV1HistoryForFavorites", "loadRemainingV2HistoryForFavorites",
   "v2HistoryEndpoint", "v2HistoryPath", "loadV2RequestWithTimeout",
-  "loadV2HistoryWithTimeout", "loadV2HistoryResponse", "v2HistoryLoadErrorMessage",
+  "loadV2HistoryWithTimeout", "loadV2HistoryResponse", "loadV2HistoryPage", "v2HistoryLoadErrorMessage",
   "v2ReviewShortText", "v2ReviewExplanation", "appendV2ReviewDetails", "shortOutputId",
 ];
 
@@ -996,13 +996,15 @@ for (const shell of shells) {
       h.context.v3ApiBase = "/api/v3/creative-agent";
       h.context.v3ProjectFetchLimit = h.context.v3ProjectHomePageSize;
       h.context.v3State.projects = [];
-      h.install(["initialV3ScenarioFromPath", "initV3Shell", "mergeV3ProjectItems"]);
+      h.context.v3HomePreviewsPending = new Set();
+      h.install(["initialV3ScenarioFromPath", "initV3Shell", "mergeV3ProjectItems", "loadV3HomePreviews"]);
       h.context.window.location.search = "?module=v3";
       await h.listeners.get("DOMContentLoaded")();
     } else {
       // Mobile's existing entry is the V3 tab; its URL normalizer does not
       // support module=v3. Exercise that real entry without inventing a route.
       h.context.mobileV3State = { projects: [], templates: [], selectedTemplate: "" };
+      h.context.mobileV3HomePreviewsPending = new Set();
       h.context.mobileV3ProjectFetchLimit = h.context.mobileV3ProjectPageSize;
       h.context.mobileV3Request = (path) => h.context.request(`/api/v3/creative-agent${path}`);
       h.context.mobileV3VisibleProjects = () => h.context.mobileV3State.projects;
@@ -1685,4 +1687,96 @@ for (const shell of shells) {
       });
     }
   }
+}
+for (const shell of shells) {
+  test(shell.name + ": a large preview leaves a slot for thumbnails and closing it cancels the transfer", async () => {
+    const desktop = shell.name === "desktop";
+    const start = shell.source.indexOf(desktop ? "const v3ProtectedMediaQueue" : "const protectedMediaQueue");
+    const end = shell.source.indexOf("function releaseImageObjectUrl", start);
+    const started = [];
+    const pending = new Map();
+    const preview = "/api/v3/creative-agent/outputs/one/preview";
+    const thumb = "/v1/outputs/visible/thumbnail";
+    const image = {
+      dataset: {},
+      classList: { add() {}, remove() {} },
+      removeAttribute(name) {
+        if (name === "data-lightbox-load-token") delete this.dataset.lightboxLoadToken;
+      },
+    };
+    const context = vm.createContext({
+      AbortController, clearTimeout, setTimeout, Image: class {},
+      URL: { createObjectURL: () => "blob:fixture", revokeObjectURL() {} },
+      authenticatedImageLoadControllers: new WeakMap(),
+      document: { body: { classList: { remove() {} } } },
+      els: { imageLightbox: {}, lightboxImage: image },
+      getVeyraToken: () => "fixture",
+      mediaUrlNeedsAuthenticatedFetch: () => true,
+      releaseImageObjectUrl() {}, resetLightboxZoom() {}, closeLightboxPrompt() {},
+      renderLightboxActions() {}, releaseV3ScrollLockIfNoModal() {},
+      bindImageWithFallback() {},
+      fetch(url, { signal }) {
+        started.push(url);
+        return new Promise((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+          pending.set(url, { signal, resolve });
+        });
+      },
+    });
+    const helperSource = ["bindProgressiveLightboxImage", "closeImageLightbox"]
+      .map((name) => extractFunction(shell.source, name)).join("\n");
+    const queueSource = shell.source.slice(start, end).replace("const authenticatedImageLoadControllers = new WeakMap();", "");
+    vm.runInContext(queueSource + "\nlet lightboxPreviewController = null;\n" + helperSource, context);
+    context.bindProgressiveLightboxImage(image, { displayUrl: preview, thumbnailUrl: thumb });
+    const small = context.resolveAuthenticatedMediaSource(thumb);
+    assert.deepEqual(started, [preview, thumb]);
+    context.closeImageLightbox();
+    assert.equal(pending.get(preview).signal.aborted, true);
+    assert.equal(pending.get(thumb).signal.aborted, false);
+    pending.get(thumb).resolve(new Response("fixture", { headers: { "Content-Type": "image/webp" } }));
+    assert.equal((await small).objectUrl, true);
+  });
+
+  test(shell.name + ": timed-out V2 history repeats the same offset with a smaller page", async () => {
+    const options = { offset: 24, limit: 24, favorite: true };
+    const requests = [];
+    const context = vm.createContext({
+      loadV2HistoryResponse: async (request) => {
+        requests.push({ ...request });
+        if (requests.length !== 2) throw Object.assign(new Error("timeout"), { name: "AbortError" });
+        return { items: [1] };
+      },
+    });
+    vm.runInContext(extractFunction(shell.source, "loadV2HistoryPage"), context);
+    assert.deepEqual(await context.loadV2HistoryPage(options, () => true), { items: [1] });
+    assert.deepEqual(requests, [options, { ...options, limit: 12 }]);
+    await assert.rejects(context.loadV2HistoryPage(options, () => false), { name: "AbortError" });
+    assert.equal(requests.length, 3);
+  });
+
+  test(shell.name + ": V3 home requests its first two covers independently of the remaining projects", async () => {
+    const batches = [];
+    const first = deferred();
+    const rest = deferred();
+    const makeRequest = (batch) => {
+      batches.push([...batch]);
+      return batch[0] === "p1" ? first.promise : rest.promise;
+    };
+    const context = vm.createContext({
+      getVeyraToken: () => "fixture",
+      v3HomePreviewsPending: new Set(),
+      mobileV3HomePreviewsPending: new Set(),
+      loadV3ProjectOutputs: ({ projectIds }) => makeRequest(projectIds),
+      loadMobileV3HomePreviewBatch: (projectIds) => makeRequest(projectIds),
+    });
+    const name = shell.name === "desktop" ? "loadV3HomePreviews" : "loadMobileV3HomePreviews";
+    vm.runInContext(extractFunction(shell.source, name), context);
+    const result = context[name](["p1", "p2", "p3", "p4"]);
+    assert.deepEqual(batches, [["p1", "p2"], ["p3", "p4"]]);
+    await context[name](["p1", "p3"]);
+    assert.equal(batches.length, 2);
+    rest.resolve();
+    first.resolve();
+    await result;
+  });
 }

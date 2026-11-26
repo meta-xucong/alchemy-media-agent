@@ -759,14 +759,15 @@ def test_mobile_releases_project_mask_after_first_preview_while_history_is_slow(
             browser.close()
 
 
-def test_mobile_delivery_opens_current_batch_without_reopening_project() -> None:
+@pytest.mark.parametrize("from_terminal_status", [False, True])
+def test_mobile_delivery_opens_current_batch_without_reopening_project(from_terminal_status: bool) -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
             page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
             result = page.evaluate(
                 """
-                async (thumbnail) => {
+                async ({ thumbnail, fromTerminalStatus }) => {
                   const project = {
                     project_id: "project_h5_delivery",
                     title: "H5 delivery",
@@ -789,6 +790,13 @@ def test_mobile_delivery_opens_current_batch_without_reopening_project() -> None
                     candidates: items.slice(1),
                     metadata: { image_billing: { status: "charged", amount: "0.28" } },
                   };
+                  if (fromTerminalStatus) {
+                    job.metadata.final_delivery = {
+                      automatic_delivery_available: true,
+                      final_delivery_output_count: currentIds.length,
+                    };
+                    mobileV3State.outputs = [items[0]];
+                  }
                   const requests = [];
                   const fallbackFetch = window.fetch;
                   window.fetch = async (input, init = {}) => {
@@ -822,17 +830,21 @@ def test_mobile_delivery_opens_current_batch_without_reopening_project() -> None
                   };
                 }
                 """,
-                "data:image/png;base64," + _ONE_PIXEL_PNG,
+                {"thumbnail": "data:image/png;base64," + _ONE_PIXEL_PNG, "fromTerminalStatus": from_terminal_status},
             )
             assert result["before"] == "v3-compose", result
             assert result["surface"] == "v3-project-detail", result
             assert result["resultVisible"], result
             assert result["selected"] == "first"
-            assert result["cards"] == ["previous", "first", "second", "third", "fourth"]
+            current_ids = ["first", "second", "third", "fourth"]
+            assert result["cards"] == (current_ids + ["previous"] if from_terminal_status else ["previous"] + current_ids)
             assert "未交付" not in result["progress"]
-            assert len(result["requests"]) == 1
-            url, method = result["requests"][0]
-            assert method == "GET"
-            assert "/project-outputs?" in url and "project_id=project_h5_delivery" in url
+            if from_terminal_status:
+                assert result["requests"] == []
+            else:
+                assert len(result["requests"]) == 1
+                url, method = result["requests"][0]
+                assert method == "GET"
+                assert "/project-outputs?" in url and "project_id=project_h5_delivery" in url
         finally:
             browser.close()
