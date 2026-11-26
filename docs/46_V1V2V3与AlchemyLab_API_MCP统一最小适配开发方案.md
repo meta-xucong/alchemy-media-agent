@@ -171,7 +171,7 @@ V2 继续使用独立服务的原始 `/api/v2/*` 契约。首批工具覆盖“�
 
 | MCP 工具 | 现有 API | 说明 |
 |---|---|---|
-| `alchemy_v2_create_creative_run` | `POST /api/v2/creative/runs/async` | 使用 V2 中枢和队列，返回原 run_id |
+| `alchemy_v2_create_creative_run` | `POST /api/v2/creative/runs` | 使用 V2 创意编排，接收 `template_case_id` |
 | `alchemy_v2_get_creative_run` | `GET /api/v2/creative/runs/{run_id}` | 查询原状态和 next_actions |
 | `alchemy_v2_upload_asset` | `/api/v2/uploads*` | 复用 V2 独立素材存储 |
 | `alchemy_v2_create_image_job` | `POST /api/v2/image/jobs` | 直接进入 V2 图像任务接口 |
@@ -183,6 +183,12 @@ V2 继续使用独立服务的原始 `/api/v2/*` 契约。首批工具覆盖“�
 V2 的 `case_strategist_search`、`case_detail`、`case_profile`、`prompt_safety_check` 继续作为内部 Agents SDK function tools；如果以 MCP 暴露，必须走对应 V2 HTTP API 或 Domain Service 的公开安全投影，不直接把 Python function tool 对象注册成公共 MCP 工具。
 
 V2 的运行时模型设置、Veyra billing settings、Provider 密钥、资源同步控制和管理员接口不开放给普通 API Key/MCP。
+
+### REST API 指定 V2 案例模板
+
+[Alchemy API 使用指南](https://alchemy.aiself.vip/api-access#v2-template-guide) 提供从 `GET /api/v2/templates` 查询案例、用 `POST /api/v2/creative/runs/async` 指定 `template_case_id`，再查询 `GET /api/v2/creative/runs/{run_id}` 核对 `selected_cases[0].case_id` 的完整请求示例。
+
+两种创意任务入口都会校验明确指定的案例。案例无效或已下架时返回 `404 template_case_unavailable`。只执行已编排计划的 `POST /api/v2/image/jobs` 收到 `template_case_id` 时返回 `422 template_requires_creative_run`，并提示使用创意任务入口。
 
 ## 6. V3 保持现状并纳入统一能力表
 

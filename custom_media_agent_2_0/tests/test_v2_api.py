@@ -279,7 +279,55 @@ def test_v2_creative_run_allows_template_without_prompt() -> None:
     )
 
     assert response.status_code == 202
-    assert response.json()["run_id"].startswith("run_")
+    run_id = response.json()["run_id"]
+    assert run_id.startswith("run_")
+    assert queue_worker_service.process_next_task_once(main_module.creative_manager, "template-test-worker")
+    completed = client.get(f"/api/v2/creative/runs/{run_id}").json()
+    assert completed["status"] == "completed"
+    assert completed["selected_cases"][0]["case_id"] == template_id
+
+
+@pytest.mark.parametrize("endpoint", ["/api/v2/creative/runs", "/api/v2/creative/runs/async"])
+@pytest.mark.parametrize("case_id", ["case_missing_for_validation", "case_retired_for_validation"])
+def test_v2_creative_run_rejects_unavailable_template_before_admission(endpoint, case_id, monkeypatch) -> None:
+    client = fresh_client()
+    if case_id == "case_retired_for_validation":
+        listed_id = client.get("/api/v2/templates", params={"limit": 1}).json()["templates"][0]["case_id"]
+        active_case = repository.get_case(listed_id)
+        assert active_case is not None
+        repository.upsert_cases([active_case.model_copy(update={"case_id": case_id, "is_active": False})])
+
+    async def unexpected_admission(*args, **kwargs):
+        pytest.fail("An unavailable template must be rejected before queue admission or generation capacity")
+
+    monkeypatch.setattr(main_module, "_enqueue_creative_run", unexpected_admission)
+    monkeypatch.setattr(main_module, "run_with_generation_capacity", unexpected_admission)
+    response = client.post(endpoint, json={"user_prompt": "Fixture poster", "template_case_id": case_id})
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error_code"] == "template_case_unavailable"
+
+
+@pytest.mark.parametrize("template_case_id", ["case_github_evolinkai_ad_0001", None])
+def test_v2_direct_image_job_rejects_template_field_with_creative_route(template_case_id, monkeypatch) -> None:
+    client = fresh_client()
+
+    async def unexpected_generation(*args, **kwargs):
+        pytest.fail("A template sent to the direct image endpoint must be rejected before generation")
+
+    monkeypatch.setattr(main_module, "run_with_generation_capacity", unexpected_generation)
+    response = client.post(
+        "/api/v2/image/jobs",
+        json={
+            "prompt_plan": {"plan_id": "fixture", "mode": "smart_enhance", "prompt": "Fixture poster"},
+            "template_case_id": template_case_id,
+        },
+    )
+
+    assert response.status_code == 422
+    error = response.json()["detail"][0]
+    assert error["type"] == "template_requires_creative_run"
+    assert "POST /api/v2/creative/runs/async" in error["msg"]
 
 
 def test_provider_sync_publishes_seed_cases(monkeypatch) -> None:
