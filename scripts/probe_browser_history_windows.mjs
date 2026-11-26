@@ -19,7 +19,7 @@ const functions = [
   "loadRemainingV1HistoryForFavorites", "loadRemainingV2HistoryForFavorites", "renderHistory", "renderV2History",
   "renderFavoritePicker", "renderV2FavoriteReferencePicker", "editableFavoriteHistoryItems", "v2FavoriteReferenceItems",
   "closeFavoritePicker", "closeV2FavoriteReferencePicker", "renderHeroHistory", "releaseImageObjectUrl", "bindImageWithFallback",
-  "v2HistoryEndpoint", "v2HistoryPath", "loadV2RequestWithTimeout", "loadV2HistoryWithTimeout", "loadV2HistoryResponse",
+  "v2HistoryEndpoint", "v2HistoryPath", "loadV2RequestWithTimeout", "loadV2HistoryWithTimeout", "loadV2HistoryResponse", "loadV2HistoryPage",
   "v2ReviewShortText", "v2ReviewExplanation", "appendV2ReviewDetails", "shortOutputId",
 ];
 function extract(source, name) {
