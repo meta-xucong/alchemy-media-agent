@@ -43,7 +43,33 @@
       <div id="keyList" class="access-key-list" aria-live="polite"><p class="access-empty">正在读取…</p></div>
       <div id="keyPagination" class="access-pagination" hidden><button id="prevKeys" class="access-button secondary" type="button">上一页</button><span id="pageCount"></span><button id="nextKeys" class="access-button secondary" type="button">下一页</button></div>
     </section>
-    <details id="usageHelp" class="access-card access-help"><summary>第一次使用？只需两步</summary><p>① 创建后保存密钥。② 在调用工具中填入本页的服务地址和密钥。</p><p>已经安装 Alchemy MCP 的用户，可复制「MCP 连接配置」，填入原插件的环境配置；无需更换工具或模型。尚未安装插件，请先按项目的 MCP 安装说明完成一次安装。</p><p>API 使用现有 <code>/api/v3/creative-agent/…</code>。密钥仅支持产品操作，不用于登录网页、后台管理或本地 handoff。密钥停用后，新请求立即被拒绝；已受理任务沿用原任务流程。</p><label for="serviceAddress">服务地址</label><input id="serviceAddress" readonly><button id="copyAddress" class="access-button secondary" type="button">复制地址</button></details>
+    <details id="usageHelp" class="access-card access-help"><summary>第一次使用？只需两步</summary><p>① 创建后保存密钥。② 在调用工具中填入本页的服务地址和密钥。</p><p>已经安装 Alchemy MCP 的用户，可复制「MCP 连接配置」，填入原插件的环境配置；无需更换工具或模型。尚未安装插件，请先按项目的 MCP 安装说明完成一次安装。</p><p>API 密钥可调用授权范围内的产品接口，V2 案例示例见下方。密钥停用后，新请求立即被拒绝；已受理任务沿用原任务流程。</p><label for="serviceAddress">服务地址</label><input id="serviceAddress" readonly><button id="copyAddress" class="access-button secondary" type="button">复制地址</button></details>
+    <details id="v2-template-guide" class="access-card access-help">
+      <summary>V2 API 指定案例模板</summary>
+      <p>示例使用有 V2 权限的 API 密钥。将下面的 <code>YOUR_API_KEY</code> 换成自己的密钥。</p>
+      <ol>
+        <li>查询可用案例，取 <code>templates</code> 列表里所选案例的 <code>case_id</code>。
+          <pre class="access-code"><code>GET /api/v2/templates?limit=24
+Authorization: Bearer YOUR_API_KEY</code></pre>
+        </li>
+        <li>将案例 ID 填入 <code>template_case_id</code>，提交一次创意任务。响应中的 <code>run_id</code> 用于查询进度。
+          <pre class="access-code"><code>POST /api/v2/creative/runs/async
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "user_prompt": "为咖啡新品做一张促销海报",
+  "template_case_id": "CASE_ID_FROM_TEMPLATES",
+  "output": { "count": 1 }
+}</code></pre>
+        </li>
+        <li>把响应里的 <code>run_id</code> 填入查询路径。任务完成后，核对 <code>selected_cases[0].case_id</code> 与提交时的 <code>template_case_id</code> 一致。
+          <pre class="access-code"><code>GET /api/v2/creative/runs/RUN_ID
+Authorization: Bearer YOUR_API_KEY</code></pre>
+        </li>
+      </ol>
+      <p>案例无效或已下架时返回 <code>404 template_case_unavailable</code>。直接生图接口 <code>POST /api/v2/image/jobs</code> 收到 <code>template_case_id</code> 时返回 <code>422 template_requires_creative_run</code>，并指向创意任务入口。</p>
+    </details>
   </main>
   <dialog id="secretDialog" class="access-dialog" aria-labelledby="secretTitle">
     <div class="access-dialog-body"><span class="access-step">已创建</span><h2 id="secretTitle">保存好，这把钥匙只显示一次</h2><p>离开或关闭此窗口后无法找回。不要分享密钥、示例或包含它的配置。</p>

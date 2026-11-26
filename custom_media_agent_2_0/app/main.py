@@ -526,6 +526,17 @@ def _with_veyra_user(body: CreateCreativeRunRequest, request: Request, authoriza
     return body.model_copy(update={"veyra_user_id": _veyra_user_id_from_request(request, authorization)})
 
 
+async def _require_active_creative_template(case_id: str | None) -> None:
+    if case_id is None:
+        return
+    case = await _run_sqlite_api_call(get_prompt_case, case_id)
+    if case is None or not case.is_active:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "template_case_unavailable", "message": "The selected V2 template does not exist or is no longer active."},
+        )
+
+
 def _uploaded_asset_owner_id(asset_id: str) -> int | None:
     asset = get_uploaded_asset(asset_id)
     if not asset:
@@ -603,6 +614,7 @@ async def _require_output_visible(request: Request, output_id: str, authorizatio
 async def create_creative_run(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
     _require_creative_asset_count(body.assets)
     run_request = _with_veyra_user(body, request, authorization)
+    await _require_active_creative_template(body.template_case_id)
 
     async def run_and_reconcile_bridge_wait():
         run = await creative_manager.run(run_request)
@@ -701,8 +713,9 @@ async def _resume_direct_bridge_run(run: CreativeRun) -> CreativeRun:
 @app.post("/api/v2/creative/runs/async", status_code=202)
 async def create_creative_run_async(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
     _require_creative_asset_count(body.assets)
-    body = _with_veyra_user(body, request, authorization)
-    return await _enqueue_creative_run(body, kind="creative_run")
+    run_request = _with_veyra_user(body, request, authorization)
+    await _require_active_creative_template(body.template_case_id)
+    return await _enqueue_creative_run(run_request, kind="creative_run")
 
 
 def _persist_queued_run(request: CreateCreativeRunRequest, *, kind: str) -> CreativeRun:

@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator, field_validator
+from pydantic_core import PydanticCustomError
 
 
 RunStatus = Literal[
@@ -667,6 +668,16 @@ class CreateImageJobRequest(BaseModel):
     provider_hint: str | None = None
     input_images: list[ProviderInputImage] = Field(default_factory=list)
     veyra_user_id: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_template_case_id(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "template_case_id" in data:
+            raise PydanticCustomError(
+                "template_requires_creative_run",
+                "Use POST /api/v2/creative/runs/async with template_case_id to select a V2 template.",
+            )
+        return data
 
 
 class CreateFeedbackRequest(BaseModel):
