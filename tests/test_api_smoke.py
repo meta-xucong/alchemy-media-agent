@@ -2269,7 +2269,7 @@ def test_frontend_static_app_is_served():
     assert "function v2HistoryEndpoint" in script.text
     # A 72-row revisitable window uses 24-row transport and server-paged favorites.
     # Account summary samples retain their independent 48/72 contract.
-    assert "loadV2HistoryResponse({ limit, offset, favorite: favoritesDemand }" in script.text
+    assert "loadV2HistoryPage({ limit, offset, favorite: favoritesDemand }" in script.text
     assert "const historyWindowSize = 72" in script.text
     assert "function loadPreviousHistoryWindow" in script.text
     assert "const historyFetchPageSize = 24" in script.text
@@ -2550,7 +2550,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "function v2HistoryEndpoint" in mobile_script.text
     # A 72-row revisitable window uses 24-row transport and server-paged favorites.
     # Account summary samples retain their independent 48/72 contract.
-    assert "loadV2HistoryResponse({ limit, offset, favorite: favoritesDemand }" in mobile_script.text
+    assert "loadV2HistoryPage({ limit, offset, favorite: favoritesDemand }" in mobile_script.text
     assert "const historyWindowSize = 72" in mobile_script.text
     assert "function loadPreviousHistoryWindow" in mobile_script.text
     assert "const historyFetchPageSize = 24" in mobile_script.text
