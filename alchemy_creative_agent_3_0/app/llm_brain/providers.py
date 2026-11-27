@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import copy
+import hashlib
 import json
 import logging
 import math
@@ -14,6 +15,7 @@ import re
 import threading
 import time
 from typing import Any
+from uuid import uuid4
 
 from ..model_routing import build_v3_model_candidates, model_protocol, v3_gateway_credentials
 from .contracts import (
@@ -1371,6 +1373,16 @@ class V3LLMBrainProvider:
                     output_config["format"] = structured_output[1]
                 if output_config:
                     payload["output_config"] = output_config
+            schema = structured_output[1]["schema"] if structured_output else None
+            numbered_plan = schema is not None and "image_set_plan" in schema["properties"]
+            trace = _ACTIVE_TRANSPORT_TRACE.get()
+            if numbered_plan and trace is not None:
+                trace["claude_schema_sha256"] = hashlib.sha256(
+                    json.dumps(schema, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                ).hexdigest()
+                trace["claude_client_request_id"] = str(uuid4())
+                headers["x-client-request-id"] = trace["claude_client_request_id"]
+                headers["x-alchemy-brain-schema-trace"] = "1"
             _mark_transport_event("client_constructing")
             with httpx.Client(timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds))) as client:
                 client_registration = _register_transport_close(client)
@@ -1419,8 +1431,14 @@ class V3LLMBrainProvider:
                 response_text = _unwrap_anthropic_json_markdown_fence(response_text)
             parsed = _loads_json_object(response_text)
             if structured_output:
+                if numbered_plan and trace is not None:
+                    trace["claude_plan_shape"] = _claude_plan_shape(parsed)
                 try:
-                    restore_anthropic_structured_output(parsed, structured_output[2])
+                    restore_anthropic_structured_output(
+                        parsed,
+                        structured_output[2],
+                        shot_plan_count=request.requested_image_count if numbered_plan else None,
+                    )
                 except ValueError as exc:
                     if trace is not None and isinstance(exc, AnthropicWireValueError):
                         trace["claude_field_path"] = exc.field_path
@@ -1724,6 +1742,21 @@ def _call_with_timeout(
     return value
 
 
+def _claude_plan_shape(response: dict[str, Any]) -> dict[str, str]:
+    def shape(section: dict[str, Any], field: str) -> str:
+        return type(section[field]).__name__ if field in section else "missing"
+
+    fields = {
+        section: shape(response, section)
+        for section in ("image_set_plan", "visual_task_profile", "capability_activation_intent", "prompt_guidance")
+    }
+    plan = response.get("image_set_plan")
+    if isinstance(plan, dict):
+        for field in ("image_count", "shot_plan"):
+            fields[f"image_set_plan.{field}"] = shape(plan, field)
+    return fields
+
+
 def _log_claude_attempt(
     request: BrainRunRequest,
     trace: dict[str, Any],
@@ -1758,6 +1791,14 @@ def _log_claude_attempt(
         "stop_reason": trace.get("claude_stop_reason"),
         "failure_kind": failure_kind,
         "field_path": field_path,
+        **(
+            {
+                "client_request_id": trace["claude_client_request_id"],
+                "schema_sha256": trace["claude_schema_sha256"],
+                "response_shape": trace.get("claude_plan_shape"),
+            }
+            if "claude_schema_sha256" in trace else {}
+        ),
         "outcome": _safe_failure_class(failure) if failure is not None else "accepted",
         "elapsed_ms": elapsed_ms,
     }))
