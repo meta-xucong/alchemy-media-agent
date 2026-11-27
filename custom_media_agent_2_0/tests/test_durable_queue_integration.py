@@ -6,9 +6,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.config import settings
 from app.repositories import repository
@@ -25,6 +26,56 @@ def _run(run_id: str) -> CreativeRun:
         intent_summary="offline durable queue integration", trace_id=f"trace_{run_id}",
         created_at=now, updated_at=now,
     )
+
+
+def test_async_creative_submission_replays_one_durable_run(tmp_path, monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(task_queue, "settings", replace(
+        settings, task_queue_db_path=tmp_path / "queue.sqlite3", task_queue_max_pending=1,
+    ))
+    monkeypatch.setattr(main, "_with_veyra_user", lambda body, _, authorization: body.model_copy(
+        update={"veyra_user_id": int(authorization)}
+    ))
+    template_available = True
+
+    async def check_case(case_id):
+        assert case_id == "case_offline"
+        if not template_available:
+            raise HTTPException(status_code=404)
+
+    monkeypatch.setattr(main, "_require_active_creative_template", check_case)
+    key = str(uuid4())
+    request = Request({"type": "http", "headers": [(b"idempotency-key", key.encode())]})
+    body = CreateCreativeRunRequest(user_prompt="offline", template_case_id="case_offline")
+
+    async def submit(account, payload=body):
+        return await main.create_creative_run_async(payload, request, str(account))
+
+    async def exercise():
+        nonlocal template_available
+        # Both requests reach admission before either can rely on the other's HTTP receipt.
+        first, replay = await asyncio.gather(submit(14), submit(14))
+        assert first.run_id == replay.run_id
+        assert task_queue.task_queue_stats()["counts"] == {"queued": 1}
+        with pytest.raises(HTTPException) as conflict:
+            await submit(14, body.model_copy(update={"user_prompt": "different"}))
+        assert conflict.value.status_code == 409
+
+        claim = task_queue.claim_next_task("offline")
+        assert claim is not None and claim.run_id == first.run_id
+        assert task_queue.complete_task(claim, first.model_copy(update={"status": "completed"}))
+        template_available = False
+        assert (await submit(14)).run_id == first.run_id
+        assert task_queue.get_run_snapshot(first.run_id).status == "completed"
+        assert task_queue.claim_next_task("another-worker") is None
+        with pytest.raises(HTTPException) as unavailable:
+            await submit(15)
+        assert unavailable.value.status_code == 404
+        template_available = True
+        assert (await submit(15)).run_id != first.run_id
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("owner", ["superseded", "completed"])

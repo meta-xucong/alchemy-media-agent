@@ -210,6 +210,7 @@ test("planned job recovery reads only the job bound to its operation id", async 
     v3State: { currentProject: { job_ids: ["job_previous_one_image"] } },
     window: { setTimeout: (resolve) => resolve() },
     v3GenerationSessionOwns: () => true,
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async (url) => {
       calls.push(url);
       if (url.endsWith("/planning-operations/op_current")) {
@@ -245,6 +246,7 @@ test("planned job recovery continues beyond 240 reads and never follows a differ
     v3State: { currentProject: { job_ids: ["job_previous_one_image"] } },
     window: { setTimeout: (resolve, delay) => { delays.push(delay); resolve(); } },
     v3GenerationSessionOwns: (owns) => owns(),
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async (url, options) => {
       assert.equal(options?.method ?? "GET", "GET");
       if (url.endsWith("/jobs/job_current")) return { job_id: "job_current", status: "finalizing" };
@@ -310,6 +312,7 @@ test("desktop submits once and follows long planning and review through to the o
     v3RecoveryProgressPresentation: () => ({ stageKey: "reviewing" }),
     friendlyError: (error) => String(error),
     completeV3GeneratedJob: async (result) => { delivered = result; },
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async (url, options = {}) => {
       requests.push([url, options.method || "GET"]);
       if (++checks > 390) {

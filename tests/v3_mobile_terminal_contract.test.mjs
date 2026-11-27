@@ -68,6 +68,7 @@ test("mobile planned job recovery reads only the job bound to its operation id",
     mobileV3State: { currentProject: { job_ids: ["job_previous_one_image"] } },
     window: { setTimeout: (resolve) => resolve() },
     mobileV3GenerationSessionOwns: () => true,
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     mobileV3Request: async (url) => {
       calls.push(url);
       if (url.endsWith("/planning-operations/op_current")) {
@@ -102,6 +103,7 @@ test("mobile cancelled planning recovery does not write a stale project after re
     mobileV3State: { currentProject: previousProject },
     window: { setTimeout: (resolve) => resolve() },
     mobileV3GenerationSessionOwns: () => ownsSession,
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     mobileV3Request: async (url) => {
       if (url.endsWith("/planning-operations/op_current")) {
         return { operation_id: "op_current", state: "planning_failed" };
@@ -126,6 +128,7 @@ test("mobile keeps following the original planning operation beyond the old poll
     window: { setTimeout: (resolve) => { ticks += 1; resolve(); } },
     mobileV3GenerationSessionOwns: (owns) => owns(),
     setMobileV3Progress: () => {},
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     mobileV3Request: async (url, options) => {
       assert.equal(options?.method ?? "GET", "GET");
       if (url.endsWith("/jobs/job_current")) return { job_id: "job_current", status: "finalizing" };
@@ -180,6 +183,7 @@ test("mobile submission stays locked until the bound job finishes review", async
     refreshMobileV3ProjectDetail: async () => { throw new Error("auxiliary project read temporarily failed"); },
     mobileV3JobDeliveryWithheld: () => false, mobileV3FormalPartialDeliveryNotice: () => "",
     friendlyError: (error) => String(error),
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     mobileV3Request: async (url, options = {}) => {
       requests.push([url, options.method || "GET"]);
       if (requests.length > 130) {
