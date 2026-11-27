@@ -1,6 +1,27 @@
 import collections,datetime,gzip,json,re,subprocess,time
 from pathlib import Path
 
+
+def _project_text_has_encoding_placeholders(value: str | None) -> bool:
+    if not value:
+        return False
+    runs = list(re.finditer(r"[?\uFFFD]{4,}", value))
+    if not runs:
+        return False
+    # A single run of ordinary question punctuation attached to a word is allowed.
+    if len(runs) == 1:
+        run = runs[0]
+        if (
+            run.start() > 0
+            and run.end() == len(value)
+            and value[run.start() - 1].isalnum()
+            and "\uFFFD" not in run.group()
+        ):
+            return False
+    markers = sum(len(run.group()) for run in runs)
+    return markers * 100 >= 35 * sum(not char.isspace() for char in value)
+
+
 wanted="/app/.media_storage"
 mounts=json.loads(subprocess.check_output(["docker","inspect","--format","{{json .Mounts}}","alchemy-media-agent"],text=True))
 base=next(Path(m["Source"]) for m in mounts if m["Destination"]==wanted)
@@ -20,6 +41,8 @@ for path in root.glob("project_*/project.json"):
     for field in ("title","user_goal","short_summary"):
         val=raw.get(field)
         if not isinstance(val,str): continue
+        if field in {"title","user_goal"} and _project_text_has_encoding_placeholders(val.strip()):
+            summary[field+"_would_block"]+=1
         compact=re.sub(r"\s+","",val)
         if len(compact)<4 or (compact.count("?")+compact.count("\ufffd"))/len(compact)<.35:
             continue
