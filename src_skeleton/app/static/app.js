@@ -17006,6 +17006,7 @@ function renderV2Outputs(outputs, job) {
         downloadUrl: v2ExplicitDownloadUrl(output),
         thumbnailUrl: v2OutputImageUrl(output),
         previewUrl: v2OutputPreviewCandidates(output)[0] || v2OutputImageUrl(output),
+        v2Preview: true,
         format: v2OutputFormat(output),
         meta: [v2ProviderResultText(job, output), v2ReviewText(output.review), v2ReviewExplanation(output.review)].filter(Boolean).join(" · "),
         promptText: v2PromptTextFromJob(job),
@@ -17294,6 +17295,7 @@ function openV2HistoryLightbox(item, index = 0, card = null) {
     downloadUrl: v2ExplicitDownloadUrl(item),
     thumbnailUrl: v2HistoryImageUrl(item),
     previewUrl: v2HistoryPreviewCandidates(item)[0] || v2HistoryImageUrl(item),
+    v2Preview: true,
     format: v2HistoryFormat(item),
     meta: [historyDetailText(historyRecordLabel(item), v2HistoryProviderResultText(item), formatDate(item.created_at || item.updated_at)), v2ReviewText(item.review), v2ReviewExplanation(item.review)].filter(Boolean).join(" · "),
     promptText: v2PromptTextFromHistory(item),
@@ -17873,7 +17875,23 @@ function bindV3ImageWithFallback(image, candidates, { detailBound = false, ...op
 
 let lightboxPreviewController = null;
 
-function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "", emptyAlt = "图片暂不可用" } = {}) {
+async function loadV2LightboxSource(display, original, signal) {
+  const read = (url) => withRequestDeadline(
+    (attempt) => resolveAuthenticatedMediaSource(url, { signal: attempt, preview: true }), 8000, signal,
+  );
+  try {
+    return await read(display);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    if (error.status === 404 && original && original !== display) return read(original);
+    if (["TimeoutError", "TypeError"].includes(error.name) || [502, 503, 504].includes(error.status)) {
+      return read(display);
+    }
+    throw error;
+  }
+}
+
+function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "", emptyAlt = "图片暂不可用", recoverPreview = false, originalUrl = "" } = {}) {
   if (!image) return;
   lightboxPreviewController?.abort();
   const display = String(displayUrl || "").trim();
@@ -17881,8 +17899,9 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   image.dataset.lightboxLoadToken = token;
   const hasSeparateThumbnail = Boolean(thumbnail && thumbnail !== display);
-  bindImageWithFallback(image, hasSeparateThumbnail ? [thumbnail] : [display], { emptyAlt, preview: !hasSeparateThumbnail });
-  if (!display || !hasSeparateThumbnail) {
+  const initialUrl = hasSeparateThumbnail ? thumbnail : display;
+  bindImageWithFallback(image, recoverPreview && !hasSeparateThumbnail ? [] : [initialUrl], { emptyAlt, preview: !hasSeparateThumbnail });
+  if (!display || (!hasSeparateThumbnail && !recoverPreview)) {
     image.classList.remove("is-loading-full");
     return;
   }
@@ -17891,7 +17910,10 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
   image.classList.add("is-loading-full");
   const preloader = new Image();
   preloader.decoding = "async";
-  void resolveAuthenticatedMediaSource(display, { signal: controller.signal, preview: true }).then((resolved) => {
+  const source = recoverPreview
+    ? loadV2LightboxSource(display, originalUrl, controller.signal)
+    : resolveAuthenticatedMediaSource(display, { signal: controller.signal, preview: true });
+  void source.then((resolved) => {
     if (image.dataset.lightboxLoadToken !== token) {
       if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
       return;
@@ -17904,7 +17926,7 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
       authenticatedImageLoadControllers.get(image)?.abort();
       releaseImageObjectUrl(image);
       if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
-      image.classList.remove("is-loading-full");
+      image.classList.remove("is-loading-full", "image-load-missing");
       image.src = resolved.url;
     };
     preloader.onerror = () => {
@@ -20124,6 +20146,7 @@ function openActiveHeroHistorySlide() {
     downloadUrl: normalizeOriginalDownloadUrl(item.downloadUrl || item.url),
     thumbnailUrl: item.thumbnailUrl || item.url,
     previewUrl: item.previewUrl || item.thumbnailUrl || item.url,
+    v2Preview: item.source === "v2",
     format: item.format,
     meta: item.meta,
     promptText: item.promptText,
@@ -20331,14 +20354,17 @@ function selectHistoryItem(item, card) {
   showNotice("历史图片已选中，可以在“继续修改”里生成新版本。", "success");
 }
 
-function openImageLightbox({ id, title, url, downloadUrl, thumbnailUrl, previewUrl, format, meta, promptText, actions = [] }) {
+function openImageLightbox({ id, title, url, downloadUrl, thumbnailUrl, previewUrl, v2Preview = false, format, meta, promptText, actions = [] }) {
   els.lightboxTitle.textContent = title || "图片预览";
   els.lightboxImage.alt = title || "放大预览图";
   els.lightboxImage.dataset.fullUrl = url || "";
+  const displayUrl = v2Preview && previewUrl && previewUrl !== thumbnailUrl ? previewUrl : url;
   bindProgressiveLightboxImage(els.lightboxImage, {
-    displayUrl: url || previewUrl || thumbnailUrl,
+    displayUrl: displayUrl || previewUrl || thumbnailUrl,
     thumbnailUrl,
     emptyAlt: els.lightboxImage.alt,
+    recoverPreview: v2Preview,
+    originalUrl: v2Preview ? url : "",
   });
   els.lightboxImage.dataset.shareTitle = title || "Alchemy 生成图片";
   els.lightboxImage.dataset.shareImage = url || "";
