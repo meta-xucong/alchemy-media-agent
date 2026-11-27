@@ -2100,7 +2100,7 @@ def test_frontend_static_app_is_served():
     assert "state.assets = [...state.assets, ...uploaded]" in script.text
     assert "v2State.uploadedAssets = [...v2State.uploadedAssets, ...uploaded]" in script.text
     assert "simpleModeState[version].files = [...(simpleModeState[version].files || []), ...imageFiles]" in script.text
-    assert "const previewUrl = item.preview_url || thumbnailUrl" in script.text
+    assert 'const previewUrl = item.preview_url === item.url ? "" : item.preview_url' in script.text
     assert 'bindProgressiveGridImage(article.querySelector(".lab-history-preview img")' in script.text
     assert "/api/lab/uploads" in script.text
     assert "/api/v2/uploads" not in script.text
@@ -2459,7 +2459,7 @@ def test_mobile_h5_app_is_served_independently():
     assert "state.assets = [...state.assets, ...uploaded]" in mobile_script.text
     assert "v2State.uploadedAssets = [...v2State.uploadedAssets, ...uploaded]" in mobile_script.text
     assert "simpleModeState[version].files = [...(simpleModeState[version].files || []), ...imageFiles]" in mobile_script.text
-    assert "const previewUrl = item.preview_url || thumbnailUrl" in mobile_script.text
+    assert 'const previewUrl = item.preview_url === item.url ? "" : item.preview_url' in mobile_script.text
     assert 'bindProgressiveGridImage(article.querySelector(".lab-history-preview img")' in mobile_script.text
     assert "/api/lab/uploads" in mobile_script.text
     assert "/api/v2/uploads" not in mobile_script.text
