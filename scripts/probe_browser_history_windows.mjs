@@ -20,6 +20,7 @@ const functions = [
   "renderFavoritePicker", "renderV2FavoriteReferencePicker", "editableFavoriteHistoryItems", "v2FavoriteReferenceItems",
   "closeFavoritePicker", "closeV2FavoriteReferencePicker", "renderHeroHistory", "releaseImageObjectUrl", "bindImageWithFallback",
   "v2HistoryEndpoint", "v2HistoryPath", "loadV2RequestWithTimeout", "loadV2HistoryWithTimeout", "loadV2HistoryResponse", "loadV2HistoryPage",
+  "withRequestDeadline", "readWithTimeout",
   "v2ReviewShortText", "v2ReviewExplanation", "appendV2ReviewDetails", "shortOutputId",
 ];
 function extract(source, name) {
@@ -131,7 +132,7 @@ async function validateFixtureRuntime(sources) {
       static revokeObjectURL() {}
     }
     const context = vm.createContext({
-      console, URL: FixtureURL, URLSearchParams, Blob, atob, AbortController, setTimeout, clearTimeout,
+      console, URL: FixtureURL, URLSearchParams, Blob, atob, AbortController, DOMException, setTimeout, clearTimeout,
       document: { body: fixtureNode("body"), createElement: fixtureNode, removeEventListener() {} },
       fetch: async (path) => {
         const url = new URL(path, "http://history-probe.test");
