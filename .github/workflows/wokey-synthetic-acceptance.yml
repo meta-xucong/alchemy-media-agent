@@ -1,4 +1,4 @@
-name: V3 UTF-8 deployed contract (isolated)
+name: V2 template catalog readback (isolated)
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [v3_utf8_online]
+        probe: [v2_case_lookup]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Verify deployed project ingress in a temporary store
+      - name: Look up the requested case in the active V2 catalog
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
@@ -42,7 +42,10 @@ jobs:
           opts=(-i "$ssh_dir/key" -p "$VPS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes
                 -o ConnectTimeout=20 -o StrictHostKeyChecking=yes -o HostKeyAlias=alchemy-acceptance-pinned
                 -o UserKnownHostsFile="$ssh_dir/known_hosts")
-          if [[ "$PROBE" == v3_utf8_provenance ]]; then
+          if [[ "$PROBE" == v2_case_lookup ]]; then
+            ssh "${opts[@]}" "${VPS_USER:-root}@$VPS_HOST" 'python3 -B -' < scripts/wokey_acceptance/v2_case_lookup.py
+            exit
+          elif [[ "$PROBE" == v3_utf8_provenance ]]; then
             ssh "${opts[@]}" "${VPS_USER:-root}@$VPS_HOST" 'python3 -B -' < scripts/wokey_acceptance/v3_utf8_provenance.py
             exit
           elif [[ "$PROBE" == release_capacity ]]; then
