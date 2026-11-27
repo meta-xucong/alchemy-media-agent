@@ -7,6 +7,7 @@ import logging
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -73,9 +74,11 @@ from app.services.veyra_billing_settings import (
 )
 from app.services.queue_worker import QueueWorker
 from app.services.task_queue import (
+    CreativeSubmissionConflict,
     QueueCapacityExceeded,
     QueueStorageBusy,
     enqueue_creative_task,
+    get_creative_submission,
     run_with_generation_capacity,
     get_run_snapshot,
     initialize_task_queue_async,
@@ -714,20 +717,52 @@ async def _resume_direct_bridge_run(run: CreativeRun) -> CreativeRun:
 async def create_creative_run_async(body: CreateCreativeRunRequest, request: Request, authorization: str = Header(default="")):
     _require_creative_asset_count(body.assets)
     run_request = _with_veyra_user(body, request, authorization)
-    await _require_active_creative_template(body.template_case_id)
-    return await _enqueue_creative_run(run_request, kind="creative_run")
+    key = request.headers.get("idempotency-key")
+    if key is None:
+        await _require_active_creative_template(body.template_case_id)
+        return await _enqueue_creative_run(run_request, kind="creative_run")
+    try:
+        submission_id = UUID(key)
+        if submission_id.version != 4 or str(submission_id) != key.lower():
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Idempotency-Key must be a UUIDv4.") from None
+    scoped_key = f"{run_request.veyra_user_id}:{submission_id}".encode()
+    task_id = "submission_" + hashlib.sha256(scoped_key).hexdigest()
+    payload = run_request.model_dump(mode="json")
+    try:
+        receipt = await _run_sqlite_api_call(get_creative_submission, task_id, payload)
+        if receipt is not None:
+            return receipt
+        await _require_active_creative_template(body.template_case_id)
+        return await _enqueue_creative_run(run_request, kind="creative_run", submission_task_id=task_id)
+    except CreativeSubmissionConflict:
+        raise HTTPException(status_code=409, detail="This Idempotency-Key already belongs to a different request.") from None
 
 
-def _persist_queued_run(request: CreateCreativeRunRequest, *, kind: str) -> CreativeRun:
+def _persist_queued_run(
+    request: CreateCreativeRunRequest, *, kind: str, submission_task_id: str | None = None
+) -> CreativeRun:
     # queued_run_json is the sole admission record. Do not publish a repository
     # row before admission: rejection or cancellation must not leave an orphan.
     queued = creative_manager.build_queued_run(request)
-    enqueue_creative_task(kind=kind, request_payload=request.model_dump(mode="json"), queued_run=queued)
+    payload = request.model_dump(mode="json")
+    if submission_task_id:
+        enqueue_creative_task(kind=kind, request_payload=payload, queued_run=queued, submission_task_id=submission_task_id)
+        receipt = get_creative_submission(submission_task_id, payload)
+        if receipt is None:
+            raise QueueStorageBusy("Committed V2 submission receipt is unavailable.")
+        return receipt
+    enqueue_creative_task(kind=kind, request_payload=payload, queued_run=queued)
     return queued
 
 
-async def _enqueue_creative_run(request: CreateCreativeRunRequest, *, kind: str) -> CreativeRun:
+async def _enqueue_creative_run(
+    request: CreateCreativeRunRequest, *, kind: str, submission_task_id: str | None = None
+) -> CreativeRun:
     try:
+        if submission_task_id:
+            return await _run_sqlite_api_call(_persist_queued_run, request, kind=kind, submission_task_id=submission_task_id)
         return await _run_sqlite_api_call(_persist_queued_run, request, kind=kind)
     except QueueCapacityExceeded as exc:
         raise _task_queue_capacity_http_error() from exc

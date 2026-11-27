@@ -877,7 +877,7 @@ async function ensureHistoryHero(moduleName) {
     for (let page = 0; page < 3 && historyHeroVisible(moduleName); page += 1) {
       const response = moduleName === "v2"
         ? await loadV2HistoryResponse({ limit: historyFetchPageSize, offset })
-        : await request(`/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`);
+        : await readWithTimeout(request, `/v1/image/history?limit=${historyFetchPageSize}&offset=${offset}`, { retry: true });
       if (!current()) return;
       const incoming = Array.isArray(response.items) ? response.items : [];
       if (incoming.length > historyFetchPageSize) throw new Error("History page exceeds the requested limit");
@@ -964,7 +964,7 @@ async function readHistoryDemand(moduleName, { reset = false, allFavorites = fal
       const limit = Math.min(historyFetchPageSize, start + historyWindowSize - offset);
       const response = moduleName === "v2"
         ? await loadV2HistoryPage({ limit, offset, favorite: favoritesDemand }, () => current() && demanded())
-        : await request(`/v1/image/history?limit=${limit}&offset=${offset}${favoritesDemand ? "&favorite=true" : ""}`);
+        : await readWithTimeout(request, `/v1/image/history?limit=${limit}&offset=${offset}${favoritesDemand ? "&favorite=true" : ""}`, { retry: true });
       if (!current()) return;
       const incoming = Array.isArray(response.items) ? response.items : [];
       if (incoming.length > limit) throw new Error("History page exceeds the requested limit");
@@ -1435,9 +1435,9 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
   }
   labState.historyLoading = true;
   if (els.labRefreshHistoryBtn) els.labRefreshHistoryBtn.disabled = true;
-  renderLabHistoryLoading();
+  if (!labState.history?.length) renderLabHistoryLoading();
   try {
-    const payload = await request("/api/lab/history?limit=72");
+    const payload = await readWithTimeout(request, "/api/lab/history?limit=72", { retry: true });
     labState.history = Array.isArray(payload.items) ? payload.items : [];
     labState.historyLoaded = true;
     renderLabHistory(labState.history);
@@ -1447,7 +1447,8 @@ async function loadLabHistory({ silent = true, force = false } = {}) {
       showGlobalToast("Alchemy Lab 历史已刷新。");
     }
   } catch (error) {
-    renderLabHistoryError(error);
+    if (!labState.history?.length) renderLabHistoryError(error);
+    else renderLabHistory(labState.history);
     updateLabNotice("Alchemy Lab 历史加载失败，请刷新重试。", "error");
     if (!silent) showGlobalToast("Alchemy Lab 历史加载失败。", "error");
   } finally {
@@ -1492,8 +1493,8 @@ function renderLabHistory(items) {
     const title = item.title || item.style_name || "Rare Style Explorer";
     const detailText = historyDetailText(item.idea || "未记录画面方向", metaText);
     const footerText = historyDetailText(item.module_label || "Rare Style Explorer", item.style_family || item.style_category || "");
-    const thumbnailUrl = item.thumbnail_url || item.url || "";
-    const previewUrl = item.preview_url || thumbnailUrl;
+    const thumbnailUrl = item.thumbnail_url === item.url ? "" : item.thumbnail_url;
+    const previewUrl = item.preview_url === item.url ? "" : item.preview_url;
     article.innerHTML = `
       <button class="v2-live-preview lab-history-preview" type="button" data-lab-history-preview="${escapeHtml(item.url || "")}" data-lab-history-index="${index}" aria-label="展开图片">
         <img alt="${escapeHtml(title)}" loading="lazy" decoding="async" />
@@ -2121,8 +2122,9 @@ async function runLabExploration() {
 function scheduleLabPolling() {
   stopLabPolling();
   labState.pollAttempt = 0;
+  const sessionId = labState.currentSession?.id;
   const tick = async () => {
-    if (!labState.currentSession?.id) {
+    if (!sessionId || labState.currentSession?.id !== sessionId) {
       stopLabPolling();
       labState.loading = false;
       setLabBusy(false);
@@ -2130,7 +2132,8 @@ function scheduleLabPolling() {
     }
     labState.pollAttempt += 1;
     try {
-      const payload = await request(`/api/lab/rare-style-explorer/sessions/${encodeURIComponent(labState.currentSession.id)}`);
+      const payload = await readWithTimeout(request, `/api/lab/rare-style-explorer/sessions/${encodeURIComponent(sessionId)}`);
+      if (labState.currentSession?.id !== sessionId) return;
       labState.currentSession = payload.session;
       labState.currentBoard = payload.board;
       renderLabIntentSummary(payload.session?.intent_plan);
@@ -2144,6 +2147,7 @@ function scheduleLabPolling() {
         updateLabNotice(payload.session?.progress?.message || "任务仍在后台串行生成，页面会继续查询同一任务。", "warning");
       }
     } catch (error) {
+      if (labState.currentSession?.id !== sessionId) return;
       updateLabNotice(`状态刷新暂时失败：${friendlyError(error)}。页面会继续查询原任务。`, "warning");
       labState.pollTimer = window.setTimeout(tick, 15000);
       return;
@@ -2265,7 +2269,7 @@ function renderLabBoard(board) {
       </details>
     `;
     const labImage = article.querySelector("img");
-    if (labImage) bindImageWithFallback(labImage, [card.thumbnail_url, card.image_url], { emptyAlt: styleName });
+    if (labImage) bindImageWithFallback(labImage, [card.thumbnail_url, card.preview_url].filter((url) => url !== card.image_url), { emptyAlt: styleName });
     els.labComparisonGrid.appendChild(article);
   });
 }
@@ -4337,7 +4341,7 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
   let homePreviewSettled = false;
   try {
     const cursor = requestingMore ? `&cursor=${encodeURIComponent(mobileV3State.projectsNextCursor)}` : "";
-    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectFetchLimit}&view=summary${cursor}`);
+    const projectsPayload = await readWithTimeout(mobileV3Request, `/projects?limit=${mobileV3ProjectFetchLimit}&view=summary${cursor}`, { retry: true });
     if (!Array.isArray(projectsPayload?.templates)) {
       throw new Error("template_catalog_unavailable");
     }
@@ -4384,7 +4388,11 @@ async function loadMobileV3Projects({ silent = true, force = false, loadMore = f
       updateMobileV3Status(`更多项目加载失败：${friendlyError(error)}`);
       return;
     }
-    mobileV3State.loaded = true;
+    if (error.name === "TimeoutError" && mobileV3State.projects.length) {
+      updateMobileV3Status("项目同步超时，已保留当前项目。");
+      return;
+    }
+    mobileV3State.loaded = false;
     mobileV3State.templates = [];
     mobileV3State.templatesLoaded = false;
     mobileV3State.templatesError = "模板目录暂时无法读取";
@@ -5925,7 +5933,7 @@ async function recoverMobileV3PlannedJob(projectId, operationId, { shouldContinu
     await new Promise((resolve) => window.setTimeout(resolve, delay));
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
     try {
-      const operation = await mobileV3Request(operationEndpoint);
+      const operation = await readWithTimeout(mobileV3Request, operationEndpoint);
       if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       if (operation?.state === "planning_failed") {
         if (operation.operation_id !== cleanOperationId) continue;
@@ -5945,7 +5953,7 @@ async function recoverMobileV3PlannedJob(projectId, operationId, { shouldContinu
       if (operation?.state === "completed" && operation.operation_id === cleanOperationId) {
         const jobId = String(operation.job_id || "").trim();
         if (!jobId) throw new Error("v3_planning_operation_job_missing");
-        const job = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
+        const job = await readWithTimeout(mobileV3Request, `/jobs/${encodeURIComponent(jobId)}`);
         if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
         if ((job?.job_id || job?.job?.job_id || job?.id) !== jobId) continue;
         return { operation: null, job };
@@ -6177,7 +6185,7 @@ async function recoverMobileV3GeneratedJob(
     if (!ownsRecovery()) return null;
     let statusReadFailed = true;
     try {
-      const job = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
+      const job = await readWithTimeout(mobileV3Request, `/jobs/${encodeURIComponent(jobId)}`);
       if (!ownsRecovery()) return null;
       if (followToTerminal && (job?.job_id || job?.job?.job_id || job?.id) !== jobId) continue;
       lastJob = job;
@@ -6724,7 +6732,7 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
   const receipt = mobileV3EcommerceReceiptForProject(project);
   if (restoreJob && receipt) {
     try {
-      const receiptJob = await mobileV3Request(`/jobs/${encodeURIComponent(receipt.jobId)}`);
+      const receiptJob = await readWithTimeout(mobileV3Request, `/jobs/${encodeURIComponent(receipt.jobId)}`);
       if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
       const recovered = mobileV3IsTerminalJob(receiptJob)
         ? mobileV3RecoveredJobFromProjectOutputs(project.project_id, receipt.jobId, receiptJob, { allowPartial: true })
@@ -6737,7 +6745,7 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
     }
   } else if (restoreJob && latestJobId) {
     try {
-      const latestJob = await mobileV3Request(`/jobs/${encodeURIComponent(latestJobId)}`);
+      const latestJob = await readWithTimeout(mobileV3Request, `/jobs/${encodeURIComponent(latestJobId)}`);
       if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
       const recovered = ["blocked", "failed", "not_found"].includes(String(latestJob?.status || "").trim().toLowerCase())
         ? mobileV3RecoveredJobFromProjectOutputs(project.project_id, latestJobId, latestJob, { allowPartial: true })
@@ -8229,7 +8237,7 @@ function mobileV3ProcessOutputsForProject(projectId) {
 async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinue = null, preserveOnError = false } = {}) {
   if (!projectId || !mobileV3GenerationSessionOwns(shouldContinue)) return [];
   try {
-    const payload = await mobileV3Request(`/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`);
+    const payload = await readWithTimeout(mobileV3Request, `/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`, { retry: true });
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
     const outputs = Array.isArray(payload.items) ? payload.items : [];
     const reviewOutputs = Array.isArray(payload.review_items) ? payload.review_items : [];
@@ -8249,7 +8257,7 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
   } catch (error) {
     if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
     mobileV3State.outputError = friendlyError(error);
-    if (preserveOnError) return [];
+    if (preserveOnError || error.name === "TimeoutError") return [];
     mobileV3MergeProjectOutputs(projectId, [], []);
     mobileV3State.outputsLoaded = false;
     clearMobileV3Caches();
@@ -8660,7 +8668,7 @@ function mobileV3MediaUrl(url) {
 }
 
 function mobileV3ThumbUrl(item) {
-  return mobileV3MediaUrl(item?.thumbnail_url || item?.metadata?.thumbnail_url || item?.preview_url || item?.download_url || "");
+  return mobileV3MediaUrl(item?.thumbnail_url || item?.metadata?.thumbnail_url || item?.preview_url || item?.metadata?.preview_url || "");
 }
 
 function mobileV3HomeThumbUrl(item) {
@@ -11579,15 +11587,12 @@ async function runV2Creative(options = {}) {
     if (promptTransformMode !== "auto") {
       output.prompt_transform_mode = promptTransformMode;
     }
-    const queuedRun = await v2Request("/creative/runs/async", {
-      method: "POST",
-      body: {
-        user_prompt: prompt,
-        mode_hint: templateCaseId ? "template_customize" : "smart_enhance",
-        template_case_id: templateCaseId,
-        assets: assetPayload,
-        output,
-      },
+    const queuedRun = await submitV2Run({
+      user_prompt: prompt,
+      mode_hint: templateCaseId ? "template_customize" : "smart_enhance",
+      template_case_id: templateCaseId,
+      assets: assetPayload,
+      output,
     });
     v2State.currentRun = queuedRun;
     els.v2TraceId.textContent = queuedRun.trace_id || queuedRun.run_id || "planning";
@@ -11624,6 +11629,22 @@ async function runV2Creative(options = {}) {
   }
 }
 
+async function submitV2Run(body) {
+  const headers = { "Idempotency-Key": crypto.randomUUID() };
+  const token = getVeyraToken();
+  while (getVeyraToken() === token) {
+    try {
+      const receipt = await withRequestDeadline((signal) => v2Request("/creative/runs/async", { method: "POST", headers, body, signal }));
+      if (receipt?.run_id) return receipt;
+    } catch (error) {
+      if (error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) throw error;
+    }
+    updateV2Notice("正在找回原任务的提交回执，请稍候。", "info");
+    await v2Delay(2500);
+  }
+  throw new Error("账户登录状态已变化，请查看原账户的历史记录。");
+}
+
 async function pollV2Run(runId, options = {}) {
   let attempt = 0;
   let consecutiveReadErrors = 0;
@@ -11633,7 +11654,7 @@ async function pollV2Run(runId, options = {}) {
     attempt += 1;
     let run = null;
     try {
-      run = await v2Request(`/creative/runs/${encodeURIComponent(runId)}`);
+      run = await readWithTimeout(v2Request, `/creative/runs/${encodeURIComponent(runId)}`);
       consecutiveReadErrors = 0;
     } catch (error) {
       consecutiveReadErrors += 1;
@@ -12409,17 +12430,15 @@ function v2OutputImageCandidates(output, { thumbnail = true } = {}) {
   const metadata = output?.metadata || {};
   const outputId = output?.output_id || metadata.output_id;
   const downloadUrl = v2ExplicitDownloadUrl(output);
-  const thumbnailCandidates = thumbnail
-    ? [
-        output?.thumbnail_url,
-        metadata.thumbnail_url,
-        v2OutputThumbnailUrl(outputId),
-      ]
-    : [];
-  return uniqueNonEmpty([
-    ...thumbnailCandidates,
-    downloadUrl,
-  ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
+  const candidates = thumbnail ? [
+    output?.thumbnail_url,
+    metadata.thumbnail_url,
+    v2OutputThumbnailUrl(outputId),
+    output?.preview_url,
+    metadata.preview_url,
+    metadata.mock ? "" : v2OutputPreviewUrl(outputId),
+  ].filter((url) => url !== downloadUrl) : [downloadUrl];
+  return uniqueNonEmpty(candidates).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
 }
 
 function v2OutputPreviewCandidates(output) {
@@ -12444,17 +12463,15 @@ function v2HistoryImageCandidates(item, { thumbnail = true } = {}) {
   const metadata = item?.metadata || {};
   const outputId = item?.output_id || metadata.output_id;
   const downloadUrl = v2ExplicitDownloadUrl(item);
-  const thumbnailCandidates = thumbnail
-    ? [
-        item?.thumbnail_url,
-        metadata.thumbnail_url,
-        v2OutputThumbnailUrl(outputId),
-      ]
-    : [];
-  return uniqueNonEmpty([
-    ...thumbnailCandidates,
-    downloadUrl,
-  ]).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
+  const candidates = thumbnail ? [
+    item?.thumbnail_url,
+    metadata.thumbnail_url,
+    v2OutputThumbnailUrl(outputId),
+    item?.preview_url,
+    metadata.preview_url,
+    metadata.mock ? "" : v2OutputPreviewUrl(outputId),
+  ].filter((url) => url !== downloadUrl) : [downloadUrl];
+  return uniqueNonEmpty(candidates).flatMap((url) => [v2DisplayMediaUrl(url), v2MediaUrl(url)]);
 }
 
 function v2HistoryPreviewCandidates(item) {
@@ -12527,9 +12544,7 @@ function scheduleProtectedMediaFetches() {
     entry.started = true;
     protectedMediaActive += 1;
     if (entry.preview) protectedMediaPreviewActive = true;
-    const thumbnailDeadline = /\/thumbnail(?:[?#]|$)/.test(entry.url)
-      ? setTimeout(() => entry.controller.abort(), 30000)
-      : null;
+    const mediaDeadline = setTimeout(() => entry.controller.abort(), 30000);
     void (async () => {
       const response = await fetch(entry.url, {
         credentials: "include",
@@ -12542,7 +12557,7 @@ function scheduleProtectedMediaFetches() {
       if (!blob.size || !String(blob.type || "").toLowerCase().startsWith("image/")) throw new Error("Media response did not contain an image.");
       return blob;
     })().then(entry.resolve, entry.reject).finally(() => {
-      if (thumbnailDeadline !== null) clearTimeout(thumbnailDeadline);
+      clearTimeout(mediaDeadline);
       protectedMediaActive = Math.max(0, protectedMediaActive - 1);
       if (entry.preview) protectedMediaPreviewActive = false;
       if (protectedMediaInflight.get(entry.key) === entry) protectedMediaInflight.delete(entry.key);
@@ -12640,7 +12655,7 @@ function releaseImageObjectUrl(image) {
   if (image?.dataset) delete image.dataset.authenticatedObjectUrl;
 }
 
-function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用", shouldContinue = () => true } = {}) {
+function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可用", preview = false, shouldContinue = () => true } = {}) {
   if (!image || !shouldContinue()) return;
   authenticatedImageLoadControllers.get(image)?.abort();
   authenticatedImageLoadControllers.delete(image);
@@ -12684,7 +12699,7 @@ function bindImageWithFallback(image, candidates, { emptyAlt = "图片暂不可�
     }
     image.dataset.fallbackIndex = String(index);
     try {
-      const resolved = await resolveAuthenticatedMediaSource(candidate, { signal });
+      const resolved = await resolveAuthenticatedMediaSource(candidate, { signal, preview });
       if (image.dataset.mediaLoadToken !== loadToken || !shouldContinue()) {
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
         return;
@@ -12722,7 +12737,7 @@ function bindProgressiveLightboxImage(image, { displayUrl = "", thumbnailUrl = "
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   image.dataset.lightboxLoadToken = token;
   const hasSeparateThumbnail = Boolean(thumbnail && thumbnail !== display);
-  bindImageWithFallback(image, hasSeparateThumbnail ? [thumbnail, display] : [display, thumbnail], { emptyAlt });
+  bindImageWithFallback(image, hasSeparateThumbnail ? [thumbnail] : [display], { emptyAlt, preview: !hasSeparateThumbnail });
   if (!display || !hasSeparateThumbnail) {
     image.classList.remove("is-loading-full");
     return;
@@ -12762,36 +12777,7 @@ function bindProgressiveGridImage(image, { thumbnailUrl = "", previewUrl = "", e
   if (!image) return;
   const thumbnail = String(thumbnailUrl || "").trim();
   const preview = String(previewUrl || "").trim();
-  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  image.dataset.progressiveGridToken = token;
   bindImageWithFallback(image, uniqueNonEmpty([thumbnail, preview]), { emptyAlt });
-  if (!preview || preview === thumbnail || image.loading === "lazy") return;
-  image.classList.add("is-loading-full");
-  const preloader = new Image();
-  preloader.decoding = "async";
-  void resolveAuthenticatedMediaSource(preview).then((resolved) => {
-    if (image.dataset.progressiveGridToken !== token) {
-      if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
-      return;
-    }
-    preloader.onload = () => {
-      if (image.dataset.progressiveGridToken !== token) {
-        if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
-        return;
-      }
-      releaseImageObjectUrl(image);
-      if (resolved.objectUrl) image.dataset.authenticatedObjectUrl = resolved.url;
-      image.classList.remove("is-loading-full");
-      image.src = resolved.url;
-    };
-    preloader.onerror = () => {
-      if (resolved.objectUrl) URL.revokeObjectURL(resolved.url);
-      if (image.dataset.progressiveGridToken === token) image.classList.remove("is-loading-full");
-    };
-    preloader.src = resolved.url;
-  }).catch(() => {
-    if (image.dataset.progressiveGridToken === token) image.classList.remove("is-loading-full");
-  });
 }
 
 function v2ReviewText(review) {
@@ -13545,7 +13531,7 @@ function accountHistoryImageUrl(item, { thumbnail = true, preview = false } = {}
 
 function accountHistoryImageCandidates(item, { thumbnail = true } = {}) {
   if (!accountHistoryIsV1(item)) return v2HistoryImageCandidates(item, { thumbnail });
-  return uniqueNonEmpty([(thumbnail && item?.thumbnail_url) || "", item?.url || ""]);
+  return uniqueNonEmpty(thumbnail ? [item?.thumbnail_url, item?.preview_url] : [item?.url]);
 }
 
 function accountHistoryProviderText(item) {
@@ -14286,7 +14272,7 @@ async function waitForV1ImageJob(initialJob, { actionLabel = "生成", onJobUpda
     }
     await delay(v1ImageJobPollDelay(attempt));
     try {
-      job = await request(`/v1/image/jobs/${encodeURIComponent(job.id)}`);
+      job = await readWithTimeout(request, `/v1/image/jobs/${encodeURIComponent(job.id)}`);
       transientErrors = 0;
       onJobUpdate?.(job);
     } catch (error) {
@@ -14548,7 +14534,7 @@ function renderGallery(outputs) {
     els.gallery.appendChild(node);
     bindImageWithFallback(
       preview.querySelector("img"),
-      uniqueNonEmpty([output.thumbnail_url, output.preview_url, output.url]),
+      uniqueNonEmpty([output.thumbnail_url, output.preview_url]),
       { emptyAlt: `生成结果 ${index + 1}` },
     );
   });
@@ -14639,7 +14625,7 @@ function renderHistory(items) {
     image.alt = `历史图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
-    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.historyGallery, false) });
+    bindImageWithFallback(image, [item.thumbnail_url, item.preview_url], { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.historyGallery, false) });
     preview.appendChild(image);
 
     const meta = document.createElement("div");
@@ -14947,7 +14933,7 @@ function renderFavoritePicker() {
     image.alt = `星标图片 ${index + 1}`;
     image.loading = "lazy";
     image.decoding = "async";
-    bindImageWithFallback(image, uniqueNonEmpty([item.thumbnail_url, item.preview_url, item.url]), { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.favoritePickerGrid, true) });
+    bindImageWithFallback(image, [item.thumbnail_url, item.preview_url], { emptyAlt: image.alt, shouldContinue: historyMediaDemand("v1", els.favoritePickerGrid, true) });
     preview.appendChild(image);
     const meta = document.createElement("div");
     meta.className = "favorite-picker-meta";
@@ -15091,7 +15077,7 @@ function renderHeroHistory(items, { source = "v1" } = {}) {
     image.alt = item.title || `历史生成作品 ${index + 1}`;
     image.loading = index === 0 ? "eager" : "lazy";
     image.decoding = "async";
-    bindImageWithFallback(image, item.imageCandidates || [item.thumbnailUrl, item.url], { emptyAlt: image.alt, shouldContinue: source === "v1" || source === "v2" ? historyMediaDemand(source, els.heroHistoryCarousel) : undefined });
+    bindImageWithFallback(image, item.imageCandidates || [item.thumbnailUrl, item.previewUrl].filter((url) => url !== item.url), { emptyAlt: image.alt, shouldContinue: source === "v1" || source === "v2" ? historyMediaDemand(source, els.heroHistoryCarousel) : undefined });
 
     slide.append(image);
     els.heroHistoryCarousel.appendChild(slide);
@@ -15313,7 +15299,7 @@ function openImageLightbox({ id, title, url, downloadUrl, thumbnailUrl, previewU
   els.lightboxImage.alt = title || "放大预览图";
   els.lightboxImage.dataset.fullUrl = url || "";
   bindProgressiveLightboxImage(els.lightboxImage, {
-    displayUrl: previewUrl || thumbnailUrl || url,
+    displayUrl: url || previewUrl || thumbnailUrl,
     thumbnailUrl,
     emptyAlt: els.lightboxImage.alt,
   });
@@ -16044,6 +16030,42 @@ function toggleBusy(isBusy) {
 
 function updateRevisionState() {
   els.reviseBtn.disabled = !state.currentJob || !state.selectedOutputId;
+}
+
+async function withRequestDeadline(load, timeoutMs = 8000, signal = null) {
+  if (signal?.aborted) throw signal.reason;
+  const controller = new AbortController();
+  let timer;
+  let rejectDeadline;
+  const deadline = new Promise((_, reject) => {
+    rejectDeadline = reject;
+    timer = window.setTimeout(() => {
+      const error = new DOMException("Request timed out", "TimeoutError");
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  const abort = () => {
+    rejectDeadline(signal.reason);
+    controller.abort(signal.reason);
+  };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    return await Promise.race([deadline, load(controller.signal)]);
+  } finally {
+    window.clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+async function readWithTimeout(load, path, { retry = false, signal = null } = {}) {
+  const read = () => withRequestDeadline((requestSignal) => load(path, { signal: requestSignal }), 8000, signal);
+  try {
+    return await read();
+  } catch (error) {
+    if (!retry || signal?.aborted || error.name !== "TimeoutError") throw error;
+    return await read();
+  }
 }
 
 async function request(path, options = {}) {

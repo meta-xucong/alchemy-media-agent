@@ -92,6 +92,7 @@ test("recovery does not refresh project projections on unchanged poll ticks", as
     v3State: {},
     v3ApiBase: "/api/v3",
     v3Delay: async () => {},
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async () => {
       jobReads += 1;
       return jobReads <= 2 ? running : terminal;
@@ -143,7 +144,7 @@ test("V3 protected media queue deduplicates URLs and caps active fetches at two"
   const context = {
     AbortController,
     Map,
-    Promise,
+    setTimeout, clearTimeout, Promise,
     Error,
     getVeyraToken: () => "test-token",
     fetch: async (url) => {
@@ -175,7 +176,7 @@ test("cancelled protected media is removed before an immediate same-URL retry", 
   const context = {
     AbortController,
     Map,
-    Promise,
+    setTimeout, clearTimeout, Promise,
     Error,
     getVeyraToken: () => "test-token",
     fetch: (url, options) => new Promise((resolve, reject) => {
@@ -209,7 +210,7 @@ test("protected media in-flight deduplication is isolated by authentication toke
   const context = {
     AbortController,
     Map,
-    Promise,
+    setTimeout, clearTimeout, Promise,
     Error,
     getVeyraToken: () => token,
     fetch: (url, options) => new Promise((resolve, reject) => {
@@ -351,7 +352,7 @@ test("mobile protected media queue deduplicates requests and caps active fetches
   let peak = 0;
   const fetches = new Map();
   const context = {
-    Map, WeakMap, AbortController, Promise, Error, getVeyraToken: () => "test-token",
+    Map, WeakMap, AbortController, Promise, Error, setTimeout, clearTimeout, getVeyraToken: () => "test-token",
     fetch: async (url) => {
       fetches.set(url, Number(fetches.get(url) || 0) + 1);
       active += 1;
@@ -543,6 +544,7 @@ test("output projection retry commits a signature only after successful refresh"
     v3ApiBase: "/api/v3",
     Date: { now: () => now },
     v3Delay: async () => { now += 3000; },
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async () => {
       jobReads += 1;
       return jobReads <= 3 ? running : terminal;
@@ -595,6 +597,7 @@ test("unchanged successful output projection is read once across running polls",
     v3ApiBase: "/api/v3",
     Date: { now: () => now },
     v3Delay: async () => { now += 3000; },
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async () => {
       jobReads += 1;
       return jobReads <= 7 ? running : { ...running, status: "failed" };
@@ -639,6 +642,7 @@ test("output projection retries once after failure then suppresses unchanged suc
     v3ApiBase: "/api/v3",
     Date: { now: () => now },
     v3Delay: async () => { now += 3000; },
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async () => {
       jobReads += 1;
       return jobReads <= 7 ? running : { ...running, status: "failed" };
@@ -720,6 +724,7 @@ test("desktop V3 project cards can be opened during preview loading", async () =
     readV3LocalProjects: () => [],
     mergeV3ProjectItems: (primary) => primary,
     waitForV3Paint: async () => {},
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: async () => ({ projects: [{ project_id: "picked" }] }),
     loadV3HomePreviews: () => previews,
     waitForV3HomePreviewImages: async () => {},

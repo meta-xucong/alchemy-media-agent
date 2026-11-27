@@ -34,6 +34,7 @@ for (const [name, relativePath] of shells) {
       setStatus() {},
       showNotice() {},
       delay: async () => {},
+      readWithTimeout: (read, path) => read(path),
       request: async () => {
         calls += 1;
         return calls < 131
@@ -84,6 +85,7 @@ for (const [name, relativePath] of shells) {
       labPollMaxAttempts: 360,
       labState: { currentSession: { id: "session-1" }, pollAttempt: 0, pollTimer: null },
       window: { setTimeout: (callback, delay) => { delays.push(delay); timers.push({ callback, delay }); return timers.length; } },
+      readWithTimeout: (read, path) => read(path),
       request: async () => {
         calls += 1;
         const terminal = calls === 362;

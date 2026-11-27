@@ -41,6 +41,10 @@ class QueueStorageBusy(RuntimeError):
     """Raised when bounded queue persistence is saturated or locked."""
 
 
+class CreativeSubmissionConflict(RuntimeError):
+    """The same submission key was used for a different request."""
+
+
 class StaleTaskClaim(RuntimeError):
     """Raised when a superseded worker tries to commit task-owned output."""
 
@@ -119,12 +123,34 @@ async def initialize_task_queue_async() -> None:
         raise QueueStorageBusy(str(exc)) from exc
 
 
-def enqueue_creative_task(*, kind: str, request_payload: dict[str, Any], queued_run: CreativeRun) -> str:
+def _creative_submission(conn, task_id: str, payload: dict[str, Any]) -> CreativeRun | None:
+    row = conn.execute(
+        "SELECT payload_json, queued_run_json FROM v2_tasks WHERE task_id = ?", (task_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    if json.loads(row["payload_json"]) != payload:
+        raise CreativeSubmissionConflict
+    return CreativeRun.model_validate_json(row["queued_run_json"])
+
+
+def get_creative_submission(task_id: str, payload: dict[str, Any]) -> CreativeRun | None:
+    if not settings.task_queue_db_path.is_file():
+        return None
+    with _connect() as conn:
+        return _creative_submission(conn, task_id, payload)
+
+
+def enqueue_creative_task(
+    *, kind: str, request_payload: dict[str, Any], queued_run: CreativeRun, submission_task_id: str | None = None
+) -> str:
     initialize_task_queue()
     now = utc_now().isoformat()
-    task_id = new_id("task")
+    task_id = submission_task_id or new_id("task")
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if submission_task_id and _creative_submission(conn, task_id, request_payload):
+            return task_id
         pending = conn.execute("SELECT COUNT(*) FROM v2_tasks WHERE status = 'queued'").fetchone()[0]
         if int(pending) >= settings.task_queue_max_pending:
             conn.rollback()

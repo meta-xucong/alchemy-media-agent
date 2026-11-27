@@ -68,6 +68,7 @@ Content-Type: application/json
 Authorization: Bearer YOUR_API_KEY</code></pre>
         </li>
       </ol>
+      <p>需要在断线后找回提交回执时，首次请求附上 <code>Idempotency-Key</code> 请求头，值为本次操作生成的 UUIDv4。重试使用同一密钥和请求内容，返回原 <code>run_id</code>。同一密钥用于不同内容时返回 <code>409</code>。</p>
       <p>案例无效或已下架时返回 <code>404 template_case_unavailable</code>。直接生图接口 <code>POST /api/v2/image/jobs</code> 收到 <code>template_case_id</code> 时返回 <code>422 template_requires_creative_run</code>，并指向创意任务入口。</p>
     </details>
   </main>

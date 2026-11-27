@@ -209,6 +209,7 @@ function createHarness(shell, { active = "image", ticket = false, respond } = {}
     cancelV3DeferredImageLoad() {}, cancelDeferredAuthenticatedImage() {},
     pendingModuleRouteStorageKey: "pending-route", veyraAccountStorageKey: "account",
     veyraTokenStorageKey: "alchemy_veyra_access_token",
+    readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
     request: (path, options) => request("v1", path, options),
     v2Request: (path, options) => request("v2", path, options),
     activePanelName: () => document.querySelector("[data-panel].active")?.dataset.panel || "image",

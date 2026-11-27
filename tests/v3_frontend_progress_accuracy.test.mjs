@@ -162,6 +162,7 @@ test("desktop and mobile keep polling the original pending billing job past the 
       v3Delay: async () => {},
       v3RecoveryDelayMs: () => 0,
       v3ApiBase: "/v3",
+      readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
       request: getJob,
       v3JobOutputProjectionSignature: () => "",
       v3JobHasTerminalOutcome: terminal,
@@ -177,6 +178,7 @@ test("desktop and mobile keep polling the original pending billing job past the 
       mobileV3GenerationSessionOwns: () => true,
       window: { setTimeout: (resolve) => resolve() },
       mobileV3RecoveryDelayMs: () => 0,
+      readWithTimeout: (read, path, { signal } = {}) => read(path, { signal }),
       mobileV3Request: getJob,
       mobileV3JobHasTerminalOutcome: terminal,
       loadMobileV3ProjectOutputs: async () => {},
@@ -191,6 +193,6 @@ test("desktop and mobile keep polling the original pending billing job past the 
       : await context.recover("project", jobId, { initialJob: pending });
     assert.equal(result, charged);
     assert.equal(calls.length, defaultLimit + 2);
-    assert.ok(calls.every(({ path, options }) => path.endsWith(`/jobs/${jobId}`) && options === undefined));
+    assert.ok(calls.every(({ path, options }) => path.endsWith(`/jobs/${jobId}`) && (!options?.method || options.method === "GET")));
   }
 });
