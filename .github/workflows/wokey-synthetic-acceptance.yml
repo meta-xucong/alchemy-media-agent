@@ -1,4 +1,4 @@
-name: Wokey live route readback (isolated)
+name: V3 project text audit (isolated)
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [live_v2, live_v1_v3_lab]
+        probe: [v3_text_audit]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Read the deployed model queues over pinned SSH
+      - name: Count stored project text artifacts over pinned SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
