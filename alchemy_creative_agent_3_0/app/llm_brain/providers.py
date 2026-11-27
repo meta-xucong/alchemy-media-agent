@@ -33,7 +33,6 @@ from .prompts import (
     _requires_remote_creative_contract,
     build_anthropic_structured_output,
     build_remote_payload,
-    creative_exploration_history,
     restore_anthropic_structured_output,
     system_prompt_for_stage,
 )
@@ -579,7 +578,7 @@ class V3LLMBrainProvider:
         if request.stage == "plan":
             if not _requires_remote_creative_contract(request):
                 return self.model
-        elif request.stage != "provider_prompt_finalize" or not creative_exploration_history(request):
+        elif request.stage != "provider_prompt_finalize":
             return self.model
         if not _is_claude_sonnet_55(self.structured_claude_model):
             raise BrainProviderUnavailable(

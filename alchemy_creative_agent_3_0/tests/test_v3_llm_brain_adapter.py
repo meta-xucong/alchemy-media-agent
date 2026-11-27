@@ -536,7 +536,7 @@ def test_creative_exploration_targets_only_rejected_output(monkeypatch, claude_r
 
 @pytest.mark.parametrize(("primary", "stage", "has_history", "require_real_images", "expected"), [
     ("claude-sonnet-5-5", "provider_prompt_finalize", True, True, "claude-sonnet-5-5-alchemy-structured"),
-    ("claude-sonnet-5-5", "provider_prompt_finalize", False, True, "claude-sonnet-5-5"),
+    ("claude-sonnet-5-5", "provider_prompt_finalize", False, True, "claude-sonnet-5-5-alchemy-structured"),
     ("claude-sonnet-5-5", "plan", True, True, "claude-sonnet-5-5-alchemy-structured"),
     ("claude-sonnet-5-5", "plan", False, True, "claude-sonnet-5-5-alchemy-structured"),
     ("claude-sonnet-5-5", "plan", False, False, "claude-sonnet-5-5"),
