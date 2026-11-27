@@ -755,6 +755,40 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "controlnet" not in v3_block.lower()
 
 
+def test_v3_project_api_preserves_utf8_and_stops_lost_text_before_persistence(tmp_path, monkeypatch) -> None:
+    store = PersistentProjectStore(storage_root=tmp_path / "projects")
+    monkeypatch.setattr(app_main, "v3_route_handlers", V3ProductRouteHandlers(project_store=store))
+    client = TestClient(app)
+    route = "/api/v3/creative-agent/projects"
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    goal = "为春日活动设计海报，保留文案「准备好了吗？」"
+
+    for title in ("春日海报", "Really????"):
+        body = json.dumps({"title": title, "user_goal": goal}, ensure_ascii=False).encode("utf-8")
+        response = client.post(route, content=body, headers=headers)
+        assert response.status_code == 200
+        project_id = response.json()["project"]["project_id"]
+        raw = (store.storage_root / project_id / "project.json").read_bytes()
+        assert title.encode("utf-8") in raw
+        assert json.loads(raw)["user_goal"] == goal
+
+    for body, field in (
+        ({"title": "API ????", "user_goal": goal}, "title"),
+        ({"title": "demo", "user_goal": "?????? TikTok ??????"}, "user_goal"),
+        ({"title": "demo", "user_goal": "\uFFFD\uFFFD\uFFFD\uFFFD"}, "user_goal"),
+    ):
+        response = client.post(route, json=body)
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["code"] == "v3_project_text_encoding_invalid"
+        assert field in detail["message"]
+        assert "????" not in detail["message"]
+    response = client.post(route, content=b'{"user_goal":"\xff"}', headers=headers)
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_v3_json"
+    assert len(list(store.storage_root.glob("project_*/project.json"))) == 2
+
+
 def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         project_mode_service,

@@ -261,6 +261,7 @@
 
   function apiGenerationExample(origin, apiKey) {
     return `// Node.js 18+。本示例会创建项目、提交一次真实生图并轮询结果。
+// 含中文的自定义文案请保存为 UTF-8 的 .mjs 文件，再用 node 运行该文件。
 const BASE_URL = ${JSON.stringify(origin)};
 const API_KEY = ${JSON.stringify(apiKey)};
 const PROMPT = "A clean studio product image of a red apple on a white ceramic plate";
@@ -272,7 +273,7 @@ async function call(path, options = {}) {
   return data;
 }
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const projectResponse = await call("/api/v3/creative-agent/projects", { method: "POST", body: JSON.stringify({ user_goal: PROMPT, title: "API 生图示例", primary_template_id: "general_template" }) });
+const projectResponse = await call("/api/v3/creative-agent/projects", { method: "POST", body: JSON.stringify({ user_goal: PROMPT, title: "API \\u751f\\u56fe\\u793a\\u4f8b", primary_template_id: "general_template" }) });
 const projectId = projectResponse.project.project_id;
 await call(\`/api/v3/creative-agent/projects/\${projectId}/jobs\`, { method: "POST", body: JSON.stringify({ user_input: PROMPT, template_id: "general_template", metadata: { require_real_images: true, requested_image_count: 1, requested_image_size: "1024x1024" }, auto_generate: { quality_mode: "standard", metadata: { require_real_images: true, requested_image_count: 1, requested_image_size: "1024x1024" } } }) });
 for (;;) { const project = await call(\`/api/v3/creative-agent/projects/\${projectId}\`); const jobId = project.project?.job_ids?.at(-1); if (!jobId) { await wait(5000); continue; } for (;;) { const job = await call(\`/api/v3/creative-agent/jobs/\${jobId}\`); if (["generated", "failed", "blocked", "cancelled"].includes(job.status)) { if (job.status !== "generated") throw new Error(JSON.stringify(job)); const exported = await call(\`/api/v3/creative-agent/jobs/\${jobId}/export\`); console.log(new URL(exported.manifest.generated_assets?.[0]?.download_url, BASE_URL).href); break; } await wait(5000); } break; }`;

@@ -88,16 +88,20 @@ HTTP成功不代表审核或选择成功；检查原 status、final_delivery、r
 上传声明字段为 filename、mime_type、size_bytes、可选role；PUT JSON为 content_base64、mime_type。
 后端仍验证实际图片、尺寸与归属；不要把本机路径传给服务端当作文件位置。
 
+Windows PowerShell 5.1 默认用 ASCII 向本机程序传递管道文本，中文可能在发送前变成问号。用 UTF-8 字节作为请求正文，并将含中文的 `.ps1` 保存为带 BOM 的 UTF-8 文件。若从 JSON 文件发送，可用 `curl.exe --data-binary '@project.json'` 直接发送 UTF-8 文件字节。若接口返回 `v3_project_text_encoding_invalid`，请从原文重新按 UTF-8 发送相应字段。
+
 以下示例会创建一个项目并发起一次真实生成；验收时确认账户与费用后只执行一次：
 
 ```powershell
 $base = $env:ALCHEMY_PRODUCT_API_BASE_URL.TrimEnd('/')
 $headers = @{ Authorization = "Bearer $env:ALCHEMY_PRODUCT_SESSION_TOKEN" }
 $contentType = 'application/json; charset=utf-8'
-$p = Invoke-RestMethod -Method Post -Uri "$base/api/v3/creative-agent/projects" -Headers $headers -ContentType $contentType -Body '{"user_goal":"A clean product photograph"}'
+$projectInput = @{ title = '春日海报'; user_goal = '为春日活动设计一张海报。' }
+$projectBytes = [Text.Encoding]::UTF8.GetBytes(($projectInput | ConvertTo-Json -Compress))
+$p = Invoke-RestMethod -Method Post -Uri "$base/api/v3/creative-agent/projects" -Headers $headers -ContentType $contentType -Body $projectBytes
 $projectId = $p.project.project_id
 $metadata = @{ require_real_images = $true; requested_image_count = 1; requested_image_size = '1024x1024' }
-$payload = @{ user_input = 'A clean product photograph'; template_id = 'general_template'; metadata = $metadata; auto_generate = @{ quality_mode = 'standard'; metadata = $metadata } }
+$payload = @{ user_input = $projectInput.user_goal; template_id = 'general_template'; metadata = $metadata; auto_generate = @{ quality_mode = 'standard'; metadata = $metadata } }
 $bytes = [Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Depth 8))
 $accepted = Invoke-RestMethod -Method Post -Uri "$base/api/v3/creative-agent/projects/$projectId/jobs" -Headers $headers -ContentType $contentType -Body $bytes
 # 不再补发 /generate，不循环重试创建。保留 $accepted 中原 operation/job ID。

@@ -656,10 +656,10 @@ async def _v3_json_payload(request: Request) -> dict:
         return {}
     try:
         payload = json.loads(raw_body)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         raise HTTPException(
             status_code=400,
-            detail={"code": "invalid_v3_json", "message": "V3 request body must be valid JSON."},
+            detail={"code": "invalid_v3_json", "message": "V3 request body must be valid UTF-8 JSON."},
         )
     if not isinstance(payload, dict):
         raise HTTPException(

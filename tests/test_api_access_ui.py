@@ -66,6 +66,7 @@ def test_user_create_native_copy_revoke_and_responsive_layout(native,browser,wid
         api_example=page.locator("#manualCopy").input_value()
         assert "创建项目" in api_example
         assert "/api/v3/creative-agent/projects" in api_example
+        assert r'title: "API \u751f\u56fe\u793a\u4f8b"' in api_example
         assert "/jobs" in api_example
         assert "auto_generate" in api_example
         assert "/export" in api_example

@@ -537,6 +537,37 @@ class PhotographyRoleContinuationError(ValueError):
         self.v3_status_code = status_code
 
 
+class V3ProjectTextEncodingError(ValueError):
+    code = "v3_project_text_encoding_invalid"
+    v3_status_code = 422
+
+    def __init__(self, fields: list[str]) -> None:
+        super().__init__(
+            f"Project text looks corrupted in {', '.join(fields)}. "
+            "Resend the original text as UTF-8 JSON bytes."
+        )
+
+
+def _project_text_has_encoding_placeholders(value: str | None) -> bool:
+    if not value:
+        return False
+    runs = list(re.finditer(r"[?\uFFFD]{4,}", value))
+    if not runs:
+        return False
+    # A single run of ordinary question punctuation attached to a word is allowed.
+    if len(runs) == 1:
+        run = runs[0]
+        if (
+            run.start() > 0
+            and run.end() == len(value)
+            and value[run.start() - 1].isalnum()
+            and "\uFFFD" not in run.group()
+        ):
+            return False
+    markers = sum(len(run.group()) for run in runs)
+    return markers * 100 >= 35 * sum(not char.isspace() for char in value)
+
+
 class Doc281GeneralSourceRegistry:
     """Brain-owned General original selection with server-only integrity binding.
 
@@ -3703,6 +3734,12 @@ class V3ProjectModeService:
 
     def create_project(self, request: CreateProjectRequest | dict[str, Any]) -> ProjectResponse:
         create_request = self._coerce_create_project_request(request)
+        corrupted_fields = [
+            field for field in ("title", "user_goal")
+            if _project_text_has_encoding_placeholders(getattr(create_request, field))
+        ]
+        if corrupted_fields:
+            raise V3ProjectTextEncodingError(corrupted_fields)
         template_manifest = self._ensure_active_template(create_request.primary_template_id)
         now = _utc_now_iso()
         project_id = f"project_{uuid4().hex[:10]}"
