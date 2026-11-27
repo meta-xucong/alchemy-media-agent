@@ -1341,6 +1341,27 @@ def build_anthropic_structured_output(
             )
             for section, shape in response_shape.items()
         }
+        # Claude does not support exact array length constraints. Number the
+        # required directions on the wire, then restore the existing ordered
+        # list before the Brain adapter consumes the result.
+        image_count = request.requested_image_count
+        slots = [str(index) for index in range(1, image_count + 1)]
+        plan_properties = properties["image_set_plan"]["properties"]
+        plan_properties["image_count"] = {"type": "integer", "enum": [image_count]}
+        plan_properties["shot_plan"] = {
+            "type": "object",
+            "properties": {slot: {"type": "string"} for slot in slots},
+            "required": slots,
+            "additionalProperties": False,
+        }
+        response_shape["image_set_plan"]["image_count"] = image_count
+        response_shape["image_set_plan"]["shot_plan"] = {
+            slot: f"Complete original whole-image direction for output {slot}." for slot in slots
+        }
+        payload["remote_response_contract"] += (
+            " Use the numbered object shown in return_schema.image_set_plan.shot_plan. "
+            "Write a distinct complete direction under each required output number."
+        )
     elif (
         task == "finalize_canonical_image_provider_prompts"
         and request.stage == "provider_prompt_finalize"
@@ -1428,11 +1449,23 @@ class AnthropicWireValueError(ValueError):
 def restore_anthropic_structured_output(
     response: dict[str, object],
     wire_value_paths: tuple[tuple[tuple[str, ...], str], ...],
+    *,
+    shot_plan_count: int | None = None,
 ) -> None:
     """Restore Claude's reversible wire encoding before semantic validation."""
 
     for path, expected in wire_value_paths:
         _restore_anthropic_json_value(response, path, expected)
+    plan = response.get("image_set_plan")
+    shots = plan.get("shot_plan") if isinstance(plan, dict) else None
+    if shot_plan_count is not None and isinstance(shots, dict):
+        slots = [str(index) for index in range(1, shot_plan_count + 1)]
+        if set(shots) != set(slots):
+            raise AnthropicWireValueError(
+                "Claude shot plan did not return the requested numbered directions",
+                ("image_set_plan", "shot_plan"),
+            )
+        plan["shot_plan"] = [shots[slot] for slot in slots]
 
 
 def _rewrite_plan_open_values_for_anthropic(payload: dict[str, object]) -> None:

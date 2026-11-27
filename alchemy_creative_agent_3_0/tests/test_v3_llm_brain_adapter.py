@@ -581,7 +581,10 @@ def test_compact_claude_plan_restores_original_visual_profile_types() -> None:
     )
     plain = json.loads(build_remote_payload(request))
     body, wire, paths = build_anthropic_structured_output(request, compact_visual_profile=True)
-    assert json.loads(body)["return_schema"] == plain["return_schema"]
+    plan_schema = json.loads(body)["return_schema"]
+    assert plan_schema["visual_task_profile"] == plain["return_schema"]["visual_task_profile"]
+    assert plan_schema["image_set_plan"]["image_count"] == request.requested_image_count
+    assert set(plan_schema["image_set_plan"]["shot_plan"]) == {"1", "2"}
     assert wire["schema"]["properties"]["visual_task_profile"] == {"type": "string"}
     assert wire["schema"]["properties"]["image_set_plan"]["type"] == "object"
     profile = {"evidence": [{"value": ["synthetic"], "metadata": {"concrete": True}}]}
@@ -2942,6 +2945,35 @@ def test_anthropic_plan_uses_closed_json_schema_and_round_trips_open_values() ->
     }
 
 
+@pytest.mark.parametrize("count", [1, 4, 10])
+def test_claude_plan_numbered_directions_round_trip_in_output_order(count: int) -> None:
+    request = BrainRunRequest(
+        user_input="Create studio photos of a ceramic vase.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=count,
+        metadata={"require_real_images": True},
+    )
+    for compact in (False, True):
+        payload, fmt, paths = build_anthropic_structured_output(request, compact_visual_profile=compact)
+        slots = [str(index) for index in range(1, count + 1)]
+        plan_schema = fmt["schema"]["properties"]["image_set_plan"]["properties"]
+        assert plan_schema["image_count"] == {"type": "integer", "enum": [count]}
+        assert plan_schema["shot_plan"] == {
+            "type": "object",
+            "required": slots,
+            "additionalProperties": False,
+            "properties": {slot: {"type": "string"} for slot in slots},
+        }
+        plan_prompt = json.loads(payload)["return_schema"]["image_set_plan"]
+        assert plan_prompt["image_count"] == count
+        assert set(plan_prompt["shot_plan"]) == set(slots)
+        reply = {"image_set_plan": {"shot_plan": {slot: f"Direction {slot}" for slot in reversed(slots)}}}
+        restore_anthropic_structured_output(reply, paths, shot_plan_count=count)
+        assert reply["image_set_plan"]["shot_plan"] == [f"Direction {slot}" for slot in slots]
+
+
 def _anthropic_finalizer_context_with_all_dynamic_receipts(user_input: str) -> dict[str, object]:
     from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.mode_role_director import (
         ModeAwareRoleDirector,
@@ -3129,6 +3161,7 @@ def test_claude_real_image_plan_sends_native_schema_and_restores_wire_values(mon
 
     calls: list[dict[str, object]] = []
     response_data = {
+        "image_set_plan": {"image_count": 1, "shot_plan": {"1": "Front view"}},
         "visual_task_profile": {
             "subject_entities": [{"attributes": '{"face_visible": true}'}],
             "evidence": [{"value": '"user request"', "metadata": "{}"}],
@@ -3183,6 +3216,7 @@ def test_claude_real_image_plan_sends_native_schema_and_restores_wire_values(mon
     output_config = calls[0]["output_config"]
     assert output_config["format"]["type"] == "json_schema"
     assert output_config["format"]["schema"]["additionalProperties"] is False
+    assert result["image_set_plan"]["shot_plan"] == ["Front view"]
     assert result["visual_task_profile"]["subject_entities"][0]["attributes"] == {"face_visible": True}
     assert result["visual_task_profile"]["evidence"][0] == {
         "value": "user request",
@@ -3285,6 +3319,15 @@ def test_claude_diagnostics_record_each_attempt_without_content(
     assert attempts[1]["stop_reason"] == "end_turn"
     assert attempts[1]["failure_kind"] is None
     assert attempts[1]["field_path"] is None
+    assert attempts[0]["client_request_id"] != attempts[1]["client_request_id"]
+    assert attempts[0]["schema_sha256"] == attempts[1]["schema_sha256"]
+    assert len(attempts[1]["schema_sha256"]) == 64
+    assert attempts[1]["response_shape"] == {
+        "image_set_plan": "missing",
+        "visual_task_profile": "missing",
+        "capability_activation_intent": "missing",
+        "prompt_guidance": "missing",
+    }
     assert "private-" not in caplog.text
     assert "gateway.example.test" not in caplog.text
 
