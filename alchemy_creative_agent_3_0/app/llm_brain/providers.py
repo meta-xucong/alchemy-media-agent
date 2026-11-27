@@ -576,9 +576,10 @@ class V3LLMBrainProvider:
     def _primary_model_for_request(self, request: BrainRunRequest) -> str:
         if not self.structured_claude_model or not _is_claude_sonnet_55(self.model):
             return self.model
-        if request.stage not in {"plan", "provider_prompt_finalize"} or not creative_exploration_history(request):
-            return self.model
-        if request.stage == "plan" and not _requires_remote_creative_contract(request):
+        if request.stage == "plan":
+            if not _requires_remote_creative_contract(request):
+                return self.model
+        elif request.stage != "provider_prompt_finalize" or not creative_exploration_history(request):
             return self.model
         if not _is_claude_sonnet_55(self.structured_claude_model):
             raise BrainProviderUnavailable(
