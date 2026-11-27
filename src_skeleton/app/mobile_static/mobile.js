@@ -4524,9 +4524,9 @@ function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
   const goal = latestItem?.project_goal || latestItem?.metadata?.project_goal || "";
   return {
     project_id: projectId,
-    title: latestItem?.project_title || goal || "V3 项目图片",
+    title: mobileV3ReadableText(latestItem?.project_title, latestItem?.metadata?.project_title),
     user_goal: goal,
-    short_summary: goal,
+    short_summary: mobileV3ReadableText(latestItem?.project_goal, latestItem?.metadata?.project_goal),
     primary_template_id: latestItem?.template_id || latestItem?.metadata?.template_id || null,
     latest_thumbnail_urls: [mobileV3HomeThumbUrl(latestItem)].filter(Boolean),
     created_at: latestItem?.created_at || "",
@@ -4779,7 +4779,7 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
       </button>
       <button class="v3-mobile-project-copy v3-mobile-project-open" type="button" data-mobile-v3-open-project-detail="${escapeHtml(projectId)}" aria-label="打开项目主页：${escapeHtml(mobileV3ProjectTitle(project))}">
         <strong>${escapeHtml(mobileV3ProjectTitle(project))}</strong>
-        <span>${escapeHtml(mobileV3ProjectGoal(project))}</span>
+        <span>${escapeHtml(mobileV3ProjectDisplayGoal(project))}</span>
         <small>${visualCountLabel} · 生成方式：${escapeHtml(generatedImageSourceText(latest, project))} · ${formatDate(latest?.created_at || project.updated_at || project.created_at)}</small>
       </button>
       <button class="button compact secondary" type="button" data-mobile-v3-open-project="${escapeHtml(projectId)}">查看图片</button>
@@ -6400,7 +6400,7 @@ function renderMobileV3ProjectGallery(project) {
     (candidate) => candidate.projectId === String(project?.project_id || ""),
   );
   setText("#mobileV3GalleryTitle", mobileV3ProjectTitle(project));
-  setText("#mobileV3GalleryGoal", mobileV3ProjectGoal(project));
+  setText("#mobileV3GalleryGoal", mobileV3ProjectDisplayGoal(project));
   setText(
     "#mobileV3GalleryCount",
     group ? mobileV3ProjectImageCountLabel(group) : `${outputs.length} 张图片`,
@@ -6471,7 +6471,7 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   if (detailPanel) detailPanel.hidden = false;
   mobileV3State.currentTimeline = [];
   setText("#mobileV3ProjectTitle", mobileV3ProjectTitle(project));
-  setText("#mobileV3ProjectGoal", mobileV3ProjectGoal(project));
+  setText("#mobileV3ProjectGoal", mobileV3ProjectDisplayGoal(project));
   const deleteButton = document.querySelector("#mobileV3DeleteProjectBtn");
   if (deleteButton) deleteButton.disabled = !project?.project_id;
   setText("#mobileV3BackToProjectsBtn", "返回最近项目");
@@ -7030,7 +7030,7 @@ function renderMobileV3ProjectSnapshot(project = mobileV3State.currentProject) {
   const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project);
   const items = [
     { label: "项目类型", value: mobileV3TemplateLabel(project.primary_template_id || mobileV3State.selectedTemplate), note: "项目中途不切换模板" },
-    { label: "项目目标", value: mobileV3ShortText(project.short_summary || mobileV3ProjectGoal(project), 34), note: "后续生成都会围绕这个目标" },
+    { label: "项目目标", value: mobileV3ShortText(mobileV3ReadableText(project.short_summary) || mobileV3ProjectDisplayGoal(project), 34), note: "后续生成都会围绕这个目标" },
     { label: "原始参考", value: `${referenceGroups.original_inputs.length} 个`, note: referenceGroups.original_inputs.length ? "作为本次生成依据" : "可上传商品、构图或风格原图" },
     { label: "延续方向", value: `${referenceGroups.continuation_outputs.length} 个`, note: referenceGroups.continuation_outputs.length ? "来自你选中的项目成片" : "满意成片可作为下一步方向" },
     {
@@ -8347,7 +8347,7 @@ function mobileV3ProjectThumbnailItem(project) {
   return {
     project_id: project.project_id,
     project_title: mobileV3ProjectTitle(project),
-    project_goal: mobileV3ProjectGoal(project),
+    project_goal: mobileV3ProjectDisplayGoal(project),
     template_id: project?.primary_template_id || project?.template_id || "general_template",
     thumbnail_url: thumbnailUrl,
     preview_url: thumbnailUrl,
@@ -8384,12 +8384,31 @@ function mobileV3ProjectHomeThumbnailUrls(project) {
   return [...formalThumbnails, ...reviewThumbnails];
 }
 
+function mobileV3ReadableText(...values) {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const text = value.trim();
+    const compact = text.replace(/\s/g, "");
+    if (!compact) continue;
+    const replacements = (compact.match(/[?\uFFFD]/g) || []).length;
+    if (compact.length < 4 || replacements / compact.length < 0.35) return text;
+  }
+  return "";
+}
+
 function mobileV3ProjectTitle(project) {
-  return project?.title || project?.short_summary || mobileV3ProjectGoal(project).slice(0, 32) || "V3 项目";
+  return mobileV3ReadableText(project?.title, project?.project_title, project?.short_summary)
+    || mobileV3ReadableText(project?.user_goal, project?.goal, project?.project_goal).slice(0, 32)
+    || "V3 项目图片";
 }
 
 function mobileV3ProjectGoal(project) {
   return project?.user_goal || project?.goal || project?.short_summary || "继续生成项目图片";
+}
+
+function mobileV3ProjectDisplayGoal(project) {
+  return mobileV3ReadableText(project?.user_goal, project?.goal, project?.short_summary, project?.project_goal)
+    || "继续这个项目";
 }
 
 function mobileV3TemplateLabel(templateId) {
@@ -8472,7 +8491,8 @@ function mobileV3IsOutputItemSelected(item, project = mobileV3State.currentProje
 }
 
 function mobileV3OutputSummary(item) {
-  return item?.summary || item?.user_input || item?.metadata?.user_input || item?.metadata?.prompt_summary || "可继续使用";
+  return mobileV3ReadableText(item?.summary, item?.user_input, item?.metadata?.user_input, item?.metadata?.prompt_summary)
+    || "可继续使用";
 }
 
 function mobileV3ReferenceSourceType(ref) {
