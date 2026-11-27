@@ -534,16 +534,18 @@ def test_creative_exploration_targets_only_rejected_output(monkeypatch, claude_r
     assert all(payload == wire_payloads[0] for payload in wire_payloads)
 
 
-@pytest.mark.parametrize(("primary", "stage", "has_history", "expected"), [
-    ("claude-sonnet-5-5", "provider_prompt_finalize", True, "claude-sonnet-5-5-alchemy-structured"),
-    ("claude-sonnet-5-5", "provider_prompt_finalize", False, "claude-sonnet-5-5"),
-    ("claude-sonnet-5-5", "plan", True, "claude-sonnet-5-5-alchemy-structured"),
-    ("claude-sonnet-5-5", "plan", False, "claude-sonnet-5-5"),
-    ("claude-sonnet-5-5", "provider_prompt_human_naturalness_resign", True, "claude-sonnet-5-5"),
-    ("kimi-k3", "provider_prompt_finalize", True, "kimi-k3"),
+@pytest.mark.parametrize(("primary", "stage", "has_history", "require_real_images", "expected"), [
+    ("claude-sonnet-5-5", "provider_prompt_finalize", True, True, "claude-sonnet-5-5-alchemy-structured"),
+    ("claude-sonnet-5-5", "provider_prompt_finalize", False, True, "claude-sonnet-5-5"),
+    ("claude-sonnet-5-5", "plan", True, True, "claude-sonnet-5-5-alchemy-structured"),
+    ("claude-sonnet-5-5", "plan", False, True, "claude-sonnet-5-5-alchemy-structured"),
+    ("claude-sonnet-5-5", "plan", False, False, "claude-sonnet-5-5"),
+    ("claude-sonnet-5-5", "provider_prompt_human_naturalness_resign", True, True, "claude-sonnet-5-5"),
+    ("kimi-k3", "provider_prompt_finalize", True, True, "kimi-k3"),
+    ("kimi-k3", "plan", False, True, "kimi-k3"),
 ])
 def test_v3_first_brain_call_uses_structured_claude_route_only_when_applicable(
-    monkeypatch, primary, stage, has_history, expected,
+    monkeypatch, primary, stage, has_history, require_real_images, expected,
 ) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_MODEL", primary)
     monkeypatch.setenv("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL", "claude-sonnet-5-5-alchemy-structured")
@@ -558,7 +560,7 @@ def test_v3_first_brain_call_uses_structured_claude_route_only_when_applicable(
         user_input="Explore a synthetic concept.", stage=stage,
         scenario_id="general_creative", template_id="general_template",
         metadata={
-            "require_real_images": True,
+            "require_real_images": require_real_images,
             "effective_variation_mode": "creative_exploration",
             "canonical_prompt_context": {
                 "creative_exploration_history": {"previous": "Synthetic baseline"} if has_history else {},
