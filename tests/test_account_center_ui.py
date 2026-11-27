@@ -81,6 +81,7 @@ def test_account_center_opens_and_contains_api_mcp(native, account_browser, mobi
         expect(page.locator("[data-account-access-copy-api]")).to_have_text("已复制 ✓")
         api_example = page.locator("#accountAccessManualCopy").input_value()
         assert "/api/v3/creative-agent/projects" in api_example
+        assert r'title: "API \u751f\u56fe\u793a\u4f8b"' in api_example
         assert "/jobs" in api_example
         expect(page.locator("#accountAccessSecretFeedback")).to_have_text("已复制到剪贴板。")
         assert "/api/v3/creative-agent/projects" in page.evaluate("window.__clipboardValue")

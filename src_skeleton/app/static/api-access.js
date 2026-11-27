@@ -168,6 +168,7 @@
   }
   function apiGenerationExample(origin, apiKey) {
     return `// Node.js 18+。运行前请确认这次调用需要真实生图（会按账户规则计费）。
+// 含中文的自定义文案请保存为 UTF-8 的 .mjs 文件，再用 node 运行该文件。
 const BASE_URL = ${JSON.stringify(origin)};
 const API_KEY = ${JSON.stringify(apiKey)};
 const PROMPT = "A clean studio product image of a red apple on a white ceramic plate";
@@ -184,7 +185,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // 1. 创建项目
 const projectResponse = await call("/api/v3/creative-agent/projects", {
   method: "POST",
-  body: JSON.stringify({ user_goal: PROMPT, title: "API 生图示例", primary_template_id: "general_template" })
+  body: JSON.stringify({ user_goal: PROMPT, title: "API \\u751f\\u56fe\\u793a\\u4f8b", primary_template_id: "general_template" })
 });
 const projectId = projectResponse.project.project_id;
 // 2. 提交生图任务
