@@ -105,6 +105,82 @@ for (const [surface, file] of [
     }
   });
 
+  test(surface + " V2 lightbox opens the existing preview and keeps the original download", () => {
+    const preview = "/api/v2/image/history/out_saved/preview";
+    const thumb = "/api/v2/image/history/out_saved/thumbnail";
+    const original = "/api/v2/outputs/out_saved/download";
+    let loadOptions;
+    let download;
+    const els = {
+      lightboxTitle: {}, lightboxImage: { dataset: {} }, lightboxMeta: {}, lightboxPromptText: {},
+      lightboxPromptBtn: { classList: { toggle() {} } }, copyPromptBtn: {}, imageLightbox: {},
+      closeImageLightboxBtn: { focus() {} },
+    };
+    const { openImageLightbox } = install(source, {
+      els, document: { body: { classList: { add() {} } } },
+      bindProgressiveLightboxImage: (_image, options) => { loadOptions = options; },
+      bindDownloadLink: (_button, url) => { download = url; },
+      normalizeOriginalDownloadUrl: (url) => url,
+      shareDescriptionFromPrompt: () => "", shareCurrentLightboxImage() {},
+      setPromptCopyState() {}, closeLightboxPrompt() {}, resetLightboxZoom() {}, renderLightboxActions() {},
+    }, ["openImageLightbox"]);
+    openImageLightbox({ url: original, thumbnailUrl: thumb, previewUrl: preview, v2Preview: true });
+    assert.equal(loadOptions.displayUrl, preview);
+    assert.equal(loadOptions.thumbnailUrl, thumb);
+    assert.equal(loadOptions.recoverPreview, true);
+    assert.equal(loadOptions.originalUrl, original);
+    assert.equal(download, original);
+    assert.equal(els.lightboxImage.dataset.fullUrl, original);
+    openImageLightbox({ url: original, thumbnailUrl: thumb, previewUrl: preview });
+    assert.equal(loadOptions.displayUrl, original);
+    assert.equal(loadOptions.recoverPreview, false);
+  });
+
+  test(surface + " V2 lightbox retries only the stalled preview and cancels when closed", async () => {
+    const window = clock();
+    const preview = "/api/v2/image/history/out_saved/preview";
+    const requests = [];
+    const { loadV2LightboxSource } = install(source, {
+      window, DOMException, AbortController,
+      resolveAuthenticatedMediaSource: (url, { signal }) => {
+        requests.push({ url, signal });
+        return requests.length === 2 ? { url: "blob:preview", objectUrl: true } : never();
+      },
+    }, ["withRequestDeadline", "loadV2LightboxSource"]);
+    const first = new AbortController();
+    const reading = loadV2LightboxSource(preview, "/original", first.signal);
+    window.expire(8000);
+    assert.equal((await reading).url, "blob:preview");
+    assert.deepEqual(requests.map(({ url }) => url), [preview, preview]);
+    assert.equal(requests[0].signal.aborted, true);
+    const closing = new AbortController();
+    const closed = loadV2LightboxSource(preview, "/original", closing.signal);
+    closing.abort();
+    await assert.rejects(closed, { name: "AbortError" });
+    assert.equal(requests.length, 3);
+    assert.equal(requests[2].signal.aborted, true);
+  });
+
+  test(surface + " V2 legacy preview falls back on 404 and respects access errors", async () => {
+    const requests = [];
+    const window = clock();
+    let status = 404;
+    const { loadV2LightboxSource } = install(source, {
+      window, DOMException, AbortController,
+      resolveAuthenticatedMediaSource: async (url) => {
+        requests.push(url);
+        if (url === "/preview") throw Object.assign(new Error("preview unavailable"), { status });
+        return { url: "blob:original" };
+      },
+    }, ["withRequestDeadline", "loadV2LightboxSource"]);
+    assert.equal((await loadV2LightboxSource("/preview", "/original", new AbortController().signal)).url, "blob:original");
+    assert.deepEqual(requests, ["/preview", "/original"]);
+    requests.length = 0;
+    status = 403;
+    await assert.rejects(loadV2LightboxSource("/preview", "/original", new AbortController().signal), { status: 403 });
+    assert.deepEqual(requests, ["/preview"]);
+  });
+
   test(surface + " keeps a download slot for thumbnails and releases a stalled original", async () => {
     const desktop = surface === "desktop";
     const queue = desktop ? "v3ProtectedMediaQueue" : "protectedMediaQueue";
