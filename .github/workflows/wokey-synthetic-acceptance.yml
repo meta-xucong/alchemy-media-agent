@@ -1,4 +1,4 @@
-name: V3 project text audit (isolated)
+name: Alchemy release capacity audit (isolated)
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [v3_text_audit]
+        probe: [release_capacity]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Count stored project text artifacts over pinned SSH
+      - name: Read release capacity over pinned SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
@@ -42,7 +42,10 @@ jobs:
           opts=(-i "$ssh_dir/key" -p "$VPS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes
                 -o ConnectTimeout=20 -o StrictHostKeyChecking=yes -o HostKeyAlias=alchemy-acceptance-pinned
                 -o UserKnownHostsFile="$ssh_dir/known_hosts")
-          if [[ "$PROBE" == live_v2 ]]; then
+          if [[ "$PROBE" == release_capacity ]]; then
+            ssh "${opts[@]}" "${VPS_USER:-root}@$VPS_HOST" 'bash -s' < scripts/wokey_acceptance/release_capacity.sh
+            exit
+          elif [[ "$PROBE" == live_v2 ]]; then
             driver="$(base64 -w0 scripts/wokey_acceptance/v2_driver.py)"
             remote="python3 -c 'import base64; exec(base64.b64decode(\"$driver\"))'"
           else
