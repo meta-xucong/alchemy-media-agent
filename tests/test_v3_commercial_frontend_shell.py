@@ -471,7 +471,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "silent: true" in restore_call
     assert "shouldContinue" in restore_call
     assert "projectOutputsRequest" in script.text
-    assert "if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;" in script.text
+    assert "if (throwOnError) await v3State.projectOutputsRequest;" in script.text
+    assert "else await v3State.projectOutputsRequest.catch(() => {});" in script.text
     assert "/api/lab/history?limit=1000" not in script.text
     assert "function v3RecoveredLatestVisibleProjectOutputs" in script.text
     assert "recovered_without_exact_job_match" in script.text

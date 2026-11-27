@@ -3632,7 +3632,8 @@ async function loadV3ProjectOutputs({
     && v3State.projectOutputsRequestOwner === requestOwner
     && v3State.projectOutputsRequestKey === requestKey
   ) {
-    if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;
+    if (throwOnError) await v3State.projectOutputsRequest;
+    else await v3State.projectOutputsRequest.catch(() => {});
     return [];
   }
   const completeImageHistoryLoaded = v3State.imageHistoryLoaded
@@ -3651,30 +3652,35 @@ async function loadV3ProjectOutputs({
     renderV3ProjectNextActions();
     return Array.isArray(v3State.imageHistory) ? v3State.imageHistory : [];
   }
-  v3State.imageHistoryLoading = true;
-  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
-  let requestPromise = null;
-  try {
-    const cacheBust = force ? `&t=${Date.now()}` : "";
-    const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
-    const surfaceQuery = normalizedSurface ? `&surface=${encodeURIComponent(normalizedSurface)}` : "";
-    const projectIdsQuery = requestedHomeProjectIds
-      ? `&project_ids=${encodeURIComponent(requestedHomeProjectIds.join(","))}`
-      : "";
-    const outputRequestPath = `${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}`;
-    requestPromise = normalizedSurface === "home_preview"
-      ? v3RequestWithTimeout(
-        outputRequestPath,
-        v3HomePreviewRequestTimeoutMs,
-        v3ProjectDetailSignal(scopedProjectId, detailEpoch),
-      )
-      : readWithTimeout(request, outputRequestPath, { retry: true, signal: v3ProjectDetailSignal(scopedProjectId, detailEpoch) });
-    v3State.projectOutputsRequest = requestPromise;
-    v3State.projectOutputsRequestOwner = requestOwner;
-    v3State.projectOutputsRequestKey = requestKey;
-    const payload = await requestPromise;
-    if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
-    if (!v3HistoryModalRequestIsCurrent(requestOwner, scopedProjectId)) return [];
+  const galleryEpoch = v3State.projectDetailEpoch;
+  const galleryToken = scopedProjectId ? getVeyraToken() : null;
+  const galleryJobId = v3State.currentJob?.job_id;
+  const galleryGeneration = v3State.followingGeneration;
+  const modal = requestOwner?.kind === "project_history_modal";
+  const galleryReads = v3State.projectGalleryReads ||= new Map();
+  const galleryKey = `${modal ? "modal" : "project"}:${scopedProjectId}`;
+  const galleryReceipt = {};
+  if (scopedProjectId) galleryReads.set(galleryKey, galleryReceipt);
+  const isLatestGalleryRead = () => galleryReads.get(galleryKey) === galleryReceipt
+    && getVeyraToken() === galleryToken;
+  const ownsGallery = () => isLatestGalleryRead()
+    && (modal ? v3HistoryModalRequestIsCurrent(requestOwner, scopedProjectId) : (
+      v3State.currentProject?.project_id === scopedProjectId
+      && v3State.projectDetailEpoch === galleryEpoch
+      && (!galleryJobId || v3State.currentJob?.job_id === galleryJobId)
+      && (!v3State.followingGeneration || v3State.followingGeneration === galleryGeneration)
+    ));
+  const finishGalleryRead = () => {
+    if (galleryReads.get(galleryKey) === galleryReceipt) galleryReads.delete(galleryKey);
+  };
+  const cacheBust = force ? `&t=${Date.now()}` : "";
+  const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
+  const surfaceQuery = normalizedSurface ? `&surface=${encodeURIComponent(normalizedSurface)}` : "";
+  const projectIdsQuery = requestedHomeProjectIds
+    ? `&project_ids=${encodeURIComponent(requestedHomeProjectIds.join(","))}`
+    : "";
+  const outputRequestPath = `${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${surfaceQuery}${projectIdsQuery}${cacheBust}`;
+  const applyPayload = (payload) => {
     const items = Array.isArray(payload.items) ? payload.items : [];
     const reviewItems = Array.isArray(payload.review_items) ? payload.review_items : [];
     const historyItems = Array.isArray(payload.history_items) ? payload.history_items : [];
@@ -3707,7 +3713,6 @@ async function loadV3ProjectOutputs({
     if (scopedProjectId) {
       syncV3ProjectOutputsFromList(items, scopedProjectId, reviewItems, historyItems);
     }
-    if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     renderV3History();
     renderV3HeroHistory();
     renderV3ProjectOutputBoard();
@@ -3715,9 +3720,45 @@ async function loadV3ProjectOutputs({
     renderV3StepCards();
     renderV3ProjectNextActions();
     return items;
+  };
+  v3State.imageHistoryLoading = true;
+  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
+  let requestPromise = null;
+  let background = false;
+  try {
+    requestPromise = normalizedSurface === "home_preview"
+      ? v3RequestWithTimeout(
+        outputRequestPath,
+        v3HomePreviewRequestTimeoutMs,
+        v3ProjectDetailSignal(scopedProjectId, detailEpoch),
+      )
+      : readWithTimeout(request, outputRequestPath, { retry: true, signal: v3ProjectDetailSignal(scopedProjectId, detailEpoch) });
+    v3State.projectOutputsRequest = requestPromise;
+    v3State.projectOutputsRequestOwner = requestOwner;
+    v3State.projectOutputsRequestKey = requestKey;
+    const payload = await requestPromise;
+    if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
+    if (!v3HistoryModalRequestIsCurrent(requestOwner, scopedProjectId)) return [];
+    if (scopedProjectId && !isLatestGalleryRead()) return [];
+    return applyPayload(payload);
   } catch (error) {
     if (!v3ProjectDetailRequestIsCurrent(scopedProjectId, detailEpoch, shouldContinue)) return [];
     if (!v3HistoryModalRequestIsCurrent(requestOwner, scopedProjectId)) return [];
+    if (scopedProjectId && !isLatestGalleryRead()) return [];
+    if (scopedProjectId && v3TransientReadError(error) && ownsGallery()) {
+      background = true;
+      const signal = modal ? null : v3ProjectDetailSignal(scopedProjectId, galleryEpoch);
+      void retryV3Read(() => readWithTimeout(request, outputRequestPath, { signal }), ownsGallery, { delayFirst: true })
+        .then((payload) => {
+          if (!payload || !ownsGallery()) return;
+          applyPayload(payload);
+          if (modal) renderV3ProjectHistoryResults(scopedProjectId);
+          else renderV3ResultBoard(v3State.currentJob);
+        })
+        .catch((retryError) => { if (ownsGallery()) v3State.imageHistoryError = friendlyError(retryError); })
+        .finally(finishGalleryRead);
+      return [];
+    }
     if (!preserveOnError) {
       v3State.imageHistoryLoaded = false;
       if (!scopedProjectId && !homePreview) v3State.imageHistorySurface = "none";
@@ -3740,6 +3781,7 @@ async function loadV3ProjectOutputs({
     if (throwOnError) throw error;
     return [];
   } finally {
+    if (!background) finishGalleryRead();
     if (
       v3State.projectOutputsRequest === requestPromise
       && v3State.projectOutputsRequestOwner === requestOwner
@@ -4867,14 +4909,17 @@ function openV3ProjectHistoryModal(projectId) {
     })
       .then(() => {
         if (!v3HistoryModalRequestIsCurrent(historyModalRequest, group.projectId)) return;
-        const refreshed = v3ProjectImageGroup(group.projectId);
-        if (refreshed) {
-          if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = v3ProjectHistoryModalCountLabel(refreshed);
-          renderV3ProjectHistoryGrid(refreshed);
-        }
+        renderV3ProjectHistoryResults(group.projectId);
       })
       .catch(() => {});
   }
+}
+
+function renderV3ProjectHistoryResults(projectId) {
+  const group = v3ProjectImageGroup(projectId);
+  if (!group) return;
+  if (els.v3ProjectHistoryCount) els.v3ProjectHistoryCount.textContent = v3ProjectHistoryModalCountLabel(group);
+  renderV3ProjectHistoryGrid(group);
 }
 
 function closeV3ProjectHistoryModal({ keepBodyState = false } = {}) {
@@ -8406,8 +8451,16 @@ function v3JobHasVisibleImages(job) {
   return v3CurrentJobImageItems(job).length > 0;
 }
 
-async function restoreV3LatestProjectJob(project = v3State.currentProject, { silent = true, shouldContinue = null, throwOnError = false } = {}) {
+async function restoreV3LatestProjectJob(project = v3State.currentProject, { silent = true, shouldContinue = null, throwOnError = false, retryStatus = false } = {}) {
   if (!v3GenerationSessionOwns(shouldContinue)) return null;
+  const signal = v3ProjectDetailSignal(project?.project_id);
+  const token = getVeyraToken();
+  const owns = () => !signal?.aborted && getVeyraToken() === token && v3GenerationSessionOwns(shouldContinue);
+  const readJob = (jobId) => {
+    const path = `${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`;
+    const load = () => readWithTimeout(request, path, { signal });
+    return retryStatus ? retryV3Read(load, owns) : load();
+  };
   const receipt = v3EcommerceReceiptForProject(project);
   if (receipt) {
     if (v3State.currentJob?.job_id === receipt.jobId) {
@@ -8416,10 +8469,8 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
       return v3State.currentJob;
     }
     try {
-      const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(receipt.jobId)}`, {
-        signal: v3ProjectDetailSignal(project?.project_id),
-      });
-      if (!v3GenerationSessionOwns(shouldContinue)) return null;
+      const job = await readJob(receipt.jobId);
+      if (!job || !owns()) return null;
       v3State.currentJob = job;
       v3State.selectedResult = null;
       v3SettleEcommerceTerminalReceipt(job);
@@ -8437,10 +8488,8 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
     return v3State.currentJob;
   }
   try {
-    const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`, {
-      signal: v3ProjectDetailSignal(project?.project_id),
-    });
-    if (!v3GenerationSessionOwns(shouldContinue)) return null;
+    const job = await readJob(jobId);
+    if (!job || !owns()) return null;
     if (["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase())) {
       const recovered = v3RecoveredJobFromProjectOutputs(jobId, job, { allowPartial: true });
       if (recovered) {
@@ -10198,6 +10247,7 @@ async function openV3Project(projectId) {
           silent: true,
           shouldContinue: detailIsCurrent,
           throwOnError: true,
+          retryStatus: true,
         });
         if (!detailIsCurrent()) return;
         if (v3ProjectJobNeedsRecovery(recoveryJob || v3State.currentJob)) {
@@ -10248,6 +10298,7 @@ async function syncV3ProjectDetailInBackground(projectId, detailEpoch) {
       silent: true,
       shouldContinue,
       throwOnError: true,
+      retryStatus: true,
     });
     if (!shouldContinue()) return;
 
@@ -21040,6 +21091,28 @@ async function readWithTimeout(load, path, { retry = false, signal = null } = {}
     if (!retry || signal?.aborted || error.name !== "TimeoutError") throw error;
     return await read();
   }
+}
+
+function v3TransientReadError(error) {
+  return ["TimeoutError", "TypeError"].includes(error.name)
+    || [408, 429].includes(error.status)
+    || (error.status >= 500 && error.status < 600);
+}
+
+async function retryV3Read(read, owns, { delayFirst = false } = {}) {
+  const wait = () => new Promise((resolve) => window.setTimeout(resolve, 5000));
+  if (delayFirst) await wait();
+  while (owns()) {
+    try {
+      const result = await read();
+      return owns() ? result : null;
+    } catch (error) {
+      if (!owns()) return null;
+      if (!v3TransientReadError(error)) throw error;
+      await wait();
+    }
+  }
+  return null;
 }
 
 async function request(path, options = {}) {

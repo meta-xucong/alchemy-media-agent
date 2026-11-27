@@ -6645,7 +6645,7 @@ async function refreshMobileV3ProjectDetail(projectId, options = {}) {
   mobileV3State.outputError = previewResult.status === "rejected" ? friendlyError(previewResult.reason) : "";
   const previewItems = Array.isArray(previewPayload?.items) ? previewPayload.items : [];
   const previewHistoryItems = Array.isArray(previewPayload?.history_items) ? previewPayload.history_items : [];
-  mobileV3MergeProjectOutputs(requestedProjectId, previewItems, [], previewHistoryItems);
+  if (previewPayload) mobileV3MergeProjectOutputs(requestedProjectId, previewItems, [], previewHistoryItems);
   mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== requestedProjectId)];
   persistMobileV3Caches();
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
@@ -6688,11 +6688,12 @@ async function refreshMobileV3ProjectDetail(projectId, options = {}) {
 async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, shouldContinue = null, restoreJob = true } = {}) {
   const requestedProjectId = String(projectId || "").trim();
   const requestEpoch = Number.isInteger(detailEpoch) ? detailEpoch : mobileV3InvalidateProjectDetail();
-  if (!requestedProjectId || !mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
-  const [projectPayload, timelinePayload, outputsPayload] = await Promise.all([
+  const ownsDetail = () => mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue);
+  if (!requestedProjectId || !ownsDetail()) return false;
+  void loadMobileV3ProjectOutputs(requestedProjectId, { shouldContinue: ownsDetail, preserveOnError: true });
+  const [projectPayload, timelinePayload] = await Promise.all([
     mobileV3Request(`/projects/${encodeURIComponent(requestedProjectId)}`),
     mobileV3Request(`/projects/${encodeURIComponent(requestedProjectId)}/timeline`),
-    mobileV3Request(`/project-outputs?limit=80&compact=true&project_id=${encodeURIComponent(requestedProjectId)}`),
   ]);
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
   const project = mobileV3ProjectWithResponseMetadata(projectPayload.project || projectPayload, projectPayload);
@@ -6708,18 +6709,6 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
   setMobileV3ProjectComposeAvailability(project);
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
   mobileV3State.currentTimeline = Array.isArray(timelinePayload.items) ? timelinePayload.items : Array.isArray(timelinePayload.timeline) ? timelinePayload.timeline : [];
-  const scopedOutputs = Array.isArray(outputsPayload.items)
-    ? outputsPayload.items
-    : Array.isArray(timelinePayload?.metadata?.project_outputs)
-      ? timelinePayload.metadata.project_outputs
-      : [];
-  const scopedReviewOutputs = Array.isArray(outputsPayload.review_items) ? outputsPayload.review_items : [];
-  const scopedHistoryOutputs = Array.isArray(outputsPayload.history_items) ? outputsPayload.history_items : [];
-  if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
-  mobileV3MergeProjectOutputs(project.project_id, scopedOutputs, scopedReviewOutputs, scopedHistoryOutputs);
-  mobileV3State.outputError = "";
-  mobileV3State.previewProjectIds.delete(String(project.project_id));
-  if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
   mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
   persistMobileV3Caches();
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
@@ -8236,15 +8225,29 @@ function mobileV3ProcessOutputsForProject(projectId) {
 
 async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinue = null, preserveOnError = false } = {}) {
   if (!projectId || !mobileV3GenerationSessionOwns(shouldContinue)) return [];
-  try {
-    const payload = await readWithTimeout(mobileV3Request, `/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`, { retry: true });
-    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
+  const token = getVeyraToken();
+  const detailEpoch = mobileV3State.projectDetailEpoch;
+  const jobId = mobileV3State.currentJob?.job_id;
+  const generation = mobileV3State.followingGeneration;
+  const reads = mobileV3State.projectGalleryReads ||= new Map();
+  const receipt = {};
+  reads.set(projectId, receipt);
+  const ownsView = () => reads.get(projectId) === receipt
+    && mobileV3State.currentProject?.project_id === projectId
+    && mobileV3State.projectDetailEpoch === detailEpoch
+    && getVeyraToken() === token;
+  const owns = () => ownsView()
+    && (!jobId || mobileV3State.currentJob?.job_id === jobId)
+    && (!mobileV3State.followingGeneration || mobileV3State.followingGeneration === generation);
+  const finishRead = () => {
+    if (reads.get(projectId) === receipt) reads.delete(projectId);
+  };
+  const path = `/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`;
+  const applyPayload = (payload) => {
     const outputs = Array.isArray(payload.items) ? payload.items : [];
     const reviewOutputs = Array.isArray(payload.review_items) ? payload.review_items : [];
     const historyOutputs = Array.isArray(payload.history_items) ? payload.history_items : [];
-    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
     mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs, historyOutputs);
-    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
     mobileV3State.outputError = "";
     mobileV3State.previewProjectIds.delete(String(projectId));
     persistMobileV3Caches();
@@ -8254,8 +8257,22 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
       renderMobileV3ProjectGallery(mobileV3State.currentProject);
     }
     return outputs;
+  };
+  let background = false;
+  try {
+    const payload = await readWithTimeout(mobileV3Request, path, { retry: true });
+    if (!ownsView() || !mobileV3GenerationSessionOwns(shouldContinue)) return [];
+    return applyPayload(payload);
   } catch (error) {
-    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
+    if (!ownsView() || !mobileV3GenerationSessionOwns(shouldContinue)) return [];
+    if (v3TransientReadError(error) && owns()) {
+      background = true;
+      void retryV3Read(() => readWithTimeout(mobileV3Request, path), owns, { delayFirst: true })
+        .then((payload) => { if (payload && owns()) applyPayload(payload); })
+        .catch((retryError) => { if (owns()) mobileV3State.outputError = friendlyError(retryError); })
+        .finally(finishRead);
+      return [];
+    }
     mobileV3State.outputError = friendlyError(error);
     if (preserveOnError || error.name === "TimeoutError") return [];
     mobileV3MergeProjectOutputs(projectId, [], []);
@@ -8268,6 +8285,8 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinu
       renderMobileV3ProjectGallery(mobileV3State.currentProject);
     }
     return [];
+  } finally {
+    if (!background) finishRead();
   }
 }
 
@@ -16066,6 +16085,28 @@ async function readWithTimeout(load, path, { retry = false, signal = null } = {}
     if (!retry || signal?.aborted || error.name !== "TimeoutError") throw error;
     return await read();
   }
+}
+
+function v3TransientReadError(error) {
+  return ["TimeoutError", "TypeError"].includes(error.name)
+    || [408, 429].includes(error.status)
+    || (error.status >= 500 && error.status < 600);
+}
+
+async function retryV3Read(read, owns, { delayFirst = false } = {}) {
+  const wait = () => new Promise((resolve) => window.setTimeout(resolve, 5000));
+  if (delayFirst) await wait();
+  while (owns()) {
+    try {
+      const result = await read();
+      return owns() ? result : null;
+    } catch (error) {
+      if (!owns()) return null;
+      if (!v3TransientReadError(error)) throw error;
+      await wait();
+    }
+  }
+  return null;
 }
 
 async function request(path, options = {}) {
