@@ -114,6 +114,21 @@ def test_lighting_retry_requires_local_pixel_evidence_against_this_output(findin
     review_prompt = _inspection_prompt(metadata)
     assert "lighting_mismatch_evidence" in review_prompt
     assert "current output's signed lighting" in review_prompt
+    assert "at most 190 characters" in review_prompt
+
+
+def test_aiself_v3_brain_and_visual_review_use_the_same_claude_route(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
+    from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+        OpenAIVisionInspectionProvider,
+    )
+
+    alias = "claude-sonnet-5-5-alchemy-structured"
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "https://aiself.vip/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("V3_LLM_BRAIN_BACKUP_MODEL", "claude-sonnet-5-5")
+    assert V3LLMBrainProvider().model == alias
+    assert OpenAIVisionInspectionProvider().model_chain == (alias, "kimi-k3", "gpt-6.1-sol")
 
 
 def test_lighting_refinement_uses_only_the_targeted_output_evidence() -> None:

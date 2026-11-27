@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from alchemy_creative_agent_3_0.app.model_routing import resolve_claude_model
 from app.config import openai_sdk_client_kwargs, settings
 from app.schemas import ImagePromptPlan
 
@@ -229,8 +230,12 @@ def _should_use_llm(*, intensity: str, provider_preference: str | None) -> bool:
 def _planner_candidates() -> list[dict[str, str]]:
     if not settings.llm_gateway_api_key or not settings.llm_gateway_base_url:
         return []
-    primary_model = settings.default_llm_model or "claude-sonnet-5-5"
-    fallback_model = settings.backup_llm_model or "kimi-k3"
+    primary_model = resolve_claude_model(
+        settings.default_llm_model or "claude-sonnet-5-5", settings.llm_gateway_base_url
+    )
+    fallback_model = resolve_claude_model(
+        settings.backup_llm_model or "kimi-k3", settings.llm_gateway_base_url
+    )
     fallback_models = ["kimi-k3", fallback_model, "gpt-6.1-sol"]
     return [
         {"provider": _text_model_protocol(primary_model), "model": primary_model},

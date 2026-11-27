@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from types import SimpleNamespace
 
@@ -50,6 +51,55 @@ def test_candidate_wall_clock_caps_leave_a_fallback_slice() -> None:
     assert work_intensity._candidate_timeout_seconds(210.0, 2) == 90.0  # noqa: SLF001
     assert work_intensity._candidate_timeout_seconds(20.0, 2) == 10.0  # noqa: SLF001
     assert alchemy_lab_llm._lab_candidate_timeout_seconds(20.0, 2) == 10.0  # noqa: SLF001
+
+
+def test_aiself_v1_and_lab_pin_only_claude_and_lab_uses_native_vision(monkeypatch, tmp_path) -> None:
+    alias = "claude-sonnet-5-5-alchemy-structured"
+    monkeypatch.setattr(settings, "llm_gateway_base_url", "https://aiself.vip/v1")
+    monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
+    monkeypatch.setattr(settings, "default_llm_model", "claude-sonnet-5-5")
+    monkeypatch.setattr(settings, "backup_llm_model", "gpt-6.1-sol")
+    monkeypatch.setattr(settings, "lab_llm_enabled", True)
+    monkeypatch.setattr(settings, "lab_llm_provider", "anthropic")
+    monkeypatch.setattr(settings, "lab_openai_api_key", "test-lab-primary-key")
+    monkeypatch.setattr(settings, "lab_vision_provider", "openai")
+    monkeypatch.setattr(settings, "lab_doubao_vision_api_key", None)
+    monkeypatch.setattr(settings, "kimi_llm_model", "claude-sonnet-5-5")
+
+    expected = [
+        {"provider": "anthropic", "model": alias},
+        {"provider": "openai", "model": "kimi-k3"},
+        {"provider": "openai", "model": "gpt-6.1-sol"},
+    ]
+    assert work_intensity._planner_candidates() == expected
+    assert alchemy_lab_llm._planner_candidates(image_paths=False) == expected
+
+    from PIL import Image
+
+    image_path = tmp_path / "synthetic.png"
+    Image.new("RGB", (8, 8), "blue").save(image_path)
+
+    async def unavailable_primary(**kwargs):
+        raise httpx.ConnectError("synthetic primary failure")
+
+    def handle(request):
+        assert request.url == httpx.URL("https://aiself.vip/v1/messages")
+        assert request.headers["x-api-key"] == "test-unified-key"
+        payload = json.loads(request.content)
+        assert payload["model"] == alias
+        assert payload["messages"][0]["content"][1]["source"]["media_type"] == "image/png"
+        return httpx.Response(200, json={"content": [{"type": "text", "text": '{"color":"blue"}'}]})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(alchemy_lab_llm, "_ask_openai_json", unavailable_primary)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handle), **kwargs))
+    result, receipt = asyncio.run(alchemy_lab_llm.plan_lab_json(
+        system_prompt="Read the color.", user_payload={"task": "name the color"}, image_paths=[image_path]
+    ))
+    assert result == {"color": "blue"}
+    assert receipt["selected_model"] == alias
+    assert receipt["selected_provider"] == "anthropic"
+    assert receipt["fallback_used"] is True
 
 
 def test_v1_and_lab_slow_primary_is_cancelled_before_fallback(monkeypatch) -> None:
@@ -294,6 +344,7 @@ def test_lab_kimi_vision_alias_keeps_legacy_route_and_model(monkeypatch) -> None
 
 
 def test_text_routes_fail_closed_when_unified_gateway_url_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "lab_llm_enabled", True)
     monkeypatch.setattr(settings, "llm_gateway_api_key", "test-unified-key")
     monkeypatch.setattr(settings, "llm_gateway_base_url", None)
 

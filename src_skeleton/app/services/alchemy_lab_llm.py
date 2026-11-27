@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from alchemy_creative_agent_3_0.app.model_routing import is_aiself_gateway, resolve_claude_model
 from app.config import openai_sdk_client_kwargs, settings
 
 
@@ -127,7 +128,7 @@ async def describe_lab_images(
 
 def lab_llm_status() -> dict[str, Any]:
     vision_provider = _normalize_lab_provider(settings.lab_vision_provider)
-    text_model = settings.default_llm_model or "claude-sonnet-5-5"
+    text_model = _lab_text_model()
     text_provider = _text_model_protocol(text_model)
     return {
         "enabled": bool(settings.lab_llm_enabled),
@@ -141,12 +142,16 @@ def lab_llm_status() -> dict[str, Any]:
     }
 
 
+def _lab_text_model() -> str:
+    return resolve_claude_model(settings.default_llm_model or "claude-sonnet-5-5", settings.llm_gateway_base_url)
+
+
 def _planner_candidates(*, image_paths: bool) -> list[dict[str, str]]:
     if not image_paths:
         if not settings.llm_gateway_api_key:
             return []
-        primary_model = settings.default_llm_model or "claude-sonnet-5-5"
-        fallback_model = settings.backup_llm_model or "kimi-k3"
+        primary_model = _lab_text_model()
+        fallback_model = resolve_claude_model(settings.backup_llm_model or "kimi-k3", settings.llm_gateway_base_url)
         fallback_models = ["kimi-k3", fallback_model, "gpt-6.1-sol"]
         return [
             {"provider": _text_model_protocol(primary_model), "model": primary_model},
@@ -164,13 +169,21 @@ def _planner_candidates(*, image_paths: bool) -> list[dict[str, str]]:
         order.extend(["doubao", "openai", "kimi"])
     else:
         order.extend(["deepseek", "doubao", "openai", "kimi"])
-    unique = []
-    for provider in order:
-        if provider in unique:
+    candidates = []
+    for provider in dict.fromkeys(order):
+        model = _lab_model(provider)
+        routed_model = resolve_claude_model(model or "", settings.llm_gateway_base_url)
+        if _text_model_protocol(routed_model) == "anthropic" and is_aiself_gateway(settings.llm_gateway_base_url):
+            if not (settings.llm_gateway_api_key and settings.llm_gateway_base_url):
+                continue
+            candidate = {"provider": "anthropic", "model": routed_model}
+        elif _lab_token(provider):
+            candidate = {"provider": provider, "model": model}
+        else:
             continue
-        if _lab_token(provider):
-            unique.append(provider)
-    return [{"provider": provider, "model": _lab_model(provider)} for provider in unique]
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
 
 
 def _lab_candidate_timeout_seconds(remaining_seconds: float, remaining_candidates: int) -> float:
@@ -304,9 +317,10 @@ async def _ask_anthropic_compatible_json(
     timeout_seconds: float,
     image_paths: list[Path],
 ) -> dict[str, Any]:
-    if not image_paths and (not settings.llm_gateway_api_key or not settings.llm_gateway_base_url):
+    use_gateway = provider == "anthropic" or not image_paths
+    if use_gateway and (not settings.llm_gateway_api_key or not settings.llm_gateway_base_url):
         raise LabLLMError("Unified text LLM gateway key and base URL must both be configured")
-    token = settings.llm_gateway_api_key if not image_paths else _lab_token(provider)
+    token = settings.llm_gateway_api_key if use_gateway else _lab_token(provider)
     if not token:
         raise LabLLMError(f"Lab {provider} token is not configured")
     content: list[dict[str, Any]] = [{"type": "text", "text": json.dumps(user_payload, ensure_ascii=False)}]
@@ -338,7 +352,7 @@ async def _ask_anthropic_compatible_json(
         "authorization": f"Bearer {token}",
         "x-api-key": token,
     }
-    base_url = settings.llm_gateway_base_url if not image_paths else _lab_base_url(provider)
+    base_url = settings.llm_gateway_base_url if use_gateway else _lab_base_url(provider)
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=min(8.0, timeout_seconds))) as client:
         response = await client.post(_anthropic_messages_url(base_url), headers=headers, json=payload)
         response.raise_for_status()
