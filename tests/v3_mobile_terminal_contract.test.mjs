@@ -23,6 +23,73 @@ const plannedRecoveryEnd = source.indexOf("\nasync function generateMobileV3Job"
 assert.ok(plannedRecoveryStart >= 0 && plannedRecoveryEnd > plannedRecoveryStart, "mobile planned job recovery function must be present");
 const plannedRecoverySource = source.slice(plannedRecoveryStart, plannedRecoveryEnd);
 
+function mobileProjectTextContext(context = {}) {
+  const declarations = [
+    "mobileV3ProjectFromOutputGroup", "mobileV3ReadableText", "mobileV3ProjectTitle",
+    "mobileV3ProjectGoal", "mobileV3ProjectDisplayGoal", "mobileV3OutputSummary",
+  ];
+  const functions = declarations.map((name) => {
+    const start = source.indexOf(`function ${name}(`);
+    if (start === -1) return "";
+    const end = source.indexOf("\nfunction ", start + 1);
+    return source.slice(start, end);
+  }).join("\n");
+  vm.runInNewContext(functions, context);
+  return context;
+}
+
+test("API project image views use readable labels when historical fields contain replacement characters", () => {
+  const context = mobileProjectTextContext({
+    mobileV3State: { projects: [] },
+    mobileV3HomeThumbUrl: (item) => item.thumbnail_url,
+  });
+  const project = context.mobileV3ProjectFromOutputGroup("project_api", {
+    project_title: "????????",
+    project_goal: "\uFFFD\uFFFD\uFFFD\uFFFD",
+    thumbnail_url: "/media/project_api/thumb.webp",
+  });
+  assert.equal(context.mobileV3ProjectTitle(project), "V3 项目图片");
+  assert.equal(context.mobileV3ProjectDisplayGoal(project), "继续这个项目");
+  assert.equal(context.mobileV3ProjectGoal(project), "\uFFFD\uFFFD\uFFFD\uFFFD");
+  assert.equal(project.latest_thumbnail_urls[0], "/media/project_api/thumb.webp");
+
+  assert.equal(context.mobileV3ProjectTitle({ title: "????????", short_summary: "春日海报" }), "春日海报");
+  assert.equal(context.mobileV3ProjectDisplayGoal({ user_goal: "???????", goal: "今天做什么？" }), "今天做什么？");
+  assert.equal(context.mobileV3ProjectTitle({ title: "FAQ?" }), "FAQ?");
+  assert.equal(context.mobileV3OutputSummary({ summary: "???????", user_input: "电商主图" }), "电商主图");
+  assert.equal(context.mobileV3OutputSummary({ summary: "???????" }), "可继续使用");
+});
+
+test("mobile gallery renders the readable heading and keeps the API thumbnail", () => {
+  const copy = new Map();
+  const cards = [];
+  const grid = { dataset: {}, classList: { toggle() {} }, appendChild: (card) => cards.push(card), addEventListener() {} };
+  const item = { output_id: "out_api", thumbnail_url: "/media/project_api/thumb.webp" };
+  const context = mobileProjectTextContext({
+    document: { querySelector: (selector) => selector === "#mobileV3GalleryGrid" ? grid : null,
+      createElement: () => ({ dataset: {}, querySelector: () => null }) },
+    setText: (selector, text) => copy.set(selector, text),
+    mobileV3ReviewOutputsForProject: () => [],
+    mobileV3HistoryOutputsForProject: () => [item],
+    mobileV3DedupeOutputItems: (items) => items,
+    mobileV3ProjectGroupsFromProjects: () => [],
+    mobileV3ThumbUrl: (output) => output.thumbnail_url,
+    mobileV3OutputId: (output) => output.output_id,
+    mobileV3HistoryOnlyOutputVisible: () => false,
+    generatedImageSourceText: () => "API",
+    handleMobileV3GalleryPreviewClick: () => {},
+    escapeHtml: String,
+  });
+  const start = source.indexOf("function renderMobileV3ProjectGallery(");
+  const end = source.indexOf("\nfunction openMobileV3ProjectDetail(", start);
+  vm.runInNewContext(source.slice(start, end), context);
+  context.renderMobileV3ProjectGallery({ project_id: "project_api", title: "???????", user_goal: "???????", short_summary: "春日海报" });
+  assert.equal(copy.get("#mobileV3GalleryTitle"), "春日海报");
+  assert.equal(copy.get("#mobileV3GalleryGoal"), "春日海报");
+  assert.equal(copy.get("#mobileV3GalleryCount"), "1 张图片");
+  assert.match(cards[0].innerHTML, /data-mobile-media-url="\/media\/project_api\/thumb\.webp"/);
+});
+
 test("backend formal partial delivery reports the eligible image count on mobile", () => {
   const context = {};
   vm.runInNewContext(productionNoticeSource, context);
