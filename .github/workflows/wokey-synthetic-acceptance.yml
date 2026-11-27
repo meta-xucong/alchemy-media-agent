@@ -1,0 +1,52 @@
+name: Wokey synthetic acceptance (isolated)
+
+on:
+  push:
+    branches:
+      - codex/wokey-synthetic-acceptance-20261127
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: [v2, v3_lab]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run pinned VPS probe with synthetic inputs
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          PROBE: ${{ matrix.probe }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ssh_dir="$(mktemp -d)"
+          trap 'rm -f -- "$ssh_dir/key" "$ssh_dir/known_hosts"; rmdir -- "$ssh_dir"' EXIT
+          if [[ -n "${VPS_SSH_KEY_B64:-}" ]]; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > "$ssh_dir/key"
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > "$ssh_dir/key"
+          fi
+          printf '%s\n' 'alchemy-acceptance-pinned ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIACijOYHrREAr+Dtn03k8JFYVeiap0tvpKxeHiEioz+C' > "$ssh_dir/known_hosts"
+          opts=(-i "$ssh_dir/key" -p "$VPS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes
+                -o ConnectTimeout=20 -o StrictHostKeyChecking=yes -o HostKeyAlias=alchemy-acceptance-pinned
+                -o UserKnownHostsFile="$ssh_dir/known_hosts")
+          if [[ "$PROBE" == v2 ]]; then
+            driver="$(base64 -w0 scripts/wokey_acceptance/v2_driver.py)"
+            remote="python3 -c 'import base64; exec(base64.b64decode(\"$driver\"))'"
+          else
+            remote='docker exec -i alchemy-media-agent python3 -B -'
+          fi
+          python3 scripts/wokey_acceptance/bundle.py "$PROBE" |
+            ssh "${opts[@]}" "${VPS_USER:-root}@$VPS_HOST" "$remote"
