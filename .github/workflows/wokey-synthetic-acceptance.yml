@@ -1,4 +1,4 @@
-name: Alchemy release capacity audit (isolated)
+name: V3 UTF-8 provenance audit (isolated)
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [release_capacity]
+        probe: [v3_utf8_provenance]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Read release capacity over pinned SSH
+      - name: Correlate stored aggregate project markers and HTTP client classes
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
@@ -42,7 +42,10 @@ jobs:
           opts=(-i "$ssh_dir/key" -p "$VPS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes
                 -o ConnectTimeout=20 -o StrictHostKeyChecking=yes -o HostKeyAlias=alchemy-acceptance-pinned
                 -o UserKnownHostsFile="$ssh_dir/known_hosts")
-          if [[ "$PROBE" == release_capacity ]]; then
+          if [[ "$PROBE" == v3_utf8_provenance ]]; then
+            ssh "${opts[@]}" "${VPS_USER:-root}@$VPS_HOST" 'python3 -B -' < scripts/wokey_acceptance/v3_utf8_provenance.py
+            exit
+          elif [[ "$PROBE" == release_capacity ]]; then
             ssh "${opts[@]}" "${VPS_USER:-root}@$VPS_HOST" 'bash -s' < scripts/wokey_acceptance/release_capacity.sh
             exit
           elif [[ "$PROBE" == live_v2 ]]; then
