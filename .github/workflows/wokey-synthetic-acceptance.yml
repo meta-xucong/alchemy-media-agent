@@ -1,4 +1,4 @@
-name: Wokey synthetic acceptance (isolated)
+name: Wokey live route readback (isolated)
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [v2]
+        probe: [live_v2, live_v1_v3_lab]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Run pinned VPS probe with synthetic inputs
+      - name: Read the deployed model queues over pinned SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
@@ -42,11 +42,11 @@ jobs:
           opts=(-i "$ssh_dir/key" -p "$VPS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes
                 -o ConnectTimeout=20 -o StrictHostKeyChecking=yes -o HostKeyAlias=alchemy-acceptance-pinned
                 -o UserKnownHostsFile="$ssh_dir/known_hosts")
-          if [[ "$PROBE" == v2 ]]; then
+          if [[ "$PROBE" == live_v2 ]]; then
             driver="$(base64 -w0 scripts/wokey_acceptance/v2_driver.py)"
             remote="python3 -c 'import base64; exec(base64.b64decode(\"$driver\"))'"
           else
-            remote='docker exec -i alchemy-media-agent python3 -B -'
+            remote='docker inspect --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" alchemy-media-agent && docker exec -i alchemy-media-agent python3 -B -'
           fi
-          python3 scripts/wokey_acceptance/bundle.py "$PROBE" |
+          cat "scripts/wokey_acceptance/$PROBE.py" |
             ssh "${opts[@]}" "${VPS_USER:-root}@$VPS_HOST" "$remote"
