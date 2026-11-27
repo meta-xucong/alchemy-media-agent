@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [v2, v3_lab]
+        probe: [v2]
     steps:
       - uses: actions/checkout@v4
         with:

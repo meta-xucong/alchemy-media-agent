@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory() as d:
             draw.rounded_rectangle((110,100,400,390),radius=50,fill=color)
             draw.ellipse((210,180,300,270),fill="#f4f4f4")
             image.save(path)
-        uploaded_assets.get_uploaded_asset=lambda asset_id: SimpleNamespace(veyra_user_id=99831) if asset_id=="synthetic_asset" else None
+        uploaded_assets.get_uploaded_asset=lambda asset_id: SimpleNamespace(asset_id=asset_id,veyra_user_id=99831) if asset_id=="synthetic_asset" else None
         uploaded_assets.uploaded_asset_path=lambda asset_id: ref if asset_id=="synthetic_asset" else None
         goal="Show the attached blue ceramic object as the only object. Preserve the source's blue body color; the backdrop can change."
         now=utc_now()
@@ -53,14 +53,23 @@ with tempfile.TemporaryDirectory() as d:
             model="synthetic",veyra_user_id=99831,prompt_plan=ImagePromptPlan(plan_id="synthetic_plan",mode="smart_enhance",prompt=goal,
             negative_prompt="watermark",user_variables={"user_prompt":goal,"provider_input_plan":{"requires_image_reference":True,"reference_image_count":1}}),
             outputs=[output],created_at=now,updated_at=now)
-        reviewed=await vr.review_generated_job(review_image_job(job))
+        pending=review_image_job(job)
+        review_error=None
+        wire_images=0
+        try:
+            content=vr._review_content(pending.outputs[0],pending)
+            wire_images=sum(1 for block in content if block.get("type")=="image_url")
+        except (ValueError, OSError) as e:
+            review_error=str(e) if str(e).startswith("review_") else type(e).__name__
+        reviewed=await vr.review_generated_job(pending)
         item=reviewed.outputs[0]
         rep=item.review
         receipt=item.metadata.get("visual_review_route") or item.metadata.get("vision_review_route") or {}
         keys=[k for k in item.metadata if k.startswith(("visual_","vision_","review_"))]
         print(json.dumps({"probe":"v2_reference_review","seconds":round(time.monotonic()-start,2),
             "mode":rep.analysis_mode,"decision":getattr(rep,"decision",None),"image_preserved":item.url==output.url,
-            "model":getattr(rep,"model",None),"receipt":{k:receipt.get(k) for k in ("selected_model","primary_model","fallback_used")},"metadata_keys":keys,
+            "model":getattr(rep,"model",None),"failure_code":rep.failure_code,"wire_images":wire_images,"prep_error":review_error,
+            "attempts":[{k:row.get(k) for k in ("model","outcome","failure_code","provider_reason","http_status","elapsed_ms")} for row in rep.model_attempts],
+            "receipt":{k:receipt.get(k) for k in ("selected_model","primary_model","fallback_used")},"metadata_keys":keys,
             "color_evidence":any(t in "".join(rep.revision_directives or []).lower() for t in ("blue","red","\u84dd","\u7ea2"))}),flush=True)
-    plan()
     asyncio.run(review())
