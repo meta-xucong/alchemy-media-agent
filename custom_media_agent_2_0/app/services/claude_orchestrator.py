@@ -42,7 +42,7 @@ from app.services.task_queue import StaleTaskClaim
 from app.services.asset_binding import build_asset_context
 from app.services.uploaded_assets import get_uploaded_asset
 from app.services.visual_signals import build_case_visual_signals
-from app.services.visual_grammar_lock import build_visual_grammar_contract
+from app.services.visual_grammar_lock import TEMPLATE_LAYOUT_RULE, build_visual_grammar_contract
 
 
 _RECENT_INVOCATIONS: list[OrchestratorInvocationRecord] = []
@@ -1992,6 +1992,10 @@ def _build_checkpoint_stage_prompt(
         payload.pop("visual_grammar_contract", None)
     if stage_name.startswith("generation_decision"):
         payload["rules"] += " Final stage: write one dense provider-ready prompt directly; no draft variants, no option analysis."
+    layout_regions = visual_grammar_contract.get("template_layout_regions")
+    if layout_regions:
+        payload.setdefault("visual_grammar_contract", {})["template_layout_regions"] = layout_regions
+        payload["rules"] += " Apply template_layout_regions. " + TEMPLATE_LAYOUT_RULE
     if stage_name.endswith("_micro"):
         payload["rules"] += " This is a retry micro-stage: finish only the missing decision; no broad re-analysis."
     return (
@@ -3146,6 +3150,7 @@ def _build_workspace(
                 "- 如果 context.request.template_case_id 非空，它是用户手选原型，视觉语法强锁，优先级高于自动检索、Claude 草稿和上传图布局。",
                 "- 有手选原型时，selected_case_ids[0] 必须保留该 template_case_id；final_prompt 必须在该原型的视觉语法基础上替换/改写用户主体，不得只借颜色/边框。",
                 "- 有手选原型时，不得把多卡片、信息图、海报版式、注释排版或复杂背景原型简化成普通单人肖像/纯背景棚拍；除非原型本身就是这种结构。",
+                f"- When visual_grammar_contract.json contains template_layout_regions: {TEMPLATE_LAYOUT_RULE}",
                 "- 没有手选原型时，从合格候选中选一个主视觉锚点。没有合格候选时，按用户需求构图，selected_case_ids 留空。辅助案例只提供局部风格。",
                 "- 如果手选原型包含 typography、notes、cards、labels、feature sheet 或 infographic，negative_prompt 不要禁止 text；只禁止错误文字、乱码、品牌 logo、水印和签名。",
                 "- 用户补充的感觉、用途、风格词只作为次级约束；如果与手选原型冲突，以手选原型为准。",
@@ -3350,6 +3355,8 @@ def _build_inline_json_prompt(workspace: Path) -> str:
     asset_instructions = _user_asset_instructions(context)
     if asset_instructions:
         payload["user_asset_instructions"] = asset_instructions
+    if visual_grammar_contract.get("template_layout_regions"):
+        payload["rules"] += " Apply template_layout_regions. " + TEMPLATE_LAYOUT_RULE
     return (
         "Return compact JSON only. final_prompt is the exact image prompt. "
         f"Total JSON <= {_CLAUDE_INLINE_JSON_CHAR_BUDGET} chars; final_prompt <= {_CLAUDE_INLINE_FINAL_PROMPT_CHAR_BUDGET} chars. "
@@ -3463,6 +3470,7 @@ def _compact_visual_grammar_contract(raw: Any) -> dict[str, Any]:
         "locked": (raw.get("locked_visual_grammar") or [])[:6],
         "replaceable": (raw.get("replaceable_semantic_content") or [])[:5],
         "anchor": _truncate(_text_value(raw.get("anchor_directive") or raw.get("visual_signal_brief")), 240),
+        **({"template_layout_regions": raw["template_layout_regions"]} if raw.get("template_layout_regions") else {}),
         "source_layout_risk": {
             "detected": bool(source_risk.get("detected")),
             "markers": (source_risk.get("markers") or [])[:5],
@@ -3923,6 +3931,11 @@ def _poster_layout_cache_fields(request: CreateCreativeRunRequest) -> dict[str, 
     return {"poster_layout": sorted(layout)} if layout else {}
 
 
+def _decision_cache_schema(request: CreateCreativeRunRequest) -> str:
+    suffix = "_locked_layout" if request.template_case_id else ""
+    return _CLAUDE_DECISION_CACHE_SCHEMA + suffix
+
+
 def _cache_key(
     *,
     request: CreateCreativeRunRequest,
@@ -3932,7 +3945,7 @@ def _cache_key(
 ) -> str:
     layout_fields = _poster_layout_cache_fields(request)
     payload = {
-        "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,
+        "cache_schema": _decision_cache_schema(request),
         "user_prompt": request.user_prompt,
         "mode_hint": request.mode_hint,
         "prompt_transform": _prompt_transform_profile(request, fallback_mode=fallback_mode),
@@ -4107,7 +4120,7 @@ def _cache_metadata(
     prompt_transform_profile = _prompt_transform_profile(request, fallback_mode=fallback_mode)
     layout_fields = _poster_layout_cache_fields(request)
     return {
-        "cache_schema": _CLAUDE_DECISION_CACHE_SCHEMA,
+        "cache_schema": _decision_cache_schema(request),
         "normalized_user_prompt": normalized_prompt,
         "prompt_tokens": tokens,
         "mode": request.mode_hint or fallback_mode,

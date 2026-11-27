@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -82,6 +83,20 @@ QR_EXCLUSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 TEMPLATE_REPLACEMENT_RELATIONSHIPS = {"replace_template_subject", "replace_template_food_subject"}
+TEMPLATE_LAYOUT_RULE = (
+    "Keep every region in its listed position. Fit user content into the regions; "
+    "a request for a main image defines the hero region of a composite board. "
+    "Replace omitted or forbidden content within its region without removing the region or copying template copy."
+)
+
+_LAYOUT_REGION_ROLES = (
+    ("primary visual", r"main image|main visual|hero|主图|主视觉"),
+    ("storyboard strip", r"storyboard|分镜"),
+    ("preparation or process", r"how to|preparation|process|instructions|冲泡|步骤|流程"),
+    ("product details", r"details?|ingredients?|specifications?|详情|配料|成分|规格"),
+    ("usage scenarios", r"lifestyle|scenarios?|use cases?|场景|好生活"),
+    ("packaging display", r"packaging|sachets?|包装|小袋|便携"),
+)
 
 
 def build_visual_grammar_contract(
@@ -147,7 +162,36 @@ def build_visual_grammar_contract(
         ),
         "orchestrator_decision_id": orchestrator_decision.decision_id if orchestrator_decision else None,
     }
+    template_lock = (asset_context or {}).get("template_lock_contract") or {}
+    if explicit_template and template_lock.get("locked_case_id") == primary.case_id:
+        regions = _template_layout_regions(primary.raw_prompt)
+        if regions:
+            contract["template_layout_regions"] = regions
     return contract
+
+
+def _template_layout_regions(raw_prompt: str) -> list[dict[str, str]]:
+    """Extract placement and generic roles without carrying the case's copy."""
+    try:
+        source = json.loads(raw_prompt)
+    except json.JSONDecodeError:
+        return []
+    layout = source.get("layout") if isinstance(source, dict) else None
+    sections = layout.get("sections") if isinstance(layout, dict) else None
+    if not isinstance(sections, list):
+        return []
+    regions = []
+    for section in sections:
+        position = section.get("position") if isinstance(section, dict) else None
+        if not isinstance(position, str):
+            continue
+        position = " ".join(position.split())
+        if not re.fullmatch(r"[\w \-–—,.%()、，（）]{1,64}", position):
+            continue
+        label = " ".join(str(section.get(key) or "") for key in ("role", "type", "title"))
+        role = next((name for name, pattern in _LAYOUT_REGION_ROLES if re.search(pattern, label, re.I)), "supporting panel")
+        regions.append({"position": position, "role": role})
+    return regions
 
 
 def apply_visual_grammar_lock(prompt: str, *, contract: dict[str, Any] | None, user_prompt: str) -> str:

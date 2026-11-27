@@ -10,7 +10,7 @@ from app.services.ids import new_id
 from app.services.poster_layout import requests_blank_poster_qr_space
 from app.services.reference_delivery import build_reference_delivery_contract, reference_delivery_prompt_section
 from app.services.visual_signals import build_case_visual_signals
-from app.services.visual_grammar_lock import build_visual_grammar_contract
+from app.services.visual_grammar_lock import TEMPLATE_LAYOUT_RULE, build_visual_grammar_contract
 
 
 _BASE_NEGATIVE_TERMS = [
@@ -170,6 +170,16 @@ def compose_prompt_plan(
         language_lock=language_lock,
         aspect_lock=aspect_lock,
     )
+    layout_regions = (visual_grammar_contract or {}).get("template_layout_regions")
+    if layout_regions:
+        regions = "; ".join(f"{region['position']} ({region['role']})" for region in layout_regions)
+        control_sections.append({
+            "intent_id": "intent_locked_template_layout",
+            "source": "selected_template",
+            "priority": "required",
+            "title": "LOCKED TEMPLATE LAYOUT",
+            "text": f"{TEMPLATE_LAYOUT_RULE} This layout governs any conflicting draft. Regions: {regions}.",
+        })
     reference_delivery = (
         (asset_context or {}).get("reference_delivery")
         if isinstance((asset_context or {}).get("reference_delivery"), dict)

@@ -28,6 +28,7 @@ class VisionVerdict(BaseModel):
     notes: list[str] = Field(max_length=5)
     issues: list[str] = Field(max_length=5)
     verified_source_fields: list[str] = Field(default_factory=list, max_length=128)
+    template_layout_matches: bool | None = None
 
 
 class ReviewModelError(ValueError):
@@ -117,6 +118,11 @@ def _local_image(path: Path, *, reference: bool) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def _locked_layout_regions(job: ImageJob) -> list[dict]:
+    grammar = job.prompt_plan.user_variables.get("visual_grammar_contract")
+    return (grammar.get("template_layout_regions") or []) if isinstance(grammar, dict) else []
+
+
 def _review_content(output: ImageOutput, job: ImageJob) -> list[dict]:
     from app.services.poster_layout import is_poster_request
     from app.services.uploaded_assets import get_uploaded_asset, uploaded_asset_path
@@ -143,6 +149,16 @@ def _review_content(output: ImageOutput, job: ImageJob) -> list[dict]:
     contract = variables.get("reference_delivery") or {}
     source_facts = [{key: item[key] for key in ("field_id", "value", "required") if key in item}
                     for item in contract.get("source_evidence", []) if isinstance(item, dict)]
+    layout_regions = _locked_layout_regions(job)
+    layout_checks = (
+        "Compare the result against each template_layout_regions position and role. "
+        "Check that those regions remain visually distinct and in their required relative positions. "
+        "Judge the layout independently of the generation_context; updated or replaced content is allowed within each region. "
+        "Set template_layout_matches to true only when all regions are visibly present in the right positions. "
+        "For a missing, merged, or misplaced region, set decision to needs_review and name the affected position and role in issues. "
+        if layout_regions else ""
+    )
+    layout_field = ',"template_layout_matches":true' if layout_regions else ""
     poster_checks = (
         "For this poster, use the user's original copy to check material omissions, wrong text, numbers or offers. "
         "Check information hierarchy between headline, supporting copy and call to action, legibility of lists, "
@@ -166,16 +182,18 @@ def _review_content(output: ImageOutput, job: ImageJob) -> list[dict]:
         "Do not impose another aesthetic, lighting recipe or composition. Harmless variation is not a failure. "
         "Flag only concrete visible problems or genuinely unverifiable hard requirements. "
         "Do not recommend generating another full set. Return ONE compact JSON object, no markdown: "
-        '{"decision":"pass|needs_review","references_match":true,"notes":["brief evidence"],"issues":["concrete defect"],"verified_source_fields":["field_id"]}. '
+        '{"decision":"pass|needs_review","references_match":true,"notes":["brief evidence"],"issues":["concrete defect"],"verified_source_fields":["field_id"]'
+        + layout_field + '}. '
         "Only list a source field ID after checking its exact supplied value is visibly and legibly preserved in the generated image. "
         "Use at most 5 short notes/issues each, in Chinese for the user. references_match is false when required supplied references cannot be verified. "
         "A pass must have no issues. "
-        + poster_checks
+        + poster_checks + layout_checks
         + "\n"
         + json.dumps({"user_request": user_request,
                       "generation_context": variables.get("generation_prompt") or job.prompt_plan.prompt,
                       "explicit_template_lock": bool(variables.get("template_lock_enabled") and (variables.get("template_lock_contract") or {}).get("locked_case_id")),
                       "reference_image_count": len(references),
+                      **({"template_layout_regions": layout_regions} if layout_regions else {}),
                       "negative_constraints": job.prompt_plan.negative_prompt, "required_source_facts": source_facts,
                       "required_field_ids": (contract.get("acceptance") or {}).get("required_field_ids", [])}, ensure_ascii=False, separators=(",", ":"))
     )
@@ -316,6 +334,11 @@ async def review_generated_job(job: ImageJob) -> ImageJob:
                         break
             reference_required = bool((job.prompt_plan.user_variables.get("provider_input_plan") or {}).get("requires_image_reference"))
             risks = list(review.detected_risks)
+            issues = list(verdict.issues)
+            if _locked_layout_regions(job) and verdict.template_layout_matches is not True:
+                risks.append("template_layout_mismatch" if verdict.template_layout_matches is False else "template_layout_unverified")
+                if not issues:
+                    issues.append("未能确认手选模板的分区及其位置，请查看成图。")
             if verdict.references_match:
                 risks = [risk for risk in risks if risk != "reference_adherence_unverified"]
             contract = job.prompt_plan.user_variables.get("reference_delivery") or {}
@@ -328,13 +351,13 @@ async def review_generated_job(job: ImageJob) -> ImageJob:
                 risks = [risk for risk in risks if risk not in {"required_source_text_unverified", "reference_pixel_review_unavailable"}]
             # A broad vision pass cannot certify missing source/file evidence.
             hard_risks = {"reference_delivery_output_unreadable", "source_text_evidence_unavailable", "source_text_evidence_missing", "required_source_text_unverified", "provider_input_images_missing", "logo_surface_reference_missing"}
-            passed = verdict.decision == "pass" and not verdict.issues and not hard_risks.intersection(risks)
+            passed = verdict.decision == "pass" and not issues and not hard_risks.intersection(risks)
             passed = passed and (not reference_required or verdict.references_match)
             decision = review.decision if review.decision in {"failed", "retry_recommended"} else "pass" if passed else "needs_review"
             updated = review.model_copy(update={"analysis_mode": "vision_model", "reviewer": "v2-vision-reviewer",
                 "decision": decision, "score": None, "detected_risks": risks,
                 "notes": [*review.notes, *[note[:400] for note in verdict.notes]],
-                "revision_directives": [*review.revision_directives, *[issue[:400] for issue in verdict.issues]],
+                "revision_directives": [*review.revision_directives, *[issue[:400] for issue in issues]],
                 "model": model, "model_attempts": attempts, "verified_source_fields": sorted(verified_ids),
                 "elapsed_ms": round((time.perf_counter() - started) * 1000), "failure_code": None})
         except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, TypeError, AttributeError, OSError) as error:
