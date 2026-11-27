@@ -10,7 +10,7 @@ from app.schemas import OrchestratorStatusResponse, V2RuntimeModelSettingsRespon
 from app.schemas import V2RuntimeModelSettingsRequest
 from app.services import runtime_model_settings
 from app.services import claude_orchestrator
-from app.services.model_routing import configured_fallback_models
+from app.services.model_routing import configured_fallback_models, visual_review_models
 
 
 def test_v2_fallback_queue_accepts_settings_without_legacy_field() -> None:
@@ -20,6 +20,25 @@ def test_v2_fallback_queue_accepts_settings_without_legacy_field() -> None:
     )
 
     assert configured_fallback_models(config) == ["kimi-k3", "gpt-6.1-sol"]
+
+
+def test_v2_aiself_wokey_routes_orchestration_and_review_with_original_fallbacks(monkeypatch) -> None:
+    alias = "claude-sonnet-5-5-alchemy-structured"
+    config = SimpleNamespace(
+        llm_gateway_base_url="https://aiself.vip/v1",
+        llm_gateway_api_key="test-unified-key",
+        claude_orchestrator_model="claude-sonnet-5-5",
+        claude_orchestrator_multimodal_model="claude-sonnet-5-5",
+        claude_orchestrator_fallback_models=("claude-sonnet-5-5", "kimi-k3", "gpt-6.1-sol"),
+    )
+    monkeypatch.setattr(claude_orchestrator, "settings", config)
+    assert claude_orchestrator._claude_code_source_selection().model == alias
+    assert visual_review_models(config) == [alias, "kimi-k3", "gpt-6.1-sol"]
+    env = {}
+    claude_orchestrator._configure_wokey_cli(env, alias)
+    assert env["ANTHROPIC_BASE_URL"] == "https://aiself.vip"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == alias
+    assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == alias
 
 
 def test_v2_fallback_uses_selected_model_and_unified_gateway(monkeypatch) -> None:

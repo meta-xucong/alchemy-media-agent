@@ -3,9 +3,22 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 
 V3_FINAL_FALLBACK_MODEL = "gpt-6.1-sol"
+AISELF_WOKEY_CLAUDE_MODEL = "claude-sonnet-5-5-alchemy-structured"
+
+
+def is_aiself_gateway(gateway_base_url: str | None) -> bool:
+    gateway = urlsplit((gateway_base_url or "").strip())
+    return gateway.scheme == "https" and gateway.hostname == "aiself.vip"
+
+
+def resolve_claude_model(model: str, gateway_base_url: str | None) -> str:
+    if model.strip().lower().startswith("claude-") and is_aiself_gateway(gateway_base_url):
+        return AISELF_WOKEY_CLAUDE_MODEL
+    return model
 
 
 def model_protocol(model: str | None) -> str | None:
@@ -32,7 +45,9 @@ def build_v3_model_candidates(
     backup = str(backup_model or "kimi-k3").strip() or "kimi-k3"
     models: list[str] = []
     seen: set[str] = set()
-    for model in (primary, "kimi-k3", backup, V3_FINAL_FALLBACK_MODEL):
+    gateway_url = v3_gateway_credentials()[1]
+    for configured_model in (primary, "kimi-k3", backup, V3_FINAL_FALLBACK_MODEL):
+        model = resolve_claude_model(configured_model, gateway_url)
         normalized = model.strip().lower()
         if not normalized or normalized in seen:
             continue

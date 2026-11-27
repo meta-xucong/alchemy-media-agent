@@ -165,7 +165,7 @@ class OpenAIVisionInspectionProvider:
         self.model_candidates = build_v3_model_candidates(primary_model, backup_model)
         self.model_chain = tuple(model_name for _, model_name in self.model_candidates)
         self.max_request_attempts = len(self.model_candidates)
-        self.model = primary_model
+        self.model = self.model_chain[0]
         self.timeout_seconds = timeout_seconds
 
     def available(self, *, force: bool = False) -> bool:
@@ -669,7 +669,9 @@ def _output_direction_review_prompt(metadata: dict[str, Any]) -> str:
         "can coexist. Distinguish key direction, key color, fill and contrast. Report a mismatch only when a named "
         "visible region contradicts a definite signed lighting requirement. Quote that exact signed excerpt and "
         "describe the observed highlight, shadow or reflection in the same region. Set lighting_mismatch_evidence "
-        "only for that finding, with region and observed in the user's language; leave the quotation verbatim. "
+        "only for that finding. Use a specific region label (at most 100 characters), a verbatim excerpt of 10–200 "
+        "characters from the signed direction, and one brief observed sentence (at most 190 characters). "
+        "Write region and observed in the user's language. "
         "Compatible lighting has no lighting issue. If a possible discrepancy cannot be localized or verified, "
         "use manual_review and explain the uncertainty in summary without recommending a lighting retry."
     )

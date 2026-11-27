@@ -17,7 +17,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from ..model_routing import build_v3_model_candidates, model_protocol, v3_gateway_credentials
+from ..model_routing import build_v3_model_candidates, model_protocol, resolve_claude_model, v3_gateway_credentials
 from .contracts import (
     BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS,
     BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
@@ -445,8 +445,10 @@ class V3LLMBrainProvider:
     structured_claude_model: str | None = None
 
     def __init__(self) -> None:
-        self.model = _env("V3_LLM_BRAIN_MODEL") or "claude-sonnet-5-5"
-        self.structured_claude_model = _env("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL")
+        gateway_url = v3_gateway_credentials()[1]
+        self.model = resolve_claude_model(_env("V3_LLM_BRAIN_MODEL") or "claude-sonnet-5-5", gateway_url)
+        structured_model = _env("V3_LLM_BRAIN_STRUCTURED_CLAUDE_MODEL")
+        self.structured_claude_model = resolve_claude_model(structured_model, gateway_url) if structured_model else None
         self.backup_model = _env("V3_LLM_BRAIN_BACKUP_MODEL") or "kimi-k3"
         self.provider = _model_protocol(self.model) or "unsupported"
         self.backup_provider = _model_protocol(self.backup_model) or "unsupported"

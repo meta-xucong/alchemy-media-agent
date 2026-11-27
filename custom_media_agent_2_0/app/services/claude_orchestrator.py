@@ -35,6 +35,7 @@ from app.schemas import (
     StageCommand,
 )
 from app.services.ids import new_id
+from app.services.model_routing import AISELF_WOKEY_CLAUDE_MODEL, resolve_claude_model
 from app.services.poster_layout import poster_layout_requirements
 from app.services import task_queue
 from app.services.task_queue import StaleTaskClaim
@@ -1043,7 +1044,9 @@ def _invoke_checkpoint_stage_with_micro(
 
 
 def _claude_code_primary_model() -> str:
-    return _text_value(settings.claude_orchestrator_model)
+    configured = _text_value(settings.claude_orchestrator_model)
+    resolved = resolve_claude_model(settings, configured or "claude-sonnet-5-5")
+    return resolved if configured or resolved == AISELF_WOKEY_CLAUDE_MODEL else ""
 
 
 def _claude_code_primary_provider(model: str | None = None) -> str:
@@ -1080,7 +1083,7 @@ def _is_kimi_model(model: str) -> bool:
 
 def _claude_code_source_selection(workspace: Path | None = None) -> ClaudeSourceSelection:
     persisted = _read_json(workspace / "claude_source_selection.json") if workspace else {}
-    model = _text_value(persisted.get("model")) if isinstance(persisted, dict) else ""
+    model = resolve_claude_model(settings, _text_value(persisted.get("model"))) if isinstance(persisted, dict) else ""
     reason = _text_value(persisted.get("reason")) if isinstance(persisted, dict) else ""
     if not model:
         model = _claude_code_primary_model()
@@ -1672,7 +1675,7 @@ def _invoke_claude_stage_json(
     _apply_claude_cli_acceleration_flags(command_line, include_effort=include_effort)
     if setting_sources_override:
         command_line.extend(["--setting-sources", setting_sources_override])
-    model = model_override or settings.claude_orchestrator_model
+    model = resolve_claude_model(settings, model_override) if model_override else _claude_code_primary_model()
     if model:
         command_line.extend(["--model", model])
     env = dict(os.environ)
@@ -1688,6 +1691,7 @@ def _invoke_claude_stage_json(
     for key, value in (env_overrides or {}).items():
         if value:
             env[key] = value
+    _configure_wokey_cli(env, model)
     env["MAX_STRUCTURED_OUTPUT_RETRIES"] = os.getenv("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(_checkpoint_stage_max_output_tokens())
     _write_text(workspace / f"{safe_stage}_prompt.txt", prompt)
@@ -1731,6 +1735,20 @@ def _checkpoint_stage_hard_timeout_seconds() -> float:
         settings.claude_orchestrator_timeout_seconds,
         settings.claude_checkpoint_stage_timeout_seconds,
     )
+
+
+def _configure_wokey_cli(env: dict[str, str], model: str) -> None:
+    if model != AISELF_WOKEY_CLAUDE_MODEL or not settings.llm_gateway_base_url:
+        return
+    env["ANTHROPIC_BASE_URL"] = _claude_cli_gateway_base_url(settings.llm_gateway_base_url) or settings.llm_gateway_base_url
+    if settings.llm_gateway_api_key:
+        env["ANTHROPIC_AUTH_TOKEN"] = settings.llm_gateway_api_key
+        env["ANTHROPIC_API_KEY"] = settings.llm_gateway_api_key
+    env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
+    env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model
+    env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model
+    env["ANTHROPIC_SMALL_FAST_MODEL"] = model
+    env["CLAUDE_CODE_SUBAGENT_MODEL"] = model
 
 
 def _checkpoint_stage_timeout_seconds(stage_name: str) -> float:
@@ -2428,6 +2446,7 @@ def _invoke_claude_file_mode(
     env = dict(os.environ)
     if source.stage_kwargs.get("strip_model_fallback_env"):
         _strip_claude_code_model_fallback_env(env)
+    _configure_wokey_cli(env, source.model)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
@@ -2625,6 +2644,7 @@ def _invoke_claude_inline_json(
     env = dict(os.environ)
     if source.stage_kwargs.get("strip_model_fallback_env"):
         _strip_claude_code_model_fallback_env(env)
+    _configure_wokey_cli(env, source.model)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
     env.setdefault("MAX_STRUCTURED_OUTPUT_RETRIES", "1")
@@ -3162,7 +3182,7 @@ def _build_workspace(
 
 def _select_claude_source_for_request(*, request: CreateCreativeRunRequest, asset_context: dict[str, Any]) -> dict[str, Any]:
     text_model = _claude_code_primary_model()
-    multimodal_model = _text_value(settings.claude_orchestrator_multimodal_model)
+    multimodal_model = resolve_claude_model(settings, _text_value(settings.claude_orchestrator_multimodal_model))
     needs_multimodal, reason = _request_needs_multimodal_claude(request=request, asset_context=asset_context)
     selected = multimodal_model if needs_multimodal and multimodal_model else text_model
     if not selected:
