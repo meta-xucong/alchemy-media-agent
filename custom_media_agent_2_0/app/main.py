@@ -1285,12 +1285,12 @@ def get_image_job(job_id: str, request: Request, authorization: str = Header(def
 
 
 @app.get("/api/v2/outputs/{output_id}/download")
-async def output_download(output_id: str, request: Request, authorization: str = Header(default="")):
+async def output_download(output_id: str, request: Request, authorization: str = Header(default=""), direct: bool = False):
     await _require_output_visible(request, output_id, authorization)
     output_file = await _run_sqlite_api_call(resolve_output_file, output_id)
     if output_file:
         path, media_type = output_file
-        accelerated_url = await signed_v2_output_url(output_id=output_id, source_path=path)
+        accelerated_url = None if direct else await signed_v2_output_url(output_id=output_id, source_path=path)
         if accelerated_url:
             return RedirectResponse(accelerated_url, status_code=302, headers={"Cache-Control": "private, no-store"})
         content = await _run_sqlite_api_call(path.read_bytes)

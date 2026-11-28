@@ -10,7 +10,7 @@ import sys
 from typing import Any
 
 from .product_tools import PRODUCT_TOOL_NAMES, PRODUCT_TOOL_SCHEMAS, ProductToolError, ProductTools
-from .versioned_tools import VERSIONED_TOOL_NAMES, VERSIONED_TOOL_SCHEMAS, VersionedToolError, VersionedTools
+from .versioned_tools import VERSIONED_TOOL_NAMES, VERSIONED_TOOL_SCHEMAS, WORKBENCH_IMAGE_TOOL, VersionedToolError, VersionedTools
 
 
 TOOL_SCHEMAS = [*PRODUCT_TOOL_SCHEMAS, *VERSIONED_TOOL_SCHEMAS]
@@ -104,7 +104,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any] | None:
                 return _response(request_id, {
                     **_text_result({"code": "alchemy_mcp_unknown_tool"}), "isError": True,
                 }, modern=modern)
-            result = _text_result(payload)
+            result = payload if name == WORKBENCH_IMAGE_TOOL else _text_result(payload)
         except (ProductToolError, VersionedToolError) as exc:
             result = {**_text_result(exc.as_dict()), "isError": True}
     else:

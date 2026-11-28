@@ -21,6 +21,12 @@
 
 连接自建 Alchemy 服务时，将服务地址改成该服务的 origin。
 
+## Codex 选图工作台
+
+在 Codex 的内置浏览器打开已部署的 Alchemy 服务的 `/codex-workbench`，并使用同一个 Alchemy 账号登录网页和 MCP。选 V2 案例或 LAB 风格后，可在会话里请 Codex 读取或修改当前草稿。打开页面的 Site tools 可查看此页提供的操作。用工作台的「生成图片」提交，页面会自动跟踪并显示原任务结果。
+
+要在会话中交付，开始时告诉 Codex「跟踪这次生成，完成后显示预览并附原图」。Codex 可读取页面的 `alchemy_read_result` 得到输出 ID，再调用独立 MCP 的 `alchemy_read_workbench_image`。`preview` 返回图片块，`original` 返回原始文件资源。若在 MCP 中设置 `ALCHEMY_WORKBENCH_OUTPUT_DIR` 为一个已存在且可写的本机绝对目录，原图会原样保存并返回本地路径，Codex 可把该文件附在回复里。工作台的「下载原图」也使用同一输出 ID。
+
 ## 费用与密钥
 
 - MCP 调用 Alchemy 已有认证 API；账户归属、权限、审核、存储和计费仍由 Alchemy 服务端处理。

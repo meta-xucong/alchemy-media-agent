@@ -37,6 +37,25 @@ def _shell_asset_version(path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
+def test_codex_workbench_and_installer_point_at_current_assets():
+    client = TestClient(app)
+    workbench = client.get("/codex-workbench")
+    assert workbench.status_code == 200
+    css_version = _shell_asset_version(app_main.STATIC_DIR / "codex-workbench.css")
+    assert f"/static/codex-workbench.css?v={css_version}" in workbench.text
+    assert "/static/codex-workbench.mjs" in workbench.text
+    for filename in ("codex-workbench.mjs", "codex-workbench-state.mjs"):
+        response = client.get(f"/static/{filename}")
+        assert response.status_code == 200
+        assert "javascript" in response.headers["content-type"]
+    installer = client.get("/mcp-download")
+    assert installer.status_code == 200
+    for filename in ("alchemy-api-mcp-v1.zip", "ALCHEMY_MCP_INSTALL.md"):
+        version = _shell_asset_version(app_main.STATIC_DIR / "downloads" / filename)
+        assert f"/static/downloads/{filename}?v={version}" in installer.text
+    assert 'href="/codex-workbench"' in installer.text
+
+
 def _png_base64(width: int = 320, height: int = 280) -> str:
     from PIL import Image
 

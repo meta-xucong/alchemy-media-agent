@@ -60,6 +60,17 @@ _SURFACES = {
 }
 VERSIONED_TOOL_SCHEMAS = [item for group in _SURFACES.values() for item in group]
 VERSIONED_TOOL_SCHEMAS.insert(0, _tool("alchemy_list_capabilities", "List the API and MCP surfaces available to the authenticated account.", []))
+WORKBENCH_IMAGE_TOOL = "alchemy_read_workbench_image"
+VERSIONED_TOOL_SCHEMAS.append(_tool(
+    WORKBENCH_IMAGE_TOOL,
+    "Read a generated V2 or LAB image after the workbench reports its output ID. "
+    "Preview returns an image. Original saves the unchanged file in the configured local output directory "
+    "and returns its path for the user; without that directory it returns an embedded resource.",
+    ["product", "output_id"],
+    product={"type": "string", "enum": ["v2", "lab"]},
+    output_id=_ID_SCHEMA,
+    rendition={"type": "string", "enum": ["preview", "original"]},
+))
 VERSIONED_TOOL_NAMES = frozenset(item["name"] for item in VERSIONED_TOOL_SCHEMAS)
 
 
@@ -95,7 +106,9 @@ def _validate(value: Any, schema: dict[str, Any]) -> None:
             for item in value:
                 _validate(item, schema["items"])
     elif kind == "string":
-        valid = type(value) is str and bool(value.strip()) and (not schema.get("pattern") or re.fullmatch(schema["pattern"], value) is not None)
+        valid = (type(value) is str and bool(value.strip())
+                 and (not schema.get("enum") or value in schema["enum"])
+                 and (not schema.get("pattern") or re.fullmatch(schema["pattern"], value) is not None))
     elif kind == "integer":
         valid = type(value) is int and schema.get("minimum", value) <= value <= schema.get("maximum", value)
     elif kind == "boolean":
@@ -129,7 +142,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 class VersionedTools:
-    def __init__(self, base_url: str, session_token: str, *, opener: Any = None):
+    def __init__(self, base_url: str, session_token: str, *, opener: Any = None, output_directory: str = ""):
         try:
             parsed = urlsplit(base_url)
             valid = parsed.scheme in {"http", "https"} and bool(parsed.hostname) and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment and parsed.path in {"", "/"} and (parsed.scheme == "https" or parsed.hostname in {"127.0.0.1", "localhost", "::1"})
@@ -142,10 +155,12 @@ class VersionedTools:
         self.base_url = base_url.rstrip("/")
         self._token = session_token
         self._opener = opener or build_opener(ProxyHandler({}), _NoRedirect())
+        self._output_directory = output_directory
 
     @classmethod
     def from_environment(cls) -> "VersionedTools":
-        return cls(os.environ.get("ALCHEMY_PRODUCT_API_BASE_URL", ""), os.environ.get("ALCHEMY_PRODUCT_SESSION_TOKEN", ""))
+        return cls(os.environ.get("ALCHEMY_PRODUCT_API_BASE_URL", ""), os.environ.get("ALCHEMY_PRODUCT_SESSION_TOKEN", ""),
+                   output_directory=os.environ.get("ALCHEMY_WORKBENCH_OUTPUT_DIR", ""))
 
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
@@ -174,6 +189,88 @@ class VersionedTools:
             raise VersionedToolError(code, http_status=exc.code, outcome_unknown=method != "GET" and (exc.code >= 500 or exc.code == 408)) from None
         except (URLError, OSError, ValueError, HTTPClientError):
             raise VersionedToolError("product_api_unavailable", outcome_unknown=method != "GET") from None
+
+    def _read_workbench_image(self, args: dict[str, Any]) -> dict[str, Any]:
+        product, output_id = args["product"], args["output_id"]
+        original = args.get("rendition", "preview") == "original"
+        if product == "v2":
+            path = (f"/api/v2/outputs/{output_id}/download?direct=true" if original
+                    else f"/api/v2/image/history/{output_id}/preview")
+        else:
+            variant = "download" if original else "preview"
+            path = f"/api/lab/outputs/{output_id}/{variant}"
+        request = Request(self.base_url + path, headers={
+            "Authorization": "Bearer " + self._token,
+            "Accept": "image/png, image/jpeg, image/webp",
+        })
+        mime_extensions = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+        for attempt in range(2):
+            try:
+                with self._opener.open(request, timeout=30) as response:
+                    mime = response.headers.get_content_type()
+                    if mime not in mime_extensions:
+                        raise VersionedToolError("workbench_image_type_invalid")
+                    advertised = response.headers.get("Content-Length", "")
+                    expected = int(advertised) if advertised.isascii() and advertised.isdecimal() else None
+                    if expected is not None and expected > MAX_RESPONSE_BYTES:
+                        raise VersionedToolError("workbench_image_too_large")
+                    content = response.read(MAX_RESPONSE_BYTES + 1)
+                    if expected is not None and len(content) != expected:
+                        raise HTTPClientError("incomplete image")
+                break
+            except HTTPError as exc:
+                exc.close()
+                if attempt == 0 and exc.code in {408, 502, 503, 504}:
+                    continue
+                raise VersionedToolError("workbench_image_unavailable", http_status=exc.code) from None
+            except (URLError, OSError, HTTPClientError):
+                if attempt == 1:
+                    raise VersionedToolError("workbench_image_unavailable") from None
+        if len(content) > MAX_RESPONSE_BYTES:
+            raise VersionedToolError("workbench_image_too_large")
+        signatures = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/webp": b"RIFF"}
+        if not content.startswith(signatures[mime]) or (mime == "image/webp" and content[8:12] != b"WEBP"):
+            raise VersionedToolError("workbench_image_type_invalid")
+        receipt = {"product": product, "output_id": output_id, "rendition": "original" if original else "preview",
+                   "bytes": len(content)}
+        if original:
+            filename = output_id + "." + mime_extensions[mime]
+            if self._output_directory:
+                saved = self._save_workbench_original(product, filename, content)
+                receipt.update(saved_original=str(saved), instruction="Attach this exact local file using an absolute Markdown file link.")
+                media = {"type": "resource_link", "uri": saved.as_uri(), "name": filename, "mimeType": mime}
+            else:
+                media = {"type": "resource", "resource": {
+                    "uri": f"alchemy://original/{product}/{filename}", "mimeType": mime,
+                    "blob": base64.b64encode(content).decode("ascii"),
+                }}
+        else:
+            media = {"type": "image", "mimeType": mime, "data": base64.b64encode(content).decode("ascii")}
+        return {"content": [{"type": "text", "text": json.dumps(receipt)}, media]}
+
+    def _save_workbench_original(self, product: str, filename: str, content: bytes) -> Path:
+        directory = Path(self._output_directory)
+        if not directory.is_absolute() or str(directory).startswith(("\\\\", "//")):
+            raise VersionedToolError("workbench_output_directory_invalid")
+        try:
+            directory = directory.resolve(strict=True)
+            if not directory.is_dir():
+                raise ValueError
+            path = directory / (product + "-" + filename)
+            if path.is_symlink():
+                raise ValueError
+            try:
+                with path.open("xb") as stream:
+                    stream.write(content)
+            except FileExistsError:
+                with path.open("rb") as stream:
+                    if stream.read(len(content) + 1) != content:
+                        raise VersionedToolError("workbench_output_already_exists") from None
+        except (OSError, ValueError) as exc:
+            if isinstance(exc, VersionedToolError):
+                raise
+            raise VersionedToolError("workbench_original_save_failed") from None
+        return path
 
     def _upload(self, *, path: str, args: dict[str, Any], consent_key: str | None = None) -> dict[str, Any]:
         file_path = Path(args["file_path"])
@@ -217,6 +314,8 @@ class VersionedTools:
         _validate(arguments, schema)
         args = dict(arguments)
         try:
+            if name == WORKBENCH_IMAGE_TOOL:
+                return self._read_workbench_image(args)
             if name == "alchemy_list_capabilities":
                 result = self._request("GET", "/api/access/capabilities")
             elif name == "alchemy_v1_create_session":

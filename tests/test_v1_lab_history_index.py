@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import json
 import os
 import shutil
@@ -205,6 +207,39 @@ def test_nested_only_lab_owner_protects_generic_output_authorization(stores, mon
     put_jobs(repo, [other])
     index.prepare_history_index(store)
     assert index.lookup_output_owner(store, record["id"]) == (None, True)
+
+
+def test_lab_media_routes_return_only_accessible_lab_outputs(stores, monkeypatch):
+    from fastapi import HTTPException
+    from PIL import Image
+    from app import main as v1_main
+
+    store, repo = stores
+    lab_record, lab_path = manifest(store, output_id="out_labw001", owner=41, lab=True)
+    v1_record, _ = manifest(store, output_id="out_v1wb001", owner=41)
+    Image.new("RGB", (2, 2), (32, 68, 75)).save(lab_path, format="PNG")
+    index.prepare_history_index(store)
+    monkeypatch.setattr(v1_main, "media_store", store)
+    monkeypatch.setattr(v1_main, "repository", repo)
+    monkeypatch.setattr(v1_main.settings, "veyra_auth_enabled", True)
+    owner = 41
+
+    async def history_context(_request, _authorization):
+        return {"user_id": owner, "is_admin": False}
+
+    monkeypatch.setattr(v1_main, "_veyra_history_context", history_context)
+    download = asyncio.run(v1_main.lab_output_media(lab_record["id"], "download", None, ""))
+    assert Path(download.path).read_bytes() == lab_path.read_bytes()
+    assert download.headers["cache-control"] == "private, no-store"
+    preview = asyncio.run(v1_main.lab_output_media(lab_record["id"], "preview", None, ""))
+    assert Path(preview.path).read_bytes()[8:12] == b"WEBP"
+    with pytest.raises(HTTPException) as wrong_surface:
+        asyncio.run(v1_main.lab_output_media(v1_record["id"], "download", None, ""))
+    assert wrong_surface.value.status_code == 404
+    owner = 77
+    with pytest.raises(HTTPException) as forbidden:
+        asyncio.run(v1_main.lab_output_media(lab_record["id"], "download", None, ""))
+    assert forbidden.value.status_code == 403
 
 
 def test_duplicate_nested_lab_owners_remain_a_durable_conflict(stores):

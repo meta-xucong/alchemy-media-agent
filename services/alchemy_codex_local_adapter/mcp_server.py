@@ -16,7 +16,7 @@ from .contracts import (
 from .facade import CodexNativeImageGenFacade
 from .materialized_bridge import MaterializedBridgeError, V3MaterializedMcpBridge
 from .product_tools import PRODUCT_TOOL_NAMES, PRODUCT_TOOL_SCHEMAS, ProductToolError, ProductTools
-from .versioned_tools import VERSIONED_TOOL_NAMES, VERSIONED_TOOL_SCHEMAS, VersionedToolError, VersionedTools
+from .versioned_tools import VERSIONED_TOOL_NAMES, VERSIONED_TOOL_SCHEMAS, WORKBENCH_IMAGE_TOOL, VersionedToolError, VersionedTools
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -265,7 +265,8 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
         if name in VERSIONED_TOOL_NAMES:
             try:
-                result = _tool_result(VersionedTools.from_environment().call(name, params.get("arguments", {})))
+                payload = VersionedTools.from_environment().call(name, params.get("arguments", {}))
+                result = payload if name == WORKBENCH_IMAGE_TOOL else _tool_result(payload)
             except VersionedToolError as exc:
                 result = {**_tool_result(exc.as_dict()), "isError": True}
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
