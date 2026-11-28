@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alchemy · 选图工作台</title>
+  <link rel="stylesheet" href="/static/codex-workbench.css">
+  <script type="module" src="/static/codex-workbench.mjs"></script>
+</head>
+<body>
+  <header class="top">
+    <a href="/" class="brand">Alchemy</a>
+    <span>Codex 工作台</span>
+  </header>
+  <main>
+    <header class="intro">
+      <div><h1>选图工作台</h1><p>先看案例和风格，再确定这次要生成的图片。</p></div>
+      <nav aria-label="生成模式">
+        <button type="button" data-product="v2" aria-pressed="true">V2 案例</button>
+        <button type="button" data-product="lab" aria-pressed="false">LAB 风格</button>
+      </nav>
+    </header>
+    <section id="login" hidden>
+      <p>请先登录 Alchemy，再返回工作台。</p><a href="/" target="_blank" rel="noopener">打开 Alchemy 登录</a>
+      <button id="reload" type="button">重新载入目录</button>
+    </section>
+    <div class="workspace">
+      <section class="library" aria-labelledby="library-title">
+        <h2 id="library-title">案例库</h2>
+        <form id="search"><label class="sr-only" for="query">搜索目录</label><input id="query" type="search" placeholder="搜索名称、用途或风格"><button>搜索</button></form>
+        <p id="catalog-notice" role="status"></p>
+        <div id="catalog" class="cards"></div>
+        <button id="more" type="button" hidden>加载更多</button>
+      </section>
+      <section class="draft" aria-labelledby="draft-title">
+        <h2 id="draft-title">本次生成</h2>
+        <p id="selected"></p>
+        <form id="generation">
+          <label>你的需求 <textarea id="prompt" required maxlength="6000" rows="5" placeholder="例如：给五谷杂粮粥做一张中文商品海报"></textarea></label>
+          <div class="options">
+            <label>画幅 <select id="ratio"><option value="">自动</option><option value="1:1">方图 1:1</option><option value="4:5">竖版 4:5</option><option value="3:2">横版 3:2</option><option value="9:16">竖版 9:16</option><option value="16:9">横版 16:9</option></select></label>
+            <label><span id="count-label">张数</span> <input id="count" type="number" min="1" max="8" required value="1"></label>
+          </div>
+          <p id="total"></p>
+          <button id="generate" class="primary">生成图片</button>
+        </form>
+        <p id="run-notice" role="status"></p>
+        <button id="recover" type="button" hidden>找回原任务</button>
+        <a id="lab-history" href="/h5?tab=lab" hidden>去 Alchemy 核对历史</a>
+      </section>
+    </div>
+    <section id="result-panel" hidden aria-labelledby="result-title">
+      <h2 id="result-title">生成结果</h2><p id="result-state"></p><div id="results" class="cards"></div>
+    </section>
+  </main>
+</body>
+</html>
