@@ -3791,11 +3791,14 @@ async def lab_output_media(output_id: str, variant: Literal["download", "preview
     await _require_output_visible(request, output_id, authorization, allow_legacy_public=False)
     if not await _run_sqlite_api_call(_is_lab_output_id, output_id):
         raise HTTPException(status_code=404, detail={"code": "lab_output_not_found"})
-    if variant == "download":
-        path, _ = await _run_sqlite_api_call(_resolve_output_file, output_id)
-    else:
+    headers = {"Cache-Control": "private, no-store"}
+    if variant == "preview":
         path = await _run_sqlite_api_call(_ensure_output_preview, output_id)
-    return FileResponse(path, headers={"Cache-Control": "private, no-store"})
+        if path == media_store.preview_path(output_id):
+            return FileResponse(path, media_type="image/webp", headers=headers)
+    else:
+        path, _ = await _run_sqlite_api_call(_resolve_output_file, output_id)
+    return FileResponse(path, headers=headers)
 
 
 @app.get("/v1/outputs/{output_id}/thumbnail")
