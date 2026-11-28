@@ -212,8 +212,17 @@ def test_nested_only_lab_owner_protects_generic_output_authorization(stores, mon
 def test_lab_media_routes_return_only_accessible_lab_outputs(stores, monkeypatch):
     from fastapi import HTTPException
     from PIL import Image
+    from starlette import responses
     from app import main as v1_main
 
+    platform_guess_type = responses.guess_type
+
+    def guess_type_without_webp(path):
+        if Path(path).suffix == ".webp":
+            return "application/octet-stream", None
+        return platform_guess_type(path)
+
+    monkeypatch.setattr(responses, "guess_type", guess_type_without_webp)
     store, repo = stores
     lab_record, lab_path = manifest(store, output_id="out_labw001", owner=41, lab=True)
     v1_record, _ = manifest(store, output_id="out_v1wb001", owner=41)
@@ -230,9 +239,16 @@ def test_lab_media_routes_return_only_accessible_lab_outputs(stores, monkeypatch
     monkeypatch.setattr(v1_main, "_veyra_history_context", history_context)
     download = asyncio.run(v1_main.lab_output_media(lab_record["id"], "download", None, ""))
     assert Path(download.path).read_bytes() == lab_path.read_bytes()
+    assert download.headers["content-type"] == "image/png"
     assert download.headers["cache-control"] == "private, no-store"
     preview = asyncio.run(v1_main.lab_output_media(lab_record["id"], "preview", None, ""))
     assert Path(preview.path).read_bytes()[8:12] == b"WEBP"
+    assert preview.headers["content-type"] == "image/webp"
+    assert preview.headers["cache-control"] == "private, no-store"
+    with monkeypatch.context() as fallback:
+        fallback.setattr(v1_main, "_ensure_output_preview", lambda _: lab_path)
+        original_preview = asyncio.run(v1_main.lab_output_media(lab_record["id"], "preview", None, ""))
+    assert original_preview.headers["content-type"] == "image/png"
     with pytest.raises(HTTPException) as wrong_surface:
         asyncio.run(v1_main.lab_output_media(v1_record["id"], "download", None, ""))
     assert wrong_surface.value.status_code == 404
