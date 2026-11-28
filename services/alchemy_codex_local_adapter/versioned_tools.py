@@ -204,17 +204,28 @@ class VersionedTools:
             "Accept": "image/png, image/jpeg, image/webp",
         })
         mime_extensions = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
-        try:
-            with self._opener.open(request, timeout=30) as response:
-                mime = response.headers.get_content_type()
-                if mime not in mime_extensions:
-                    raise VersionedToolError("workbench_image_type_invalid")
-                content = response.read(MAX_RESPONSE_BYTES + 1)
-        except HTTPError as exc:
-            exc.close()
-            raise VersionedToolError("workbench_image_unavailable", http_status=exc.code) from None
-        except (URLError, OSError, HTTPClientError):
-            raise VersionedToolError("workbench_image_unavailable") from None
+        for attempt in range(2):
+            try:
+                with self._opener.open(request, timeout=30) as response:
+                    mime = response.headers.get_content_type()
+                    if mime not in mime_extensions:
+                        raise VersionedToolError("workbench_image_type_invalid")
+                    advertised = response.headers.get("Content-Length", "")
+                    expected = int(advertised) if advertised.isascii() and advertised.isdecimal() else None
+                    if expected is not None and expected > MAX_RESPONSE_BYTES:
+                        raise VersionedToolError("workbench_image_too_large")
+                    content = response.read(MAX_RESPONSE_BYTES + 1)
+                    if expected is not None and len(content) != expected:
+                        raise HTTPClientError("incomplete image")
+                break
+            except HTTPError as exc:
+                exc.close()
+                if attempt == 0 and exc.code in {408, 502, 503, 504}:
+                    continue
+                raise VersionedToolError("workbench_image_unavailable", http_status=exc.code) from None
+            except (URLError, OSError, HTTPClientError):
+                if attempt == 1:
+                    raise VersionedToolError("workbench_image_unavailable") from None
         if len(content) > MAX_RESPONSE_BYTES:
             raise VersionedToolError("workbench_image_too_large")
         signatures = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/webp": b"RIFF"}

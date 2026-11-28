@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 import unittest
 from unittest.mock import patch
 
@@ -76,14 +76,39 @@ class WorkbenchMediaTests(unittest.TestCase):
         with self.assertRaises(VersionedToolError):
             self.tools.call(WORKBENCH_IMAGE_TOOL, {"product": "v1", "output_id": "../out_x"})
         self.assertEqual(self.opener.requests, [])
-        for status in (302, 403):
+        for status in (302, 401, 403, 404):
             with self.subTest(status=status), patch.object(
                 self.opener, "open", side_effect=HTTPError("test", status, "", {}, None),
-            ):
+            ) as fetch:
                 with self.assertRaises(VersionedToolError) as error:
                     self.tools.call(WORKBENCH_IMAGE_TOOL, {"product": "lab", "output_id": "out_x"})
                 self.assertEqual(error.exception.http_status, status)
                 self.assertFalse(error.exception.outcome_unknown)
+                self.assertEqual(fetch.call_count, 1)
+
+    def test_retries_one_original_read_after_network_or_gateway_failure(self):
+        for first in (URLError("socket"), HTTPError("test", 502, "", {}, None)):
+            with self.subTest(first=first), patch.object(self.opener, "open", side_effect=[
+                first, MediaResponse(PNG, "image/png"),
+            ]) as fetch:
+                args = {"product": "v2", "output_id": "out_x", "rendition": "original"}
+                result = self.tools.call(WORKBENCH_IMAGE_TOOL, args)
+                self.assertEqual(base64.b64decode(result["content"][1]["resource"]["blob"]), PNG)
+                self.assertEqual(fetch.call_count, 2)
+                self.assertIs(fetch.call_args_list[0].args[0], fetch.call_args_list[1].args[0])
+                self.assertEqual(fetch.call_args_list[1].args[0].get_method(), "GET")
+
+    def test_partial_response_is_not_saved_as_original(self):
+        parts = [MediaResponse(PNG, "image/png"), MediaResponse(PNG, "image/png")]
+        for part in parts:
+            part.headers["Content-Length"] = str(len(PNG) + 5)
+        with TemporaryDirectory() as directory, patch.object(self.opener, "open", side_effect=parts) as fetch:
+            tools = VersionedTools("https://alchemy.example", "test-key", opener=self.opener,
+                                   output_directory=directory)
+            with self.assertRaisesRegex(VersionedToolError, "workbench_image_unavailable"):
+                tools.call(WORKBENCH_IMAGE_TOOL, {"product": "v2", "output_id": "out_x", "rendition": "original"})
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_does_not_return_html_or_too_large_original(self):
         for body, mime in ((b"<html>", "text/html"), (b"not an image", "image/png"),
@@ -100,7 +125,7 @@ class WorkbenchMediaTests(unittest.TestCase):
             locator = tools.call(WORKBENCH_IMAGE_TOOL, args)["content"][1]
             self.assertEqual(locator["type"], "resource_link")
             original = Path(directory) / "lab-out_x.png"
-            self.assertEqual(locator["uri"], original.as_uri())
+            self.assertEqual(locator["uri"], original.resolve().as_uri())
             self.assertEqual(original.read_bytes(), PNG)
             self.assertEqual(tools.call(WORKBENCH_IMAGE_TOOL, args)["content"][1], locator)
             original.write_bytes(b"existing user file")
