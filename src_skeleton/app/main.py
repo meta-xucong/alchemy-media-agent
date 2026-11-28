@@ -442,10 +442,12 @@ def _shell_asset_version_replacements() -> dict[str, str]:
     }
 
 
-def _asset_versioned_shell_response(path: Path) -> HTMLResponse:
+def _asset_versioned_shell_response(path: Path, *, extra_assets: dict[str, Path] | None = None) -> HTMLResponse:
     html = path.read_text(encoding="utf-8")
     for token, version in _shell_asset_version_replacements().items():
         html = html.replace(token, version)
+    for token, asset in (extra_assets or {}).items():
+        html = html.replace(token, _shell_asset_version(asset))
     return HTMLResponse(html, headers=APP_SHELL_HEADERS)
 
 
@@ -4471,7 +4473,10 @@ def api_access_page():
 
 @app.get("/mcp-download", include_in_schema=False)
 def mcp_download_page():
-    response = _asset_versioned_shell_response(STATIC_DIR / "mcp-download.html")
+    response = _asset_versioned_shell_response(STATIC_DIR / "mcp-download.html", extra_assets={
+        "__MCP_BUNDLE_VERSION__": STATIC_DIR / "downloads" / "alchemy-api-mcp-v1.zip",
+        "__MCP_GUIDE_VERSION__": STATIC_DIR / "downloads" / "ALCHEMY_MCP_INSTALL.md",
+    })
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
@@ -4480,7 +4485,9 @@ def mcp_download_page():
 
 @app.get("/codex-workbench", include_in_schema=False)
 def codex_workbench_page():
-    response = _asset_versioned_shell_response(STATIC_DIR / "codex-workbench.html")
+    response = _asset_versioned_shell_response(STATIC_DIR / "codex-workbench.html", extra_assets={
+        "__CODEX_WORKBENCH_CSS_VERSION__": STATIC_DIR / "codex-workbench.css",
+    })
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
